@@ -6,6 +6,12 @@ from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
 from modules.fill_blank import new_fill, get_fill_answer
 from modules.riddles import new_riddle, get_answer
+from modules.multiple_choice import (
+    start_question,
+    answer_question,
+    get_active_question,
+    clear_question,
+)
 from modules.group_stats import add_kick, add_mute, make_report
 from modules.spam_history import get_message_ids, clear_user
 from modules.web_search import can_search, search_web
@@ -337,6 +343,55 @@ async def handle_new_message(bot, event):
                 return
 
 
+        # بازی چهار گزینه‌ای
+        if clean_text == "چهار گزینه‌ای":
+            try:
+                quiz = start_question(chat_id)
+                options_text = "\n".join(
+                    f"{index}) {option}"
+                    for index, option in enumerate(quiz["options"], 1)
+                )
+                quiz_text = (
+                    "🎯 سوال چهار گزینه‌ای:\n\n"
+                    f"{quiz['question']}\n\n"
+                    f"{options_text}"
+                )
+
+                def u16_length(value):
+                    return len(value.encode("utf-16-le")) // 2
+
+                option_start = quiz_text.index(options_text)
+                entities = []
+                current_offset = option_start
+                for option_line in options_text.split("\n"):
+                    entities.append(
+                        MessageEntityBold(
+                            offset=u16_length(quiz_text[:current_offset]),
+                            length=u16_length(option_line),
+                        )
+                    )
+                    current_offset += len(option_line) + 1
+
+                await event.reply(quiz_text, formatting_entities=entities)
+
+                async def multiple_choice_timer():
+                    import asyncio
+                    await asyncio.sleep(30)
+                    active_quiz = get_active_question(chat_id)
+                    if active_quiz and active_quiz["token"] == quiz["token"]:
+                        clear_question(chat_id, quiz["token"])
+                        await event.reply(
+                            "⏰ زمان تمام شد!\n\n"
+                            f"پاسخ درست:\nگزینه {active_quiz['answer']}"
+                        )
+
+                import asyncio
+                asyncio.create_task(multiple_choice_timer())
+
+            except Exception as e:
+                bot.logger.log_error(f"خطای بازی چهار گزینه‌ای: {e}")
+            return
+
         # بازی جای خالی
         if clean_text == "جای خالی":
             try:
@@ -390,6 +445,21 @@ async def handle_new_message(bot, event):
                 return
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی جواب چیستان: {e}")
+
+        try:
+            result = answer_question(chat_id, clean_text)
+            if result is not None:
+                is_correct, correct_option = result
+                if is_correct:
+                    await event.reply("✅ آفرین! پاسخ درست بود 🎉")
+                else:
+                    await event.reply(
+                        "❌ اشتباه بود.\n\n"
+                        f"پاسخ درست: گزینه {correct_option}"
+                    )
+                return
+        except Exception as e:
+            bot.logger.log_error(f"خطای بررسی پاسخ چهار گزینه‌ای: {e}")
 
 # ثبت آمار پیام گروه
         try:
@@ -543,7 +613,9 @@ async def handle_new_message(bot, event):
                 "😂 جک\n"
                 "یک جک خنده دار دریافت کنید\n\n"
                 "✍️ جای خالی\n"
-                "۳۰ ثانیه فرصت دارید جای خالی را کامل کنید"
+                "۳۰ ثانیه فرصت دارید جای خالی را کامل کنید\n\n"
+                "🎯 چهار گزینه‌ای\n"
+                "به سؤال پاسخ دهید: 1، 2، 3 یا 4"
             )
 
             entities = []
@@ -560,7 +632,8 @@ async def handle_new_message(bot, event):
                 "🧩 چیستان",
                 "🎯 جرعت - حقیقت",
                 "😂 جک",
-                "✍️ جای خالی"
+                "✍️ جای خالی",
+                "🎯 چهار گزینه‌ای"
             ]:
                 pos = games_text.find(word)
                 if pos != -1:
