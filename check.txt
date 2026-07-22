@@ -1,0 +1,457 @@
+   104	    async def handle_new_message(self, event):
+   105	        """هندلر اصلی برای پیام‌های جدید"""
+   106	
+   107	        chat = await event.get_chat()
+   108	        sender = await event.get_sender()
+   109	
+   110	        chat_id = getattr(chat, "id", None)
+   111	        user_id = getattr(sender, "id", None)
+   112	
+   113	        username = (
+   114	            getattr(sender, "username", None)
+   115	            or getattr(sender, "first_name", None)
+   116	            or str(user_id)
+   117	        )
+   118	
+   119	        if not username.startswith("@"):
+   120	            display_username = "@" + str(username)
+   121	        else:
+   122	            display_username = username
+   123	
+   124	        # ثبت ادمین توسط مالک ربات
+   125	            if clean_text.startswith("ثبت ادمین"):
+   126	                try:
+   127	                    owner = getattr(sender, "username", "")
+   128	                    if owner != "osine1":
+   129	                        await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
+   130	                        return
+   131	
+   132	                    admin_username = None
+   133	
+   134	                    if event.reply_to:
+   135	                        reply_msg = await self.client.get_messages(
+   136	                                chat_id,
+   137	                                ids=event.reply_to.reply_to_msg_id
+   138	                            )
+   139	                        if reply_msg:
+   140	                            user = await reply_msg.get_sender()
+   141	                            admin_username = getattr(user, "username", None)
+   142	
+   143	                    if not admin_username:
+   144	                        parts = clean_text.split()
+   145	                        if len(parts) >= 3:
+   146	                            admin_username = parts[2].replace("@", "")
+   147	
+   148	                    if not admin_username:
+   149	                        await event.reply("❌ باید ریپلای کنید یا @username بدهید")
+   150	                        return
+   151	
+   152	                    add_admin(chat_id, admin_username)
+   153	                    await event.reply(f"✅ ادمین @{admin_username} ثبت شد")
+   154	
+   155	                except Exception as e:
+   156	                    await event.reply(f"❌ خطا: {e}")
+   157	
+   158	                return
+   159	
+   160	
+   161	            # برکناری ادمین توسط مالک ربات
+   162	            if clean_text.startswith("برکناری ادمین"):
+   163	                try:
+   164	                    owner = getattr(sender, "username", "")
+   165	                    if owner != "osine1":
+   166	                        await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
+   167	                        return
+   168	
+   169	                    admin_username = None
+   170	
+   171	                    if event.reply_to:
+   172	                        reply_msg = await self.client.get_messages(
+   173	                            chat_id,
+   174	                            ids=event.reply_to.reply_to_msg_id
+   175	                        )
+   176	                        if reply_msg:
+   177	                            user = await reply_msg.get_sender()
+   178	                            admin_username = getattr(user, "username", None)
+   179	
+   180	                    if not admin_username:
+   181	                        parts = clean_text.split()
+   182	                        if len(parts) >= 3:
+   183	                            admin_username = parts[2].replace("@", "")
+   184	
+   185	                    if not admin_username:
+   186	                        await event.reply("❌ باید ریپلای کنید یا @username بدهید")
+   187	                        return
+   188	
+   189	                    if remove_admin(chat_id, admin_username):
+   190	                        await event.reply(f"✅ دسترسی ادمین @{admin_username} حذف شد")
+   191	                    else:
+   192	                        await event.reply("❌ این کاربر ادمین نیست")
+   193	
+   194	                except Exception as e:
+   195	                    await event.reply(f"❌ خطا: {e}")
+   196	
+   197	                return
+   198	
+   199	            # حذف پیام با ریپلای
+   200	            if clean_text == "پاک":
+   201	                try:
+   202	                    sender_username = getattr(sender, "username", None)
+   203	
+   204	                    if not is_admin(chat_id, sender_username):
+   205	                        await event.reply("❌ فقط ادمین‌ها اجازه حذف پیام دارند")
+   206	                        return
+   207	
+   208	                    if not event.reply_to:
+   209	                        await event.reply("❌ باید روی پیام ریپلای کنید")
+   210	                        return
+   211	
+   212	                    await self.client.delete_messages(
+   213	                        chat_id,
+   214	                        event.reply_to.reply_to_msg_id
+   215	                    )
+   216	
+   217	                except Exception as e:
+   218	                    await event.reply(f"❌ خطا: {e}")
+   219	
+   220	                return
+   221	
+   222	            # اخراج کاربر با ریپلای
+   223	            if clean_text == "اخراج":
+   224	                try:
+   225	                    sender_username = getattr(sender, "username", None)
+   226	
+   227	                    if not is_admin(chat_id, sender_username):
+   228	                        await event.reply("❌ فقط ادمین‌ها اجازه اخراج دارند")
+   229	                        return
+   230	
+   231	                    if not event.reply_to:
+   232	                        await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+   233	                        return
+   234	
+   235	                    reply_msg = await self.client.get_messages(
+   236	                        chat_id,
+   237	                        ids=event.reply_to.reply_to_msg_id
+   238	                    )
+   239	
+   240	                    target_user = await reply_msg.get_sender()
+   241	
+   242	                    await self.client.kick_participant(
+   243	                        chat_id,
+   244	                        target_user
+   245	                    )
+   246	
+   247	                    target_username = getattr(target_user, "username", None)
+   248	
+   249	                    if target_username:
+   250	                        add_banned(chat_id, target_username)
+   251	
+   252	                    await event.reply("✅ کاربر اخراج شد")
+   253	
+   254	                except Exception as e:
+   255	                    await event.reply(f"❌ خطا در اخراج: {e}")
+   256	
+   257	                return
+   258	
+   259	            # آزاد کردن کاربر از لیست محروم‌ها
+   260	            if clean_text == "آزاد":
+   261	                try:
+   262	                    sender_username = getattr(sender, "username", None)
+   263	
+   264	                    if not is_admin(chat_id, sender_username):
+   265	                        await event.reply("❌ فقط ادمین‌ها اجازه آزاد کردن دارند")
+   266	                        return
+   267	
+   268	                    if not event.reply_to:
+   269	                        await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+   270	                        return
+   271	
+   272	                    reply_msg = await self.client.get_messages(
+   273	                        chat_id,
+   274	                        ids=event.reply_to.reply_to_msg_id
+   275	                    )
+   276	
+   277	                    target_user = await reply_msg.get_sender()
+   278	                    target_username = getattr(target_user, "username", None)
+   279	
+   280	                    if not target_username:
+   281	                        await event.reply("❌ یوزرنیم کاربر پیدا نشد")
+   282	                        return
+   283	
+   284	                    if remove_banned(chat_id, target_username):
+   285	                        await event.reply("✅ کاربر از لیست محروم‌ها حذف شد")
+   286	                    else:
+   287	                        await event.reply("⚠️ این کاربر در لیست محروم‌ها نیست")
+   288	
+   289	                except Exception as e:
+   290	                    await event.reply(f"❌ خطا در آزاد کردن: {e}")
+   291	
+   292	                return
+   293	
+   294	
+   295	            # اخطار کاربر با ریپلای
+   296	            if clean_text == "اخطار":
+   297	                try:
+   298	                    sender = await event.get_sender()
+   299	
+   300	                    if not is_admin(chat_id, getattr(sender, "username", None)):
+   301	                        await event.reply("❌ فقط ادمین‌ها اجازه اخطار دادن دارند")
+   302	                        return
+   303	
+   304	                    if not event.reply_to_msg_id:
+   305	                        await event.reply("❌ روی پیام کاربر ریپلای کنید")
+   306	                        return
+   307	
+   308	                    reply_msg = await self.client.get_messages(
+   309	                        chat_id,
+   310	                        ids=event.reply_to_msg_id
+   311	                    )
+   312	
+   313	                    target = await self.client.get_entity(
+   314	                        getattr(reply_msg, "sender_id", None)
+   315	                    )
+   316	
+   317	                    target_name = getattr(target, "username", None) or str(getattr(target, "id", ""))
+   318	
+   319	                    await event.reply(
+   320	                        f"⚠️ اخطار برای کاربر @{target_name}\n"
+   321	                        "لطفاً قوانین گروه را رعایت کنید."
+   322	                    )
+   323	
+   324	                except Exception as e:
+   325	                    await event.reply(f"❌ خطا در اخطار: {e}")
+   326	
+   327	            # سکوت کاربر با ریپلای
+   328	            if clean_text == "سکوت":
+   329	                try:
+   330	                    sender = await event.get_sender()
+   331	
+   332	                    sender_username = getattr(sender, "username", None)
+   333	                    if not is_admin(chat_id, sender_username):
+   334	                        await event.reply("❌ فقط ادمین‌ها اجازه استفاده از سکوت را دارند")
+   335	                        return
+   336	
+   337	                    if not event.reply_to:
+   338	                        await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+   339	                        return
+   340	
+   341	                    reply_msg = await self.client.get_messages(
+   342	                        chat_id,
+   343	                        ids=event.reply_to.reply_to_msg_id
+   344	                    )
+   345	
+   346	                    if not reply_msg:
+   347	                        await event.reply("❌ پیام ریپلای شده پیدا نشد")
+   348	                        return
+   349	
+   350	                    target_user = await reply_msg.get_sender()
+   351	
+   352	                    if not target_user:
+   353	                        await event.reply("❌ کاربر پیدا نشد")
+   354	                        return
+   355	
+   356	                    # بررسی ادمین بودن (سازگار با SPlus)
+   357	                    try:
+   358	                        admins = await self.client.get_participants(chat_id)
+   359	                        admin_ids = [
+   360	                            getattr(x, "id", 0)
+   361	                            for x in admins
+   362	                            if getattr(x, "admin_rights", None)
+   363	                        ]
+   364	
+   365	                        if target_user.id in admin_ids:
+   366	                            await event.reply("⚠️ این کاربر ادمین است و سکوت نشد")
+   367	                            return
+   368	                    except Exception:
+   369	                        pass
+   370	
+   371	                    result = await self.admin_actions.mute_user(
+   372	                        chat_id,
+   373	                        target_user.id,
+   374	                        0
+   375	                    )
+   376	
+   377	                    if result:
+   378	                        await event.reply(
+   379	                            f"🔇 کاربر {getattr(target_user,'username','کاربر')} سکوت شد"
+   380	                        )
+   381	                    else:
+   382	                        await event.reply("❌ انجام سکوت ناموفق بود")
+   383	
+   384	                except Exception as e:
+   385	                    self.logger.log_error(
+   386	                        f"خطای سکوت کاربر: {e}"
+   387	                    )
+   388	                    await event.reply(f"❌ خطا در سکوت کاربر:\n{e}")
+   389	
+   390	                return
+   391	
+   392	
+   393	            # حذف دستی پیام با ریپلای و کلمه پاک
+   394	            if clean_text == "پاک":
+   395	                try:
+   396	                    reply_id = getattr(
+   397	                        event.message,
+   398	                        "reply_to_msg_id",
+   399	                        None
+   400	                    )
+   401	
+   402	                    if reply_id:
+   403	                        await self.client.delete_messages(
+   404	                            chat.id,
+   405	                            [reply_id]
+   406	                        )
+   407	
+   408	                        try:
+   409	                            await event.delete()
+   410	                        except Exception:
+   411	                            pass
+   412	
+   413	                        await event.reply(
+   414	                            "✅ با موفقیت پاک شد"
+   415	                        )
+   416	
+   417	                    return
+   418	
+   419	                except Exception as e:
+   420	                    self.logger.log_error(
+   421	                        f"DELETE COMMAND ERROR: {e}"
+   422	                    )
+   423	                    return
+   424	
+   425	
+   426	                        # اطلاعات چت برای حذف تکراری
+   427	            chat = await event.get_chat()
+   428	            chat_id = getattr(chat, "id", None)
+   429	
+   430	# حذف پیام‌های تکراری بیشتر از ۳ بار
+   431	            try:
+   432	                key = f"{chat_id}:{message_text.strip()}"
+   433	
+   434	                if key not in self.repeat_messages:
+   435	                    self.repeat_messages[key] = []
+   436	
+   437	                self.repeat_messages[key].append(event.message.id)
+   438	
+   439	                if len(self.repeat_messages[key]) > 3:
+   440	                    ids = self.repeat_messages[key]
+   441	
+   442	                    await self.client.delete_messages(
+   443	                        chat_id,
+   444	                        ids
+   445	                    )
+   446	
+   447	                    self.repeat_messages[key] = []
+   448	
+   449	                    if chat_id not in self.delete_notice_lock:
+   450	                        self.delete_notice_lock.add(chat_id)
+   451	                        await event.reply(
+   452	                            "⚠️ پیام تکراری بیش از حد ارسال شد و پاک شد"
+   453	                        )
+   454	
+   455	                    return
+   456	
+   457	            except Exception as e:
+   458	                self.logger.log_error(
+   459	                    f"خطای حذف تکراری: {e}"
+   460	                )
+   461	
+   462	
+   463	            # حذف پیام های فوروارد شده
+   464	            try:
+   465	                if getattr(event.message, "fwd_from", None):
+   466	                    await self.client.delete_messages(
+   467	                        chat_id,
+   468	                        [event.message.id]
+   469	                    )
+   470	
+   471	                    if chat_id not in self.delete_notice_lock:
+   472	                        self.delete_notice_lock.add(chat_id)
+   473	                        await event.reply(
+   474	                            "⚠️ پیام فوروارد شده حذف شد"
+   475	                        )
+   476	
+   477	                    return
+   478	
+   479	            except Exception as e:
+   480	                self.logger.log_error(
+   481	                    f"خطای حذف فوروارد: {e}"
+   482	                )
+   483	
+   484	            # استثنا: پیام‌های فوروارد شده از @osine1 هیچ‌وقت حذف نشوند
+   485	            try:
+   486	                if getattr(event.message, "fwd_from", None):
+   487	                    forward_sender = getattr(event.message.fwd_from, "from_id", None)
+   488	
+   489	                    if forward_sender:
+   490	                        sender_entity = await self.client.get_entity(forward_sender)
+   491	
+   492	                        if getattr(sender_entity, "username", "") == "osine1":
+   493	                            print("✅ فوروارد @osine1 محافظت شد")
+   494	                            return
+   495	            except Exception as e:
+   496	                print("خطای بررسی فوروارد:", e)
+   497	
+   498	            # استثنا: فورواردهای کانال @osine1 حذف نشوند
+   499	            try:
+   500	                if getattr(event.message, "fwd_from", None):
+   501	                    fwd = event.message.fwd_from
+   502	                    fwd_id = getattr(getattr(fwd, "from_id", None), "channel_id", None)
+   503	
+   504	                    if fwd_id == 22389465:
+   505	                        print("✅ فوروارد کانال osine1 محافظت شد")
+   506	                        return
+   507	            except Exception as e:
+   508	                print("خطای تشخیص فوروارد:", e)
+   509	
+   510	            # بررسی اسپم
+   511	            is_spam, reason = self.detector.is_spam(message_text)
+   512	
+   513	            if is_spam:
+   514	                # افزایش شمارنده
+   515	                count = self.tracker.increment(chat_id, user_id)
+   516	                threshold = self.config_manager.get("spam_threshold", 3)
+   517	
+   518	                # لاگ
+   519	                self.logger.log_deleted_message(
+   520	                    user_id=user_id,
+   521	                    username=display_username,
+   522	                    group_id=chat_id,
+   523	                    group_title=chat_title,
+   524	                    original_text=message_text,
+   525	                    reason=reason,
+   526	                    message_id=event.message.id
+   527	                )
+   528	
+   529	                # حذف پیام اگر تنظیم شده
+   530	                if self.config_manager.get("delete_spam", True):
+   531	                    deleted = await self.admin_actions.delete_message(chat_id, event=event)
+   532	                    if deleted:
+   533	                        print(
+   534	                            f"🗑️ حذف شد | {chat_title} | {username} | دلیل: {reason} | تعداد تخلف: {count}")
+   535	
+   536	                # ارسال هشدار
+   537	                await self.admin_actions.send_warning(
+   538	                    chat_id=chat_id,
+   539	                    username=display_username,
+   540	                    reason=reason,
+   541	                    count=count,
+   542	                    threshold=threshold,
+   543	                    reply_to=None  # برای جلوگیری از ریپلای به پیام حذف شده
+   544	                )
+   545	
+   546	                # بررسی مجازات
+   547	                if self.tracker.should_punish(chat_id, user_id):
+   548	                    print(
+   549	                        f"⚠️ کاربر {username}({user_id}) به آستانه {threshold} رسید - اعمال مجازات")
+   550	                    await self.admin_actions.punish_user(chat_id, user_id, username)
+   551	            else:
+   552	                # پیام سالم - می‌توان برای آنالیز بیشتر لاگ کرد
+   553	                pass
+   554	
+   555	        except Exception as e:
+   556	            self.logger.log_error(f"خطا در هندل پیام: {e}")
+   557	            import traceback
+   558	            traceback.print_exc()
+   559	
+   560	    async def handle_admin_commands(self, event, text: str, admin_id: int, chat_id: int):

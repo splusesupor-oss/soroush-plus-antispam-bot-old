@@ -1,0 +1,62 @@
+from pathlib import Path
+from modules.group_storage import activate_group, deactivate_group, is_active
+
+p = Path("main.py")
+
+text = p.read_text(encoding="utf-8")
+
+if "ثبت گروه" in text:
+    print("✅ قبلاً اضافه شده")
+    exit()
+
+old = '''            # فعال و غیرفعال کردن گروه توسط مالک اصلی
+            if clean_text in ["فعال سازی", "غیر فعال"]:
+'''
+
+new = '''            # ثبت خودکار گروه توسط مالک
+            if clean_text == "ثبت گروه":
+                try:
+                    owner = getattr(sender, "username", "")
+
+                    if owner != "osine1":
+                        await event.reply(
+                            "❌ فقط مالک ربات اجازه ثبت گروه دارد"
+                        )
+                        return
+
+                    chat = await event.get_chat()
+
+                    gid = getattr(chat, "id", None)
+                    title = getattr(chat, "title", )
+
+                    activate_group(
+                        gid,
+                        title
+                    )
+
+                    await event.reply(
+                        f"✅ گروه «{title}» ثبت شد\\\\n"
+                        f"🆔 {gid}"
+                    )
+
+                except Exception as e:
+                    await event.reply(
+                        f"❌ خطا در ثبت گروه: {e}"
+                    )
+
+                return
+
+
+            # فعال و غیرفعال کردن گروه توسط مالک اصلی
+            if clean_text in ["فعال سازی", "غیر فعال"]:
+'''
+
+if old not in text:
+    print("❌ محل تغییر پیدا نشد")
+    exit()
+
+text = text.replace(old,new)
+
+p.write_text(text,encoding="utf-8")
+
+print("✅ ثبت گروه خودکار اضافه شد")

@@ -1,0 +1,327 @@
+import random
+"""
+ربات مدیریت گروه سروش پلاس - ضد هرزنامه
+اجرا روی حساب کاربری شما با SPlusthon (فورک Telethon برای سروش)
+
+ویژگی‌ها:
+- بررسی تمام پیام‌های جدید گروه
+- تشخیص لینک، شماره، آیدی، کلمات تبلیغاتی
+- حذف خودکار + سایلنت/بن بعد از 3 تخلف
+- وایت لیست مدیران
+- افزودن کلمات ممنوعه از طریق فایل یا دستور
+- لاگ کامل
+- ماژولار
+
+نویسنده: Agent for Soroush Plus
+"""
+
+import os
+import asyncio
+import sys
+from dotenv import load_dotenv
+
+# لود env
+load_dotenv()
+
+# اگر پوشه ماژول‌ها در مسیر نیست اضافه کن
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
+
+# تلاش برای import SPlusthon
+try:
+    from splusthon import SoroushClient, events
+    from splusthon.sessions import StringSession
+    SPLUSTHON_AVAILABLE = True
+except ImportError:
+    SPLUSTHON_AVAILABLE = False
+    print("⚠️ کتابخانه splusthon نصب نیست. ابتدا pip install splusthon را اجرا کنید")
+    print("راهنما: pip install -r requirements.txt")
+
+# ---------------------------------------------------
+
+class SoroushAntiSpamBot:
+    def __init__(self, config_path="config/config.json"):
+        print("🚀 در حال بارگذاری تنظیمات...")
+        self.config_manager = ConfigManager(config_path=config_path)
+        self.logger = BotLogger(
+            log_file=self.config_manager.get("log_file", "logs/deleted_messages.log")
+        )
+        self.detector = SpamDetector(self.config_manager)
+        self.tracker = UserTracker(
+            spam_counts_file=self.config_manager.get("spam_counts_file", "logs/spam_counts.json"),
+            threshold=self.config_manager.get("spam_threshold", 3)
+        )
+        
+        self.client = None
+        self.admin_actions = None
+
+        self.logger.log_info("✅ تنظیمات بارگذاری شد")
+        self.logger.log_info(f"📚 تعداد کلمات ممنوعه: {len(self.config_manager.banned_words)}")
+        self.logger.log_info(f"🛡️ تعداد کاربران سفید: {len(self.config_manager.whitelisted_ids)}")
+
+    async def initialize_client(self):
+        """ساخت کلاینت سروش"""
+        if not SPLUSTHON_AVAILABLE:
+            raise RuntimeError("SPlusthon نصب نیست")
+
+        # اولویت: SESSION_STRING از env یا config
+        session_str = os.getenv("SOROUSH_SESSION_STRING") or self.config_manager.get("session_string", "")
+        api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
+        api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
+
+        # اگر session string وجود داشته باشد از آن استفاده کن
+        if session_str:
+            session = StringSession(session_str)
+        else:
+            session = StringSession()  # جدید می‌سازد و بعد باید ذخیره کنی
+
+        # SPlusthon شامل api_id/hash پیش‌فرض برای سروش است، ولی اگر کاربر مقادیر شخصی دارد استفاده می‌کنیم
+        if api_id and api_hash:
+            self.client = SoroushClient(session, api_id, api_hash)
+        else:
+            self.client = SoroushClient(session)
+
+        self.admin_actions = AdminActions(self.client, self.logger, self.config_manager)
+        return self.client
+
+    async def handle_new_message(self, event):
+        """هندلر اصلی برای پیام‌های جدید"""
+        try:
+            # اگر پیام متنی نیست رد کن (مثلا سرویس)
+            if not event.message or not hasattr(event.message, 'message'):
+                return
+
+            # اطلاعات پیام
+            message_text = event.message.message or event.message.text or ""
+            # برای کپشن عکس/فایل هم چک کن
+            if not message_text and hasattr(event.message, 'file') and event.message.file:
+                # اگر فایل دارد، نام فایل یا کپشن را چک کن
+                try:
+                    caption = getattr(event.message, 'caption', None) or ""
+                    message_text = caption
+                except:
+                    pass
+
+            if not message_text:
+                return
+
+            # پاسخ خودکار پیام‌ها
+            auto_replies = {
+                "سلام": "سلام خوبی؟",
+                "درود": "درود بر شما 🌹",
+                "خوبی": "ممنون، تو خوبی؟",
+                "چطوری": "خوبم، مرسی 😊",
+                "چه خبر": "سلامتی بچها 🦊",
+                "چخبر": "سلامتی بچها 🦊",
+                "چخبرا": "سلامتی بچها 🦊",
+                "ربات": "سلام جانم؟",
+                "صبح بخیر": "صبح شما هم بخیر ☀️",
+                "شب بخیر": "شب شما هم بخیر 🌙",
+                "مرسی": "خواهش می‌کنم 🌹",
+                "ممنون": "قابلی نداشت 😊"
+            }
+
+            jokes = [
+                "😂 یکی به دوستش گفت چرا همیشه دیر میای؟ گفت چون عجله دارم، آروم آروم میام!",
+                "🤣 رفتم باشگاه ثبت نام کنم گفتن هدفت چیه؟ گفتم فقط می‌خوام وقتی از پله بالا میرم با پله‌ها دوست باشم!",
+                "😂 معلم گفت چرا مشقت سفیده؟ گفت چون با مداد سفید نوشتم که معلوم نباشه!",
+                "🤣 یکی گفت گوشی جدید گرفتم خیلی باهوشه! پرسیدن چطور؟ گفت خودش می‌فهمه کی شارژ نداره!",
+                "😂 بابام گفت چرا انقدر با گوشیت حرف می‌زنی؟ گفتم دارم با رفیقم چت می‌کنم. گفت پس چرا جواب نمیده؟ گفتم چون رفته شارژر بیاره!",
+                "🤣 دکتر گفت باید کمتر شیرینی بخوری. گفتم چشم دکتر، از فردا کمتر می‌خورم... ولی تعداد دفعاتش همونه!",
+                "😂 یکی پرسید چرا کتاب نمی‌خونی؟ گفت چون کتاب‌ها حرف نمی‌زنن، من با آدم‌ها راحت‌ترم!",
+                "🤣 به دوستم گفتم چرا ساعت زنگ‌دارتو خاموش کردی؟ گفت چون هر روز صبح باهام دعوا می‌کنه!"
+            ]
+
+            clean_text = message_text.strip()
+
+            # فونت ساز گروه
+            if clean_text == "جک":
+                import random
+                await event.reply(random.choice(jokes))
+                return
+
+            if clean_text in auto_replies:
+                await event.reply(auto_replies[clean_text])
+                return
+
+
+
+            chat = await event.get_chat()
+            sender = await event.get_sender()
+
+
+
+            # حذف دستی پیام با ریپلای و کلمه پاک
+            if clean_text == "پاک":
+                try:
+                    sender = await event.get_sender()
+                except Exception as e:
+                    print("DELETE COMMAND ERROR:", e)
+                    return
+
+            # بررسی اسپم
+            is_spam, reason = self.detector.is_spam(message_text)
+
+            if is_spam:
+                # افزایش شمارنده
+                count = self.tracker.increment(chat_id, user_id)
+                threshold = self.config_manager.get("spam_threshold", 3)
+
+                # لاگ
+                self.logger.log_deleted_message(
+                    user_id=user_id,
+                    username=username,
+                    group_id=chat_id,
+                    group_title=chat_title,
+                    original_text=message_text,
+                    reason=reason,
+                    message_id=event.message.id
+                )
+
+                # حذف پیام اگر تنظیم شده
+                if self.config_manager.get("delete_spam", True):
+                    deleted = await self.admin_actions.delete_message(chat_id, event=event)
+                    if deleted:
+                        print(f"🗑️ حذف شد | {chat_title} | {username} | دلیل: {reason} | تعداد تخلف: {count}")
+
+                # ارسال هشدار
+                await self.admin_actions.send_warning(
+                    chat_id=chat_id,
+                    username=username,
+                    reason=reason,
+                    count=count,
+                    threshold=threshold,
+                    reply_to=None  # برای جلوگیری از ریپلای به پیام حذف شده
+                )
+
+                # بررسی مجازات
+                if self.tracker.should_punish(chat_id, user_id):
+                    print(f"⚠️ کاربر {username}({user_id}) به آستانه {threshold} رسید - اعمال مجازات")
+                    await self.admin_actions.punish_user(chat_id, user_id, username)
+            else:
+                # پیام سالم - می‌توان برای آنالیز بیشتر لاگ کرد
+                pass
+
+        except Exception as e:
+            self.logger.log_error(f"خطا در هندل پیام: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def handle_admin_commands(self, event, text: str, admin_id: int, chat_id: int):
+        """دستورات مدیریتی داخل گروه"""
+        text = text.strip()
+        if not text.startswith(('!', '/', '.')):
+            return
+
+        # حذف پیشوند
+        cmd_text = text[1:].strip()
+        parts = cmd_text.split()
+        if not parts:
+            return
+        cmd = parts[0].lower()
+
+        try:
+            if cmd in ["addword", "addban", "افزودن"]:
+                if len(parts) < 2:
+                    await event.respond("❌ استفاده: !addword کلمه_ممنوعه")
+                    return
+                word = " ".join(parts[1:])
+                if self.config_manager.add_banned_word(word):
+                    await event.respond(f"✅ کلمه '{word}' به لیست سیاه اضافه شد.")
+                else:
+                    await event.respond(f"⚠️ کلمه '{word}' قبلا وجود دارد.")
+
+            elif cmd in ["remword", "removeword", "حذف"]:
+                if len(parts) < 2:
+                    await event.respond("❌ استفاده: !remword کلمه")
+                    return
+                word = " ".join(parts[1:])
+                if self.config_manager.remove_banned_word(word):
+                    await event.respond(f"✅ کلمه '{word}' حذف شد.")
+                else:
+                    await event.respond(f"⚠️ کلمه '{word}' یافت نشد.")
+
+            elif cmd in ["stats", "آمار"]:
+                group_counts = self.tracker.get_all_counts(chat_id)
+                top = self.tracker.get_top_spammers(chat_id, limit=5)
+                msg = f"📊 آمار اسپم گروه:\nتعداد کل متخلفان: {len(group_counts)}\n\n🏆 بیشترین تخلف:\n"
+                for uid, cnt in top:
+                    msg += f"- {uid}: {cnt} بار\n"
+                msg += f"\n📚 کلمات ممنوعه: {len(self.config_manager.banned_words)} عدد"
+                await event.respond(msg)
+
+            elif cmd in ["whitelist", "سفید"]:
+                if len(parts) >= 2 and parts[1].isdigit():
+                    # افزودن به وایت لیست (فقط در حافظه، برای دائمی باید فایل را ویرایش کرد)
+                    new_id = int(parts[1])
+                    self.config_manager.whitelisted_ids.add(new_id)
+                    await event.respond(f"✅ {new_id} به لیست سفید موقت اضافه شد (برای دائمی config.json را ویرایش کنید)")
+                else:
+                    await event.respond(f"🛡️ لیست سفید: {len(self.config_manager.whitelisted_ids)} کاربر\nبرای افزودن: !whitelist user_id")
+
+            elif cmd in ["reset", "ریست"]:
+                if len(parts) >= 2:
+                    try:
+                        target_id = int(parts[1])
+                        self.tracker.reset_count(chat_id, target_id)
+                        await event.respond(f"✅ شمارنده {target_id} صفر شد.")
+                    except:
+                        await event.respond("❌ آیدی نامعتبر")
+                else:
+                    self.tracker.reset_group(chat_id)
+                    await event.respond("✅ شمارنده تمام کاربران این گروه صفر شد.")
+
+            elif cmd in ["help", "راهنما"]:
+                help_text = """
+🤖 دستورات مدیر ربات ضد اسپم:
+
+!addword کلمه - افزودن کلمه ممنوعه
+!remword کلمه - حذف کلمه ممنوعه
+!stats - نمایش آمار اسپم
+!whitelist user_id - افزودن موقت به لیست سفید
+!reset [user_id] - صفر کردن شمارنده
+!help - همین راهنما
+
+⚙️ تنظیمات از طریق فایل config/config.json و config/banned_words.txt هم قابل تغییر است.
+"""
+                await event.respond(help_text)
+
+            self.logger.log_error(f"خطا در دستور ادمین {cmd}: {e}")
+
+    async def is_admin_user(self, event, user_id):
+        try:
+            sender = await event.get_sender()
+
+            self.logger.log_error(f"خطا در تشخیص مدیر: {e}")
+            return False
+
+    async def run(self):
+        """اجرای ربات"""
+        await self.initialize_client()
+
+        await self.client.connect()
+
+        @self.client.on(events.NewMessage())
+        async def new_message_handler(event):
+
+            print("📩 پیام دریافت شد:", getattr(event.message, "message", ""))
+
+            if event.out:
+                return
+
+            text = (event.message.message or "").strip()
+
+            # پیوی فقط دستورات ادمین
+            if event.is_private:
+                sender = await event.get_sender()
+
+    except KeyboardInterrupt:
+        print("\n🛑 ربات توسط کاربر متوقف شد")
+        print(f"❌ خطای اصلی: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()

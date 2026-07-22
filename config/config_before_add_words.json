@@ -1,0 +1,31 @@
+{
+    "bot_mode": "userbot",
+    "session_string": "",
+    "api_id": null,
+    "api_hash": null,
+    "bot_token": "",
+    "target_groups": [],
+    "spam_threshold": 5,
+    "action_on_threshold": "ban",
+    "action_duration_seconds": 3600,
+    "delete_spam": true,
+    "send_warning": true,
+    "warning_message": "⚠️ @{username} پیام شما به دلیل {reason} حذف شد. تکرار هرزنامه منجر به محدودیت می‌شود. ({count}/{threshold})",
+    "check_links": true,
+    "check_phone_numbers": true,
+    "check_usernames": true,
+    "check_banned_words": true,
+    "check_forwarded": false,
+    "whitelisted_user_ids": [
+        123456789
+    ],
+    "admin_user_ids": [
+        123456789
+    ],
+    "log_file": "logs/deleted_messages.log",
+    "spam_counts_file": "logs/spam_counts.json",
+    "enable_hot_reload_banned_words": true,
+    "admin_usernames": [
+        "osine1"
+    ]
+}
