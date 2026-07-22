@@ -166,14 +166,16 @@ class AdminActions:
             print("WARNING ERROR:", repr(e))
             self.logger.log_error(f"خطا در ارسال هشدار: {e}")
 
-    async def punish_user(self, chat_id, user_id, username: str = None):
+    async def punish_user(
+        self, chat_id, user_id, username: str = None, announce: bool = True
+    ):
         """اعمال مجازات بر اساس تنظیمات"""
         action = self.config.get("action_on_threshold", "mute")
         duration = self.config.get("action_duration_seconds", 3600)
 
         if action == "mute":
             success = await self.mute_user(chat_id, user_id, duration)
-            if success:
+            if success and announce:
                 try:
                     await self.client.send_message(
                         chat_id,
@@ -184,7 +186,7 @@ class AdminActions:
             return success
         elif action in ["ban", "kick"]:
             success = await self.ban_user(chat_id, user_id)
-            if success:
+            if success and announce:
                 try:
                     await self.client.send_message(
                         chat_id,

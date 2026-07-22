@@ -187,6 +187,25 @@ async def handle_new_message(bot, event):
 
         clean_text = message_text.strip()
 
+        if not event.is_private and clean_text in ["فعال", "غیر فعال"]:
+            if not _is_main_bot_owner(bot, user_id):
+                await event.reply("❌ فقط مالک اصلی ربات اجازه تغییر وضعیت را دارد")
+                return
+
+            chat = await event.get_chat()
+            title = getattr(chat, "title", "")
+            if clean_text == "غیر فعال":
+                deactivate_group(chat_id, title)
+                await event.reply(
+                    f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
+                )
+            else:
+                activate_group(chat_id, title)
+                await event.reply(
+                    f"🦊 روباه در گروه «{title}» فعال شد ✅"
+                )
+            return
+
         if clean_text == "ثبت اصل":
             begin_registration(user_id)
             await event.reply("لقب یا اصل خودتو بنویس")
@@ -765,8 +784,8 @@ async def handle_new_message(bot, event):
             )
             return
 
-        # فعال و غیرفعال کردن گروه توسط مالک اصلی
-        if clean_text in ["فعال سازی", "غیر فعال"]:
+        # فعال‌سازی گروه توسط مالک اصلی
+        if clean_text == "فعال سازی":
             try:
                 sender = await event.get_sender()
                 print("OWNER DEBUG:", getattr(sender, "username", None), getattr(sender, "id", None), getattr(sender, "first_name", None))
@@ -795,9 +814,13 @@ async def handle_new_message(bot, event):
 
                     owner_section = f"👑 مالک گروه:\n{owner_text}"
                     admins_section = f"👮 ادمین های گروه:\n{admins_text}"
+                    activation_hint = (
+                        "برای آشنایی بیشتر، کلمه «راهنما» را ارسال کنید.\n"
+                        "یا بیو ربات را مشاهده کنید؛ کانال راهنما در آن قرار دارد."
+                    )
                     activation_text = (
                         f"🦊 روباه در گروه «{title}» فعال سازی شد ✅\n\n"
-                        f"{owner_section}\n\n{admins_section}"
+                        f"{owner_section}\n\n{admins_section}\n\n{activation_hint}"
                     )
 
                     def u16_length(value):
@@ -805,6 +828,7 @@ async def handle_new_message(bot, event):
 
                     owner_offset = activation_text.index(owner_section)
                     admins_offset = activation_text.index(admins_section)
+                    hint_offset = activation_text.index(activation_hint)
                     entities = [
                         MessageEntityBlockquote(
                             offset=u16_length(activation_text[:owner_offset]),
@@ -821,6 +845,10 @@ async def handle_new_message(bot, event):
                         MessageEntityBold(
                             offset=u16_length(activation_text[:admins_offset]),
                             length=u16_length("👮 ادمین های گروه:"),
+                        ),
+                        MessageEntityBold(
+                            offset=u16_length(activation_text[:hint_offset]),
+                            length=u16_length(activation_hint),
                         ),
                     ]
 
@@ -1642,7 +1670,12 @@ async def handle_new_message(bot, event):
                     await bot.admin_actions.delete_message(chat_id, event=event)
 
                     if hasattr(bot.admin_actions, "ban_user"):
-                        await bot.admin_actions.ban_user(chat_id, user_id)
+                        banned = await bot.admin_actions.ban_user(chat_id, user_id)
+                        if banned:
+                            await bot.client.send_message(
+                                chat_id,
+                                f"🚫 کاربر {username or user_id} به دلیل اسپم مکرر از گروه اخراج شد."
+                            )
 
                     return
             except Exception as e:
@@ -1696,7 +1729,18 @@ async def handle_new_message(bot, event):
                         f"⚠️ کاربر {username}({user_id}) به آستانه {threshold} رسید - اعمال مجازات"
                     )
 
-                    await bot.admin_actions.punish_user(chat_id, user_id, username)
+                    punished = await bot.admin_actions.punish_user(
+                        chat_id, user_id, username, announce=False
+                    )
+                    if (
+                        punished
+                        and count >= 5
+                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
+                    ):
+                        await bot.client.send_message(
+                            chat_id,
+                            f"🚫 کاربر {username or user_id} به دلیل تخلفات از گروه اخراج شد."
+                        )
 
                     # بعد از مجازات شمارنده تخلف صفر شود
                     bot.tracker.reset_count(chat_id, user_id)

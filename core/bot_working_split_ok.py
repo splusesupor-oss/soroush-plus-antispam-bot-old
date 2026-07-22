@@ -216,6 +216,19 @@ class SoroushAntiSpamBot:
 
             text = (event.message.message or "").strip()
 
+            # کنترل فعال بودن گروه باید قبل از هر دستور گروهی انجام شود.
+            if not event.is_private:
+                chat_lock = await event.get_chat()
+                lock_id = getattr(chat_lock, "id", None)
+                sender_lock = await event.get_sender()
+                sender_id = getattr(sender_lock, "id", None)
+                main_owner_id = self.config_manager.get("OWNER_ID")
+
+                if not is_active(lock_id):
+                    if text == "فعال" and str(sender_id) == str(main_owner_id):
+                        await handle_new_message(self, event)
+                    return
+
             # آزاد کردن کاربر محروم شده
             if text == "آزاد":
                 try:
@@ -244,21 +257,6 @@ class SoroushAntiSpamBot:
                 except Exception as e:
                     await event.reply(f"❌ خطا در آزاد کردن: {e}")
                 return
-
-
-
-            # کنترل فعال بودن گروه
-            if not event.is_private:
-                chat_lock = await event.get_chat()
-                lock_id = getattr(chat_lock, "id", None)
-
-                sender_lock = await event.get_sender()
-                owner_lock = getattr(sender_lock, "username", None)
-
-                # مالک همیشه اجازه فعال/غیر فعال کردن دارد
-                if text not in ["فعال سازی", "غیر فعال"] or owner_lock != "osine1":
-                    if not is_active(lock_id):
-                        return
 
 
 
