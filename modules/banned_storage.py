@@ -81,6 +81,45 @@ def remove_banned(group_id, user_id=None, username=None):
     return removed_count
 
 
+def find_banned_records(user_id=None, username=None, data=None):
+    """تمام رکوردهای منطبق را در همهٔ گروه‌ها، از دادهٔ تازهٔ فایل پیدا می‌کند."""
+    if data is None:
+        data = load_banned()
+
+    return {
+        group_id: [
+            entry for entry in entries
+            if isinstance(entries, list) and _entry_matches(entry, user_id, username)
+        ]
+        for group_id, entries in data.items()
+        if isinstance(entries, list)
+        and any(_entry_matches(entry, user_id, username) for entry in entries)
+    }
+
+
+def remove_banned_everywhere(user_id=None, username=None):
+    """تمام رکوردهای بنِ یک کاربر را در همهٔ گروه‌های فایل حذف می‌کند."""
+    data = load_banned()
+    before_records = find_banned_records(user_id, username, data)
+    removed_count = 0
+
+    for group_id, entries in data.items():
+        if not isinstance(entries, list):
+            continue
+        remaining = [
+            entry for entry in entries
+            if not _entry_matches(entry, user_id, username)
+        ]
+        removed_count += len(entries) - len(remaining)
+        data[group_id] = remaining
+
+    if removed_count:
+        save_banned(data)
+
+    remaining_records = find_banned_records(user_id, username, load_banned())
+    return removed_count, before_records, remaining_records
+
+
 def is_banned(group_id, user_id, username=None, data=None):
     """وضعیت بن را با دادهٔ تازهٔ فایل یا دادهٔ صریحِ داده‌شده بررسی می‌کند."""
     if data is None:
