@@ -116,6 +116,70 @@ async def get_activation_admin_info(bot, chat_id):
 
     return owner, admins
 
+
+MAIN_BOT_OWNER_ID = 68074059
+
+
+async def _get_group_creator_id(bot, chat_id):
+    def creator_id(users, participants):
+        users_by_id = {
+            getattr(user, "id", None): user
+            for user in users
+        }
+        for participant in participants:
+            if "Creator" in participant.__class__.__name__:
+                user_id = getattr(participant, "user_id", None)
+                if user_id in users_by_id:
+                    return user_id
+        return None
+
+    try:
+        channel = await bot.client.get_input_entity(chat_id)
+        result = await bot.client(
+            functions.channels.GetParticipantsRequest(
+                channel=channel,
+                filter=types.ChannelParticipantsAdmins(),
+                offset=0,
+                limit=100,
+                hash=0,
+            )
+        )
+        creator = creator_id(
+            getattr(result, "users", []),
+            getattr(result, "participants", []),
+        )
+        if creator is not None:
+            return creator
+    except Exception:
+        pass
+
+    try:
+        result = await bot.client(
+            functions.messages.GetFullChatRequest(chat_id=chat_id)
+        )
+        participant_container = getattr(
+            getattr(result, "full_chat", None),
+            "participants",
+            None,
+        )
+        return creator_id(
+            getattr(result, "users", []),
+            getattr(participant_container, "participants", []),
+        )
+    except Exception as error:
+        bot.logger.log_error(
+            f"خطا در دریافت مالک گروه {chat_id} برای مدیریت ادمین‌ها: {error}"
+        )
+        return None
+
+
+async def _can_manage_group_admins(bot, chat_id, user_id):
+    if user_id == MAIN_BOT_OWNER_ID:
+        return True
+
+    return user_id == await _get_group_creator_id(bot, chat_id)
+
+
 async def handle_new_message(bot, event):
     """هندلر اصلی برای پیام‌های جدید"""
     try:
@@ -871,17 +935,13 @@ async def handle_new_message(bot, event):
         # ثبت ادمین توسط مالک ربات
 
         if clean_text.startswith("ثبت ادمین"):
-            sender_username = getattr(sender, "username", None)
-            if sender_username != "osine1":
-                await event.reply("❌ فقط مالک ربات اجازه استفاده از این دستور را دارد")
+            if not await _can_manage_group_admins(bot, chat_id, user_id):
+                await event.reply(
+                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
+                )
                 return
 
             try:
-                owner = getattr(sender, "username", "")
-                if owner != "osine1":
-                    await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
-                    return
-
                 admin_username = None
 
                 if event.reply_to:
@@ -913,17 +973,13 @@ async def handle_new_message(bot, event):
 
         # برکناری ادمین توسط مالک ربات
         if clean_text.startswith("برکناری ادمین"):
-            sender_username = getattr(sender, "username", None)
-            if sender_username != "osine1":
-                await event.reply("❌ فقط ادمین‌ها اجازه استفاده از این دستور را دارند")
+            if not await _can_manage_group_admins(bot, chat_id, user_id):
+                await event.reply(
+                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
+                )
                 return
 
             try:
-                owner = getattr(sender, "username", "")
-                if owner != "osine1":
-                    await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
-                    return
-
                 admin_username = None
 
                 if event.reply_to:
