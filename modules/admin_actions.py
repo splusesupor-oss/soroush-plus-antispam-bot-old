@@ -253,8 +253,14 @@ class AdminActions:
                 )
             )
 
+            display_name = " ".join(
+                part for part in (
+                    getattr(user, "first_name", None),
+                    getattr(user, "last_name", None),
+                ) if part
+            ).strip()
             removed_count, before_records, remaining_records = (
-                remove_banned_everywhere(user_id, username)
+                remove_banned_everywhere(user_id, username, display_name)
             )
             still_banned = is_banned(chat_id, user_id, username)
             print(
