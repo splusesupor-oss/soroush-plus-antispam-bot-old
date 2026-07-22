@@ -356,6 +356,10 @@ class SoroushAntiSpamBot:
                     registered_owner_id is not None
                     and str(sender_id) == str(registered_owner_id)
                 )
+                is_global_bot_owner = is_global_owner(sender_username)
+                can_change_group_mode = (
+                    is_global_bot_owner or is_registered_owner
+                )
                 is_enable_command = text == "فعال"
                 is_disable_command = text == "غیر فعال"
 
@@ -367,13 +371,15 @@ class SoroushAntiSpamBot:
                         f"normalized_username={normalized_username!r} "
                         f"text={text!r} disabled_before={not group_is_active} "
                         f"registered_owner_id={registered_owner_id} "
-                        f"owner_check={is_registered_owner} "
+                        f"registered_owner_check={is_registered_owner} "
+                        f"global_owner_check={is_global_bot_owner} "
+                        f"mode_owner_check={can_change_group_mode} "
                         f"enable_match={is_enable_command} "
                         f"disable_match={is_disable_command}"
                     )
 
                 if not group_is_active:
-                    if is_enable_command and is_registered_owner:
+                    if is_enable_command and can_change_group_mode:
                         title = getattr(chat_lock, "title", "")
                         activate_group(lock_id, title)
                         await send_activation_message(
@@ -382,7 +388,7 @@ class SoroushAntiSpamBot:
                     return
 
                 if is_disable_command:
-                    if is_registered_owner:
+                    if can_change_group_mode:
                         title = getattr(chat_lock, "title", "")
                         deactivate_group(lock_id, title)
                         for task in self.group_timer_tasks.pop(lock_id, set()):
