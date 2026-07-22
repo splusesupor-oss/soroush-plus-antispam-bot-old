@@ -258,10 +258,12 @@ async def handle_new_message(bot, event):
                 )
             return
 
+        registered_owner_id = get_group_owner(chat_id)
         if (
             not event.is_private
+            and registered_owner_id is not None
             and clean_text == "سلام"
-            and str(user_id) == str(get_group_owner(chat_id))
+            and str(user_id) == str(registered_owner_id)
         ):
             await event.reply("سلام مالک جون 👑")
             return
