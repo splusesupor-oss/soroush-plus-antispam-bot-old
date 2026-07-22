@@ -14,6 +14,7 @@ from modules.banned_storage import (
     is_banned,
     load_banned,
     get_matching_ban_records,
+    remove_banned_everywhere,
     FILE as BANNED_STORAGE_FILE,
 )
 from modules.group_words_commands import handle_group_word_command
@@ -183,6 +184,30 @@ class SoroushAntiSpamBot:
         await self.client.connect()
         asyncio.create_task(process_delete(self))
 
+        async def is_currently_restricted(chat_id, user):
+            """وضعیت فعلی عضو را از SPlusthon می‌خواند؛ خطا یعنی حفظ بن فعلی."""
+            try:
+                channel = await self.client.get_input_entity(chat_id)
+                participant = await self.client.get_input_entity(user)
+                result = await self.client(
+                    functions.channels.GetParticipantRequest(
+                        channel=channel,
+                        participant=participant,
+                    )
+                )
+                state = getattr(result, "participant", None)
+                state_name = state.__class__.__name__ if state else "Unknown"
+                restricted = "Banned" in state_name or "Left" in state_name
+                self.logger.log_info(
+                    f"MANUAL RELEASE CHECK user_id={getattr(user, 'id', None)} "
+                    f"state={state_name} restricted={restricted}"
+                )
+                return restricted
+            except Exception as error:
+                self.logger.log_error(
+                    f"خطا در بررسی وضعیت بن کاربر {getattr(user, 'id', None)}: {error}"
+                )
+                return True
 
 
         @self.client.on(events.ChatAction())
@@ -217,6 +242,32 @@ class SoroushAntiSpamBot:
                     f"source={BANNED_STORAGE_FILE} records={matching_records}"
                 )
                 if banned:
+                    if not await is_currently_restricted(chat_id, user):
+                        display_name = " ".join(
+                            part for part in (
+                                getattr(user, "first_name", None),
+                                getattr(user, "last_name", None),
+                            ) if part
+                        ).strip()
+                        removed_count, _, remaining_records = (
+                            remove_banned_everywhere(
+                                user_id,
+                                username,
+                                display_name,
+                            )
+                        )
+                        self.tracker.banned_users.pop(
+                            f"{chat_id}:{user_id}", None
+                        )
+                        self.punished_users.discard(f"{chat_id}:{user_id}")
+                        self.spammer_messages.pop(user_id, None)
+                        self.logger.log_info(
+                            "Detected manual release, removed user from permanent "
+                            f"banned storage. user_id={user_id} "
+                            f"removed={removed_count} remaining={remaining_records}"
+                        )
+                        return
+
                     await self.client.edit_permissions(
                         chat_id,
                         user,
