@@ -221,7 +221,7 @@ class AdminActions:
 
     async def unban_user(self, chat_id, user_id, username=None):
         try:
-            from modules.banned_storage import remove_banned
+            from modules.banned_storage import is_banned, remove_banned
             from splusthon.tl import functions, types
 
             user = await self.client.get_entity(user_id)
@@ -250,7 +250,18 @@ class AdminActions:
                 )
             )
 
-            remove_banned(chat_id, user_id, username)
+            removed_count = remove_banned(chat_id, user_id, username)
+            still_banned = is_banned(chat_id, user_id, username)
+            self.logger.log_info(
+                "UNBAN DEBUG "
+                f"user_id={user_id} username={username} "
+                f"removed={removed_count} is_banned={still_banned}"
+            )
+            if still_banned:
+                self.logger.log_error(
+                    f"رکورد بن {user_id} پس از آزادسازی هنوز در ذخیره‌سازی باقی مانده است"
+                )
+                return False
 
             self.logger.log_action(
                 "UNBAN",

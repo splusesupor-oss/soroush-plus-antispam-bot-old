@@ -63,25 +63,28 @@ def add_banned(group_id, user_id, username=None, display_name=None, reason=""):
 
 
 def remove_banned(group_id, user_id=None, username=None):
+    """تمام رکوردهای منطبق با شناسه و نام کاربر را از فایل حذف می‌کند."""
     data = load_banned()
     gid = str(group_id)
     if gid not in data:
-        return False
+        return 0
 
     original_length = len(data[gid])
     data[gid] = [
         entry for entry in data[gid]
         if not _entry_matches(entry, user_id, username)
     ]
-    if len(data[gid]) == original_length:
-        return False
+    removed_count = original_length - len(data[gid])
+    if removed_count:
+        save_banned(data)
 
-    save_banned(data)
-    return True
+    return removed_count
 
 
-def is_banned(group_id, user_id, username=None):
-    data = load_banned()
+def is_banned(group_id, user_id, username=None, data=None):
+    """وضعیت بن را با دادهٔ تازهٔ فایل یا دادهٔ صریحِ داده‌شده بررسی می‌کند."""
+    if data is None:
+        data = load_banned()
     for entry in data.get(str(group_id), []):
         if _entry_matches(entry, user_id, username):
             return True

@@ -8,7 +8,7 @@ from modules.group_stats import add_message, add_deleted, add_kick, add_mute, ma
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.banned_storage import add_banned, remove_banned, is_banned
+from modules.banned_storage import add_banned, remove_banned, is_banned, load_banned
 from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
@@ -192,7 +192,15 @@ class SoroushAntiSpamBot:
                 user_id = user.id
                 username = getattr(user, "username", None)
 
-                if is_banned(chat_id, user_id, username):
+                banned_data = load_banned()
+                banned = is_banned(
+                    chat_id, user_id, username, data=banned_data
+                )
+                self.logger.log_info(
+                    "JOIN BAN CHECK "
+                    f"user_id={user_id} username={username} is_banned={banned}"
+                )
+                if banned:
                     await self.client.edit_permissions(
                         chat_id,
                         user,
@@ -260,6 +268,9 @@ class SoroushAntiSpamBot:
                     )
                     self.punished_users.discard(f"{event.chat_id}:{user.id}")
                     self.spammer_messages.pop(user.id, None)
+                    self.logger.log_info(
+                        f"UNBAN COMPLETE user_id={user.id} removed successfully"
+                    )
                     await event.reply("♻️ کاربر آزاد شد")
 
                 except Exception as e:
