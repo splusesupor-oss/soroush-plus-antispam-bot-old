@@ -1,67 +1,88 @@
+"""ذخیره‌سازی سازگارِ کاربران بن‌شده به‌صورت دائمی برای هر گروه."""
 import json
 from pathlib import Path
 
+
 FILE = Path("config/banned_users.json")
+
 
 def load_banned():
     if not FILE.exists():
         return {}
     try:
         return json.loads(FILE.read_text(encoding="utf-8"))
-    except:
+    except Exception:
         return {}
+
 
 def save_banned(data):
     FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
-def add_banned(group_id, username):
+
+def _entry_matches(entry, user_id=None, username=None):
+    identifiers = set()
+    if user_id is not None:
+        identifiers.add(str(user_id).lower())
+    if username:
+        identifiers.add(str(username).replace("@", "").lower())
+
+    if isinstance(entry, dict):
+        values = [entry.get("user_id"), entry.get("username")]
+    else:
+        values = [entry]
+
+    return any(
+        value is not None and str(value).replace("@", "").lower() in identifiers
+        for value in values
+    )
+
+
+def add_banned(group_id, user_id, username=None, display_name=None, reason=""):
+    """کاربر را با شناسه پایدار و اطلاعات نمایشی در ذخیرهٔ موجود ثبت می‌کند."""
     data = load_banned()
-
     gid = str(group_id)
+    entries = data.setdefault(gid, [])
+    record = {
+        "user_id": str(user_id),
+        "username": username or None,
+        "display_name": display_name or None,
+        "reason": reason or "بن دائمی",
+    }
 
-    if gid not in data:
-        data[gid] = []
+    for index, entry in enumerate(entries):
+        if _entry_matches(entry, user_id, username):
+            entries[index] = record
+            save_banned(data)
+            return
 
-    if username not in data[gid]:
-        data[gid].append(username)
-
+    entries.append(record)
     save_banned(data)
 
-def remove_banned(group_id, username):
+
+def remove_banned(group_id, user_id=None, username=None):
     data = load_banned()
     gid = str(group_id)
-
     if gid not in data:
         return False
 
-    target = str(username).lower()
+    original_length = len(data[gid])
+    data[gid] = [
+        entry for entry in data[gid]
+        if not _entry_matches(entry, user_id, username)
+    ]
+    if len(data[gid]) == original_length:
+        return False
 
-    for item in list(data[gid]):
-        if str(item).lower() == target:
-            data[gid].remove(item)
-            save_banned(data)
-            return True
-
-    return False
+    save_banned(data)
+    return True
 
 
 def is_banned(group_id, user_id, username=None):
     data = load_banned()
-    gid = str(group_id)
-
-    if gid not in data:
-        return False
-
-    uid = str(user_id)
-
-    for x in data[gid]:
-        if str(x) == uid:
+    for entry in data.get(str(group_id), []):
+        if _entry_matches(entry, user_id, username):
             return True
-
-        if username and str(x).lower() == str(username).lower():
-            return True
-
     return False

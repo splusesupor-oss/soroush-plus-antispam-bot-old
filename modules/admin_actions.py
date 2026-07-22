@@ -114,8 +114,8 @@ class AdminActions:
             return False
 
 
-    async def ban_user(self, chat_id, user_id) -> bool:
-        """Kick + permanent storage ban"""
+    async def ban_user(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:
+        """بن دائمی و ثبت پایدار کاربر برای جلوگیری از بازگشت."""
         try:
             user = await self.client.get_entity(user_id)
 
@@ -123,16 +123,35 @@ class AdminActions:
                 chat_id,
                 user
             )
+            try:
+                await self.client.edit_permissions(
+                    chat_id,
+                    user,
+                    until_date=None,
+                    view_messages=False,
+                )
+            except Exception as permission_error:
+                self.logger.log_error(
+                    f"خطا در اعمال محدودیت دائمی {user_id}: {permission_error}"
+                )
 
             try:
                 from modules.banned_storage import add_banned
 
                 username = getattr(user, "username", None)
-
-                if username:
-                    add_banned(chat_id, username)
-                else:
-                    add_banned(chat_id, str(user_id))
+                display_name = " ".join(
+                    part for part in (
+                        getattr(user, "first_name", None),
+                        getattr(user, "last_name", None),
+                    ) if part
+                ).strip()
+                add_banned(
+                    chat_id,
+                    user_id,
+                    username=username,
+                    display_name=display_name,
+                    reason=reason,
+                )
 
             except Exception as e:
                 self.logger.log_error(f"storage ban error: {e}")
@@ -141,7 +160,7 @@ class AdminActions:
                 "BAN",
                 user_id,
                 chat_id,
-                "حذف دائمی به دلیل اسپم"
+                reason
             )
 
             return True
@@ -185,7 +204,9 @@ class AdminActions:
                     pass
             return success
         elif action in ["ban", "kick"]:
-            success = await self.ban_user(chat_id, user_id)
+            success = await self.ban_user(
+                chat_id, user_id, reason="رسیدن به آستانه تخلفات"
+            )
             if success and announce:
                 try:
                     await self.client.send_message(
@@ -203,7 +224,7 @@ class AdminActions:
             from modules.banned_storage import remove_banned
             from splusthon.tl import functions, types
 
-            remove_banned(chat_id, username or str(user_id))
+            remove_banned(chat_id, user_id, username)
 
             user = await self.client.get_entity(user_id)
             entity = await self.client.get_input_entity(chat_id)

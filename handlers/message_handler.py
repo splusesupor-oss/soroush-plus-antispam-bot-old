@@ -28,7 +28,7 @@ from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.admin_storage import add_admin, remove_admin, is_admin
-from modules.banned_storage import remove_banned
+from modules.banned_storage import add_banned, remove_banned
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
@@ -297,7 +297,8 @@ async def handle_new_message(bot, event):
 
                 await bot.admin_actions.ban_user(
                     chat_id,
-                    user_id
+                    user_id,
+                    reason="اسپم تکراری"
                 )
 
                 clear_user(chat_id, user_id)
@@ -1223,6 +1224,20 @@ async def handle_new_message(bot, event):
                     until_date=None,
                     view_messages=False
                 )
+                target_username = getattr(target_user, "username", None)
+                target_display_name = " ".join(
+                    part for part in (
+                        getattr(target_user, "first_name", None),
+                        getattr(target_user, "last_name", None),
+                    ) if part
+                ).strip()
+                add_banned(
+                    chat_id,
+                    target_user.id,
+                    username=target_username,
+                    display_name=target_display_name,
+                    reason="اخراج دستی توسط مالک یا ادمین",
+                )
 
                 await event.reply("✅ کاربر اخراج شد")
 
@@ -1719,7 +1734,9 @@ async def handle_new_message(bot, event):
                     await bot.admin_actions.delete_message(chat_id, event=event)
 
                     if hasattr(bot.admin_actions, "ban_user"):
-                        banned = await bot.admin_actions.ban_user(chat_id, user_id)
+                        banned = await bot.admin_actions.ban_user(
+                            chat_id, user_id, reason="اسپم مکرر شدید"
+                        )
                         if banned:
                             await bot.client.send_message(
                                 chat_id,
