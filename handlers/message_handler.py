@@ -16,38 +16,101 @@ from modules.banned_storage import remove_banned
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
+from splusthon import types
+
+
+def _format_group_member(user):
+    username = getattr(user, "username", None)
+    if username:
+        return f"@{username}"
+
+    user_id = getattr(user, "id", None)
+    name = " ".join(
+        part for part in (
+            getattr(user, "first_name", None),
+            getattr(user, "last_name", None),
+        ) if part
+    ).strip()
+
+    if name and user_id is not None:
+        return f"{name} (ID: {user_id})"
+    if user_id is not None:
+        return f"ID: {user_id}"
+    return "کاربر ناشناس"
+
 
 async def get_activation_admin_info(bot, chat_id):
-    owner = "نامشخص"
+    owner = None
     admins = []
+    admin_ids = set()
+
+    def collect_participants(users, participants):
+        nonlocal owner
+        users = {
+            getattr(user, "id", None): user
+            for user in users
+        }
+
+        for participant in participants:
+            user_id = getattr(participant, "user_id", None)
+            user = users.get(user_id)
+            if not user:
+                continue
+
+            participant_type = participant.__class__.__name__
+            if "Creator" in participant_type:
+                owner = _format_group_member(user)
+            elif "Admin" in participant_type and user_id not in admin_ids:
+                admin_ids.add(user_id)
+                admins.append(_format_group_member(user))
 
     try:
-        async for user in bot.client.iter_participants(chat_id, limit=200):
-            print("PART DEBUG REAL:", repr(user), type(user))
+        channel = await bot.client.get_input_entity(chat_id)
+        offset = 0
+        limit = 100
 
-            username = getattr(user, "username", None)
-            name = (
-                "@" + username if username
-                else getattr(user, "first_name", None)
-                or str(getattr(user, "id", ""))
+        while True:
+            result = await bot.client(
+                functions.channels.GetParticipantsRequest(
+                    channel=channel,
+                    filter=types.ChannelParticipantsAdmins(),
+                    offset=offset,
+                    limit=limit,
+                    hash=0,
+                )
             )
+            users = getattr(result, "users", [])
+            if not users:
+                break
 
-            if getattr(user, "is_creator", False):
-                owner = name
-            elif getattr(user, "is_admin", False):
-                admins.append(name)
+            collect_participants(
+                users,
+                getattr(result, "participants", []),
+            )
+            if len(users) < limit:
+                break
+            offset += len(users)
 
-            participant = getattr(user, "participant", None)
-            print("PART DEBUG:", getattr(user,"id",None), getattr(user,"username",None), type(user), type(participant), participant)
-            if participant:
-                kind = participant.__class__.__name__
-                if "Creator" in kind:
-                    owner = name
-                elif "Admin" in kind:
-                    admins.append(name)
-
-    except Exception as e:
-        print("ADMIN INFO ERROR:", e)
+    except Exception as channel_error:
+        # Basic groups do not support channels.GetParticipantsRequest.
+        try:
+            result = await bot.client(
+                functions.messages.GetFullChatRequest(chat_id=chat_id)
+            )
+            participant_container = getattr(
+                getattr(result, "full_chat", None),
+                "participants",
+                None,
+            )
+            collect_participants(
+                getattr(result, "users", []),
+                getattr(participant_container, "participants", []),
+            )
+        except Exception as basic_chat_error:
+            bot.logger.log_error(
+                "خطا در دریافت مالک و ادمین‌های گروه "
+                f"{chat_id}: channel={channel_error}; basic_chat={basic_chat_error}"
+            )
 
     return owner, admins
 
@@ -679,12 +742,19 @@ async def handle_new_message(bot, event):
                     activate_group(gid, title)
 
                     owner, admins = await get_activation_admin_info(bot, gid)
+                    owner_text = owner or "یافت نشد (دسترسی کافی ندارم)"
+                    admins_text = (
+                        "\n".join(
+                            f"{index}. {admin}"
+                            for index, admin in enumerate(admins, 1)
+                        )
+                        if admins else "ندارد"
+                    )
 
                     await event.respond(
                         f"🦊 روباه در گروه «{title}» فعال سازی شد ✅\n\n"
-                        f"مالک گروه: {owner}\n\n"
-                        f"ادمین های گروه:\n"
-                        + ("\n".join(admins) if admins else "ندارد")
+                        f"👑 مالک گروه:\n{owner_text}\n\n"
+                        f"👮 ادمین های گروه:\n{admins_text}"
                     )
 
             except Exception as e:
