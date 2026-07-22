@@ -197,7 +197,7 @@ class SoroushAntiSpamBot:
                 )
                 state = getattr(result, "participant", None)
                 state_name = state.__class__.__name__ if state else "Unknown"
-                restricted = "Banned" in state_name or "Left" in state_name
+                restricted = "Banned" in state_name
                 self.logger.log_info(
                     f"MANUAL RELEASE CHECK user_id={getattr(user, 'id', None)} "
                     f"state={state_name} restricted={restricted}"
@@ -208,6 +208,53 @@ class SoroushAntiSpamBot:
                     f"خطا در بررسی وضعیت بن کاربر {getattr(user, 'id', None)}: {error}"
                 )
                 return True
+
+
+        @self.client.on(events.Raw(types.UpdateChannelParticipant))
+        async def manual_unban_update(update):
+            previous = getattr(update, "prev_participant", None)
+            current = getattr(update, "new_participant", None)
+            previous_name = previous.__class__.__name__ if previous else "None"
+            current_name = current.__class__.__name__ if current else "None"
+
+            if "Banned" not in previous_name or "Banned" in current_name:
+                return
+
+            chat_id = getattr(update, "channel_id", None)
+            user_id = getattr(update, "user_id", None)
+            if chat_id is None or user_id is None:
+                return
+
+            try:
+                user = await self.client.get_entity(user_id)
+                username = getattr(user, "username", None)
+                display_name = " ".join(
+                    part for part in (
+                        getattr(user, "first_name", None),
+                        getattr(user, "last_name", None),
+                    ) if part
+                ).strip()
+                if not is_banned(chat_id, user_id, username, data=load_banned()):
+                    return
+
+                removed_count, _, remaining_records = remove_banned_everywhere(
+                    user_id,
+                    username,
+                    display_name,
+                )
+                self.tracker.banned_users.pop(f"{chat_id}:{user_id}", None)
+                self.punished_users.discard(f"{chat_id}:{user_id}")
+                self.spammer_messages.pop(user_id, None)
+                self.logger.log_info(
+                    "Detected manual release, removed user from permanent "
+                    f"banned storage. user_id={user_id} "
+                    f"update={previous_name}->{current_name} "
+                    f"removed={removed_count} remaining={remaining_records}"
+                )
+            except Exception as error:
+                self.logger.log_error(
+                    f"خطا در همگام‌سازی آزادسازی دستی {user_id}: {error}"
+                )
 
 
         @self.client.on(events.ChatAction())
