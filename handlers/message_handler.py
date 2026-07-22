@@ -1,4 +1,4 @@
-import time
+import time as _time
 
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
@@ -1147,7 +1147,7 @@ async def handle_new_message(bot, event):
                     return
 
                 cooldown_key = (chat_id, user_id)
-                now = time.monotonic()
+                now = _time.monotonic()
                 last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
                 if last_cleanup is not None and now - last_cleanup < 5:
                     await event.reply(
@@ -1194,7 +1194,7 @@ async def handle_new_message(bot, event):
                     return
 
                 cooldown_key = (chat_id, user_id)
-                now = time.monotonic()
+                now = _time.monotonic()
                 last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
                 if last_cleanup is not None and now - last_cleanup < 5:
                     await event.reply(
@@ -1522,14 +1522,14 @@ async def handle_new_message(bot, event):
 
             bot.flood_messages[chat_id].append(
                 (
-                    time.time(),
+                    _time.time(),
                     event.message.id,
                     user_id,
                     message_text.strip()
                 )
             )
 
-            now = time.time()
+            now = _time.time()
 
             bot.flood_messages[chat_id] = [
                 x for x in bot.flood_messages[chat_id]
