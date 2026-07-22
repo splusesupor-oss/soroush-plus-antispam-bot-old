@@ -753,10 +753,40 @@ async def handle_new_message(bot, event):
                         if admins else "ندارد"
                     )
 
-                    await event.respond(
+                    owner_section = f"👑 مالک گروه:\n{owner_text}"
+                    admins_section = f"👮 ادمین های گروه:\n{admins_text}"
+                    activation_text = (
                         f"🦊 روباه در گروه «{title}» فعال سازی شد ✅\n\n"
-                        f"👑 مالک گروه:\n{owner_text}\n\n"
-                        f"👮 ادمین های گروه:\n{admins_text}"
+                        f"{owner_section}\n\n{admins_section}"
+                    )
+
+                    def u16_length(value):
+                        return len(value.encode("utf-16-le")) // 2
+
+                    owner_offset = activation_text.index(owner_section)
+                    admins_offset = activation_text.index(admins_section)
+                    entities = [
+                        MessageEntityBlockquote(
+                            offset=u16_length(activation_text[:owner_offset]),
+                            length=u16_length(owner_section),
+                        ),
+                        MessageEntityBold(
+                            offset=u16_length(activation_text[:owner_offset]),
+                            length=u16_length("👑 مالک گروه:"),
+                        ),
+                        MessageEntityBlockquote(
+                            offset=u16_length(activation_text[:admins_offset]),
+                            length=u16_length(admins_section),
+                        ),
+                        MessageEntityBold(
+                            offset=u16_length(activation_text[:admins_offset]),
+                            length=u16_length("👮 ادمین های گروه:"),
+                        ),
+                    ]
+
+                    await event.respond(
+                        activation_text,
+                        formatting_entities=entities,
                     )
 
             except Exception as e:
