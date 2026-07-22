@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from modules.owner_check import is_global_owner
 
 FILE = Path("config/admins.json")
 
@@ -61,8 +62,7 @@ def is_admin(group_id, username):
 
     username = username.replace("@", "")
 
-    # مالک اصلی ربات
-    if username == "osine1":
+    if is_global_owner(username):
         return True
 
     return username in data.get(str(group_id), [])

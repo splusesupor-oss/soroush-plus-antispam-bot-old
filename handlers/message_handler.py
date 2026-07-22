@@ -5,6 +5,7 @@ from modules.fill_blank import check_fill
 from modules.riddles import check_answer
 from modules.group_stats import add_message
 from modules.group_storage import activate_group, deactivate_group
+from modules.owner_check import is_global_owner
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
 from modules.fill_blank import new_fill, get_fill_answer
@@ -187,13 +188,8 @@ async def get_activation_admin_info(bot, chat_id):
     return owner, admins
 
 
-def _is_main_bot_owner(bot, user_id):
-    owner_id = bot.config_manager.get("OWNER_ID")
-    return owner_id is not None and str(user_id) == str(owner_id)
-
-
-def _can_manage_group_admins(bot, chat_id, user_id):
-    if _is_main_bot_owner(bot, user_id):
+def _can_manage_group_admins(bot, chat_id, user_id, username):
+    if is_global_owner(username):
         return True
 
     group_owner_id = get_group_owner(chat_id)
@@ -205,7 +201,7 @@ DELETE_COMMAND_COOLDOWNS = {}
 
 def _has_group_management_permission(bot, chat_id, user_id, username):
     return (
-        _can_manage_group_admins(bot, chat_id, user_id)
+        _can_manage_group_admins(bot, chat_id, user_id, username)
         or is_admin(chat_id, username)
         or bot.config_manager.is_admin(user_id, username)
     )
@@ -248,7 +244,7 @@ async def handle_new_message(bot, event):
         clean_text = message_text.strip()
 
         if clean_text == "صفر":
-            if not _is_main_bot_owner(bot, user_id):
+            if not is_global_owner(getattr(sender, "username", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد")
                 return
             if not event.reply_to:
@@ -894,9 +890,7 @@ async def handle_new_message(bot, event):
             try:
                 sender = await event.get_sender()
                 print("OWNER DEBUG:", getattr(sender, "username", None), getattr(sender, "id", None), getattr(sender, "first_name", None))
-                owner = getattr(sender, "username", None)
-
-                if owner != "osine1":
+                if not is_global_owner(getattr(sender, "username", None)):
                     await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
                     return
 
@@ -1007,7 +1001,7 @@ async def handle_new_message(bot, event):
         )
 
         if clean_text == "ثبت مالک":
-            if not _is_main_bot_owner(bot, user_id):
+            if not is_global_owner(getattr(sender, "username", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه ثبت مالک گروه را دارد")
                 return
 
@@ -1035,7 +1029,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "لغو مالک":
-            if not _is_main_bot_owner(bot, user_id):
+            if not is_global_owner(getattr(sender, "username", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه لغو مالک گروه را دارد")
                 return
 
@@ -1050,9 +1044,7 @@ async def handle_new_message(bot, event):
         if clean_text == "ثبت گروه":
 
             try:
-                owner = getattr(sender, "username", "")
-
-                if owner != "osine1":
+                if not is_global_owner(getattr(sender, "username", None)):
                     await event.reply(
                         "❌ فقط مالک ربات اجازه ثبت گروه دارد"
                     )
@@ -1085,7 +1077,9 @@ async def handle_new_message(bot, event):
         # ثبت ادمین توسط مالک ربات
 
         if clean_text.startswith("ثبت ادمین"):
-            if not _can_manage_group_admins(bot, chat_id, user_id):
+            if not _can_manage_group_admins(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            ):
                 await event.reply(
                     "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
                 )
@@ -1123,7 +1117,9 @@ async def handle_new_message(bot, event):
 
         # حذف ادمین توسط مالک اصلی یا مالک ثبت‌شده گروه
         if clean_text.startswith(("برکناری ادمین", "لغو ادمین")):
-            if not _can_manage_group_admins(bot, chat_id, user_id):
+            if not _can_manage_group_admins(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            ):
                 await event.reply(
                     "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
                 )
@@ -1665,8 +1661,8 @@ async def handle_new_message(bot, event):
                 if forward_sender:
                     sender_entity = await bot.client.get_entity(forward_sender)
 
-                    if getattr(sender_entity, "username", "") == "osine1":
-                        print("✅ فوروارد @osine1 محافظت شد")
+                    if is_global_owner(getattr(sender_entity, "username", None)):
+                        print("✅ فوروارد مالک اصلی محافظت شد")
                         return
         except Exception as e:
             print("خطای بررسی فوروارد:", e)

@@ -1,15 +1,15 @@
 from modules.group_banned_words_control import enable, disable
 from modules.admin_storage import is_admin
 from modules.group_storage import get_group_owner
+from modules.owner_check import is_global_owner
 
 
 async def _can_manage_commands(bot, event, admin_id, chat_id):
     sender = await event.get_sender()
     username = getattr(sender, "username", None)
-    main_owner_id = bot.config_manager.get("OWNER_ID")
     group_owner_id = get_group_owner(chat_id)
     return (
-        (main_owner_id is not None and str(admin_id) == str(main_owner_id))
+        is_global_owner(username)
         or (group_owner_id is not None and str(admin_id) == str(group_owner_id))
         or is_admin(chat_id, username)
         or bot.config_manager.is_admin(admin_id, username)

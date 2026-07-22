@@ -8,6 +8,7 @@ from modules.group_stats import add_message, add_deleted, add_kick, add_mute, ma
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
+from modules.owner_check import is_global_owner
 from modules.banned_storage import (
     add_banned,
     remove_banned,
@@ -168,8 +169,7 @@ class SoroushAntiSpamBot:
             if is_admin(chat_id, username):
                 return True
 
-            # بررسی مالک یا ادمین با آیدی عددی
-            if str(user_id) == "68074059":
+            if is_global_owner(username):
                 return True
 
             return False
@@ -426,8 +426,7 @@ class SoroushAntiSpamBot:
 
                 if "صفر" in text:
                     sender = await event.get_sender()
-                    main_owner_id = self.config_manager.get("OWNER_ID")
-                    if str(getattr(sender, "id", None)) != str(main_owner_id):
+                    if not is_global_owner(getattr(sender, "username", None)):
                         await event.reply(
                             "❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد"
                         )
