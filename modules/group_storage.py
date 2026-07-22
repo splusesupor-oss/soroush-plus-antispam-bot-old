@@ -40,23 +40,49 @@ def save_groups(data):
 
 def activate_group(group_id, title):
     data = load_groups()
+    group = data.get(str(group_id), {})
 
-    data[str(group_id)] = {
+    group.update({
         "title": title,
         "active": True
-    }
+    })
+    data[str(group_id)] = group
 
     save_groups(data)
 
 def deactivate_group(group_id, title):
     data = load_groups()
+    group = data.get(str(group_id), {})
 
-    data[str(group_id)] = {
+    group.update({
         "title": title,
         "active": False
-    }
+    })
+    data[str(group_id)] = group
 
     save_groups(data)
+
+def set_group_owner(group_id, owner_id):
+    data = load_groups()
+    gid = str(group_id)
+    group = data.get(gid, {})
+    group["owner_id"] = int(owner_id)
+    data[gid] = group
+    save_groups(data)
+
+def get_group_owner(group_id):
+    data = load_groups()
+    return data.get(str(group_id), {}).get("owner_id")
+
+def remove_group_owner(group_id):
+    data = load_groups()
+    group = data.get(str(group_id))
+    if not group or "owner_id" not in group:
+        return False
+
+    del group["owner_id"]
+    save_groups(data)
+    return True
 
 def is_active(group_id):
     data = load_groups()

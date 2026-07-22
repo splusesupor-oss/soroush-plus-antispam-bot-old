@@ -13,6 +13,7 @@ from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.admin_storage import add_admin, remove_admin
 from modules.banned_storage import remove_banned
+from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
@@ -117,67 +118,17 @@ async def get_activation_admin_info(bot, chat_id):
     return owner, admins
 
 
-MAIN_BOT_OWNER_ID = 68074059
+def _is_main_bot_owner(bot, user_id):
+    owner_id = bot.config_manager.get("OWNER_ID")
+    return owner_id is not None and str(user_id) == str(owner_id)
 
 
-async def _get_group_creator_id(bot, chat_id):
-    def creator_id(users, participants):
-        users_by_id = {
-            getattr(user, "id", None): user
-            for user in users
-        }
-        for participant in participants:
-            if "Creator" in participant.__class__.__name__:
-                user_id = getattr(participant, "user_id", None)
-                if user_id in users_by_id:
-                    return user_id
-        return None
-
-    try:
-        channel = await bot.client.get_input_entity(chat_id)
-        result = await bot.client(
-            functions.channels.GetParticipantsRequest(
-                channel=channel,
-                filter=types.ChannelParticipantsAdmins(),
-                offset=0,
-                limit=100,
-                hash=0,
-            )
-        )
-        creator = creator_id(
-            getattr(result, "users", []),
-            getattr(result, "participants", []),
-        )
-        if creator is not None:
-            return creator
-    except Exception:
-        pass
-
-    try:
-        result = await bot.client(
-            functions.messages.GetFullChatRequest(chat_id=chat_id)
-        )
-        participant_container = getattr(
-            getattr(result, "full_chat", None),
-            "participants",
-            None,
-        )
-        return creator_id(
-            getattr(result, "users", []),
-            getattr(participant_container, "participants", []),
-        )
-    except Exception as error:
-        bot.logger.log_error(
-            f"خطا در دریافت مالک گروه {chat_id} برای مدیریت ادمین‌ها: {error}"
-        )
-        return None
-
-
-async def _can_manage_group_admins(bot, chat_id, user_id):
-    if user_id == MAIN_BOT_OWNER_ID:
+def _can_manage_group_admins(bot, chat_id, user_id):
+    if _is_main_bot_owner(bot, user_id):
         return True
 
-    return user_id == await _get_group_creator_id(bot, chat_id)
+    group_owner_id = get_group_owner(chat_id)
+    return group_owner_id is not None and str(user_id) == str(group_owner_id)
 
 
 async def handle_new_message(bot, event):
@@ -897,8 +848,51 @@ async def handle_new_message(bot, event):
             or getattr(sender, "first_name", "Unknown")
         )
 
-        # ثبت ادمین توسط مالک ربات
+        if clean_text == "ثبت مالک":
+            if not _is_main_bot_owner(bot, user_id):
+                await event.reply("❌ فقط مالک اصلی ربات اجازه ثبت مالک گروه را دارد")
+                return
+
+            if not event.reply_to:
+                await event.reply("❌ برای ثبت مالک باید روی پیام کاربر ریپلای کنید")
+                return
+
+            try:
+                reply_msg = await bot.client.get_messages(
+                    chat_id,
+                    ids=event.reply_to.reply_to_msg_id,
+                )
+                target_user = await reply_msg.get_sender() if reply_msg else None
+                if not target_user:
+                    await event.reply("❌ کاربر پیدا نشد")
+                    return
+
+                set_group_owner(chat_id, target_user.id)
+                await event.reply(
+                    f"✅ مالک گروه ثبت شد: {_format_group_member(target_user)}"
+                )
+            except Exception as e:
+                bot.logger.log_error(f"خطا در ثبت مالک گروه: {e}")
+                await event.reply(f"❌ خطا در ثبت مالک: {e}")
+            return
+
+        if clean_text == "لغو مالک":
+            if not _can_manage_group_admins(bot, chat_id, user_id):
+                await event.reply(
+                    "❌ فقط مالک اصلی ربات یا مالک ثبت‌شده همین گروه اجازه لغو مالک را دارد"
+                )
+                return
+
+            removed_owner = remove_group_owner(chat_id)
+            if removed_owner:
+                await event.reply("✅ مالک گروه لغو شد")
+            else:
+                await event.reply("❌ برای این گروه مالک ثبت‌شده‌ای وجود ندارد")
+            return
+
+        # ثبت گروه توسط مالک ربات
         if clean_text == "ثبت گروه":
+
             try:
                 owner = getattr(sender, "username", "")
 
@@ -935,7 +929,7 @@ async def handle_new_message(bot, event):
         # ثبت ادمین توسط مالک ربات
 
         if clean_text.startswith("ثبت ادمین"):
-            if not await _can_manage_group_admins(bot, chat_id, user_id):
+            if not _can_manage_group_admins(bot, chat_id, user_id):
                 await event.reply(
                     "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
                 )
@@ -973,7 +967,7 @@ async def handle_new_message(bot, event):
 
         # برکناری ادمین توسط مالک ربات
         if clean_text.startswith("برکناری ادمین"):
-            if not await _can_manage_group_admins(bot, chat_id, user_id):
+            if not _can_manage_group_admins(bot, chat_id, user_id):
                 await event.reply(
                     "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
                 )
