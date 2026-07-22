@@ -265,6 +265,13 @@ class SoroushAntiSpamBot:
                 text = (event.message.message or "").strip()
 
                 if "صفر" in text:
+                    sender = await event.get_sender()
+                    main_owner_id = self.config_manager.get("OWNER_ID")
+                    if str(getattr(sender, "id", None)) != str(main_owner_id):
+                        await event.reply(
+                            "❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد"
+                        )
+                        return
                     try:
                         import re
                         from modules.group_storage import load_groups

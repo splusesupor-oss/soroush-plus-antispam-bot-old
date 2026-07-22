@@ -1,14 +1,38 @@
 from modules.group_banned_words_control import enable, disable
+from modules.admin_storage import is_admin
+from modules.group_storage import get_group_owner
+
+
+async def _can_manage_commands(bot, event, admin_id, chat_id):
+    sender = await event.get_sender()
+    username = getattr(sender, "username", None)
+    main_owner_id = bot.config_manager.get("OWNER_ID")
+    group_owner_id = get_group_owner(chat_id)
+    return (
+        (main_owner_id is not None and str(admin_id) == str(main_owner_id))
+        or (group_owner_id is not None and str(admin_id) == str(group_owner_id))
+        or is_admin(chat_id, username)
+        or bot.config_manager.is_admin(admin_id, username)
+    )
+
+
 async def handle_admin_commands(bot, event, text: str, admin_id: int, chat_id: int):
 
 
     """دستورات مدیریتی داخل گروه"""
     text = text.strip()
 
+    if (
+        text not in ["لغو کلمات ممنوعه", "فعال کلمات ممنوعه"]
+        and not text.startswith(("!", "/", "."))
+    ):
+        return
+
+    if not await _can_manage_commands(bot, event, admin_id, chat_id):
+        await event.respond("❌ فقط مالک یا ادمین گروه می‌تواند این دستور را اجرا کند")
+        return
+
     if text in ["لغو کلمات ممنوعه", "فعال کلمات ممنوعه"]:
-        if not await bot.is_admin_user(event, admin_id):
-            await event.respond("❌ فقط مدیر می‌تواند این دستور را اجرا کند")
-            return
 
         if text == "لغو کلمات ممنوعه":
             disable(chat_id)
@@ -32,9 +56,6 @@ async def handle_admin_commands(bot, event, text: str, admin_id: int, chat_id: i
     cmd = parts[0].lower()
 
     if text in ["لغو کلمات ممنوعه", "فعال کلمات ممنوعه"]:
-        if not await bot.is_admin_user(event, admin_id):
-            await event.respond("❌ فقط مدیر می‌تواند این دستور را اجرا کند")
-            return
         if text == "لغو کلمات ممنوعه":
             print("DEBUG BANNED DISABLE:", chat_id)
             disable(chat_id)

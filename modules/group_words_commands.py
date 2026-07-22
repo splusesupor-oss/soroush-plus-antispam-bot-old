@@ -1,5 +1,17 @@
 from modules.group_words_storage import add_word, remove_word, get_words
 from modules.admin_storage import is_admin
+from modules.group_storage import get_group_owner
+
+
+def _can_manage_group_words(bot, chat_id, user_id, username):
+    main_owner_id = bot.config_manager.get("OWNER_ID")
+    group_owner_id = get_group_owner(chat_id)
+    return (
+        (main_owner_id is not None and str(user_id) == str(main_owner_id))
+        or (group_owner_id is not None and str(user_id) == str(group_owner_id))
+        or is_admin(chat_id, username)
+        or bot.config_manager.is_admin(user_id, username)
+    )
 
 
 async def handle_group_word_command(bot, event, text, chat_id, user_id, username=None):
@@ -13,10 +25,7 @@ async def handle_group_word_command(bot, event, text, chat_id, user_id, username
         except Exception:
             username = None
 
-    if not username:
-        return False
-
-    if not is_admin(chat_id, username):
+    if not _can_manage_group_words(bot, chat_id, user_id, username):
         return False
 
 

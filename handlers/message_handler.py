@@ -21,6 +21,7 @@ from modules.user_original_storage import (
     get_original,
 )
 from modules.jokes import get_joke
+from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.group_stats import add_kick, add_mute, make_report, add_deleted_count
 from modules.spam_history import get_message_ids, clear_user
 from modules.web_search import can_search, search_web
@@ -149,11 +150,17 @@ def _can_manage_group_admins(bot, chat_id, user_id):
 DELETE_COMMAND_COOLDOWNS = {}
 
 
-def _can_delete_messages(bot, chat_id, user_id, username):
+def _has_group_management_permission(bot, chat_id, user_id, username):
     return (
         _can_manage_group_admins(bot, chat_id, user_id)
         or is_admin(chat_id, username)
         or bot.config_manager.is_admin(user_id, username)
+    )
+
+
+def _can_delete_messages(bot, chat_id, user_id, username):
+    return _has_group_management_permission(
+        bot, chat_id, user_id, username
     )
 
 
@@ -206,6 +213,31 @@ async def handle_new_message(bot, event):
                 )
             return
 
+        if clean_text == "صفر":
+            if not _is_main_bot_owner(bot, user_id):
+                await event.reply("❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد")
+                return
+            if not event.reply_to:
+                await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+                return
+
+            try:
+                reply_msg = await bot.client.get_messages(
+                    chat_id,
+                    ids=event.reply_to.reply_to_msg_id,
+                )
+                target_user = await reply_msg.get_sender() if reply_msg else None
+                if not target_user:
+                    await event.reply("❌ کاربر پیدا نشد")
+                    return
+
+                bot.tracker.reset_count(chat_id, target_user.id)
+                await event.reply("✅ تخلفات کاربر صفر شد.")
+            except Exception as e:
+                bot.logger.log_error(f"خطا در صفر کردن تخلفات: {e}")
+                await event.reply(f"❌ خطا: {e}")
+            return
+
         if clean_text == "ثبت اصل":
             begin_registration(user_id)
             await event.reply("لقب یا اصل خودتو بنویس")
@@ -232,6 +264,15 @@ async def handle_new_message(bot, event):
             and str(user_id) == str(get_group_owner(chat_id))
         ):
             await event.reply("سلام مالک جون 👑")
+            return
+
+        if clean_text in INSULTS:
+            await event.reply(INSULT_REPLY)
+            return
+
+        simple_reply = SIMPLE_REPLIES.get(clean_text)
+        if simple_reply:
+            await event.reply(simple_reply)
             return
 
         # ذخیره تاریخچه پیام برای ضد تکرار
@@ -1154,7 +1195,9 @@ async def handle_new_message(bot, event):
                 sender = await event.get_sender()
                 sender_username = getattr(sender, "username", None)
 
-                if not bot.config_manager.is_admin(chat_id, sender_username):
+                if not _has_group_management_permission(
+                    bot, chat_id, user_id, sender_username
+                ):
                     await event.reply("❌ فقط ادمین‌ها اجازه اخراج دارند")
                     return
 
@@ -1231,7 +1274,9 @@ async def handle_new_message(bot, event):
 # اخطار کاربر با ریپلای
         if clean_text == "اخطار":
             sender_username = getattr(sender, "username", None)
-            if not bot.config_manager.is_admin(chat_id, sender_username):
+            if not _has_group_management_permission(
+                bot, chat_id, user_id, sender_username
+            ):
                 await event.reply("❌ فقط ادمین‌ها اجازه استفاده از این دستور را دارند")
                 return
 
@@ -1277,7 +1322,9 @@ async def handle_new_message(bot, event):
                 sender = await event.get_sender()
 
                 sender_username = getattr(sender, "username", None)
-                if not bot.config_manager.is_admin(chat_id, sender_username):
+                if not _has_group_management_permission(
+                    bot, chat_id, user_id, sender_username
+                ):
                     await event.reply("❌ فقط ادمین‌ها اجازه استفاده از سکوت را دارند")
                     return
 
@@ -1341,7 +1388,9 @@ async def handle_new_message(bot, event):
         # رفع سکوت کاربر با ریپلای
         if clean_text == "رفع سکوت":
             sender_username = getattr(sender, "username", None)
-            if not bot.config_manager.is_admin(chat_id, sender_username):
+            if not _has_group_management_permission(
+                bot, chat_id, user_id, sender_username
+            ):
                 await event.reply("❌ فقط ادمین‌ها اجازه استفاده از این دستور را دارند")
                 return
 
