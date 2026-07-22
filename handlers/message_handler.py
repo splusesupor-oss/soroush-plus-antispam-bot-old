@@ -1,4 +1,4 @@
-import time as _time
+import asyncio as _asyncio
 
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
@@ -427,7 +427,7 @@ async def handle_new_message(bot, event):
                         )
 
                 import asyncio
-                asyncio.create_task(multiple_choice_timer())
+                _asyncio.create_task(multiple_choice_timer())
 
             except Exception as e:
                 bot.logger.log_error(f"خطای بازی چهار گزینه‌ای: {e}")
@@ -446,7 +446,7 @@ async def handle_new_message(bot, event):
                     if ans:
                         await event.reply(f"⏰ زمان تمام شد!\n✅ پاسخ: {ans}")
 
-                asyncio.create_task(fill_timer())
+                _asyncio.create_task(fill_timer())
 
             except Exception as e:
                 bot.logger.log_error(f"خطای جای خالی: {e}")
@@ -465,7 +465,7 @@ async def handle_new_message(bot, event):
                     if answer:
                         await event.reply(f"⏰ زمان چیستان تمام شد!\n✅ پاسخ: {answer}")
 
-                asyncio.create_task(riddle_timer())
+                _asyncio.create_task(riddle_timer())
 
             except Exception as e:
                 bot.logger.log_error(f"خطای چیستان: {e}")
@@ -1147,7 +1147,7 @@ async def handle_new_message(bot, event):
                     return
 
                 cooldown_key = (chat_id, user_id)
-                now = _time.monotonic()
+                now = _asyncio.get_running_loop().time()
                 last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
                 if last_cleanup is not None and now - last_cleanup < 5:
                     await event.reply(
@@ -1194,7 +1194,7 @@ async def handle_new_message(bot, event):
                     return
 
                 cooldown_key = (chat_id, user_id)
-                now = _time.monotonic()
+                now = _asyncio.get_running_loop().time()
                 last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
                 if last_cleanup is not None and now - last_cleanup < 5:
                     await event.reply(
@@ -1522,14 +1522,14 @@ async def handle_new_message(bot, event):
 
             bot.flood_messages[chat_id].append(
                 (
-                    _time.time(),
+                    _asyncio.get_running_loop().time(),
                     event.message.id,
                     user_id,
                     message_text.strip()
                 )
             )
 
-            now = _time.time()
+            now = _asyncio.get_running_loop().time()
 
             bot.flood_messages[chat_id] = [
                 x for x in bot.flood_messages[chat_id]
