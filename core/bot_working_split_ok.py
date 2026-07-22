@@ -8,7 +8,7 @@ from modules.group_stats import add_message, add_deleted, add_kick, add_mute, ma
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.owner_check import is_global_owner
+from modules.owner_check import is_global_owner, normalize_username
 from modules.banned_storage import (
     add_banned,
     remove_banned,
@@ -350,13 +350,30 @@ class SoroushAntiSpamBot:
                 sender_id = getattr(sender_lock, "id", None)
                 registered_owner_id = get_group_owner(lock_id)
                 group_is_active = is_active(lock_id)
+                sender_username = getattr(sender_lock, "username", None)
+                normalized_username = normalize_username(sender_username)
+                is_registered_owner = (
+                    registered_owner_id is not None
+                    and str(sender_id) == str(registered_owner_id)
+                )
+                is_enable_command = text == "فعال"
+                is_disable_command = text == "غیر فعال"
+
+                if is_enable_command or is_disable_command:
+                    self.logger.log_info(
+                        "GROUP MODE DEBUG "
+                        f"chat_id={lock_id} sender_id={sender_id} "
+                        f"sender_username={sender_username!r} "
+                        f"normalized_username={normalized_username!r} "
+                        f"text={text!r} disabled_before={not group_is_active} "
+                        f"registered_owner_id={registered_owner_id} "
+                        f"owner_check={is_registered_owner} "
+                        f"enable_match={is_enable_command} "
+                        f"disable_match={is_disable_command}"
+                    )
 
                 if not group_is_active:
-                    if (
-                        text == "فعال"
-                        and registered_owner_id is not None
-                        and str(sender_id) == str(registered_owner_id)
-                    ):
+                    if is_enable_command and is_registered_owner:
                         title = getattr(chat_lock, "title", "")
                         activate_group(lock_id, title)
                         await send_activation_message(
@@ -364,11 +381,8 @@ class SoroushAntiSpamBot:
                         )
                     return
 
-                if text == "غیر فعال":
-                    if (
-                        registered_owner_id is not None
-                        and str(sender_id) == str(registered_owner_id)
-                    ):
+                if is_disable_command:
+                    if is_registered_owner:
                         title = getattr(chat_lock, "title", "")
                         deactivate_group(lock_id, title)
                         for task in self.group_timer_tasks.pop(lock_id, set()):
