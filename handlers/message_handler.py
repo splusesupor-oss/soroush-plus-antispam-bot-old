@@ -458,7 +458,10 @@ async def handle_new_message(bot, event):
 
 
         # بازی چهار گزینه‌ای
-        if clean_text == "چهار گزینه‌ای":
+        normalized_game_command = " ".join(
+            clean_text.replace("‌", " ").split()
+        )
+        if normalized_game_command == "چهار گزینه ای":
             try:
                 quiz = start_question(chat_id)
                 options_text = "\n".join(
