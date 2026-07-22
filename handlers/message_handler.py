@@ -188,6 +188,59 @@ async def get_activation_admin_info(bot, chat_id):
     return owner, admins
 
 
+async def send_activation_message(bot, event, chat_id, title):
+    owner, admins = await get_activation_admin_info(bot, chat_id)
+    owner_text = owner or "یافت نشد (دسترسی کافی ندارم)"
+    admins_text = (
+        "\n".join(
+            f"{index}. {admin}"
+            for index, admin in enumerate(admins, 1)
+        )
+        if admins else "ندارد"
+    )
+
+    owner_section = f"👑 مالک گروه:\n{owner_text}"
+    admins_section = f"👮 ادمین های گروه:\n{admins_text}"
+    activation_hint = (
+        "برای آشنایی بیشتر کلمه راهنما را ارسال کنید یا بیو ربات، "
+        "کانال راهنما را مطالعه کنید."
+    )
+    activation_text = (
+        f"🦊 روباه در گروه «{title}» فعال سازی شد ✅\n\n"
+        f"{owner_section}\n\n{admins_section}\n\n{activation_hint}"
+    )
+
+    def u16_length(value):
+        return len(value.encode("utf-16-le")) // 2
+
+    owner_offset = activation_text.index(owner_section)
+    admins_offset = activation_text.index(admins_section)
+    hint_offset = activation_text.index(activation_hint)
+    entities = [
+        MessageEntityBlockquote(
+            offset=u16_length(activation_text[:owner_offset]),
+            length=u16_length(owner_section),
+        ),
+        MessageEntityBold(
+            offset=u16_length(activation_text[:owner_offset]),
+            length=u16_length("👑 مالک گروه:"),
+        ),
+        MessageEntityBlockquote(
+            offset=u16_length(activation_text[:admins_offset]),
+            length=u16_length(admins_section),
+        ),
+        MessageEntityBold(
+            offset=u16_length(activation_text[:admins_offset]),
+            length=u16_length("👮 ادمین های گروه:"),
+        ),
+        MessageEntityBold(
+            offset=u16_length(activation_text[:hint_offset]),
+            length=u16_length(activation_hint),
+        ),
+    ]
+    await event.respond(activation_text, formatting_entities=entities)
+
+
 def _can_manage_group_admins(bot, chat_id, user_id, username):
     if is_global_owner(username):
         return True
@@ -901,60 +954,7 @@ async def handle_new_message(bot, event):
                 if clean_text == "فعال سازی":
                     activate_group(gid, title)
 
-                    owner, admins = await get_activation_admin_info(bot, gid)
-                    owner_text = owner or "یافت نشد (دسترسی کافی ندارم)"
-                    admins_text = (
-                        "\n".join(
-                            f"{index}. {admin}"
-                            for index, admin in enumerate(admins, 1)
-                        )
-                        if admins else "ندارد"
-                    )
-
-                    owner_section = f"👑 مالک گروه:\n{owner_text}"
-                    admins_section = f"👮 ادمین های گروه:\n{admins_text}"
-                    activation_hint = (
-                        "برای آشنایی بیشتر، کلمه «راهنما» را ارسال کنید.\n"
-                        "یا بیو ربات را مشاهده کنید؛ کانال راهنما در آن قرار دارد."
-                    )
-                    activation_text = (
-                        f"🦊 روباه در گروه «{title}» فعال سازی شد ✅\n\n"
-                        f"{owner_section}\n\n{admins_section}\n\n{activation_hint}"
-                    )
-
-                    def u16_length(value):
-                        return len(value.encode("utf-16-le")) // 2
-
-                    owner_offset = activation_text.index(owner_section)
-                    admins_offset = activation_text.index(admins_section)
-                    hint_offset = activation_text.index(activation_hint)
-                    entities = [
-                        MessageEntityBlockquote(
-                            offset=u16_length(activation_text[:owner_offset]),
-                            length=u16_length(owner_section),
-                        ),
-                        MessageEntityBold(
-                            offset=u16_length(activation_text[:owner_offset]),
-                            length=u16_length("👑 مالک گروه:"),
-                        ),
-                        MessageEntityBlockquote(
-                            offset=u16_length(activation_text[:admins_offset]),
-                            length=u16_length(admins_section),
-                        ),
-                        MessageEntityBold(
-                            offset=u16_length(activation_text[:admins_offset]),
-                            length=u16_length("👮 ادمین های گروه:"),
-                        ),
-                        MessageEntityBold(
-                            offset=u16_length(activation_text[:hint_offset]),
-                            length=u16_length(activation_hint),
-                        ),
-                    ]
-
-                    await event.respond(
-                        activation_text,
-                        formatting_entities=entities,
-                    )
+                    await send_activation_message(bot, event, gid, title)
 
             except Exception as e:
                 await event.reply(f"❌ خطا: {e}")

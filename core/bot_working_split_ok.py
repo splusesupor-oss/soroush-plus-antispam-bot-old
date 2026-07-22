@@ -22,7 +22,7 @@ from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, get_group_owner, is_active
 from modules.group_actions import GroupActions
-from handlers.message_handler import handle_new_message
+from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.admin_handler import handle_admin_commands
 import random
 """
@@ -359,8 +359,8 @@ class SoroushAntiSpamBot:
                     ):
                         title = getattr(chat_lock, "title", "")
                         activate_group(lock_id, title)
-                        await event.reply(
-                            f"🦊 روباه در گروه «{title}» فعال شد ✅"
+                        await send_activation_message(
+                            self, event, lock_id, title
                         )
                     return
 
