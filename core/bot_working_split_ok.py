@@ -8,7 +8,14 @@ from modules.group_stats import add_message, add_deleted, add_kick, add_mute, ma
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.banned_storage import add_banned, remove_banned, is_banned, load_banned
+from modules.banned_storage import (
+    add_banned,
+    remove_banned,
+    is_banned,
+    load_banned,
+    get_matching_ban_records,
+    FILE as BANNED_STORAGE_FILE,
+)
 from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
@@ -196,9 +203,18 @@ class SoroushAntiSpamBot:
                 banned = is_banned(
                     chat_id, user_id, username, data=banned_data
                 )
+                matching_records = get_matching_ban_records(
+                    chat_id, user_id, username, data=banned_data
+                )
                 self.logger.log_info(
                     "JOIN BAN CHECK "
-                    f"user_id={user_id} username={username} is_banned={banned}"
+                    f"user_id={user_id} username={username} is_banned={banned} "
+                    f"file={BANNED_STORAGE_FILE} records={matching_records}"
+                )
+                print(
+                    "JOIN BAN DEBUG "
+                    f"user_id={user_id} username={username} "
+                    f"source={BANNED_STORAGE_FILE} records={matching_records}"
                 )
                 if banned:
                     await self.client.edit_permissions(

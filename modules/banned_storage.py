@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 
-FILE = Path("config/banned_users.json")
+FILE = Path(__file__).resolve().parent.parent / "config" / "banned_users.json"
 
 
 def load_banned():
@@ -120,11 +120,16 @@ def remove_banned_everywhere(user_id=None, username=None):
     return removed_count, before_records, remaining_records
 
 
-def is_banned(group_id, user_id, username=None, data=None):
-    """وضعیت بن را با دادهٔ تازهٔ فایل یا دادهٔ صریحِ داده‌شده بررسی می‌کند."""
+def get_matching_ban_records(group_id, user_id, username=None, data=None):
+    """رکوردهای دقیقِ گروهی را که باعث تشخیص بن می‌شوند برمی‌گرداند."""
     if data is None:
         data = load_banned()
-    for entry in data.get(str(group_id), []):
-        if _entry_matches(entry, user_id, username):
-            return True
-    return False
+    return [
+        entry for entry in data.get(str(group_id), [])
+        if _entry_matches(entry, user_id, username)
+    ]
+
+
+def is_banned(group_id, user_id, username=None, data=None):
+    """وضعیت بن را با دادهٔ تازهٔ فایل یا دادهٔ صریحِ داده‌شده بررسی می‌کند."""
+    return bool(get_matching_ban_records(group_id, user_id, username, data))
