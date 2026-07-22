@@ -120,7 +120,7 @@ class SpamDetector:
 
         return False, None
 
-    def check_spam_score(self, text: str, chat_id=None) -> Tuple[int, List[str]]:
+    def check_spam_score(self, text: str, chat_id=None, include_banned_words=True) -> Tuple[int, List[str]]:
         """سیستم امتیازدهی برای تشخیص اسپم‌های ترکیبی"""
         score = 0
         reasons = []
@@ -140,10 +140,11 @@ class SpamDetector:
             score += 2
             reasons.append(reason_user)
 
-        is_banned, reason_banned = self.check_banned_words(text, chat_id)
-        if is_banned:
-            score += 2
-            reasons.append(reason_banned)
+        if include_banned_words:
+            is_banned, reason_banned = self.check_banned_words(text, chat_id)
+            if is_banned:
+                score += 2
+                reasons.append(reason_banned)
 
         # بررسی فوروارد زیاد یا ایموجی زیاد
         if len(text) > 500 and text.count('http') >= 1:
@@ -172,7 +173,9 @@ class SpamDetector:
         if is_banned:
             return True, reason_banned
 
-        score, reasons = self.check_spam_score(text, chat_id)
+        score, reasons = self.check_spam_score(
+            text, chat_id, include_banned_words=False
+        )
 
         if score >= self.spam_score_threshold:
             return True, " و ".join(reasons)

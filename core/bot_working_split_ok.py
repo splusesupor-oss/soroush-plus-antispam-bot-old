@@ -211,8 +211,6 @@ class SoroushAntiSpamBot:
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
 
-            print("📩 پیام دریافت شد:", getattr(event.message, "message", ""))
-
             if event.out:
                 return
 

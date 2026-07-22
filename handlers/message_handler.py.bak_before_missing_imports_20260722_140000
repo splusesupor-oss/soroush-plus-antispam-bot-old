@@ -4,18 +4,6 @@ from modules.group_stats import add_message
 from modules.group_storage import activate_group, deactivate_group
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
-from modules.fill_blank import new_fill, get_fill_answer
-from modules.riddles import new_riddle, get_answer
-from modules.group_stats import add_kick, add_mute, make_report
-from modules.spam_history import get_message_ids, clear_user
-from modules.web_search import can_search, search_web
-from modules.jorat_haghighat import get_jorat, get_haghighat
-from modules.font_converter import make_fonts
-from modules.admin_storage import add_admin, remove_admin
-from modules.banned_storage import remove_banned
-from handlers.admin_handler import handle_admin_commands
-from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
-from splusthon.tl import functions
 
 async def get_activation_admin_info(bot, chat_id):
     owner = "نامشخص"

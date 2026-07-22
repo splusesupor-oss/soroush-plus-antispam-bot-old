@@ -14,6 +14,8 @@ class ConfigManager:
         self.banned_words: Set[str] = set()
         self.whitelisted_ids: Set[int] = set()
         self.whitelisted_usernames: Set[str] = set()
+        self._banned_words_mtime = None
+        self._whitelist_mtime = None
         self.load_all()
 
     def load_all(self):
@@ -46,6 +48,7 @@ class ConfigManager:
                 words.add(str(w).lower())
         
         self.banned_words = words
+        self._banned_words_mtime = self._file_mtime(self.banned_words_path)
         return words
 
     def load_whitelist(self):
@@ -72,6 +75,7 @@ class ConfigManager:
 
         self.whitelisted_ids = ids
         self.whitelisted_usernames = usernames
+        self._whitelist_mtime = self._file_mtime(self.whitelist_path)
         return ids, usernames
 
     def is_whitelisted(self, user_id: int, username: str = None) -> bool:
@@ -139,8 +143,17 @@ class ConfigManager:
     def get(self, key, default=None):
         return self.config.get(key, default)
 
+    @staticmethod
+    def _file_mtime(path):
+        try:
+            return os.stat(path).st_mtime_ns
+        except OSError:
+            return None
+
     def reload_if_needed(self):
         """برای hot-reload تنظیمات"""
         if self.config.get("enable_hot_reload_banned_words"):
-            self.load_banned_words()
-            self.load_whitelist()
+            if self._file_mtime(self.banned_words_path) != self._banned_words_mtime:
+                self.load_banned_words()
+            if self._file_mtime(self.whitelist_path) != self._whitelist_mtime:
+                self.load_whitelist()

@@ -18,7 +18,6 @@ def save_history_message(chat_id, user_id, message_id, text):
     MESSAGE_HISTORY[key].append(normalize(text))
     if message_id not in USER_MESSAGE_IDS[key]:
         USER_MESSAGE_IDS[key].append(message_id)
-    print(f"💾 HISTORY COUNT user={user_id} count={len(USER_MESSAGE_IDS[key])}")
 
 
 def is_repeat(chat_id, user_id, text, limit=3):

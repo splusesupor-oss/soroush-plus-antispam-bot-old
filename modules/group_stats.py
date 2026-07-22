@@ -4,21 +4,41 @@ from datetime import datetime
 
 FILE = "logs/group_stats.json"
 
+_stats_cache = None
+_stats_cache_mtime = None
+
+def _file_mtime():
+    try:
+        return os.stat(FILE).st_mtime_ns
+    except OSError:
+        return None
+
 
 def load_stats():
-    if not os.path.exists(FILE):
-        return {}
+    global _stats_cache, _stats_cache_mtime
+    mtime = _file_mtime()
+    if _stats_cache is not None and mtime == _stats_cache_mtime:
+        return _stats_cache
 
-    try:
-        with open(FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    if mtime is None:
+        _stats_cache = {}
+    else:
+        try:
+            with open(FILE, "r", encoding="utf-8") as f:
+                _stats_cache = json.load(f)
+        except Exception:
+            _stats_cache = {}
+
+    _stats_cache_mtime = mtime
+    return _stats_cache
 
 
 def save_stats(data):
+    global _stats_cache, _stats_cache_mtime
     with open(FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    _stats_cache = data
+    _stats_cache_mtime = _file_mtime()
 
 
 def ensure_group(data, chat_id):
