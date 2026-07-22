@@ -583,8 +583,7 @@ async def handle_new_message(bot, event):
                     await event.reply("✅ آفرین! پاسخ درست بود 🎉")
                 else:
                     await event.reply(
-                        "❌ اشتباه بود.\n\n"
-                        f"پاسخ درست: گزینه {correct_option}"
+                        f"❌ غلط بود. گزینه {correct_option} درست بود."
                     )
                 return
         except Exception as e:
