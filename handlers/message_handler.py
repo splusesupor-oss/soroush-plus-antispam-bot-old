@@ -1514,8 +1514,6 @@ async def handle_new_message(bot, event):
 
         # ضد اسپم پیام‌های پشت سرهم
         try:
-            import time
-
             if not hasattr(bot, "flood_messages"):
                 bot.flood_messages = {}
 
