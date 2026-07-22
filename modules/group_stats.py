@@ -85,13 +85,18 @@ def add_message(chat_id, user_id, username=""):
 
 
 def add_deleted(chat_id, user_id, username=""):
+    add_deleted_count(chat_id, user_id, username)
+
+
+def add_deleted_count(chat_id, user_id, username="", count=1):
     data = load_stats()
 
     group = ensure_group(data, chat_id)
     user = ensure_user(group, user_id, username)
+    count = max(0, int(count))
 
-    group["deleted"] += 1
-    user["deleted"] += 1
+    group["deleted"] += count
+    user["deleted"] += count
 
     save_stats(data)
 

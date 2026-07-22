@@ -1,3 +1,5 @@
+import time
+
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
 from modules.group_stats import add_message
@@ -18,12 +20,13 @@ from modules.user_original_storage import (
     save_original,
     get_original,
 )
-from modules.group_stats import add_kick, add_mute, make_report
+from modules.jokes import get_joke
+from modules.group_stats import add_kick, add_mute, make_report, add_deleted_count
 from modules.spam_history import get_message_ids, clear_user
 from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.admin_storage import add_admin, remove_admin
+from modules.admin_storage import add_admin, remove_admin, is_admin
 from modules.banned_storage import remove_banned
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from handlers.admin_handler import handle_admin_commands
@@ -143,6 +146,17 @@ def _can_manage_group_admins(bot, chat_id, user_id):
     return group_owner_id is not None and str(user_id) == str(group_owner_id)
 
 
+DELETE_COMMAND_COOLDOWNS = {}
+
+
+def _can_delete_messages(bot, chat_id, user_id, username):
+    return (
+        _can_manage_group_admins(bot, chat_id, user_id)
+        or is_admin(chat_id, username)
+        or bot.config_manager.is_admin(user_id, username)
+    )
+
+
 async def handle_new_message(bot, event):
     """هندلر اصلی برای پیام‌های جدید"""
     try:
@@ -166,49 +180,6 @@ async def handle_new_message(bot, event):
             return
 
 
-
-        jokes = [
-"رفتم دکتر گفتم حافظه‌ام ضعیف شده، گفت از کی؟ گفتم چی از کی؟ 😂",
-"معلم گفت چرا دیر اومدی؟ گفتم خواب دیدم دارم فوتبال بازی می‌کنم، وقت اضافه خوردیم 😂",
-"به دوستم گفتم چرا گوشی‌تو خاموش کردی؟ گفت شارژ نداشتم روشنش کنم 😂",
-"یکی گفت چرا همیشه لبخند می‌زنی؟ گفتم چون قبض‌ها رو باز نمی‌کنم 😂",
-"رفیقم گفت رژیم گرفتم، پرسیدم چی می‌خوری؟ گفت فقط غذاهای سبک مثل پیتزا 😂",
-"گفتم اینترنت قطع شده، گفتن وصلش کن. گفتم اگه وصل بود که پیام نمی‌دادم 😂",
-"یکی رفت خواستگاری گفتن شغلت چیه؟ گفت متخصص خوابیدن روی مبل 😂",
-"به کامپیوتر گفتم خسته‌ای؟ گفت نه فقط هنگ کردم 😂",
-"بابام گفت چرا دیر خوابیدی؟ گفتم خوابم نمی‌برد، گفت خب بیدار نباش 😂",
-"دوستم گفت چرا کتاب نمی‌خونی؟ گفتم آخرش رو بلدم، همه می‌میرن 😂",
-"گوشی جدید گرفتم، هنوز خودش منو نمی‌شناسه 😂",
-"یکی گفت پول داری؟ گفتم آره، توی خاطراتم 😂",
-"رفتم باشگاه ثبت نام کنم، گفتن هدفت چیه؟ گفتم رسیدن به یخچال بدون نفس نفس زدن 😂",
-"معلم پرسید آینده‌ات رو چطور می‌بینی؟ گفتم با چشمام 😂",
-"یکی گفت چرا عینک زدی؟ گفتم چون چشمام بدون کمک نمی‌بینه 😂",
-"گفتم چرا ساعتت کار نمی‌کنه؟ گفت وقت ندارم درستش کنم 😂",
-"دوستم گفت ماشینم خیلی باهوشه، گفتم چرا؟ گفت خودش می‌فهمه کی بنزین نداره 😂",
-"یکی پرسید چرا انقدر ساکتی؟ گفتم دارم به حرفای خودم گوش میدم 😂",
-"مامانم گفت اتاقتو مرتب کن، گفتم چشم، ولی چشمام شلوغه 😂",
-"گفتم خوابم میاد، گفت بخواب، گفتم اینترنت ندارم دانلودش کنم 😂",
-"یکی گفت چقدر خوش شانسی، گفتم آره فقط شانسم خبر نداره 😂",
-"رفتم بانک گفتن رمزت چیه؟ گفتم یادم نیست، گفتن پس پولت هم یادش نیست 😂",
-"دوستم گفت ورزش می‌کنم، گفتم چه ورزشی؟ گفت بالا پایین کردن کنترل تلویزیون 😂",
-"گفتم چرا دیر کردی؟ گفت دیر نکردم، زود نیومدم 😂",
-"یکی گفت زندگی سخته، گفتم آره مخصوصا وقتی شارژ گوشی ۱ درصده 😂",
-"گفتم چرا لپ‌تاپت کند شده؟ گفت مثل صاحبش پیر شده 😂",
-"یکی گفت چرا همیشه آنلاین هستی؟ گفتم چون آفلاین بودن بلد نیستم 😂",
-"معلم گفت چرا مشقت ناقصه؟ گفت بقیه‌ش رو فردا می‌نویسم، هنوز فردا نشده 😂",
-"رفتم خرید، فروشنده گفت چیزی می‌خوای؟ گفتم نه فقط قیمت‌ها رو نگاه می‌کنم و گریه می‌کنم 😂",
-"یکی گفت چای می‌خوری؟ گفتم نه، ولی چای منو می‌خوره 😂",
-"گوشی زنگ خورد، جواب دادم، خودش بود 😂",
-"گفتم چرا تلویزیون نگاه نمی‌کنی؟ گفت حوصله ندارم ببینم چی حوصله ندارم 😂",
-"یکی گفت خیلی باهوشی، گفتم خودم هم تازه فهمیدم 😂",
-"رفیقم گفت خواب دیدم پولدار شدم، گفتم بیدار شدی؟ گفت آره فقیرتر شدم 😂",
-"گفتم چرا در یخچال رو باز کردی؟ گفت ببینم چیزی تغییر کرده یا نه 😂",
-"یکی گفت کار سختیه، گفتم آره مخصوصا وقتی انجامش ندی 😂",
-"پدرم گفت چرا گوشی دستته؟ گفتم دارم دنبال گوشی می‌گردم 😂",
-"یکی گفت چرا دیر جواب دادی؟ گفتم داشتم جواب مناسب پیدا می‌کردم، پیدا نشد 😂",
-"گفتم امروز چه روزیه؟ گفت همون روزیه که دیروز منتظرش بودی 😂",
-"یکی گفت آینده‌ات روشنه، گفتم فقط قبض برقش زیاده 😂"
-]
 
         chat_id = event.chat_id
         sender = await event.get_sender()
@@ -234,6 +205,14 @@ async def handle_new_message(bot, event):
                 await event.reply(
                     "هنوز اصلی ثبت نکردی. برای ثبت بنویس: ثبت اصل"
                 )
+            return
+
+        if (
+            not event.is_private
+            and clean_text == "سلام"
+            and str(user_id) == str(get_group_owner(chat_id))
+        ):
+            await event.reply("سلام مالک جون 👑")
             return
 
         # ذخیره تاریخچه پیام برای ضد تکرار
@@ -509,10 +488,9 @@ async def handle_new_message(bot, event):
             return
 
 
-        # فونت ساز گروه
+        # جک
         if clean_text == "جک":
-            import random
-            await event.reply(random.choice(jokes))
+            await event.reply(get_joke())
             return
 
         # پاسخ معرفی ربات
@@ -1055,47 +1033,54 @@ async def handle_new_message(bot, event):
         if clean_text.startswith("پاک "):
             try:
                 sender_username = getattr(sender, "username", None)
-
-                if not bot.config_manager.is_admin(chat_id, sender_username):
-                    await event.reply("❌ فقط ادمین‌ها اجازه حذف پیام دارند")
+                if not _can_delete_messages(
+                    bot, chat_id, user_id, sender_username
+                ):
+                    await event.reply("❌ فقط مالک و ادمین‌ها اجازه حذف پیام دارند")
                     return
 
                 parts = clean_text.split()
+                if len(parts) != 2 or not parts[1].isdigit():
+                    await event.reply("❌ استفاده: پاک + عدد مورد نیاز")
+                    return
 
-                if len(parts) == 2 and parts[1].isdigit():
-                    count = min(int(parts[1]), 500)
+                requested_count = int(parts[1])
+                if requested_count < 1 or requested_count > 700:
+                    await event.reply("❌ تعداد پیام باید بین 1 تا 700 باشد")
+                    return
 
-                    msgs = await bot.client.get_messages(
-                        chat_id,
-                        limit=count
+                cooldown_key = (chat_id, user_id)
+                now = time.monotonic()
+                last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
+                if last_cleanup is not None and now - last_cleanup < 5:
+                    await event.reply(
+                        "لطفا ۵ ثانیه صبر کنید تا پاکسازی قبلی کامل شود ⏳"
+                    )
+                    return
+                DELETE_COMMAND_COOLDOWNS[cooldown_key] = now
+
+                messages = await bot.client.get_messages(
+                    chat_id,
+                    limit=requested_count,
+                )
+                message_ids = [
+                    message.id for message in messages
+                    if getattr(message, "id", None)
+                ]
+
+                deleted_count = 0
+                for start_index in range(0, len(message_ids), 100):
+                    batch = message_ids[start_index:start_index + 100]
+                    await bot.client.delete_messages(chat_id, batch)
+                    deleted_count += len(batch)
+
+                if deleted_count:
+                    add_deleted_count(
+                        chat_id, user_id, sender_username or "", deleted_count
                     )
 
-                    ids = [m.id for m in msgs if getattr(m, "id", None)]
-
-                    if ids:
-                        await bot.client.delete_messages(
-                            chat_id,
-                            ids
-                        )
-                        try:
-                            from modules.group_stats import add_deleted
-                            for _ in ids:
-                                add_deleted(chat_id, user_id, username)
-                        except Exception:
-                            pass
-
-                        try:
-                            from modules.group_stats import add_deleted
-                            add_deleted(chat_id, user_id, username)
-                        except Exception:
-                            pass
-
-                        try:
-                            add_deleted(chat_id, user_id, username)
-                        except Exception:
-                            pass
-
-                    return
+                await event.reply(f"{deleted_count} پیام پاک شد 💣")
+                return
 
             except Exception as e:
                 await event.reply(f"❌ خطا: {e}")
@@ -1105,10 +1090,21 @@ async def handle_new_message(bot, event):
         if clean_text == "پاک":
             try:
                 sender_username = getattr(sender, "username", None)
-
-                if not bot.config_manager.is_admin(chat_id, sender_username):
-                    await event.reply("❌ فقط ادمین‌ها اجازه حذف پیام دارند")
+                if not _can_delete_messages(
+                    bot, chat_id, user_id, sender_username
+                ):
+                    await event.reply("❌ فقط مالک و ادمین‌ها اجازه حذف پیام دارند")
                     return
+
+                cooldown_key = (chat_id, user_id)
+                now = time.monotonic()
+                last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
+                if last_cleanup is not None and now - last_cleanup < 5:
+                    await event.reply(
+                        "لطفا ۵ ثانیه صبر کنید تا پاکسازی قبلی کامل شود ⏳"
+                    )
+                    return
+                DELETE_COMMAND_COOLDOWNS[cooldown_key] = now
 
                 if not event.reply_to:
                     await event.reply("❌ باید روی پیام ریپلای کنید")
