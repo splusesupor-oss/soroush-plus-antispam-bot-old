@@ -3,7 +3,7 @@ import asyncio as _asyncio
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
 from modules.group_stats import add_message
-from modules.group_storage import activate_group, deactivate_group
+from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
 from modules.fill_blank import new_fill, get_fill_answer
@@ -208,24 +208,38 @@ async def handle_new_message(bot, event):
 
         clean_text = message_text.strip()
 
-        if not event.is_private and clean_text in ["فعال", "غیر فعال"]:
-            if not _is_main_bot_owner(bot, user_id):
-                await event.reply("❌ فقط مالک اصلی ربات اجازه تغییر وضعیت را دارد")
+        if not event.is_private:
+            group_chat = await event.get_chat()
+            group_id = getattr(group_chat, "id", chat_id)
+            registered_owner_id = get_group_owner(group_id)
+
+            if not is_active(group_id):
+                if (
+                    clean_text == "فعال"
+                    and registered_owner_id is not None
+                    and str(user_id) == str(registered_owner_id)
+                ):
+                    title = getattr(group_chat, "title", "")
+                    activate_group(group_id, title)
+                    await event.reply(
+                        f"🦊 روباه در گروه «{title}» فعال شد ✅"
+                    )
                 return
 
-            chat = await event.get_chat()
-            title = getattr(chat, "title", "")
             if clean_text == "غیر فعال":
-                deactivate_group(chat_id, title)
+                if (
+                    registered_owner_id is None
+                    or str(user_id) != str(registered_owner_id)
+                ):
+                    await event.reply("❌ فقط مالک ثبت‌شده گروه اجازه تغییر وضعیت را دارد")
+                    return
+
+                title = getattr(group_chat, "title", "")
+                deactivate_group(group_id, title)
                 await event.reply(
                     f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
                 )
-            else:
-                activate_group(chat_id, title)
-                await event.reply(
-                    f"🦊 روباه در گروه «{title}» فعال شد ✅"
-                )
-            return
+                return
 
         if clean_text == "صفر":
             if not _is_main_bot_owner(bot, user_id):
@@ -421,6 +435,8 @@ async def handle_new_message(bot, event):
                     active_quiz = get_active_question(chat_id)
                     if active_quiz and active_quiz["token"] == quiz["token"]:
                         clear_question(chat_id, quiz["token"])
+                        if not is_active(chat_id):
+                            return
                         await event.reply(
                             "⏰ زمان تمام شد!\n\n"
                             f"پاسخ درست:\nگزینه {active_quiz['answer']}"
@@ -443,7 +459,7 @@ async def handle_new_message(bot, event):
                     import asyncio
                     await asyncio.sleep(30)
                     ans = get_fill_answer(chat_id, user_id)
-                    if ans:
+                    if ans and is_active(chat_id):
                         await event.reply(f"⏰ زمان تمام شد!\n✅ پاسخ: {ans}")
 
                 _asyncio.create_task(fill_timer())
@@ -462,7 +478,7 @@ async def handle_new_message(bot, event):
                     import asyncio
                     await asyncio.sleep(60)
                     answer = get_answer(chat_id, user_id)
-                    if answer:
+                    if answer and is_active(chat_id):
                         await event.reply(f"⏰ زمان چیستان تمام شد!\n✅ پاسخ: {answer}")
 
                 _asyncio.create_task(riddle_timer())

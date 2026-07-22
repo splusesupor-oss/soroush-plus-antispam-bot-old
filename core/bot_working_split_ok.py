@@ -19,7 +19,7 @@ from modules.banned_storage import (
 )
 from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
-from modules.group_storage import activate_group, deactivate_group, is_active
+from modules.group_storage import activate_group, deactivate_group, get_group_owner, is_active
 from modules.group_actions import GroupActions
 from handlers.message_handler import handle_new_message
 from handlers.admin_handler import handle_admin_commands
@@ -344,10 +344,14 @@ class SoroushAntiSpamBot:
                 lock_id = getattr(chat_lock, "id", None)
                 sender_lock = await event.get_sender()
                 sender_id = getattr(sender_lock, "id", None)
-                main_owner_id = self.config_manager.get("OWNER_ID")
+                registered_owner_id = get_group_owner(lock_id)
 
                 if not is_active(lock_id):
-                    if text == "فعال" and str(sender_id) == str(main_owner_id):
+                    if (
+                        text == "فعال"
+                        and registered_owner_id is not None
+                        and str(sender_id) == str(registered_owner_id)
+                    ):
                         await handle_new_message(self, event)
                     return
 
