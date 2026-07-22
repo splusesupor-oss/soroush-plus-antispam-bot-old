@@ -58,6 +58,20 @@ def _format_group_member(user):
     return "کاربر ناشناس"
 
 
+def _format_banned_user(user, user_id):
+    username = getattr(user, "username", None) if user else None
+    if username:
+        return f"@{username}"
+
+    display_name = " ".join(
+        part for part in (
+            getattr(user, "first_name", None) if user else None,
+            getattr(user, "last_name", None) if user else None,
+        ) if part
+    ).strip()
+    return display_name or str(user_id)
+
+
 async def get_activation_admin_info(bot, chat_id):
     owner = None
     admins = []
@@ -301,11 +315,18 @@ async def handle_new_message(bot, event):
                         ids
                     )
 
-                await bot.admin_actions.ban_user(
+                banned = await bot.admin_actions.ban_user(
                     chat_id,
                     user_id,
                     reason="اسپم تکراری"
                 )
+                if banned:
+                    await bot.client.send_message(
+                        chat_id,
+                        "🚫 کاربر "
+                        f"{_format_banned_user(sender, user_id)} "
+                        "به دلیل اسپم مکرر از گروه اخراج شد."
+                    )
 
                 clear_user(chat_id, user_id)
                 return
@@ -1326,7 +1347,20 @@ async def handle_new_message(bot, event):
                 )
 
                 if bot.tracker.should_punish(chat_id, user.id):
-                    await bot.admin_actions.punish_user(chat_id, user.id, username)
+                    punished = await bot.admin_actions.punish_user(
+                        chat_id, user.id, username, announce=False
+                    )
+                    if (
+                        punished
+                        and count >= 5
+                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
+                    ):
+                        await bot.client.send_message(
+                            chat_id,
+                            "🚫 کاربر "
+                            f"{_format_banned_user(user, user.id)} "
+                            "به دلیل تخلفات از گروه اخراج شد."
+                        )
                     bot.tracker.reset_count(chat_id, user.id)
 
             except Exception as e:
@@ -1640,11 +1674,22 @@ async def handle_new_message(bot, event):
                 if punish_key not in bot.punished_users:
                     bot.punished_users.add(punish_key)
 
-                    await bot.admin_actions.punish_user(
+                    punished = await bot.admin_actions.punish_user(
                         chat_id,
                         user_id,
-                        username
+                        username,
+                        announce=False,
                     )
+                    if (
+                        punished
+                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
+                    ):
+                        await bot.client.send_message(
+                            chat_id,
+                            "🚫 کاربر "
+                            f"{_format_banned_user(sender, user_id)} "
+                            "به دلیل اسپم مکرر از گروه اخراج شد."
+                        )
 
                 return
 
@@ -1743,7 +1788,9 @@ async def handle_new_message(bot, event):
                         if banned:
                             await bot.client.send_message(
                                 chat_id,
-                                f"🚫 کاربر {username or user_id} به دلیل اسپم مکرر از گروه اخراج شد."
+                                "🚫 کاربر "
+                                f"{_format_banned_user(sender, user_id)} "
+                                "به دلیل اسپم مکرر از گروه اخراج شد."
                             )
 
                     return
@@ -1808,7 +1855,9 @@ async def handle_new_message(bot, event):
                     ):
                         await bot.client.send_message(
                             chat_id,
-                            f"🚫 کاربر {username or user_id} به دلیل تخلفات از گروه اخراج شد."
+                            "🚫 کاربر "
+                            f"{_format_banned_user(sender, user_id)} "
+                            "به دلیل تخلفات از گروه اخراج شد."
                         )
 
                     # بعد از مجازات شمارنده تخلف صفر شود

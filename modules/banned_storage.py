@@ -206,4 +206,12 @@ def get_matching_ban_records(group_id, user_id, username=None, data=None):
 
 def is_banned(group_id, user_id, username=None, data=None):
     """وضعیت بن را با دادهٔ تازهٔ فایل یا دادهٔ صریحِ داده‌شده بررسی می‌کند."""
-    return bool(get_matching_ban_records(group_id, user_id, username, data))
+    records = get_matching_ban_records(group_id, user_id, username, data)
+    banned = bool(records)
+    if banned:
+        print(
+            "BANNED STORAGE MATCH "
+            f"user_id={user_id} username={username} group_id={group_id} "
+            f"source={FILE} records={records}"
+        )
+    return banned
