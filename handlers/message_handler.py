@@ -877,10 +877,8 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "لغو مالک":
-            if not _can_manage_group_admins(bot, chat_id, user_id):
-                await event.reply(
-                    "❌ فقط مالک اصلی ربات یا مالک ثبت‌شده همین گروه اجازه لغو مالک را دارد"
-                )
+            if not _is_main_bot_owner(bot, user_id):
+                await event.reply("❌ فقط مالک اصلی ربات اجازه لغو مالک گروه را دارد")
                 return
 
             removed_owner = remove_group_owner(chat_id)
@@ -965,8 +963,8 @@ async def handle_new_message(bot, event):
             return
 
 
-        # برکناری ادمین توسط مالک ربات
-        if clean_text.startswith("برکناری ادمین"):
+        # حذف ادمین توسط مالک اصلی یا مالک ثبت‌شده گروه
+        if clean_text.startswith(("برکناری ادمین", "لغو ادمین")):
             if not _can_manage_group_admins(bot, chat_id, user_id):
                 await event.reply(
                     "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
