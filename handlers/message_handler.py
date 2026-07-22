@@ -1,4 +1,5 @@
 import asyncio as _asyncio
+from collections import deque
 
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
@@ -70,6 +71,29 @@ def _format_banned_user(user, user_id):
         ) if part
     ).strip()
     return display_name or str(user_id)
+
+
+async def _send_moderation_notification_once(
+    bot, chat_id, user_id, action, source_message_id, text
+):
+    key = (chat_id, user_id, action, source_message_id)
+    if not hasattr(bot, "moderation_notification_guard"):
+        bot.moderation_notification_guard = set()
+        bot.moderation_notification_order = deque(maxlen=1000)
+    if key in bot.moderation_notification_guard:
+        return False
+
+    if len(bot.moderation_notification_order) == bot.moderation_notification_order.maxlen:
+        expired_key = bot.moderation_notification_order.popleft()
+        bot.moderation_notification_guard.discard(expired_key)
+    bot.moderation_notification_guard.add(key)
+    bot.moderation_notification_order.append(key)
+    try:
+        await bot.client.send_message(chat_id, text)
+        return True
+    except Exception:
+        bot.moderation_notification_guard.discard(key)
+        raise
 
 
 async def get_activation_admin_info(bot, chat_id):
@@ -335,11 +359,15 @@ async def handle_new_message(bot, event):
                     reason="اسپم تکراری"
                 )
                 if banned:
-                    await bot.client.send_message(
+                    await _send_moderation_notification_once(
+                        bot,
                         chat_id,
+                        user_id,
+                        "spam_ban",
+                        event.message.id,
                         "🚫 کاربر "
                         f"{_format_banned_user(sender, user_id)} "
-                        "به دلیل اسپم مکرر از گروه اخراج شد."
+                        "به دلیل اسپم مکرر از گروه اخراج شد.",
                     )
 
                 clear_user(chat_id, user_id)
@@ -1371,11 +1399,15 @@ async def handle_new_message(bot, event):
                         and count >= 5
                         and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
                     ):
-                        await bot.client.send_message(
+                        await _send_moderation_notification_once(
+                            bot,
                             chat_id,
+                            user.id,
+                            "warning_ban",
+                            event.message.id,
                             "🚫 کاربر "
                             f"{_format_banned_user(user, user.id)} "
-                            "به دلیل تخلفات از گروه اخراج شد."
+                            "به دلیل تخلفات از گروه اخراج شد.",
                         )
                     bot.tracker.reset_count(chat_id, user.id)
 
@@ -1698,11 +1730,15 @@ async def handle_new_message(bot, event):
                         punished
                         and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
                     ):
-                        await bot.client.send_message(
+                        await _send_moderation_notification_once(
+                            bot,
                             chat_id,
+                            user_id,
+                            "spam_ban",
+                            event.message.id,
                             "🚫 کاربر "
                             f"{_format_banned_user(sender, user_id)} "
-                            "به دلیل اسپم مکرر از گروه اخراج شد."
+                            "به دلیل اسپم مکرر از گروه اخراج شد.",
                         )
 
                 return
@@ -1800,11 +1836,15 @@ async def handle_new_message(bot, event):
                             chat_id, user_id, reason="اسپم مکرر شدید"
                         )
                         if banned:
-                            await bot.client.send_message(
+                            await _send_moderation_notification_once(
+                                bot,
                                 chat_id,
+                                user_id,
+                                "spam_ban",
+                                event.message.id,
                                 "🚫 کاربر "
                                 f"{_format_banned_user(sender, user_id)} "
-                                "به دلیل اسپم مکرر از گروه اخراج شد."
+                                "به دلیل اسپم مکرر از گروه اخراج شد.",
                             )
 
                     return
@@ -1867,11 +1907,15 @@ async def handle_new_message(bot, event):
                         and count >= 5
                         and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
                     ):
-                        await bot.client.send_message(
+                        await _send_moderation_notification_once(
+                            bot,
                             chat_id,
+                            user_id,
+                            "warning_ban",
+                            event.message.id,
                             "🚫 کاربر "
                             f"{_format_banned_user(sender, user_id)} "
-                            "به دلیل تخلفات از گروه اخراج شد."
+                            "به دلیل تخلفات از گروه اخراج شد.",
                         )
 
                     # بعد از مجازات شمارنده تخلف صفر شود
