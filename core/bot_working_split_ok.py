@@ -97,6 +97,7 @@ class SoroushAntiSpamBot:
         self.repeat_messages = {}
         self.flood_messages = {}
         self.user_messages = {}
+        self.group_timer_tasks = {}
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
 
@@ -268,6 +269,9 @@ class SoroushAntiSpamBot:
                     return
 
                 chat_id = event.chat_id
+                if not is_active(chat_id):
+                    return
+
                 user_id = user.id
                 username = getattr(user, "username", None)
 
@@ -338,21 +342,40 @@ class SoroushAntiSpamBot:
 
             text = (event.message.message or "").strip()
 
-            # کنترل فعال بودن گروه باید قبل از هر دستور گروهی انجام شود.
+            # MASTER GROUP MODE GATE: every incoming group message passes here first.
             if not event.is_private:
                 chat_lock = await event.get_chat()
                 lock_id = getattr(chat_lock, "id", None)
                 sender_lock = await event.get_sender()
                 sender_id = getattr(sender_lock, "id", None)
                 registered_owner_id = get_group_owner(lock_id)
+                group_is_active = is_active(lock_id)
 
-                if not is_active(lock_id):
+                if not group_is_active:
                     if (
                         text == "فعال"
                         and registered_owner_id is not None
                         and str(sender_id) == str(registered_owner_id)
                     ):
-                        await handle_new_message(self, event)
+                        title = getattr(chat_lock, "title", "")
+                        activate_group(lock_id, title)
+                        await event.reply(
+                            f"🦊 روباه در گروه «{title}» فعال شد ✅"
+                        )
+                    return
+
+                if text == "غیر فعال":
+                    if (
+                        registered_owner_id is not None
+                        and str(sender_id) == str(registered_owner_id)
+                    ):
+                        title = getattr(chat_lock, "title", "")
+                        deactivate_group(lock_id, title)
+                        for task in self.group_timer_tasks.pop(lock_id, set()):
+                            task.cancel()
+                        await event.reply(
+                            f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
+                        )
                     return
 
             # آزاد کردن کاربر محروم شده

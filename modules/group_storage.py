@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-FILE = Path("config/groups.json")
+FILE = Path(__file__).resolve().parent.parent / "config" / "groups.json"
 
 _cache = None
 _cache_mtime = None

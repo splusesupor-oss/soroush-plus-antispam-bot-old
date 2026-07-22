@@ -4,7 +4,7 @@ from collections import deque
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
 from modules.group_stats import add_message
-from modules.group_storage import activate_group, deactivate_group, is_active
+from modules.group_storage import activate_group, deactivate_group
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
 from modules.fill_blank import new_fill, get_fill_answer
@@ -94,6 +94,21 @@ async def _send_moderation_notification_once(
     except Exception:
         bot.moderation_notification_guard.discard(key)
         raise
+
+
+def _track_group_timer(bot, chat_id, task):
+    if not hasattr(bot, "group_timer_tasks"):
+        bot.group_timer_tasks = {}
+    tasks = bot.group_timer_tasks.setdefault(chat_id, set())
+    tasks.add(task)
+
+    def discard_finished_task(completed_task):
+        tasks.discard(completed_task)
+        if not tasks:
+            bot.group_timer_tasks.pop(chat_id, None)
+
+    task.add_done_callback(discard_finished_task)
+    return task
 
 
 async def get_activation_admin_info(bot, chat_id):
@@ -231,39 +246,6 @@ async def handle_new_message(bot, event):
         user_id = sender.id if sender else 0
 
         clean_text = message_text.strip()
-
-        if not event.is_private:
-            group_chat = await event.get_chat()
-            group_id = getattr(group_chat, "id", chat_id)
-            registered_owner_id = get_group_owner(group_id)
-
-            if not is_active(group_id):
-                if (
-                    clean_text == "فعال"
-                    and registered_owner_id is not None
-                    and str(user_id) == str(registered_owner_id)
-                ):
-                    title = getattr(group_chat, "title", "")
-                    activate_group(group_id, title)
-                    await event.reply(
-                        f"🦊 روباه در گروه «{title}» فعال شد ✅"
-                    )
-                return
-
-            if clean_text == "غیر فعال":
-                if (
-                    registered_owner_id is None
-                    or str(user_id) != str(registered_owner_id)
-                ):
-                    await event.reply("❌ فقط مالک ثبت‌شده گروه اجازه تغییر وضعیت را دارد")
-                    return
-
-                title = getattr(group_chat, "title", "")
-                deactivate_group(group_id, title)
-                await event.reply(
-                    f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
-                )
-                return
 
         if clean_text == "صفر":
             if not _is_main_bot_owner(bot, user_id):
@@ -463,15 +445,17 @@ async def handle_new_message(bot, event):
                     active_quiz = get_active_question(chat_id)
                     if active_quiz and active_quiz["token"] == quiz["token"]:
                         clear_question(chat_id, quiz["token"])
-                        if not is_active(chat_id):
-                            return
                         await event.reply(
                             "⏰ زمان تمام شد!\n\n"
                             f"پاسخ درست:\nگزینه {active_quiz['answer']}"
                         )
 
                 import asyncio
-                _asyncio.create_task(multiple_choice_timer())
+                _track_group_timer(
+                    bot,
+                    chat_id,
+                    _asyncio.create_task(multiple_choice_timer()),
+                )
 
             except Exception as e:
                 bot.logger.log_error(f"خطای بازی چهار گزینه‌ای: {e}")
@@ -487,10 +471,14 @@ async def handle_new_message(bot, event):
                     import asyncio
                     await asyncio.sleep(30)
                     ans = get_fill_answer(chat_id, user_id)
-                    if ans and is_active(chat_id):
+                    if ans:
                         await event.reply(f"⏰ زمان تمام شد!\n✅ پاسخ: {ans}")
 
-                _asyncio.create_task(fill_timer())
+                _track_group_timer(
+                    bot,
+                    chat_id,
+                    _asyncio.create_task(fill_timer()),
+                )
 
             except Exception as e:
                 bot.logger.log_error(f"خطای جای خالی: {e}")
@@ -506,10 +494,14 @@ async def handle_new_message(bot, event):
                     import asyncio
                     await asyncio.sleep(60)
                     answer = get_answer(chat_id, user_id)
-                    if answer and is_active(chat_id):
+                    if answer:
                         await event.reply(f"⏰ زمان چیستان تمام شد!\n✅ پاسخ: {answer}")
 
-                _asyncio.create_task(riddle_timer())
+                _track_group_timer(
+                    bot,
+                    chat_id,
+                    _asyncio.create_task(riddle_timer()),
+                )
 
             except Exception as e:
                 bot.logger.log_error(f"خطای چیستان: {e}")
