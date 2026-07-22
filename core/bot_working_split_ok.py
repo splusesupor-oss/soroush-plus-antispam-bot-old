@@ -246,12 +246,20 @@ class SoroushAntiSpamBot:
                         await event.reply("❌ کاربر پیدا نشد")
                         return
 
-                    await self.admin_actions.unban_user(
+                    released = await self.admin_actions.unban_user(
                         event.chat_id,
                         user.id,
                         getattr(user, "username", None)
                     )
+                    if not released:
+                        await event.reply("❌ آزاد کردن انجام نشد")
+                        return
 
+                    self.tracker.banned_users.pop(
+                        f"{event.chat_id}:{user.id}", None
+                    )
+                    self.punished_users.discard(f"{event.chat_id}:{user.id}")
+                    self.spammer_messages.pop(user.id, None)
                     await event.reply("♻️ کاربر آزاد شد")
 
                 except Exception as e:

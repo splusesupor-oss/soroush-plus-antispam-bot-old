@@ -224,8 +224,6 @@ class AdminActions:
             from modules.banned_storage import remove_banned
             from splusthon.tl import functions, types
 
-            remove_banned(chat_id, user_id, username)
-
             user = await self.client.get_entity(user_id)
             entity = await self.client.get_input_entity(chat_id)
             user_entity = await self.client.get_input_entity(user)
@@ -251,6 +249,8 @@ class AdminActions:
                     )
                 )
             )
+
+            remove_banned(chat_id, user_id, username)
 
             self.logger.log_action(
                 "UNBAN",

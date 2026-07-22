@@ -28,7 +28,7 @@ from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.admin_storage import add_admin, remove_admin, is_admin
-from modules.banned_storage import add_banned, remove_banned
+from modules.banned_storage import add_banned
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
@@ -258,7 +258,11 @@ async def handle_new_message(bot, event):
                 )
             return
 
-        registered_owner_id = get_group_owner(chat_id)
+        owner_chat_id = chat_id
+        if not event.is_private and clean_text == "سلام":
+            owner_chat = await event.get_chat()
+            owner_chat_id = getattr(owner_chat, "id", chat_id)
+        registered_owner_id = get_group_owner(owner_chat_id)
         if (
             not event.is_private
             and registered_owner_id is not None
@@ -1270,12 +1274,9 @@ async def handle_new_message(bot, event):
 
                 ok = await bot.admin_actions.unban_user(
                     chat_id,
-                    user.id
+                    user.id,
+                    getattr(user, "username", None),
                 )
-
-                username = getattr(user, "username", None)
-                if username:
-                    remove_banned(chat_id, user.id)
 
                 if ok:
 
