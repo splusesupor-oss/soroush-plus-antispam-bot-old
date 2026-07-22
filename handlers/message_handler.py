@@ -26,14 +26,16 @@ def _format_group_member(user):
 
     user_id = getattr(user, "id", None)
     name = " ".join(
-        part for part in (
+        part.strip(" |")
+        for part in (
             getattr(user, "first_name", None),
             getattr(user, "last_name", None),
-        ) if part
-    ).strip()
+        )
+        if part and part.strip(" |")
+    )
 
-    if name and user_id is not None:
-        return f"{name} (ID: {user_id})"
+    if name:
+        return name
     if user_id is not None:
         return f"ID: {user_id}"
     return "کاربر ناشناس"
