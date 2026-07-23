@@ -29,17 +29,30 @@ def is_gif_message(message):
 
 
 def reset_gif_history(chat_id, user_id):
-    GIF_HISTORY.pop((chat_id, user_id), None)
+    key = (chat_id, user_id)
+    if key in GIF_HISTORY:
+        print(f"GIF HISTORY RESET key={key} deque_id={id(GIF_HISTORY[key])}")
+    GIF_HISTORY.pop(key, None)
 
 
 def track_gif(chat_id, user_id, message_id):
     """Track every consecutive GIF; return five message IDs at threshold."""
     key = (chat_id, user_id)
     history = GIF_HISTORY[key]
+    history_before = list(history)
     if not history:
         print(f"GIF TRACK START chat_id={chat_id} user_id={user_id}")
 
     history.append(message_id)
+    print(
+        "GIF STATE DEBUG\n"
+        f"chat_id={chat_id}\n"
+        f"user_id={user_id}\n"
+        f"history_key={key}\n"
+        f"history_before={history_before}\n"
+        f"history_after={list(history)}\n"
+        f"history_deque_id={id(history)}"
+    )
     print(f"GIF COUNT={len(history)}")
 
     if len(history) == 5:

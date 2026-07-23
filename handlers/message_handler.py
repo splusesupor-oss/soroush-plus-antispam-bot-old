@@ -424,6 +424,7 @@ async def handle_new_message(bot, event):
             )
         )
         if not is_group_moderator and not is_gif_message(event.message):
+            print("GIF HISTORY RESET REQUEST reason=non_gif_message")
             reset_gif_history(chat_id, user_id)
         print(
             "MESSAGE RECEIVED DEBUG\n"
