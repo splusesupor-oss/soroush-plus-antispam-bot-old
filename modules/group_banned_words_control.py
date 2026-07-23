@@ -1,6 +1,8 @@
 import json
 import os
 
+from modules.group_id import normalize_group_id
+
 FILE = "config/group_banned_words.json"
 
 _cache = None
@@ -42,16 +44,16 @@ def save(data):
 
 def enable(chat_id):
     data = load()
-    data[str(chat_id)] = True
+    data[normalize_group_id(chat_id)] = True
     save(data)
 
 
 def disable(chat_id):
     data = load()
-    data[str(chat_id)] = False
+    data[normalize_group_id(chat_id)] = False
     save(data)
 
 
 def is_enabled(chat_id):
     data = load()
-    return data.get(str(chat_id), True)
+    return data.get(normalize_group_id(chat_id), True)

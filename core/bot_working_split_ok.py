@@ -22,6 +22,7 @@ from modules.banned_storage import (
 from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
+from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
@@ -79,7 +80,10 @@ from collections import defaultdict, deque
 class SoroushAntiSpamBot:
     def __init__(self, config_path="config/config.json"):
         print("🚀 در حال بارگذاری تنظیمات...")
+        migrated_files = migrate_all_group_storage()
         self.config_manager = ConfigManager(config_path=config_path)
+        if migrated_files:
+            print("GROUP STORAGE MIGRATED:", ", ".join(migrated_files))
         self.bot_sent_messages = []
         self.logger = BotLogger(
             log_file=self.config_manager.get(

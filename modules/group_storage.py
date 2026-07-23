@@ -1,31 +1,18 @@
 import json
 from pathlib import Path
 
+from modules.group_id import normalize_group_id
+
 FILE = Path(__file__).resolve().parent.parent / "config" / "groups.json"
 
 _cache = None
 _cache_mtime = None
 
 
-def _canonical_group_id(group_id):
-    """شناسهٔ کانالی SPlusthon را با شناسهٔ کوتاهِ ذخیره‌شده سازگار می‌کند."""
-    try:
-        numeric_id = int(group_id)
-    except (TypeError, ValueError):
-        return str(group_id)
-
-    # SPlusthon ممکن است یک گروه قدیمی با شناسهٔ 23164149 را به شکل
-    # -1000023164149 برگرداند. داده‌های قبلی config/groups.json با شکل کوتاه
-    # ذخیره شده‌اند؛ هر دو باید همان گروه باشند.
-    if numeric_id <= -1_000_000_000_000:
-        numeric_id = abs(numeric_id) - 1_000_000_000_000
-    return str(numeric_id)
-
-
 def _group_key(data, group_id):
     """کلید موجود را بدون ساختن رکورد تکراری پیدا می‌کند."""
     raw_key = str(group_id)
-    canonical_key = _canonical_group_id(group_id)
+    canonical_key = normalize_group_id(group_id)
     if raw_key in data:
         return raw_key
     if canonical_key in data:

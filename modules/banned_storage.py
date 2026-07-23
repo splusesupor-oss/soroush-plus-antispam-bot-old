@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+from modules.group_id import normalize_group_id
+
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "banned_users.json"
 
@@ -68,7 +70,7 @@ def add_banned(
 ):
     """کاربر را با شناسه پایدار و اطلاعات نمایشی در ذخیرهٔ موجود ثبت می‌کند."""
     data = load_banned()
-    gid = str(group_id)
+    gid = normalize_group_id(group_id)
     entries = data.setdefault(gid, [])
     record = {
         "user_id": str(user_id),
@@ -103,7 +105,7 @@ def add_banned(
 def remove_banned(group_id, user_id=None, username=None, display_name=None):
     """تمام رکوردهای منطبق با شناسه، نام و لقب کاربر را از فایل حذف می‌کند."""
     data = load_banned()
-    gid = str(group_id)
+    gid = normalize_group_id(group_id)
     if gid not in data:
         return 0
 
@@ -208,7 +210,7 @@ def get_matching_ban_records(group_id, user_id, username=None, data=None):
     if data is None:
         data = load_banned()
     return [
-        entry for entry in data.get(str(group_id), [])
+        entry for entry in data.get(normalize_group_id(group_id), [])
         if _entry_matches(entry, user_id, username)
     ]
 

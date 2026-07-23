@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+from modules.group_id import normalize_group_id
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "admins.json"
 
@@ -24,7 +25,7 @@ def save_admins(data):
 
 def add_admin(group_id, user_id, username=None):
     data = load_admins()
-    gid = str(group_id)
+    gid = normalize_group_id(group_id)
     entries = data.setdefault(gid, [])
     normalized_id = str(user_id)
 
@@ -46,7 +47,7 @@ def is_admin(group_id, user_id):
     if user_id is None:
         return False
     normalized_id = str(user_id)
-    for entry in load_admins().get(str(group_id), []):
+    for entry in load_admins().get(normalize_group_id(group_id), []):
         if isinstance(entry, dict) and str(entry.get("user_id")) == normalized_id:
             return True
     return False
@@ -54,7 +55,7 @@ def is_admin(group_id, user_id):
 
 def remove_admin(group_id, user_id):
     data = load_admins()
-    gid = str(group_id)
+    gid = normalize_group_id(group_id)
     if gid not in data:
         return False
 

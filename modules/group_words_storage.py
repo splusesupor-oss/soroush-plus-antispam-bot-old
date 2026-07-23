@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from modules.group_id import normalize_group_id
+
 FILE = Path("config/group_words.json")
 
 _cache = None
@@ -43,7 +45,7 @@ def save_words(data):
 
 def add_word(group_id, word):
     data = load_words()
-    gid = str(group_id)
+    gid = normalize_group_id(group_id)
 
     if gid not in data:
         data[gid] = []
@@ -60,7 +62,7 @@ def add_word(group_id, word):
 
 def remove_word(group_id, word):
     data = load_words()
-    gid = str(group_id)
+    gid = normalize_group_id(group_id)
 
     if gid in data and word in data[gid]:
         data[gid].remove(word)
@@ -72,4 +74,4 @@ def remove_word(group_id, word):
 
 def get_words(group_id):
     data = load_words()
-    return data.get(str(group_id), [])
+    return data.get(normalize_group_id(group_id), [])

@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from typing import Dict
 from collections import defaultdict
 
+from modules.group_id import normalize_group_id
+
 class UserTracker:
     def __init__(self, spam_counts_file: str = "logs/spam_counts.json", threshold: int = 3):
         self.spam_counts_file = spam_counts_file
@@ -32,17 +34,17 @@ class UserTracker:
             json.dump(self.spam_counts, f, ensure_ascii=False, indent=2)
 
     def _key(self, group_id, user_id):
-        return str(group_id), str(user_id)
+        return normalize_group_id(group_id), str(user_id)
 
 
     def set_muted(self, group_id: int, user_id: int, until: datetime):
         """ثبت کاربر mute شده"""
-        key = f"{group_id}:{user_id}"
+        key = f"{normalize_group_id(group_id)}:{user_id}"
         self.muted_users[key] = until
 
     def is_muted(self, group_id: int, user_id: int) -> bool:
         """بررسی وضعیت mute"""
-        key = f"{group_id}:{user_id}"
+        key = f"{normalize_group_id(group_id)}:{user_id}"
         if key not in self.muted_users:
             return False
         if datetime.now() >= self.muted_users[key]:
@@ -52,12 +54,12 @@ class UserTracker:
 
     def set_banned(self, group_id: int, user_id: int):
         """ثبت کاربر ban شده"""
-        key = f"{group_id}:{user_id}"
+        key = f"{normalize_group_id(group_id)}:{user_id}"
         self.banned_users[key] = datetime.now()
 
     def is_banned(self, group_id: int, user_id: int) -> bool:
         """بررسی وضعیت ban"""
-        return f"{group_id}:{user_id}" in self.banned_users
+        return f"{normalize_group_id(group_id)}:{user_id}" in self.banned_users
 
     def increment(self, group_id: int, user_id: int) -> int:
         """افزایش شمارنده هرزنامه و برگرداندن تعداد جدید"""
@@ -86,7 +88,7 @@ class UserTracker:
             self.save()
 
     def reset_group(self, group_id: int):
-        g_key = str(group_id)
+        g_key = normalize_group_id(group_id)
         if g_key in self.spam_counts:
             del self.spam_counts[g_key]
             self.save()
@@ -94,12 +96,12 @@ class UserTracker:
     def get_all_counts(self, group_id: int = None):
         if group_id is None:
             return self.spam_counts
-        return self.spam_counts.get(str(group_id), {})
+        return self.spam_counts.get(normalize_group_id(group_id), {})
 
     def get_top_spammers(self, group_id: int = None, limit: int = 10):
         """لیست بیشترین اسپمرها"""
         if group_id:
-            group_data = self.spam_counts.get(str(group_id), {})
+            group_data = self.spam_counts.get(normalize_group_id(group_id), {})
             sorted_users = sorted(group_data.items(), key=lambda x: x[1], reverse=True)
             return sorted_users[:limit]
         else:

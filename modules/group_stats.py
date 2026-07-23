@@ -1,5 +1,7 @@
 import json
 import os
+
+from modules.group_id import normalize_group_id
 from datetime import datetime
 
 FILE = "logs/group_stats.json"
@@ -42,7 +44,7 @@ def save_stats(data):
 
 
 def ensure_group(data, chat_id):
-    chat_id = str(chat_id)
+    chat_id = normalize_group_id(chat_id)
 
     if chat_id not in data:
         data[chat_id] = {
@@ -121,7 +123,7 @@ def add_mute(chat_id):
 
 def get_stats(chat_id):
     data = load_stats()
-    return data.get(str(chat_id), {
+    return data.get(normalize_group_id(chat_id), {
         "messages": 0,
         "deleted": 0,
         "kicked": 0,

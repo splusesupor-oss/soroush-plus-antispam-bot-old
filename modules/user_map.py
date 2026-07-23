@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from modules.group_id import normalize_group_id
+
 FILE = Path("logs/user_map.json")
 
 
@@ -26,7 +28,7 @@ def save_user(group_id, username, user_id):
 
     data = load_map()
 
-    gid = str(group_id)
+    gid = normalize_group_id(group_id)
     uname = username.replace("@", "").lower()
 
     if gid not in data:
