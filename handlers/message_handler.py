@@ -544,8 +544,12 @@ async def handle_new_message(bot, event):
                             chat_id, user_id, 24 * 60 * 60
                         )
                         if muted:
-                            await bot.client.send_message(
+                            await _send_moderation_notification_once(
+                                bot,
                                 chat_id,
+                                user_id,
+                                "forward_spam_mute",
+                                event.message.id,
                                 "📡کاربر "
                                 f"{_format_banned_user(sender, user_id)} "
                                 "به دلیل ارسال فوروارد اسپم 24 ساعت سکوت شد",
