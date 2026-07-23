@@ -985,7 +985,8 @@ async def handle_new_message(bot, event):
                 "🎯 جرعت - حقیقت",
                 "😂 جک",
                 "✍️ جای خالی",
-                "🎯 چهار گزینه‌ای"
+                "🎯 چهار گزینه‌ای",
+                "🖌 تصحیح کلمات"
             ]:
                 pos = games_text.find(word)
                 if pos != -1:
@@ -1012,6 +1013,9 @@ async def handle_new_message(bot, event):
                 "ثبت اصل\n\n"
                 "برای نمایش اصل بنویسید:\n"
                 "اصلم\n\n"
+                "آمار یک کاربر\n"
+                "برای دریافت آمار بنویسید:\n"
+                "آمارم\n\n"
                 "🎮 لیست بازی ها:\n"
                 "برای مشاهده بازی‌ها بنویسید:\n"
                 "لیست بازی\n\n"
@@ -1107,6 +1111,7 @@ async def handle_new_message(bot, event):
                   "🧩 چیستان:",
                     "برای ثبت اصل بنویسید:",
                     "برای نمایش اصل بنویسید:",
+                    "آمار یک کاربر",
                   "😂 جک:",
                   "🎯 بازی جرعت حقیقت:",
                   "✍️ ساخت فونت:",
@@ -1242,9 +1247,9 @@ async def handle_new_message(bot, event):
                 return
             banned_data = load_banned()
             removed_count = len(banned_data.get(str(chat_id), []))
-            banned_data[str(chat_id)] = []
+            banned_data.pop(str(chat_id), None)
             save_banned(banned_data)
-            await event.reply(f"🔗{removed_count} از لیست خراج شده خارج شد")
+            await event.reply(f"🔗[{removed_count} کاربران اخراج شده] از لیست خارج شد")
             return
 
         if clean_text in {"قفل", "باز"}:
@@ -1252,9 +1257,11 @@ async def handle_new_message(bot, event):
                 await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
                 return
             if clean_text == "قفل":
+                bot.logger.log_info("LOCK COMMAND RECEIVED")
                 await bot.group_actions.lock_group(chat_id)
                 await event.reply("🔒 گروه قفل شد")
             else:
+                bot.logger.log_info("UNLOCK COMMAND RECEIVED")
                 await bot.group_actions.unlock_group(chat_id)
                 await event.reply("🔓 گروه باز شد")
             return
@@ -1268,15 +1275,35 @@ async def handle_new_message(bot, event):
             hours = max(0, (activity.get('last', 0) - activity.get('first', 0)) / 3600)
             score = min(10, max(1, (messages // 10) + activity.get('gifs', 0) + activity.get('videos', 0)))
             display_name = " ".join(part for part in (getattr(sender, 'first_name', None), getattr(sender, 'last_name', None)) if part) or str(user_id)
-            await event.reply(
-                f"⟣ {display_name} ⟢\n\n"
-                f"● تعداد پیامی که داده {messages}\n\n"
-                f"● تعداد گیف هایی که فرستاد {activity.get('gifs', 0)}\n\n"
-                f"● تعداد تخلف هایی که انجام داد {violations}\n\n"
-                f"● تعداد فیلم هایی که ارسال کرده {activity.get('videos', 0)}\n\n"
-                f"● ساعاتی که داخل گروه فعالیت کرد {hours:.1f}\n\n"
-                f"⎋ {score}"
+            stats_text = (
+                f"⟣ [{display_name}] ⟢\n\n"
+                f"● تعداد پیامی که داده [{messages}]\n\n"
+                f"● تعداد گیف هایی که فرستاد [{activity.get('gifs', 0)}]\n\n"
+                f"● تعداد تخلف هایی که انجام داد [{violations}]\n\n"
+                f"● تعداد فیلم هایی که ارسال کرده [{activity.get('videos', 0)}]\n\n"
+                f"● ساعاتی که داخل گروه فعالیت کرد [{hours:.1f}]\n\n"
+                f"⎋ [امتیاز کاربر: {score} از 10]"
             )
+            def stat_u16(value):
+                return len(value.encode("utf-16-le")) // 2
+            entities = []
+            for label in (
+                "تعداد پیامی که داده",
+                "تعداد گیف هایی که فرستاد",
+                "تعداد تخلف هایی که انجام داد",
+                "تعداد فیلم هایی که ارسال کرده",
+                "ساعاتی که داخل گروه فعالیت کرد",
+            ):
+                pos = stats_text.find(label)
+                entities.append(MessageEntityBold(
+                    offset=stat_u16(stats_text[:pos]), length=stat_u16(label)
+                ))
+            score_text = f"⎋ [امتیاز کاربر: {score} از 10]"
+            score_pos = stats_text.find(score_text)
+            entities.append(MessageEntityBlockquote(
+                offset=stat_u16(stats_text[:score_pos]), length=stat_u16(score_text)
+            ))
+            await event.reply(stats_text, formatting_entities=entities)
             return
 
         if clean_text == "ثبت مالک":

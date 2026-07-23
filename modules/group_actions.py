@@ -12,23 +12,30 @@ class GroupActions:
         self.logger = logger
 
     async def lock_group(self, chat_id, minutes=None):
-        chat = await self.client.get_input_entity(chat_id)
-
-        await self.client(
-            ToggleJoinToSendRequest(
-                chat,
-                True
-            )
+        # SPlusthon user=None updates default member permissions for the group.
+        await self.client.edit_permissions(
+            chat_id,
+            None,
+            send_messages=False,
+            send_media=False,
+            send_stickers=False,
+            send_gifs=False,
+            send_games=False,
+            send_inline=False,
+            send_polls=False,
         )
 
     async def unlock_group(self, chat_id):
-        chat = await self.client.get_input_entity(chat_id)
-
-        await self.client(
-            ToggleJoinToSendRequest(
-                chat,
-                False
-            )
+        await self.client.edit_permissions(
+            chat_id,
+            None,
+            send_messages=True,
+            send_media=True,
+            send_stickers=True,
+            send_gifs=True,
+            send_games=True,
+            send_inline=True,
+            send_polls=True,
         )
 
     async def change_title(self, chat_id, title):
