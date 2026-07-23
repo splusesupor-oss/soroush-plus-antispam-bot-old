@@ -195,6 +195,11 @@ class SoroushAntiSpamBot:
         await self.initialize_client()
 
         await self.client.connect()
+        try:
+            self.bot_account_id = getattr(await self.client.get_me(), "id", None)
+        except Exception as error:
+            self.bot_account_id = None
+            self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
         asyncio.create_task(process_delete(self))
 
         async def is_currently_restricted(chat_id, user):

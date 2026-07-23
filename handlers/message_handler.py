@@ -418,6 +418,13 @@ async def handle_new_message(bot, event):
         chat_id = getattr(event_chat, "id", event.chat_id)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
+        sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+        # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
+        if (
+            user_id == getattr(bot, "bot_account_id", None)
+            or sender_username == "aifox"
+        ):
+            return
         clean_text = message_text.strip()
         fast_command = (
             clean_text in SIMPLE_REPLIES
