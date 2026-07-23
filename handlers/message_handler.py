@@ -420,10 +420,13 @@ async def handle_new_message(bot, event):
         user_id = sender.id if sender else 0
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
         # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
-        if (
+        is_bot_account = (
             user_id == getattr(bot, "bot_account_id", None)
             or sender_username in {"aifox", "osine1"}
-        ):
+        )
+        # مالک اصلی باید به فرمان‌ها برسد؛ bypass امنیتی او از مسیر moderator
+        # اعمال می‌شود، نه با return پیش از handler.
+        if is_bot_account and not is_global_owner(user_id):
             return
         clean_text = message_text.strip()
         fast_command = (
@@ -484,11 +487,15 @@ async def handle_new_message(bot, event):
                         )
                         if muted:
                             print("USER MUTED 3600")
-                            await bot.client.send_message(
+                            await _send_moderation_notification_once(
+                                bot,
                                 chat_id,
-                                "📡 کاربر "
+                                user_id,
+                                "gif_mute",
+                                event.message.id,
+                                "📡کاربر "
                                 f"{_format_banned_user(sender, user_id)} "
-                                "به دلیل ارسال هرزنامه گیف یک ساعت سکوت شد"
+                                "به دلیل ارسال هرزنامه گیف یک ساعت سکوت شد",
                             )
                             print("GIF WARNING SENT")
                     except Exception as error:
@@ -1686,6 +1693,11 @@ async def handle_new_message(bot, event):
 
 # آزاد کردن کاربر محروم شده
         if clean_text == "آزاد":
+            if not _has_group_management_permission(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            ):
+                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                return
             try:
                 if not event.reply_to:
                     await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
