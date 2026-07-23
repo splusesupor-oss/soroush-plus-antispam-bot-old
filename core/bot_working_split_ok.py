@@ -4,6 +4,7 @@ from modules.security.delete_queue import process_delete
 import asyncio
 from modules.admin_storage import is_admin, add_admin, remove_admin
 from modules.riddles import new_riddle, check_answer, get_answer
+from modules.spam_history import get_user_history
 from modules.group_stats import add_message, add_deleted, add_kick, add_mute, make_report
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
 from modules.jorat_haghighat import get_jorat, get_haghighat
@@ -20,7 +21,7 @@ from modules.banned_storage import (
 )
 from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
-from modules.group_storage import activate_group, deactivate_group, get_group_owner, is_active
+from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_actions import GroupActions
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.admin_handler import handle_admin_commands
@@ -102,6 +103,7 @@ class SoroushAntiSpamBot:
         self.spam_burst_users = set()
         self.spam_burst_messages = {}
         self.spam_burst_tasks = {}
+        self.rejoin_spam_state = {}
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
 
@@ -213,6 +215,21 @@ class SoroushAntiSpamBot:
                 )
                 return True
 
+        def restore_rejoin_spam_state(chat_id, user_id):
+            punish_key = f"{chat_id}:{user_id}"
+            burst_key = (chat_id, user_id)
+            previous_violations = self.tracker.get_count(chat_id, user_id)
+            self.rejoin_spam_state[burst_key] = {
+                "previously_banned": True,
+                "previous_violations": previous_violations,
+            }
+            self.punished_users.discard(punish_key)
+            burst_task = self.spam_burst_tasks.pop(burst_key, None)
+            if burst_task:
+                burst_task.cancel()
+            self.spam_burst_users.discard(burst_key)
+            self.spam_burst_messages.pop(burst_key, None)
+
 
         @self.client.on(events.Raw(types.UpdateChannelParticipant))
         async def manual_unban_update(update):
@@ -247,7 +264,7 @@ class SoroushAntiSpamBot:
                     display_name,
                 )
                 self.tracker.banned_users.pop(f"{chat_id}:{user_id}", None)
-                self.punished_users.discard(f"{chat_id}:{user_id}")
+                restore_rejoin_spam_state(chat_id, user_id)
                 self.spammer_messages.pop(user_id, None)
                 self.logger.log_info(
                     "Detected manual release, removed user from permanent "
@@ -277,6 +294,24 @@ class SoroushAntiSpamBot:
 
                 user_id = user.id
                 username = getattr(user, "username", None)
+                punish_key = f"{chat_id}:{user_id}"
+                burst_key = (chat_id, user_id)
+                history = get_user_history(chat_id, user_id)
+                rejoin_state = self.rejoin_spam_state.get(burst_key, {})
+                self.logger.log_info(
+                    "SPLUS REJOIN STATE DEBUG\n"
+                    f"user_id={user_id}\n"
+                    f"chat_id={chat_id}\n"
+                    f"previously_banned={rejoin_state.get('previously_banned', False)}\n"
+                    f"previous_violations={rejoin_state.get('previous_violations', 0)}\n"
+                    "new_spam_detected=False\n"
+                    "ban_triggered=False\n"
+                    f"punish_key={punish_key}\n"
+                    f"in_punished_users={punish_key in self.punished_users}\n"
+                    f"in_spam_burst_users={burst_key in self.spam_burst_users}\n"
+                    f"history_count={len(history) if history is not None else 0}\n"
+                    f"spam_count={self.tracker.get_count(chat_id, user_id)}"
+                )
 
                 banned_data = load_banned()
                 banned = is_banned(
@@ -313,7 +348,7 @@ class SoroushAntiSpamBot:
                         self.tracker.banned_users.pop(
                             f"{chat_id}:{user_id}", None
                         )
-                        self.punished_users.discard(f"{chat_id}:{user_id}")
+                        restore_rejoin_spam_state(chat_id, user_id)
                         self.spammer_messages.pop(user_id, None)
                         self.logger.log_info(
                             "Detected manual release, removed user from permanent "
@@ -351,18 +386,10 @@ class SoroushAntiSpamBot:
                 lock_id = getattr(chat_lock, "id", None)
                 sender_lock = await event.get_sender()
                 sender_id = getattr(sender_lock, "id", None)
-                registered_owner_id = get_group_owner(lock_id)
                 group_is_active = is_active(lock_id)
                 sender_username = getattr(sender_lock, "username", None)
                 normalized_username = normalize_username(sender_username)
-                is_registered_owner = (
-                    registered_owner_id is not None
-                    and str(sender_id) == str(registered_owner_id)
-                )
-                is_global_bot_owner = is_global_owner(sender_username)
-                can_change_group_mode = (
-                    is_global_bot_owner or is_registered_owner
-                )
+                can_change_group_mode = is_global_owner(sender_username)
                 is_enable_command = text == "فعال"
                 is_disable_command = text == "غیر فعال"
 
@@ -373,9 +400,7 @@ class SoroushAntiSpamBot:
                         f"sender_username={sender_username!r} "
                         f"normalized_username={normalized_username!r} "
                         f"text={text!r} disabled_before={not group_is_active} "
-                        f"registered_owner_id={registered_owner_id} "
-                        f"registered_owner_check={is_registered_owner} "
-                        f"global_owner_check={is_global_bot_owner} "
+                        f"global_owner_check={can_change_group_mode} "
                         f"mode_owner_check={can_change_group_mode} "
                         f"enable_match={is_enable_command} "
                         f"disable_match={is_disable_command}"
@@ -430,13 +455,7 @@ class SoroushAntiSpamBot:
                     self.tracker.banned_users.pop(
                         f"{event.chat_id}:{user.id}", None
                     )
-                    self.punished_users.discard(f"{event.chat_id}:{user.id}")
-                    burst_key = (event.chat_id, user.id)
-                    burst_task = self.spam_burst_tasks.pop(burst_key, None)
-                    if burst_task:
-                        burst_task.cancel()
-                    self.spam_burst_users.discard(burst_key)
-                    self.spam_burst_messages.pop(burst_key, None)
+                    restore_rejoin_spam_state(event.chat_id, user.id)
                     self.spammer_messages.pop(user.id, None)
                     self.logger.log_info(
                         f"UNBAN COMPLETE user_id={user.id} removed successfully"
