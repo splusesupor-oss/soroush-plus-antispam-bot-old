@@ -487,17 +487,26 @@ async def handle_new_message(bot, event):
                         )
                         if muted:
                             print("USER MUTED 3600")
-                            await _send_moderation_notification_once(
-                                bot,
-                                chat_id,
-                                user_id,
-                                "gif_mute",
-                                event.message.id,
-                                "📡کاربر "
-                                f"{_format_banned_user(sender, user_id)} "
-                                "به دلیل ارسال هرزنامه گیف یک ساعت سکوت شد",
+                            notification_key = (chat_id, user_id)
+                            now = _asyncio.get_running_loop().time()
+                            notified_until = getattr(
+                                bot, "gif_spam_notification_until", {}
                             )
-                            print("GIF WARNING SENT")
+                            if notified_until.get(notification_key, 0) <= now:
+                                if not hasattr(bot, "gif_spam_notification_until"):
+                                    bot.gif_spam_notification_until = {}
+                                bot.gif_spam_notification_until[notification_key] = now + 3600
+                                await _send_moderation_notification_once(
+                                    bot,
+                                    chat_id,
+                                    user_id,
+                                    "gif_mute",
+                                    event.message.id,
+                                    "📡کاربر "
+                                    f"{_format_banned_user(sender, user_id)} "
+                                    "به دلیل ارسال هرزنامه گیف یک ساعت سکوت شد",
+                                )
+                                print("GIF WARNING SENT")
                     except Exception as error:
                         bot.logger.log_error(
                             f"خطا در mute GIF spam {user_id}: {error}"
