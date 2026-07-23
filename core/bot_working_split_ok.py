@@ -379,9 +379,23 @@ class SoroushAntiSpamBot:
 
             raw_text = event.message.message or ""
             text = raw_text.strip()
+            routing_chat = await event.get_chat()
+            is_private_splus = (
+                event.is_private
+                or routing_chat.__class__.__name__ == "User"
+            )
+            is_broadcast_text = text in {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
+            if is_broadcast_text:
+                self.logger.log_info(
+                    "BROADCAST COMMAND RECEIVED "
+                    f"text={text!r} event_out={event.out} "
+                    f"event_is_private={event.is_private} "
+                    f"chat_type={routing_chat.__class__.__name__} "
+                    f"private_route={is_private_splus}"
+                )
             if (
                 event.out
-                and event.is_private
+                and is_private_splus
                 and event.message.id in getattr(self, "broadcast_bot_message_ids", set())
             ):
                 self.broadcast_bot_message_ids.discard(event.message.id)
@@ -430,7 +444,7 @@ class SoroushAntiSpamBot:
                     self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
                     return
             elif event.out:
-                if event.is_private:
+                if is_private_splus:
                     private_sender = await event.get_sender()
                     if event.out:
                         private_me = await self.client.get_me()
@@ -452,7 +466,7 @@ class SoroushAntiSpamBot:
                     return
 
             # MASTER GROUP MODE GATE: every incoming group message passes here first.
-            if not event.is_private:
+            if not is_private_splus:
                 chat_lock = await event.get_chat()
                 lock_id = getattr(chat_lock, "id", None)
                 sender_lock = await event.get_sender()
@@ -544,7 +558,7 @@ class SoroushAntiSpamBot:
 
 
               # پیوی فقط دستور صفر کردن تخلف
-            if event.is_private:
+            if is_private_splus:
                 text = (event.message.message or "").strip()
                 sender = await event.get_sender()
                 if event.out:
