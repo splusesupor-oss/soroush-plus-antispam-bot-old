@@ -174,7 +174,7 @@ class SoroushAntiSpamBot:
             if is_admin(chat_id, user_id):
                 return True
 
-            if is_global_owner(username):
+            if is_global_owner(user_id):
                 return True
 
             return False
@@ -375,29 +375,49 @@ class SoroushAntiSpamBot:
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
 
-            text = (event.message.message or "").strip()
+            raw_text = event.message.message or ""
+            text = raw_text.strip()
             is_mode_command = text in {"فعال", "غیر فعال"}
+            mode_username = None
             if is_mode_command:
                 sender_for_mode = await event.get_sender()
                 sender_username_for_mode = getattr(sender_for_mode, "username", None)
-                normalized_username_for_mode = normalize_username(
-                    sender_username_for_mode
-                )
-                is_global_owner_for_mode = is_global_owner(
-                    sender_username_for_mode
+                try:
+                    client_me = await self.client.get_me()
+                    client_me_id = getattr(client_me, "id", None)
+                    client_me_username = getattr(client_me, "username", None)
+                except Exception as error:
+                    client_me_id = None
+                    client_me_username = None
+                    self.logger.log_error(f"OWNER RUNTIME TRACE get_me error: {error}")
+
+                normalized_sender = normalize_username(sender_username_for_mode)
+                normalized_client = normalize_username(client_me_username)
+                global_owner_config = get_owner()
+                is_global_owner_sender = is_global_owner(getattr(sender_for_mode, "id", None))
+                is_global_owner_client = is_global_owner(client_me_id)
+                mode_username = (
+                    client_me_username if event.out else sender_username_for_mode
                 )
                 self.logger.log_info(
-                    "OWNER COMMAND DEBUG\n"
-                    f"user_id={getattr(sender_for_mode, 'id', None)}\n"
-                    f"username={sender_username_for_mode!r}\n"
-                    f"normalized_username={normalized_username_for_mode!r}\n"
-                    f"stored_owner_id={self.config_manager.get('OWNER_ID')}\n"
-                    f"stored_owner_username={get_owner()!r}\n"
-                    f"is_owner={is_global_owner_for_mode}\n"
-                    f"command={text!r}\n"
-                    f"event_out={event.out}"
+                    "OWNER RUNTIME TRACE\n"
+                    f"raw_text={raw_text!r}\n"
+                    f"event_out={event.out}\n"
+                    f"sender_id={getattr(sender_for_mode, 'id', None)}\n"
+                    f"sender_username={sender_username_for_mode!r}\n"
+                    f"client_me_id={client_me_id}\n"
+                    f"client_me_username={client_me_username!r}\n"
+                    f"normalized_sender={normalized_sender!r}\n"
+                    f"normalized_client={normalized_client!r}\n"
+                    f"global_owner_config={global_owner_config!r}\n"
+                    f"is_global_owner_sender={is_global_owner_sender}\n"
+                    f"is_global_owner_client={is_global_owner_client}"
+                )
+                is_global_owner_for_mode = (
+                    is_global_owner_client if event.out else is_global_owner_sender
                 )
                 if event.out and not is_global_owner_for_mode:
+                    self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
                     return
             elif event.out:
                 return
@@ -409,9 +429,13 @@ class SoroushAntiSpamBot:
                 sender_lock = await event.get_sender()
                 sender_id = getattr(sender_lock, "id", None)
                 group_is_active = is_active(lock_id)
-                sender_username = getattr(sender_lock, "username", None)
+                sender_username = (
+                    mode_username if is_mode_command else getattr(
+                        sender_lock, "username", None
+                    )
+                )
                 normalized_username = normalize_username(sender_username)
-                can_change_group_mode = is_global_owner(sender_username)
+                can_change_group_mode = is_global_owner(sender_id)
                 is_enable_command = text == "فعال"
                 is_disable_command = text == "غیر فعال"
 
@@ -496,7 +520,7 @@ class SoroushAntiSpamBot:
 
                 if "صفر" in text:
                     sender = await event.get_sender()
-                    if not is_global_owner(getattr(sender, "username", None)):
+                    if not is_global_owner(getattr(sender, "id", None)):
                         await event.reply(
                             "❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد"
                         )

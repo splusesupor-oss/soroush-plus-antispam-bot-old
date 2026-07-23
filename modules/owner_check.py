@@ -1,9 +1,10 @@
-"""Centralized Soroush Plus global-owner username authentication."""
+"""Centralized Soroush Plus global-owner authentication by user ID."""
 import json
 from pathlib import Path
 
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "owner.json"
+DEFAULT_GLOBAL_OWNER_ID = 68074059
 
 
 def normalize_username(username):
@@ -15,18 +16,26 @@ def normalize_username(username):
 
 def get_owner():
     if not FILE.exists():
-        return None
+        return {"user_id": DEFAULT_GLOBAL_OWNER_ID, "username": None}
     try:
         data = json.loads(FILE.read_text(encoding="utf-8"))
-        return normalize_username(data.get("username"))
+        return {
+            "user_id": int(data.get("user_id", DEFAULT_GLOBAL_OWNER_ID)),
+            "username": normalize_username(data.get("username")),
+        }
     except Exception:
-        return None
+        return {"user_id": DEFAULT_GLOBAL_OWNER_ID, "username": None}
 
 
-def is_global_owner(username):
-    owner = get_owner()
-    return owner is not None and normalize_username(username) == owner
+def is_global_owner(user):
+    """Only the configured Soroush Plus user ID is the global owner."""
+    if user is None:
+        return False
+    user_id = getattr(user, "id", user)
+    try:
+        return int(user_id) == get_owner()["user_id"]
+    except (TypeError, ValueError):
+        return False
 
 
-# Backward-compatible public alias for existing imports.
 is_owner = is_global_owner

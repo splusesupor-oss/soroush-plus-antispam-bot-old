@@ -91,6 +91,18 @@ def _get_forward_metadata(message):
     return False, None, fields
 
 
+def _log_ban_execution(bot, chat_id, user_id, reason):
+    punish_key = f"{chat_id}:{user_id}"
+    bot.logger.log_info(
+        "BAN EXECUTION DEBUG\n"
+        f"chat_id={chat_id}\n"
+        f"user_id={user_id}\n"
+        f"reason={reason}\n"
+        f"already_punished={punish_key in bot.punished_users}\n"
+        f"will_ban={punish_key not in bot.punished_users}"
+    )
+
+
 async def _send_moderation_notification_once(
     bot, chat_id, user_id, action, source_message_id, text
 ):
@@ -340,7 +352,7 @@ async def send_activation_message(bot, event, chat_id, title):
 
 
 def _can_manage_group_admins(bot, chat_id, user_id, username):
-    if is_global_owner(username):
+    if is_global_owner(user_id):
         return True
 
     group_owner_id = get_group_owner(chat_id)
@@ -352,7 +364,7 @@ DELETE_COMMAND_COOLDOWNS = {}
 
 def _has_group_management_permission(bot, chat_id, user_id, username):
     group_owner_id = get_group_owner(chat_id)
-    if is_global_owner(username):
+    if is_global_owner(user_id):
         result, source = True, "global_owner"
     elif group_owner_id is not None and str(user_id) == str(group_owner_id):
         result, source = True, "registered_group_owner"
@@ -451,7 +463,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "صفر":
-            if not is_global_owner(getattr(sender, "username", None)):
+            if not is_global_owner(getattr(sender, "id", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد")
                 return
             if not event.reply_to:
@@ -523,6 +535,7 @@ async def handle_new_message(bot, event):
             try:
                 if is_repeat(chat_id, user_id, message_text):
                     punish_key = f"{chat_id}:{user_id}"
+                    _log_ban_execution(bot, chat_id, user_id, "اسپم تکراری")
                     if punish_key in bot.punished_users:
                         return
                     bot.punished_users.add(punish_key)
@@ -1086,7 +1099,7 @@ async def handle_new_message(bot, event):
             try:
                 sender = await event.get_sender()
                 print("OWNER DEBUG:", getattr(sender, "username", None), getattr(sender, "id", None), getattr(sender, "first_name", None))
-                if not is_global_owner(getattr(sender, "username", None)):
+                if not is_global_owner(getattr(sender, "id", None)):
                     await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
                     return
 
@@ -1144,7 +1157,7 @@ async def handle_new_message(bot, event):
         )
 
         if clean_text == "ثبت مالک":
-            if not is_global_owner(getattr(sender, "username", None)):
+            if not is_global_owner(getattr(sender, "id", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه ثبت مالک گروه را دارد")
                 return
 
@@ -1172,7 +1185,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "لغو مالک":
-            if not is_global_owner(getattr(sender, "username", None)):
+            if not is_global_owner(getattr(sender, "id", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه لغو مالک گروه را دارد")
                 return
 
@@ -1187,7 +1200,7 @@ async def handle_new_message(bot, event):
         if clean_text == "ثبت گروه":
 
             try:
-                if not is_global_owner(getattr(sender, "username", None)):
+                if not is_global_owner(getattr(sender, "id", None)):
                     await event.reply(
                         "❌ فقط مالک ربات اجازه ثبت گروه دارد"
                     )
@@ -1790,6 +1803,7 @@ async def handle_new_message(bot, event):
                 print("🚨 HEAVY REPEAT SPAM BAN:", username, user_id)
 
                 punish_key = f"{chat_id}:{user_id}"
+                _log_ban_execution(bot, chat_id, user_id, "تکرار شدید داخل پیام")
 
                 if punish_key not in bot.punished_users:
                     bot.punished_users.add(punish_key)
@@ -1869,6 +1883,19 @@ async def handle_new_message(bot, event):
             is_spam, reason = bot.detector.is_spam(message_text, chat_id)
 
         if is_spam:
+            rejoin_state = getattr(bot, "rejoin_spam_state", {}).get(
+                (chat_id, user_id), {}
+            )
+            if rejoin_state.get("previously_banned"):
+                bot.logger.log_info(
+                    "SPLUS REJOIN STATE DEBUG\n"
+                    f"user_id={user_id}\n"
+                    f"chat_id={chat_id}\n"
+                    "previously_banned=True\n"
+                    f"previous_violations={rejoin_state.get('previous_violations', 0)}\n"
+                    "new_spam_detected=True\n"
+                    f"ban_triggered={f'{chat_id}:{user_id}' not in bot.punished_users}"
+                )
 
             # اسپم تکراری شدید: ذخیره + حذف + بن مستقیم
             try:
@@ -1897,6 +1924,7 @@ async def handle_new_message(bot, event):
 
                     if hasattr(bot.admin_actions, "ban_user"):
                         punish_key = f"{chat_id}:{user_id}"
+                        _log_ban_execution(bot, chat_id, user_id, "اسپم تکراری شدید")
                         if punish_key not in bot.punished_users:
                             bot.punished_users.add(punish_key)
                             banned = await bot.admin_actions.ban_user(
@@ -1960,6 +1988,7 @@ async def handle_new_message(bot, event):
             # بررسی مجازات
             if bot.tracker.should_punish(chat_id, user_id):
                 punish_key = f"{chat_id}:{user_id}"
+                _log_ban_execution(bot, chat_id, user_id, "رسیدن به آستانه تخلفات")
 
                 if punish_key not in bot.punished_users:
                     bot.punished_users.add(punish_key)

@@ -9,7 +9,7 @@ async def _can_manage_commands(bot, event, admin_id, chat_id):
     username = getattr(sender, "username", None)
     group_owner_id = get_group_owner(chat_id)
     return (
-        is_global_owner(username)
+        is_global_owner(admin_id)
         or (group_owner_id is not None and str(admin_id) == str(group_owner_id))
         or is_admin(chat_id, admin_id)
     )

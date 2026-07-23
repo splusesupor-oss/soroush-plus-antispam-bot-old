@@ -7,7 +7,7 @@ from modules.owner_check import is_global_owner
 def _can_manage_group_words(bot, chat_id, user_id, username):
     group_owner_id = get_group_owner(chat_id)
     return (
-        is_global_owner(username)
+        is_global_owner(user_id)
         or (group_owner_id is not None and str(user_id) == str(group_owner_id))
         or is_admin(chat_id, user_id)
     )
