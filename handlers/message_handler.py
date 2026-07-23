@@ -26,6 +26,7 @@ from modules.jokes import get_joke
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.gif_spam_detector import (
     get_gif_event_info,
+    get_gif_fingerprint,
     get_gif_media_id,
     reset_gif_history,
     track_gif,
@@ -448,7 +449,20 @@ async def handle_new_message(bot, event):
             if gif_media_id is None:
                 reset_gif_history(chat_id, user_id)
             else:
-                gif_debug = get_gif_event_info(event.message, chat_id, user_id)
+                gif_fingerprint, fingerprint_source = await get_gif_fingerprint(
+                    bot.client, event.message
+                )
+                if gif_fingerprint is None:
+                    reset_gif_history(chat_id, user_id)
+                    return
+
+                gif_debug = get_gif_event_info(
+                    event.message,
+                    chat_id,
+                    user_id,
+                    gif_fingerprint,
+                    fingerprint_source,
+                )
                 print(
                     "GIF EVENT RECEIVED\n"
                     f"message_id={gif_debug['message_id']}\n"
@@ -456,14 +470,17 @@ async def handle_new_message(bot, event):
                     f"mime_type={gif_debug['mime_type']}\n"
                     f"document_id={gif_debug['document_id']}\n"
                     f"file_id={gif_debug['file_id']}\n"
+                    f"document_size={gif_debug['document_size']}\n"
                     f"animation_attribute={gif_debug['animation_attribute']}\n"
+                    f"gif_fingerprint={gif_debug['fingerprint']}\n"
+                    f"fingerprint_source={gif_debug['fingerprint_source']}\n"
                     f"current_history={gif_debug['current_history']}"
                 )
                 repeated_gif_ids = track_gif(
                     chat_id,
                     user_id,
                     event.message.id,
-                    gif_media_id,
+                    gif_fingerprint,
                 )
                 if repeated_gif_ids:
                     print("REPEATED GIF DETECTED")
