@@ -3,7 +3,7 @@ from collections import deque
 
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
-from modules.group_stats import add_message
+from modules.group_stats import add_message, get_stats
 from modules.group_storage import activate_group, deactivate_group
 from modules.owner_check import is_global_owner
 from modules.spam_history import save_history_message
@@ -24,6 +24,8 @@ from modules.user_original_storage import (
 )
 from modules.jokes import get_joke
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
+from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
+from modules.user_activity import record as record_activity, get as get_activity
 from modules.gif_spam_detector import (
     is_gif_message,
     reset_gif_history,
@@ -35,7 +37,7 @@ from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.admin_storage import add_admin, remove_admin, is_admin
-from modules.banned_storage import add_banned
+from modules.banned_storage import add_banned, load_banned, save_banned
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
@@ -415,6 +417,8 @@ async def handle_new_message(bot, event):
         chat_id = getattr(event_chat, "id", event.chat_id)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
+        if not event.is_private:
+            record_activity(chat_id, user_id, event.message)
         sender_username = getattr(sender, "username", None)
         is_group_moderator = (
             not event.is_private
@@ -665,6 +669,25 @@ async def handle_new_message(bot, event):
                 await event.reply(result)
                 return
 
+
+        # بازی تصحیح کلمات
+        if clean_text == "تصحیح کلمات":
+            game = start_correction(chat_id)
+            await event.reply(f"{game['wrong']}\n\n۳۰ ثانیه زمان دارید صحیح کلمه را بنویسید")
+            async def correction_timer():
+                await _asyncio.sleep(30)
+                active = get_correction(chat_id)
+                if active and active['token'] == game['token']:
+                    clear_correction(chat_id, game['token'])
+                    await event.reply(f"پاسخ درست:\n{active['correct']}")
+            _track_group_timer(bot, chat_id, _asyncio.create_task(correction_timer()))
+            return
+
+        result_correction = answer_correction(chat_id, clean_text)
+        if result_correction is not None:
+            if result_correction:
+                await event.reply("آفرین پاسخ درست بود")
+            return
 
         # بازی چهار گزینه‌ای
         normalized_game_command = " ".join(
@@ -942,7 +965,9 @@ async def handle_new_message(bot, event):
                 "✍️ جای خالی\n"
                 "۳۰ ثانیه فرصت دارید جای خالی را کامل کنید\n\n"
                 "🎯 چهار گزینه‌ای\n"
-                "به سؤال پاسخ دهید: 1، 2، 3 یا 4"
+                "به سؤال پاسخ دهید: 1، 2، 3 یا 4\n\n"
+                "🖌 تصحیح کلمات\n"
+                "یک کلمه با املای غلط نوشته میشود و شما باید صحیح آن را بنویسید"
             )
 
             entities = []
@@ -1210,6 +1235,49 @@ async def handle_new_message(bot, event):
             getattr(sender, "username", None)
             or getattr(sender, "first_name", "Unknown")
         )
+
+        if clean_text == "ریست اخراجی ها":
+            if str(user_id) != str(get_group_owner(chat_id)):
+                await event.reply("❌ فقط مالک ثبت‌شده اجازه استفاده از این دستور را دارد")
+                return
+            banned_data = load_banned()
+            removed_count = len(banned_data.get(str(chat_id), []))
+            banned_data[str(chat_id)] = []
+            save_banned(banned_data)
+            await event.reply(f"🔗{removed_count} از لیست خراج شده خارج شد")
+            return
+
+        if clean_text in {"قفل", "باز"}:
+            if not _has_group_management_permission(bot, chat_id, user_id, getattr(sender, 'username', None)):
+                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                return
+            if clean_text == "قفل":
+                await bot.group_actions.lock_group(chat_id)
+                await event.reply("🔒 گروه قفل شد")
+            else:
+                await bot.group_actions.unlock_group(chat_id)
+                await event.reply("🔓 گروه باز شد")
+            return
+
+        if clean_text == "آمارم":
+            activity = get_activity(chat_id, user_id)
+            group_stats = get_stats(chat_id)
+            user_stats = group_stats.get('users', {}).get(str(user_id), {})
+            messages = user_stats.get('messages', 0)
+            violations = bot.tracker.get_count(chat_id, user_id)
+            hours = max(0, (activity.get('last', 0) - activity.get('first', 0)) / 3600)
+            score = min(10, max(1, (messages // 10) + activity.get('gifs', 0) + activity.get('videos', 0)))
+            display_name = " ".join(part for part in (getattr(sender, 'first_name', None), getattr(sender, 'last_name', None)) if part) or str(user_id)
+            await event.reply(
+                f"⟣ {display_name} ⟢\n\n"
+                f"● تعداد پیامی که داده {messages}\n\n"
+                f"● تعداد گیف هایی که فرستاد {activity.get('gifs', 0)}\n\n"
+                f"● تعداد تخلف هایی که انجام داد {violations}\n\n"
+                f"● تعداد فیلم هایی که ارسال کرده {activity.get('videos', 0)}\n\n"
+                f"● ساعاتی که داخل گروه فعالیت کرد {hours:.1f}\n\n"
+                f"⎋ {score}"
+            )
+            return
 
         if clean_text == "ثبت مالک":
             if not is_global_owner(getattr(sender, "id", None)):
