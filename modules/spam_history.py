@@ -17,41 +17,18 @@ def normalize(text):
 def save_history_message(chat_id, user_id, message_id, text):
     key = (chat_id, user_id)
     if message_id is None:
-        print(
-            "MESSAGE HISTORY SAVE\n"
-            f"chat_id={chat_id}\nuser_id={user_id}\nmessage_id=None\n"
-            f"text={normalize(text)!r}\nsaved=False\n"
-            f"History size for this user: {len(MESSAGE_HISTORY[key])}\n"
-            f"writer_key={key}"
-        )
-        return
+        return False
 
     normalized_text = normalize(text)
     if any(item["message_id"] == message_id for item in MESSAGE_HISTORY[key]):
-        print(
-            "MESSAGE HISTORY SAVE\n"
-            f"chat_id={chat_id}\nuser_id={user_id}\nmessage_id={message_id}\n"
-            f"text={normalized_text!r}\nsaved=False\n"
-            f"History size for this user: {len(MESSAGE_HISTORY[key])}\n"
-            f"writer_key={key}"
-        )
-        return
+        return False
 
     MESSAGE_HISTORY[key].append({
         "message_id": message_id,
         "normalized_text": normalized_text,
         "timestamp": time.monotonic(),
     })
-    print(
-        "MESSAGE HISTORY SAVE\n"
-        f"chat_id={chat_id}\n"
-        f"user_id={user_id}\n"
-        f"message_id={message_id}\n"
-        f"text={normalized_text!r}\n"
-        f"saved=True\n"
-        f"History size for this user: {len(MESSAGE_HISTORY[key])}\n"
-        f"writer_key={key}"
-    )
+    return True
 
 
 def get_user_history(chat_id, user_id):

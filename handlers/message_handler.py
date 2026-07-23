@@ -163,14 +163,7 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
 
 
 async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
-    reader_key = (chat_id, user_id)
     history = get_user_history(chat_id, user_id)
-    print(
-        "HEAVY SPAM HISTORY READ\n"
-        f"reader_key={reader_key}\n"
-        f"history_found={history is not None}\n"
-        f"history_size={len(history) if history is not None else 0}"
-    )
     if history is None:
         print("HEAVY SPAM CLEANUP\n"
               f"User: {user_id}\nStored messages: 0\nDeleted messages: 0\n"
