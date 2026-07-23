@@ -511,22 +511,32 @@ async def handle_new_message(bot, event):
             )
             if not is_group_moderator:
                 deleted = False
+                forward_key = (chat_id, user_id)
+                forward_count = getattr(bot, "forward_spam_counts", {}).get(
+                    forward_key, 0
+                ) + 1
+                bot.forward_spam_counts[forward_key] = forward_count
                 try:
                     await bot.client.delete_messages(chat_id, [event.message.id])
                     deleted = True
-                    await _send_moderation_notification_once(
-                        bot,
-                        chat_id,
-                        user_id,
-                        "forward_delete",
-                        event.message.id,
-                        "🚫 پیام فوروارد شده پاک شد.",
-                    )
+                    if forward_count >= 3:
+                        muted = await bot.admin_actions.mute_user(
+                            chat_id, user_id, 24 * 60 * 60
+                        )
+                        if muted:
+                            await bot.client.send_message(
+                                chat_id,
+                                "📡کاربر "
+                                f"{_format_banned_user(sender, user_id)} "
+                                "به دلیل ارسال اسپم فوروارد شده 24 ساعت سکوت شد",
+                            )
+                            bot.forward_spam_counts.pop(forward_key, None)
                 finally:
                     bot.logger.log_info(
                         "FORWARD DETECTED "
                         f"user_id={user_id} username={sender_username} "
-                        f"forward_field={forward_field} deleted={deleted}"
+                        f"forward_field={forward_field} deleted={deleted} "
+                        f"forward_count={forward_count}"
                     )
                 return
 

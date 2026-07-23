@@ -111,6 +111,7 @@ class SoroushAntiSpamBot:
         self.spam_burst_messages = {}
         self.spam_burst_tasks = {}
         self.rejoin_spam_state = {}
+        self.forward_spam_counts = {}
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
 
