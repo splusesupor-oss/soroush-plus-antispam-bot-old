@@ -1031,6 +1031,9 @@ async def handle_new_message(bot, event):
                 "پیام‌های تبلیغاتی، فورواردی، تکراری و هرزنامه‌ها خودکار بررسی می‌شوند.\n\n"
 
                 "👑 دستورات ادمین‌ها:\n\n"
+                "برای قفل کردن ارسال پیام گروه:\nقفل\n\n"
+                "برای باز کردن ارسال پیام گروه:\nباز\n\n"
+                "برای خالی کردن لیست اخراج شده ها:\nریست اخراجی ها\n\n"
                 "⚠️ اخطار دادن به کاربر:\n"
                 "روی پیام ریپلای کنید و بنویسید:\n"
                 "اخطار\n\n"
@@ -1117,6 +1120,9 @@ async def handle_new_message(bot, event):
                   "✍️ ساخت فونت:",
                   "🛡️ امنیت گروه:",
                   "👑 دستورات ادمین‌ها:",
+                  "قفل",
+                  "باز",
+                  "ریست اخراجی ها",
                   "🎮 لیست بازی ها:",
                   "👑 مدیریت ادمین‌ها:",
                   "➕ افزودن ادمین:",
@@ -1246,7 +1252,27 @@ async def handle_new_message(bot, event):
                 await event.reply("❌ فقط مالک ثبت‌شده اجازه استفاده از این دستور را دارد")
                 return
             banned_data = load_banned()
-            removed_count = len(banned_data.get(str(chat_id), []))
+            entries = list(banned_data.get(str(chat_id), []))
+            removed_count = len(entries)
+            for entry in entries:
+                try:
+                    target_id = entry.get("user_id") if isinstance(entry, dict) else entry
+                    target = await bot.client.get_entity(target_id)
+                    await bot.client.edit_permissions(
+                        chat_id,
+                        target,
+                        until_date=None,
+                        view_messages=True,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        send_polls=True,
+                    )
+                except Exception as error:
+                    bot.logger.log_error(f"خطا در رفع اخراجی {entry}: {error}")
             banned_data.pop(str(chat_id), None)
             save_banned(banned_data)
             await event.reply(f"🔗[{removed_count} کاربران اخراج شده] از لیست خارج شد")
