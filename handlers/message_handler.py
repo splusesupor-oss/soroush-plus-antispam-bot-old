@@ -540,21 +540,30 @@ async def handle_new_message(bot, event):
                     await bot.client.delete_messages(chat_id, [event.message.id])
                     deleted = True
                     if forward_count >= 3:
-                        muted = await bot.admin_actions.mute_user(
-                            chat_id, user_id, 24 * 60 * 60
-                        )
-                        if muted:
-                            await _send_moderation_notification_once(
-                                bot,
-                                chat_id,
-                                user_id,
-                                "forward_spam_mute",
-                                event.message.id,
-                                "📡کاربر "
-                                f"{_format_banned_user(sender, user_id)} "
-                                "به دلیل ارسال فوروارد اسپم 24 ساعت سکوت شد",
+                        processing = getattr(bot, "forward_spam_processing", set())
+                        if forward_key in processing:
+                            return
+                        if not hasattr(bot, "forward_spam_processing"):
+                            bot.forward_spam_processing = set()
+                        bot.forward_spam_processing.add(forward_key)
+                        try:
+                            muted = await bot.admin_actions.mute_user(
+                                chat_id, user_id, 24 * 60 * 60
                             )
+                            if muted:
+                                await _send_moderation_notification_once(
+                                    bot,
+                                    chat_id,
+                                    user_id,
+                                    "forward_spam_mute",
+                                    event.message.id,
+                                    "📡کاربر "
+                                    f"{_format_banned_user(sender, user_id)} "
+                                    "به دلیل ارسال فوروارد اسپم 24 ساعت سکوت شد",
+                                )
+                        finally:
                             bot.forward_spam_counts.pop(forward_key, None)
+                            bot.forward_spam_processing.discard(forward_key)
                 finally:
                     bot.logger.log_info(
                         "FORWARD DETECTED "
