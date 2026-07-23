@@ -6,6 +6,10 @@ from modules.group_storage import load_groups
 PROMPT = "📢 متن اطلاع‌رسانی را ارسال کنید."
 
 
+def _log_phase(bot, phase, owner_id, reason=""):
+    bot.logger.log_info(f"{phase} owner_id={owner_id} {reason}".strip())
+
+
 def _preview(text):
     return (
         "━━━━━━━━━━━━━━\n\n"
@@ -59,6 +63,8 @@ async def handle_private_broadcast(bot, event, owner_id, text):
 
     if text == "اطلاع رسانی":
         begin(owner_id)
+        _log_phase(bot, "BROADCAST START", owner_id)
+        _log_phase(bot, "WAITING_FOR_TEXT", owner_id)
         await event.reply(PROMPT)
         return True
 
@@ -68,13 +74,18 @@ async def handle_private_broadcast(bot, event, owner_id, text):
     if state["phase"] == "awaiting_confirmation":
         if text in {"لغو", "❌ لغو"}:
             clear(owner_id)
+            _log_phase(bot, "STATE CLEARED", owner_id, "reason=cancel")
             await event.reply("❌ اطلاع‌رسانی لغو شد.")
             return True
 
         if text in {"تایید", "✅ تایید"}:
+            _log_phase(bot, "CONFIRMED", owner_id)
             announcement_text = consume_confirmation(owner_id)
             if announcement_text is None:
+                _log_phase(bot, "STATE CLEARED", owner_id, "reason=no_active_session")
                 return False
+            _log_phase(bot, "STATE CLEARED", owner_id, "reason=confirmed")
+            _log_phase(bot, "BROADCAST STARTED", owner_id)
             try:
                 successful, failed = await _broadcast_to_groups(bot, announcement_text)
                 await event.reply(
@@ -82,6 +93,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
                     f"گروه‌های موفق: {successful}\n"
                     f"گروه‌های ناموفق: {failed}"
                 )
+                _log_phase(bot, "BROADCAST FINISHED", owner_id)
             finally:
                 clear(owner_id)
             return True
@@ -94,6 +106,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
             await event.reply("📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
             return True
         set_message(owner_id, text)
+        _log_phase(bot, "PREVIEW CREATED", owner_id)
         await event.reply(_preview(text))
         return True
 

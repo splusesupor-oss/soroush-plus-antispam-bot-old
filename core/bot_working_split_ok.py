@@ -25,6 +25,7 @@ from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_actions import GroupActions
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
+from modules.broadcast_state import get as get_broadcast_state
 from handlers.admin_handler import handle_admin_commands
 import random
 """
@@ -421,7 +422,22 @@ class SoroushAntiSpamBot:
                     self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
                     return
             elif event.out:
-                return
+                if event.is_private:
+                    private_sender = await event.get_sender()
+                    private_owner_id = getattr(private_sender, "id", None)
+                    is_broadcast_trigger = text == "اطلاع رسانی"
+                    has_broadcast_session = bool(
+                        get_broadcast_state(private_owner_id)
+                    )
+                    if (
+                        is_global_owner(private_owner_id)
+                        and (is_broadcast_trigger or has_broadcast_session)
+                    ):
+                        pass
+                    else:
+                        return
+                else:
+                    return
 
             # MASTER GROUP MODE GATE: every incoming group message passes here first.
             if not event.is_private:
