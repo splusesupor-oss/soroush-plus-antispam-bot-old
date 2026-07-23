@@ -432,7 +432,11 @@ class SoroushAntiSpamBot:
             elif event.out:
                 if event.is_private:
                     private_sender = await event.get_sender()
-                    private_owner_id = getattr(private_sender, "id", None)
+                    if event.out:
+                        private_me = await self.client.get_me()
+                        private_owner_id = getattr(private_me, "id", None)
+                    else:
+                        private_owner_id = getattr(private_sender, "id", None)
                     is_broadcast_trigger = text == "اطلاع رسانی"
                     has_broadcast_session = bool(
                         get_broadcast_state(private_owner_id)
@@ -543,9 +547,17 @@ class SoroushAntiSpamBot:
             if event.is_private:
                 text = (event.message.message or "").strip()
                 sender = await event.get_sender()
-                sender_id = getattr(sender, "id", None)
+                if event.out:
+                    private_me = await self.client.get_me()
+                    sender_id = getattr(private_me, "id", None)
+                else:
+                    sender_id = getattr(sender, "id", None)
 
                 if is_global_owner(sender_id):
+                    self.logger.log_info(
+                        "BROADCAST COMMAND RECEIVED "
+                        f"owner_id={sender_id} text={text!r} event_out={event.out}"
+                    )
                     if await handle_private_broadcast(self, event, sender_id, text):
                         return
 
