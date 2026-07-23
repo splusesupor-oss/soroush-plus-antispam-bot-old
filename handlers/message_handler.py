@@ -745,7 +745,7 @@ async def handle_new_message(bot, event):
         result_correction = answer_correction(chat_id, clean_text)
         if result_correction is not None:
             if result_correction:
-                await event.reply("آفرین پاسخ درست بود")
+                await event.reply("✅ آفرین، پاسخ درست بود.")
             return
 
         # بازی چهار گزینه‌ای
@@ -854,14 +854,14 @@ async def handle_new_message(bot, event):
         # بررسی جواب جای خالی
         try:
             if check_fill(chat_id, user_id, clean_text):
-                await event.reply("🎉 آفرین! درست بود\n⭐ امتیاز گرفتی")
+                await event.reply("✅ آفرین، پاسخ درست بود.")
                 return
         except Exception as e:
             bot.logger.log_error(f"خطای جای خالی: {e}")
 
         try:
             if check_answer(chat_id, user_id, clean_text):
-                await event.reply("🎉 آفرین! پاسخ درست بود ✅")
+                await event.reply("✅ آفرین، پاسخ درست بود.")
                 return
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی جواب چیستان: {e}")
