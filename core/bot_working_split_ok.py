@@ -379,6 +379,14 @@ class SoroushAntiSpamBot:
 
             raw_text = event.message.message or ""
             text = raw_text.strip()
+            if (
+                event.out
+                and event.is_private
+                and event.message.id in getattr(self, "broadcast_bot_message_ids", set())
+            ):
+                self.broadcast_bot_message_ids.discard(event.message.id)
+                return
+
             is_mode_command = text in {"فعال", "غیر فعال"}
             mode_username = None
             if is_mode_command:

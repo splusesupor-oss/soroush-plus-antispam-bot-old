@@ -10,6 +10,17 @@ def _log_phase(bot, phase, owner_id, reason=""):
     bot.logger.log_info(f"{phase} owner_id={owner_id} {reason}".strip())
 
 
+async def _broadcast_reply(bot, event, text):
+    message = await event.reply(text)
+    if message is not None:
+        message_id = getattr(message, "id", None)
+        if message_id is not None:
+            if not hasattr(bot, "broadcast_bot_message_ids"):
+                bot.broadcast_bot_message_ids = set()
+            bot.broadcast_bot_message_ids.add(message_id)
+    return message
+
+
 def _preview(text):
     return (
         "━━━━━━━━━━━━━━\n\n"
@@ -38,6 +49,7 @@ async def _broadcast_to_groups(bot, text):
             try:
                 await bot.client.send_message(getattr(dialog, "entity", group_id), text)
                 successful += 1
+                _log_phase(bot, f"GROUP SENT: {group_id}", "")
             except Exception:
                 failed += 1
         return successful, failed
@@ -65,7 +77,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         begin(owner_id)
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(bot, "WAITING_FOR_TEXT", owner_id)
-        await event.reply(PROMPT)
+        await _broadcast_reply(bot, event, PROMPT)
         return True
 
     if not state:
@@ -75,7 +87,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         if text in {"لغو", "❌ لغو"}:
             clear(owner_id)
             _log_phase(bot, "STATE CLEARED", owner_id, "reason=cancel")
-            await event.reply("❌ اطلاع‌رسانی لغو شد.")
+            await _broadcast_reply(bot, event, "❌ اطلاع‌رسانی لغو شد.")
             return True
 
         if text in {"تایید", "✅ تایید"}:
@@ -88,7 +100,9 @@ async def handle_private_broadcast(bot, event, owner_id, text):
             _log_phase(bot, "BROADCAST STARTED", owner_id)
             try:
                 successful, failed = await _broadcast_to_groups(bot, announcement_text)
-                await event.reply(
+                await _broadcast_reply(
+                    bot,
+                    event,
                     "✅ اطلاع‌رسانی پایان یافت.\n\n"
                     f"گروه‌های موفق: {successful}\n"
                     f"گروه‌های ناموفق: {failed}"
@@ -98,16 +112,16 @@ async def handle_private_broadcast(bot, event, owner_id, text):
                 clear(owner_id)
             return True
 
-        await event.reply("برای ارسال «✅ تایید» یا برای لغو «❌ لغو» را ارسال کنید.")
+        await _broadcast_reply(bot, event, "برای ارسال «✅ تایید» یا برای لغو «❌ لغو» را ارسال کنید.")
         return True
 
     if state["phase"] == "awaiting_message":
         if text in {"تایید", "✅ تایید", "لغو", "❌ لغو"}:
-            await event.reply("📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
+            await _broadcast_reply(bot, event, "📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
             return True
         set_message(owner_id, text)
         _log_phase(bot, "PREVIEW CREATED", owner_id)
-        await event.reply(_preview(text))
+        await _broadcast_reply(bot, event, _preview(text))
         return True
 
     # The sending state is intentionally not allowed to recreate a preview.
