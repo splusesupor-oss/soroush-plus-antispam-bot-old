@@ -1,5 +1,5 @@
 """Private SPlusthon broadcast workflow for the global owner."""
-from modules.broadcast_state import begin, clear, get, set_message
+from modules.broadcast_state import begin, clear, consume_confirmation, get, set_message
 from modules.group_storage import load_groups
 
 
@@ -72,9 +72,9 @@ async def handle_private_broadcast(bot, event, owner_id, text):
             return True
 
         if text in {"تایید", "✅ تایید"}:
-            announcement_text = state["text"]
-            # State must be gone before sending starts, so confirmation cannot loop.
-            clear(owner_id)
+            announcement_text = consume_confirmation(owner_id)
+            if announcement_text is None:
+                return False
             try:
                 successful, failed = await _broadcast_to_groups(bot, announcement_text)
                 await event.reply(
