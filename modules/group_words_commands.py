@@ -24,7 +24,15 @@ async def handle_group_word_command(bot, event, text, chat_id, user_id, username
         except Exception:
             username = None
 
+    is_filter_command = (
+        text.startswith("/فیلتر ")
+        or text.startswith("/رفع ")
+        or text == "/فیلترها"
+    )
     if not _can_manage_group_words(bot, chat_id, user_id, username):
+        if is_filter_command:
+            await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده از فیلترها را دارد")
+            return True
         return False
 
 

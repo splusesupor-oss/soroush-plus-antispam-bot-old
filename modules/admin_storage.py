@@ -60,17 +60,13 @@ def add_admin(group_id, user_id, username=None):
 
 
 def is_admin(group_id, user_id, username=None):
+    """فقط رکوردهای ID-based ثبت‌شده توسط ربات مجوز ادمین دارند."""
     if user_id is None:
         return False
     normalized_id = str(user_id)
-    normalized_username = (username or "").lstrip("@").lower()
     for entry in load_admins().get(normalize_group_id(group_id), []):
         if isinstance(entry, dict) and str(entry.get("user_id")) == normalized_id:
             return True
-        # سازگاری فقط برای رکوردهای قدیمیِ username-based موجود در storage.
-        if isinstance(entry, str) and normalized_username:
-            if entry.lstrip("@").lower() == normalized_username:
-                return True
     return False
 
 
