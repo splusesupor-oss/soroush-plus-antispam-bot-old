@@ -364,48 +364,41 @@ async def handle_new_message(bot, event):
             await event.reply(simple_reply)
             return
 
-        # ذخیره تاریخچه پیام برای ضد تکرار
-        try:
-            save_history_message(
-                chat_id,
-                user_id,
-                event.message.id,
-                message_text
+        # ضدتکرار فقط برای پیام‌های سریع و یکسانِ کاربران عادی اجرا می‌شود.
+        sender_username = getattr(sender, "username", None)
+        is_group_moderator = (
+            not event.is_private
+            and _has_group_management_permission(
+                bot, chat_id, user_id, sender_username
             )
-
-            if is_repeat(chat_id, user_id, message_text):
-                print("🚨 HISTORY REPEAT BAN:", user_id)
-
-                ids = get_message_ids(chat_id, user_id)
-
-                if ids:
-                    await bot.client.delete_messages(
-                        chat_id,
-                        ids
+        )
+        if not is_group_moderator:
+            try:
+                save_history_message(chat_id, user_id, event.message.id, message_text)
+                if is_repeat(chat_id, user_id, message_text):
+                    punish_key = f"{chat_id}:{user_id}"
+                    if punish_key in bot.punished_users:
+                        return
+                    bot.punished_users.add(punish_key)
+                    ids = get_message_ids(chat_id, user_id)
+                    if ids:
+                        await bot.client.delete_messages(chat_id, ids)
+                    banned = await bot.admin_actions.ban_user(
+                        chat_id, user_id, reason="اسپم تکراری"
                     )
-
-                banned = await bot.admin_actions.ban_user(
-                    chat_id,
-                    user_id,
-                    reason="اسپم تکراری"
-                )
-                if banned:
-                    await _send_moderation_notification_once(
-                        bot,
-                        chat_id,
-                        user_id,
-                        "spam_ban",
-                        event.message.id,
-                        "🚫 کاربر "
-                        f"{_format_banned_user(sender, user_id)} "
-                        "به دلیل اسپم مکرر از گروه اخراج شد.",
-                    )
-
-                clear_user(chat_id, user_id)
-                return
-
-        except Exception as e:
-            print("history error:", e)
+                    if banned:
+                        await _send_moderation_notification_once(
+                            bot, chat_id, user_id, "spam_ban", event.message.id,
+                            "🚫 کاربر "
+                            f"{_format_banned_user(sender, user_id)} "
+                            "به دلیل اسپم مکرر از گروه اخراج شد.",
+                        )
+                        clear_user(chat_id, user_id)
+                    else:
+                        bot.punished_users.discard(punish_key)
+                    return
+            except Exception as e:
+                print("history error:", e)
 
         # جستجوی وب
         if clean_text.startswith("جستجو "):
@@ -1580,7 +1573,7 @@ async def handle_new_message(bot, event):
             ]
 
             # فقط پیام‌های تکراری یک کاربر حذف شوند
-            if len(user_msgs) >= 5:
+            if not is_group_moderator and len(user_msgs) >= 5:
 
                 texts = [
                     x[3]
@@ -1631,10 +1624,13 @@ async def handle_new_message(bot, event):
         # حذف پیام های فوروارد شده (به جز ادمین)
         try:
 
-            if getattr(event.message, "fwd_from", None):
+            if (
+                bot.config_manager.get("check_forwarded", False)
+                and getattr(event.message, "fwd_from", None)
+            ):
 
-                if bot.config_manager.is_admin(chat_id, username):
-                    print(f"✅ ADMIN FORWARD BYPASS: {username}")
+                if is_group_moderator:
+                    print(f"✅ ADMIN FORWARD BYPASS: {sender_username}")
                     return
 
                 await bot.client.delete_messages(
@@ -1693,7 +1689,7 @@ async def handle_new_message(bot, event):
                     repeat_found = True
                     break
 
-            if repeat_found:
+            if repeat_found and not is_group_moderator:
                 from modules.user_map import save_user
 
                 save_user(chat_id, username, user_id)
@@ -1767,20 +1763,16 @@ async def handle_new_message(bot, event):
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی کلمات گروه: {e}")
 
+        # مدیر/مالک ثبت‌شده از فیلتر خودکار و فیلتر کلمات گروه عبور می‌کند.
+        if is_group_moderator:
+            print(f"✅ ADMIN BYPASS FILTER: {sender_username}")
+            return
+
         # بررسی اسپم
         if group_word_spam:
             is_spam = True
             reason = group_word_reason
         else:
-            # ADMIN BYPASS BEFORE DETECTOR
-            try:
-                if bot.config_manager.is_admin(chat_id, username):
-                    print(f'✅ ADMIN BYPASS FILTER: {username}')
-                    is_spam = False
-                    reason = ''
-                    return
-            except Exception as e:
-                print('ADMIN CHECK ERROR:', e)
 
             # FORWARD BYPASS BEFORE DETECTOR
             try:
@@ -1822,20 +1814,25 @@ async def handle_new_message(bot, event):
                     await bot.admin_actions.delete_message(chat_id, event=event)
 
                     if hasattr(bot.admin_actions, "ban_user"):
-                        banned = await bot.admin_actions.ban_user(
-                            chat_id, user_id, reason="اسپم مکرر شدید"
-                        )
-                        if banned:
-                            await _send_moderation_notification_once(
-                                bot,
-                                chat_id,
-                                user_id,
-                                "spam_ban",
-                                event.message.id,
-                                "🚫 کاربر "
-                                f"{_format_banned_user(sender, user_id)} "
-                                "به دلیل اسپم مکرر از گروه اخراج شد.",
+                        punish_key = f"{chat_id}:{user_id}"
+                        if punish_key not in bot.punished_users:
+                            bot.punished_users.add(punish_key)
+                            banned = await bot.admin_actions.ban_user(
+                                chat_id, user_id, reason="اسپم مکرر شدید"
                             )
+                            if banned:
+                                await _send_moderation_notification_once(
+                                    bot,
+                                    chat_id,
+                                    user_id,
+                                    "spam_ban",
+                                    event.message.id,
+                                    "🚫 کاربر "
+                                    f"{_format_banned_user(sender, user_id)} "
+                                    "به دلیل اسپم مکرر از گروه اخراج شد.",
+                                )
+                            else:
+                                bot.punished_users.discard(punish_key)
 
                     return
             except Exception as e:
@@ -1908,9 +1905,14 @@ async def handle_new_message(bot, event):
                             "به دلیل تخلفات از گروه اخراج شد.",
                         )
 
-                    # بعد از مجازات شمارنده تخلف صفر شود
+                    # بعد از بن دائمی گارد حفظ می‌شود تا پیام‌های صف‌شده
+                    # دوباره بن/اعلان تولید نکنند؛ برای mute گارد آزاد می‌شود.
                     bot.tracker.reset_count(chat_id, user_id)
-                    bot.punished_users.discard(punish_key)
+                    if not (
+                        punished
+                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
+                    ):
+                        bot.punished_users.discard(punish_key)
             # پیام سالم - می‌توان برای آنالیز بیشتر لاگ کرد
             pass
 
