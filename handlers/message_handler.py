@@ -1251,31 +1251,46 @@ async def handle_new_message(bot, event):
             if str(user_id) != str(get_group_owner(chat_id)):
                 await event.reply("❌ فقط مالک ثبت‌شده اجازه استفاده از این دستور را دارد")
                 return
+            removed_ids = set()
+            try:
+                from splusthon import types
+                async for removed_user in bot.client.iter_participants(
+                    chat_id,
+                    filter=types.ChannelParticipantsKicked(),
+                ):
+                    try:
+                        await bot.client.edit_permissions(
+                            chat_id,
+                            removed_user,
+                            until_date=None,
+                            view_messages=True,
+                            send_messages=True,
+                            send_media=True,
+                            send_stickers=True,
+                            send_gifs=True,
+                            send_games=True,
+                            send_inline=True,
+                            send_polls=True,
+                        )
+                        removed_ids.add(getattr(removed_user, "id", None))
+                    except Exception as error:
+                        bot.logger.log_error(f"خطا در رفع اخراجی واقعی: {error}")
+            except Exception as error:
+                bot.logger.log_error(f"خطا در دریافت اخراجی‌های واقعی: {error}")
+
             banned_data = load_banned()
-            entries = list(banned_data.get(str(chat_id), []))
-            removed_count = len(entries)
-            for entry in entries:
+            for entry in banned_data.get(str(chat_id), []):
                 try:
                     target_id = entry.get("user_id") if isinstance(entry, dict) else entry
                     target = await bot.client.get_entity(target_id)
-                    await bot.client.edit_permissions(
-                        chat_id,
-                        target,
-                        until_date=None,
-                        view_messages=True,
-                        send_messages=True,
-                        send_media=True,
-                        send_stickers=True,
-                        send_gifs=True,
-                        send_games=True,
-                        send_inline=True,
-                        send_polls=True,
-                    )
-                except Exception as error:
-                    bot.logger.log_error(f"خطا در رفع اخراجی {entry}: {error}")
+                    await bot.client.edit_permissions(chat_id, target, until_date=None, view_messages=True)
+                    removed_ids.add(getattr(target, "id", target_id))
+                except Exception:
+                    pass
             banned_data.pop(str(chat_id), None)
             save_banned(banned_data)
-            await event.reply(f"🔗[{removed_count} کاربران اخراج شده] از لیست خارج شد")
+            removed_count = len({item for item in removed_ids if item is not None})
+            await event.reply(f"🔗[ {removed_count} کاربران اخراج شده ] از لیست خارج شد")
             return
 
         if clean_text in {"قفل", "باز"}:
@@ -1303,12 +1318,12 @@ async def handle_new_message(bot, event):
             display_name = " ".join(part for part in (getattr(sender, 'first_name', None), getattr(sender, 'last_name', None)) if part) or str(user_id)
             stats_text = (
                 f"⟣ [{display_name}] ⟢\n\n"
-                f"● تعداد پیامی که داده [{messages}]\n\n"
-                f"● تعداد گیف هایی که فرستاد [{activity.get('gifs', 0)}]\n\n"
-                f"● تعداد تخلف هایی که انجام داد [{violations}]\n\n"
-                f"● تعداد فیلم هایی که ارسال کرده [{activity.get('videos', 0)}]\n\n"
-                f"● ساعاتی که داخل گروه فعالیت کرد [{hours:.1f}]\n\n"
-                f"⎋ [امتیاز کاربر: {score} از 10]"
+                f"● تعداد پیامی که داده [ {messages} ]\n\n"
+                f"● تعداد گیف هایی که فرستاد [ {activity.get('gifs', 0)} ]\n\n"
+                f"● تعداد تخلف هایی که انجام داد [ {violations} ]\n\n"
+                f"● تعداد فیلم هایی که ارسال کرده [ {activity.get('videos', 0)} ]\n\n"
+                f"● ساعاتی که داخل گروه فعالیت کرد [ {hours:.1f} ]\n\n"
+                f"⎋ [ امتیاز کاربر: {score} از 10 ]"
             )
             def stat_u16(value):
                 return len(value.encode("utf-16-le")) // 2
@@ -1324,7 +1339,7 @@ async def handle_new_message(bot, event):
                 entities.append(MessageEntityBold(
                     offset=stat_u16(stats_text[:pos]), length=stat_u16(label)
                 ))
-            score_text = f"⎋ [امتیاز کاربر: {score} از 10]"
+            score_text = f"⎋ [ امتیاز کاربر: {score} از 10 ]"
             score_pos = stats_text.find(score_text)
             entities.append(MessageEntityBlockquote(
                 offset=stat_u16(stats_text[:score_pos]), length=stat_u16(score_text)
