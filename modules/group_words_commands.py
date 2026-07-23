@@ -9,7 +9,7 @@ def _can_manage_group_words(bot, chat_id, user_id, username):
     return (
         is_global_owner(user_id)
         or (group_owner_id is not None and str(user_id) == str(group_owner_id))
-        or is_admin(chat_id, user_id)
+        or is_admin(chat_id, user_id, username)
     )
 
 
