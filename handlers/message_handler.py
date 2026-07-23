@@ -462,7 +462,7 @@ async def handle_new_message(bot, event):
                             print("USER MUTED 3600")
                             await bot.client.send_message(
                                 chat_id,
-                                "🚫 کاربر "
+                                "📡 کاربر "
                                 f"{_format_banned_user(sender, user_id)} "
                                 "به دلیل ارسال هرزنامه گیف یک ساعت سکوت شد"
                             )
