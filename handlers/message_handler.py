@@ -541,7 +541,6 @@ async def handle_new_message(bot, event):
                             f"{_format_banned_user(sender, user_id)} "
                             "به دلیل اسپم مکرر از گروه اخراج شد.",
                         )
-                        clear_user(chat_id, user_id)
                     else:
                         bot.punished_users.discard(punish_key)
                         bot.spam_burst_users.discard(punish_key)
