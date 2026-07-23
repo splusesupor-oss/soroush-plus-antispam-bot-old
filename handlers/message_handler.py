@@ -422,7 +422,7 @@ async def handle_new_message(bot, event):
         # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
         if (
             user_id == getattr(bot, "bot_account_id", None)
-            or sender_username == "aifox"
+            or sender_username in {"aifox", "osine1"}
         ):
             return
         clean_text = message_text.strip()
@@ -430,7 +430,11 @@ async def handle_new_message(bot, event):
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
             or clean_text in {"راهنما", "/help", "!help", "help", "آمارم", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات"}
-            or clean_text.startswith(("!", "/", "."))
+            or (
+                clean_text.startswith(("!", "/", "."))
+                and not clean_text.startswith(("/فیلتر ", "/رفع "))
+                and clean_text != "/فیلترها"
+            )
         )
         # فرمان‌های کوتاه نباید برای ثبت آمار/فعالیت منتظر I/O فایل بمانند.
         if not event.is_private and not fast_command:
@@ -528,7 +532,7 @@ async def handle_new_message(bot, event):
                                 chat_id,
                                 "📡کاربر "
                                 f"{_format_banned_user(sender, user_id)} "
-                                "به دلیل ارسال اسپم فوروارد شده 24 ساعت سکوت شد",
+                                "به دلیل ارسال فوروارد اسپم 24 ساعت سکوت شد",
                             )
                             bot.forward_spam_counts.pop(forward_key, None)
                 finally:
@@ -1272,7 +1276,11 @@ async def handle_new_message(bot, event):
             except Exception as e:
                 bot.logger.log_error(f"خطای اجرای دستور کلمات ممنوعه: {e}")
 
-        if clean_text.startswith(("!", "/", ".")):
+        if (
+            clean_text.startswith(("!", "/", "."))
+            and not clean_text.startswith(("/فیلتر ", "/رفع "))
+            and clean_text != "/فیلترها"
+        ):
             try:
                 sender = await event.get_sender()
                 await handle_admin_commands(bot, 
