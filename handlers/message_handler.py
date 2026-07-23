@@ -25,7 +25,7 @@ from modules.user_original_storage import (
 from modules.jokes import get_joke
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.group_stats import add_kick, add_mute, make_report, add_deleted_count
-from modules.spam_history import get_message_ids, clear_user
+from modules.spam_history import get_message_ids, get_user_history, clear_user
 from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
@@ -143,6 +143,54 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
             bot.spam_burst_tasks.pop(key, None)
 
     bot.spam_burst_tasks[key] = _asyncio.create_task(delete_burst_messages())
+
+
+async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
+    history = get_user_history(chat_id, user_id)
+    if history is None:
+        print("HEAVY SPAM CLEANUP\n"
+              f"User: {user_id}\nStored messages: 0\nDeleted messages: 0\n"
+              "Failed deletions: 0\nReason: no history found")
+        return
+    if not history:
+        print("HEAVY SPAM CLEANUP\n"
+              f"User: {user_id}\nStored messages: 0\nDeleted messages: 0\n"
+              "Failed deletions: 0\nReason: history empty")
+        return
+
+    raw_ids = [item.get("message_id") for item in history]
+    valid_ids = [message_id for message_id in raw_ids if isinstance(message_id, int) and message_id > 0]
+    invalid_count = len(raw_ids) - len(valid_ids)
+    if not valid_ids:
+        print("HEAVY SPAM CLEANUP\n"
+              f"User: {user_id}\nStored messages: {len(history)}\nDeleted messages: 0\n"
+              f"Failed deletions: {invalid_count}\nReason: message ids missing or invalid")
+        clear_user(chat_id, user_id)
+        return
+
+    deleted_count = 0
+    failed_count = invalid_count
+    for start in range(0, len(valid_ids), 100):
+        batch = valid_ids[start:start + 100]
+        try:
+            await bot.client.delete_messages(chat_id, batch)
+            deleted_count += len(batch)
+        except Exception as error:
+            failed_count += len(batch)
+            bot.logger.log_error(
+                f"خطای حذف دسته‌ای heavy spam {user_id}: {error}"
+            )
+        await _asyncio.sleep(0.2)
+
+    print("HEAVY SPAM CLEANUP\n"
+          f"User: {user_id}\nStored messages: {len(history)}\n"
+          f"Deleted messages: {deleted_count}\nFailed deletions: {failed_count}")
+    if deleted_count:
+        await event.reply(f"🗑️ {deleted_count} پیام اسپم حذف شد.")
+    elif failed_count:
+        print("HEAVY SPAM CLEANUP reason: delete failed")
+
+    clear_user(chat_id, user_id)
 
 
 async def get_activation_admin_info(bot, chat_id):
@@ -328,6 +376,7 @@ async def handle_new_message(bot, event):
         user_id = sender.id if sender else 0
 
         clean_text = message_text.strip()
+        save_history_message(chat_id, user_id, event.message.id, message_text)
         burst_key = (chat_id, user_id)
         if burst_key in bot.spam_burst_users:
             _queue_spam_burst_deletion(
@@ -413,7 +462,6 @@ async def handle_new_message(bot, event):
         )
         if not is_group_moderator:
             try:
-                save_history_message(chat_id, user_id, event.message.id, message_text)
                 if is_repeat(chat_id, user_id, message_text):
                     punish_key = f"{chat_id}:{user_id}"
                     if punish_key in bot.punished_users:
@@ -1694,11 +1742,6 @@ async def handle_new_message(bot, event):
 
                 save_user(chat_id, username, user_id)
 
-                await bot.admin_actions.delete_message(
-                    chat_id,
-                    event=event
-                )
-
                 print("🚨 HEAVY REPEAT SPAM BAN:", username, user_id)
 
                 punish_key = f"{chat_id}:{user_id}"
@@ -1725,6 +1768,11 @@ async def handle_new_message(bot, event):
                             "🚫 کاربر "
                             f"{_format_banned_user(sender, user_id)} "
                             "به دلیل اسپم مکرر از گروه اخراج شد.",
+                        )
+
+                    if punished:
+                        await _cleanup_heavy_spam_history(
+                            bot, event, chat_id, user_id
                         )
 
                 return
