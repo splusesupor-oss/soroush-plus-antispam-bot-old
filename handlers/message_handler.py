@@ -412,19 +412,27 @@ async def handle_new_message(bot, event):
             except BaseException:
                 pass
 
+        event_chat = await event.get_chat()
+        chat_id = getattr(event_chat, "id", event.chat_id)
+        sender = await event.get_sender()
+        user_id = sender.id if sender else 0
+        media = getattr(event.message, "media", None)
+        print(
+            "MESSAGE RECEIVED DEBUG\n"
+            f"message_id={getattr(event.message, 'id', None)}\n"
+            f"user_id={user_id}\n"
+            f"chat_id={chat_id}\n"
+            f"has_media={bool(media or getattr(event.message, 'file', None))}\n"
+            f"media_class={media.__class__.__name__ if media else None}"
+        )
+
         if (
             not message_text
             and not _get_forward_metadata(event.message)[0]
             and get_gif_media_id(event.message) is None
         ):
+            print("RETURN AFTER GIF CHECK reason=non_gif_media_or_empty_message")
             return
-
-
-
-        event_chat = await event.get_chat()
-        chat_id = getattr(event_chat, "id", event.chat_id)
-        sender = await event.get_sender()
-        user_id = sender.id if sender else 0
 
         clean_text = message_text.strip()
         save_history_message(chat_id, user_id, event.message.id, message_text)
@@ -476,6 +484,7 @@ async def handle_new_message(bot, event):
                         bot.logger.log_info(
                             f"GIF spam deleted chat_id={chat_id} user_id={user_id} count={deleted}"
                         )
+                    print("RETURN AFTER GIF CHECK reason=repeated_gif_deleted")
                     return
 
         is_forwarded, forward_field, forward_fields = _get_forward_metadata(
@@ -510,6 +519,7 @@ async def handle_new_message(bot, event):
 
         burst_key = (chat_id, user_id)
         if burst_key in bot.spam_burst_users:
+            print("RETURN AFTER GIF CHECK reason=spam_burst_user")
             _queue_spam_burst_deletion(
                 bot, chat_id, user_id, {event.message.id}
             )
