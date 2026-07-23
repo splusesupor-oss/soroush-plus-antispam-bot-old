@@ -169,7 +169,7 @@ class SoroushAntiSpamBot:
             chat = await event.get_chat()
             chat_id = getattr(chat, "id", None)
 
-            if is_admin(chat_id, username):
+            if is_admin(chat_id, user_id):
                 return True
 
             if is_global_owner(username):

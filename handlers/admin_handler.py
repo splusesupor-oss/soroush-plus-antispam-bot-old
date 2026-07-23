@@ -11,8 +11,7 @@ async def _can_manage_commands(bot, event, admin_id, chat_id):
     return (
         is_global_owner(username)
         or (group_owner_id is not None and str(admin_id) == str(group_owner_id))
-        or is_admin(chat_id, username)
-        or bot.config_manager.is_admin(admin_id, username)
+        or is_admin(chat_id, admin_id)
     )
 
 

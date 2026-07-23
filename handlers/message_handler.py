@@ -351,11 +351,22 @@ DELETE_COMMAND_COOLDOWNS = {}
 
 
 def _has_group_management_permission(bot, chat_id, user_id, username):
-    return (
-        _can_manage_group_admins(bot, chat_id, user_id, username)
-        or is_admin(chat_id, username)
-        or bot.config_manager.is_admin(user_id, username)
+    group_owner_id = get_group_owner(chat_id)
+    if is_global_owner(username):
+        result, source = True, "global_owner"
+    elif group_owner_id is not None and str(user_id) == str(group_owner_id):
+        result, source = True, "registered_group_owner"
+    elif is_admin(chat_id, user_id):
+        result, source = True, "registered_group_admin_id"
+    else:
+        result, source = False, "none"
+
+    bot.logger.log_info(
+        "ADMIN CHECK DEBUG "
+        f"user_id={user_id} username={username} group_id={chat_id} "
+        f"result={result} source={source}"
     )
+    return result
 
 
 def _can_delete_messages(bot, chat_id, user_id, username):
@@ -1219,28 +1230,30 @@ async def handle_new_message(bot, event):
                 return
 
             try:
-                admin_username = None
-
+                admin_user = None
                 if event.reply_to:
                     reply_msg = await bot.client.get_messages(
-                            chat_id,
-                            ids=event.reply_to.reply_to_msg_id
-                        )
+                        chat_id, ids=event.reply_to.reply_to_msg_id
+                    )
                     if reply_msg:
-                        user = await reply_msg.get_sender()
-                        admin_username = getattr(user, "username", None)
+                        admin_user = await reply_msg.get_sender()
 
-                if not admin_username:
+                if not admin_user:
                     parts = clean_text.split()
                     if len(parts) >= 3:
-                        admin_username = parts[2].replace("@", "")
+                        admin_user = await bot.client.get_entity(parts[2])
 
-                if not admin_username:
+                if not admin_user:
                     await event.reply("❌ باید ریپلای کنید یا @username بدهید")
                     return
 
-                add_admin(chat_id, admin_username)
-                await event.reply(f"✅ ادمین @{admin_username} ثبت شد")
+                admin_username = getattr(admin_user, "username", None)
+                if add_admin(chat_id, admin_user.id, admin_username):
+                    await event.reply(
+                        f"✅ ادمین @{admin_username or admin_user.id} ثبت شد"
+                    )
+                else:
+                    await event.reply("⚠️ این کاربر قبلا ادمین ثبت شده است")
 
             except Exception as e:
                 await event.reply(f"❌ خطا: {e}")
@@ -1259,31 +1272,30 @@ async def handle_new_message(bot, event):
                 return
 
             try:
-                admin_username = None
-
+                admin_user = None
                 if event.reply_to:
                     reply_msg = await bot.client.get_messages(
-                        chat_id,
-                        ids=event.reply_to.reply_to_msg_id
+                        chat_id, ids=event.reply_to.reply_to_msg_id
                     )
-
                     if reply_msg:
-                        user = await reply_msg.get_sender()
-                        admin_username = getattr(user, "username", None)
+                        admin_user = await reply_msg.get_sender()
 
-                if not admin_username:
+                if not admin_user:
                     parts = clean_text.split()
                     if len(parts) >= 3:
-                        admin_username = parts[2].replace("@", "")
+                        admin_user = await bot.client.get_entity(parts[2])
 
-                if not admin_username:
+                if not admin_user:
                     await event.reply("❌ باید ریپلای کنید یا @username بدهید")
                     return
 
-                if remove_admin(chat_id, admin_username):
-                    await event.reply(f"✅ دسترسی ادمین @{admin_username} حذف شد")
+                admin_username = getattr(admin_user, "username", None)
+                if remove_admin(chat_id, admin_user.id):
+                    await event.reply(
+                        f"✅ دسترسی ادمین @{admin_username or admin_user.id} حذف شد"
+                    )
                 else:
-                    await event.reply("❌ این کاربر ادمین نیست")
+                    await event.reply("❌ این کاربر ادمین ثبت‌شده نیست")
 
             except Exception as e:
                 await event.reply(f"❌ خطا: {e}")
