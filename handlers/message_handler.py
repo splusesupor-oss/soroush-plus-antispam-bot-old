@@ -74,6 +74,23 @@ def _format_banned_user(user, user_id):
     return display_name or str(user_id)
 
 
+def _get_forward_metadata(message):
+    fields = {
+        field: getattr(message, field, None)
+        for field in (
+            "fwd_from",
+            "forward_from",
+            "forward_chat",
+            "forwarded",
+            "is_forward",
+        )
+    }
+    for field, value in fields.items():
+        if value:
+            return True, field, fields
+    return False, None, fields
+
+
 async def _send_moderation_notification_once(
     bot, chat_id, user_id, action, source_message_id, text
 ):
@@ -366,7 +383,7 @@ async def handle_new_message(bot, event):
             except BaseException:
                 pass
 
-        if not message_text:
+        if not message_text and not _get_forward_metadata(event.message)[0]:
             return
 
 
@@ -376,6 +393,43 @@ async def handle_new_message(bot, event):
         user_id = sender.id if sender else 0
 
         clean_text = message_text.strip()
+        sender_username = getattr(sender, "username", None)
+        is_group_moderator = (
+            not event.is_private
+            and _has_group_management_permission(
+                bot, chat_id, user_id, sender_username
+            )
+        )
+        is_forwarded, forward_field, forward_fields = _get_forward_metadata(
+            event.message
+        )
+        if is_forwarded:
+            bot.logger.log_info(
+                "FORWARD DETECTED "
+                f"user_id={user_id} username={sender_username} "
+                f"forward_field={forward_field} fields={forward_fields}"
+            )
+            if not is_group_moderator:
+                deleted = False
+                try:
+                    await bot.client.delete_messages(chat_id, [event.message.id])
+                    deleted = True
+                    await _send_moderation_notification_once(
+                        bot,
+                        chat_id,
+                        user_id,
+                        "forward_delete",
+                        event.message.id,
+                        "🚫 پیام فوروارد شده پاک شد.",
+                    )
+                finally:
+                    bot.logger.log_info(
+                        "FORWARD DETECTED "
+                        f"user_id={user_id} username={sender_username} "
+                        f"forward_field={forward_field} deleted={deleted}"
+                    )
+                return
+
         save_history_message(chat_id, user_id, event.message.id, message_text)
         burst_key = (chat_id, user_id)
         if burst_key in bot.spam_burst_users:
@@ -453,13 +507,6 @@ async def handle_new_message(bot, event):
             return
 
         # ضدتکرار فقط برای پیام‌های سریع و یکسانِ کاربران عادی اجرا می‌شود.
-        sender_username = getattr(sender, "username", None)
-        is_group_moderator = (
-            not event.is_private
-            and _has_group_management_permission(
-                bot, chat_id, user_id, sender_username
-            )
-        )
         if not is_group_moderator:
             try:
                 if is_repeat(chat_id, user_id, message_text):
@@ -1710,20 +1757,6 @@ async def handle_new_message(bot, event):
                 f"خطای حذف تکراری: {e}"
             )
 
-
-        # فوروارد برای کاربر عادی از هر منبعی حذف می‌شود.
-        try:
-            if getattr(event.message, "fwd_from", None):
-                if is_group_moderator:
-                    print(f"✅ ADMIN FORWARD BYPASS: {sender_username}")
-                    return
-
-                await bot.client.delete_messages(chat_id, [event.message.id])
-                await event.reply("⚠️ پیام فوروارد شده حذف شد")
-                return
-
-        except Exception as e:
-            bot.logger.log_error(f"خطای حذف فوروارد: {e}")
 
         # بررسی تکرار شدید داخل یک پیام
         try:
