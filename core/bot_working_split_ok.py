@@ -99,6 +99,9 @@ class SoroushAntiSpamBot:
         self.flood_messages = {}
         self.user_messages = {}
         self.group_timer_tasks = {}
+        self.spam_burst_users = set()
+        self.spam_burst_messages = {}
+        self.spam_burst_tasks = {}
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
 
@@ -428,6 +431,12 @@ class SoroushAntiSpamBot:
                         f"{event.chat_id}:{user.id}", None
                     )
                     self.punished_users.discard(f"{event.chat_id}:{user.id}")
+                    burst_key = (event.chat_id, user.id)
+                    burst_task = self.spam_burst_tasks.pop(burst_key, None)
+                    if burst_task:
+                        burst_task.cancel()
+                    self.spam_burst_users.discard(burst_key)
+                    self.spam_burst_messages.pop(burst_key, None)
                     self.spammer_messages.pop(user.id, None)
                     self.logger.log_info(
                         f"UNBAN COMPLETE user_id={user.id} removed successfully"

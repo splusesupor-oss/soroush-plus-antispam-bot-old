@@ -112,6 +112,39 @@ def _track_group_timer(bot, chat_id, task):
     return task
 
 
+def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
+    key = (chat_id, user_id)
+    bot.spam_burst_messages.setdefault(key, set()).update(message_ids)
+    existing_task = bot.spam_burst_tasks.get(key)
+    if existing_task and not existing_task.done():
+        return
+
+    async def delete_burst_messages():
+        idle_rounds = 0
+        try:
+            while idle_rounds < 3:
+                ids = sorted(bot.spam_burst_messages.pop(key, set()))
+                if not ids:
+                    idle_rounds += 1
+                    await _asyncio.sleep(0.2)
+                    continue
+
+                idle_rounds = 0
+                for start in range(0, len(ids), 100):
+                    batch = ids[start:start + 100]
+                    try:
+                        await bot.client.delete_messages(chat_id, batch)
+                    except Exception as error:
+                        bot.logger.log_error(
+                            f"خطا در حذف دسته‌ای spam burst {user_id}: {error}"
+                        )
+                    await _asyncio.sleep(0.2)
+        finally:
+            bot.spam_burst_tasks.pop(key, None)
+
+    bot.spam_burst_tasks[key] = _asyncio.create_task(delete_burst_messages())
+
+
 async def get_activation_admin_info(bot, chat_id):
     owner = None
     admins = []
@@ -295,6 +328,12 @@ async def handle_new_message(bot, event):
         user_id = sender.id if sender else 0
 
         clean_text = message_text.strip()
+        burst_key = (chat_id, user_id)
+        if burst_key in bot.spam_burst_users:
+            _queue_spam_burst_deletion(
+                bot, chat_id, user_id, {event.message.id}
+            )
+            return
 
         if clean_text == "صفر":
             if not is_global_owner(getattr(sender, "username", None)):
@@ -380,13 +419,15 @@ async def handle_new_message(bot, event):
                     if punish_key in bot.punished_users:
                         return
                     bot.punished_users.add(punish_key)
+                    bot.spam_burst_users.add(punish_key)
                     ids = get_message_ids(chat_id, user_id)
-                    if ids:
-                        await bot.client.delete_messages(chat_id, ids)
                     banned = await bot.admin_actions.ban_user(
                         chat_id, user_id, reason="اسپم تکراری"
                     )
                     if banned:
+                        _queue_spam_burst_deletion(
+                            bot, chat_id, user_id, set(ids)
+                        )
                         await _send_moderation_notification_once(
                             bot, chat_id, user_id, "spam_ban", event.message.id,
                             "🚫 کاربر "
@@ -396,6 +437,7 @@ async def handle_new_message(bot, event):
                         clear_user(chat_id, user_id)
                     else:
                         bot.punished_users.discard(punish_key)
+                        bot.spam_burst_users.discard(punish_key)
                     return
             except Exception as e:
                 print("history error:", e)
