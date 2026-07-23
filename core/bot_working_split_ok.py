@@ -24,6 +24,7 @@ from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_actions import GroupActions
 from handlers.message_handler import handle_new_message, send_activation_message
+from handlers.broadcast_handler import handle_private_broadcast
 from handlers.admin_handler import handle_admin_commands
 import random
 """
@@ -517,6 +518,12 @@ class SoroushAntiSpamBot:
               # پیوی فقط دستور صفر کردن تخلف
             if event.is_private:
                 text = (event.message.message or "").strip()
+                sender = await event.get_sender()
+                sender_id = getattr(sender, "id", None)
+
+                if is_global_owner(sender_id):
+                    if await handle_private_broadcast(self, event, sender_id, text):
+                        return
 
                 if "صفر" in text:
                     sender = await event.get_sender()
