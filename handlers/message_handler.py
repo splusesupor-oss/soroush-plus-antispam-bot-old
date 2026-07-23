@@ -1663,61 +1663,19 @@ async def handle_new_message(bot, event):
             )
 
 
-        # حذف پیام های فوروارد شده (به جز ادمین)
+        # فوروارد برای کاربر عادی از هر منبعی حذف می‌شود.
         try:
-
-            if (
-                bot.config_manager.get("check_forwarded", False)
-                and getattr(event.message, "fwd_from", None)
-            ):
-
+            if getattr(event.message, "fwd_from", None):
                 if is_group_moderator:
                     print(f"✅ ADMIN FORWARD BYPASS: {sender_username}")
                     return
 
-                await bot.client.delete_messages(
-                    chat_id,
-                    [event.message.id]
-                )
-
-                if chat_id not in bot.delete_notice_lock:
-                    bot.delete_notice_lock.add(chat_id)
-                    await event.reply(
-                        "⚠️ پیام فوروارد شده حذف شد"
-                    )
-
+                await bot.client.delete_messages(chat_id, [event.message.id])
+                await event.reply("⚠️ پیام فوروارد شده حذف شد")
                 return
 
         except Exception as e:
-            bot.logger.log_error(
-                f"خطای حذف فوروارد: {e}"
-            )
-
-        # استثنا: پیام‌های فوروارد شده از @osine1 هیچ‌وقت حذف نشوند
-        try:
-            if getattr(event.message, "fwd_from", None):
-                forward_sender = getattr(event.message.fwd_from, "from_id", None)
-
-                if forward_sender:
-                    sender_entity = await bot.client.get_entity(forward_sender)
-
-                    if is_global_owner(getattr(sender_entity, "username", None)):
-                        print("✅ فوروارد مالک اصلی محافظت شد")
-                        return
-        except Exception as e:
-            print("خطای بررسی فوروارد:", e)
-
-        # استثنا: فورواردهای کانال @osine1 حذف نشوند
-        try:
-            if getattr(event.message, "fwd_from", None):
-                fwd = event.message.fwd_from
-                fwd_id = getattr(getattr(fwd, "from_id", None), "channel_id", None)
-
-                if fwd_id == 22389465:
-                    print("✅ فوروارد کانال osine1 محافظت شد")
-                    return
-        except Exception as e:
-            print("خطای تشخیص فوروارد:", e)
+            bot.logger.log_error(f"خطای حذف فوروارد: {e}")
 
         # بررسی تکرار شدید داخل یک پیام
         try:
@@ -1815,17 +1773,6 @@ async def handle_new_message(bot, event):
             is_spam = True
             reason = group_word_reason
         else:
-
-            # FORWARD BYPASS BEFORE DETECTOR
-            try:
-                if getattr(event.message, 'fwd_from', None):
-                    print('✅ FORWARD BYPASS')
-                    is_spam = False
-                    reason = ''
-                    return
-            except Exception as e:
-                print('FORWARD CHECK ERROR:', e)
-
             is_spam, reason = bot.detector.is_spam(message_text, chat_id)
 
         if is_spam:
