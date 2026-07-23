@@ -418,7 +418,15 @@ async def handle_new_message(bot, event):
         chat_id = getattr(event_chat, "id", event.chat_id)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
-        if not event.is_private:
+        clean_text = message_text.strip()
+        fast_command = (
+            clean_text in SIMPLE_REPLIES
+            or clean_text in INSULTS
+            or clean_text in {"راهنما", "/help", "!help", "help", "آمارم", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات"}
+            or clean_text.startswith(("!", "/", "."))
+        )
+        # فرمان‌های کوتاه نباید برای ثبت آمار/فعالیت منتظر I/O فایل بمانند.
+        if not event.is_private and not fast_command:
             record_activity(chat_id, user_id, event.message)
         sender_username = getattr(sender, "username", None)
         is_group_moderator = (
@@ -437,8 +445,8 @@ async def handle_new_message(bot, event):
         ):
             return
 
-        clean_text = message_text.strip()
-        save_history_message(chat_id, user_id, event.message.id, message_text)
+        if not fast_command:
+            save_history_message(chat_id, user_id, event.message.id, message_text)
         if not is_group_moderator:
             if is_gif_message(event.message):
                 repeated_gif_ids = track_gif(
@@ -591,7 +599,7 @@ async def handle_new_message(bot, event):
             return
 
         # ضدتکرار فقط برای پیام‌های سریع و یکسانِ کاربران عادی اجرا می‌شود.
-        if not is_group_moderator:
+        if not fast_command and not is_group_moderator:
             try:
                 if is_repeat(chat_id, user_id, message_text):
                     punish_key = f"{chat_id}:{user_id}"
@@ -824,7 +832,7 @@ async def handle_new_message(bot, event):
 
 # ثبت آمار پیام گروه
         try:
-            if not event.is_private:
+            if not event.is_private and not fast_command:
                 sender_stats = await event.get_sender()
                 chat_stats = await event.get_chat()
 
@@ -847,7 +855,7 @@ async def handle_new_message(bot, event):
             chat = await event.get_chat()
             chat_id = getattr(chat, "id", 0)
 
-            if await bot.check_group_word_commands(
+            if not fast_command and await bot.check_group_word_commands(
                 event,
                 clean_text,
                 chat_id,

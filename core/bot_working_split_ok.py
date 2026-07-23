@@ -48,6 +48,7 @@ import random
 import os
 import asyncio
 import sys
+import time
 from dotenv import load_dotenv
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 
@@ -667,7 +668,15 @@ class SoroushAntiSpamBot:
                     except Exception as e:
                         self.logger.log_error(f"خطای اجرای دستور مدیر: {e}")
 
+            started = time.perf_counter()
             await handle_new_message(self, event)
+            elapsed = time.perf_counter() - started
+            if elapsed >= 0.05:
+                self.logger.log_info(
+                    "MESSAGE PROCESS TIME "
+                    f"receive={started:.6f} total={elapsed:.4f}s "
+                    f"chat_id={event.chat_id} text={text!r}"
+                )
 
 
         print("✅ ربات فعال شد و منتظر پیام است")
