@@ -163,7 +163,14 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
 
 
 async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
+    reader_key = (chat_id, user_id)
     history = get_user_history(chat_id, user_id)
+    print(
+        "HEAVY SPAM HISTORY READ\n"
+        f"reader_key={reader_key}\n"
+        f"history_found={history is not None}\n"
+        f"history_size={len(history) if history is not None else 0}"
+    )
     if history is None:
         print("HEAVY SPAM CLEANUP\n"
               f"User: {user_id}\nStored messages: 0\nDeleted messages: 0\n"
@@ -388,11 +395,13 @@ async def handle_new_message(bot, event):
 
 
 
-        chat_id = event.chat_id
+        event_chat = await event.get_chat()
+        chat_id = getattr(event_chat, "id", event.chat_id)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
 
         clean_text = message_text.strip()
+        save_history_message(chat_id, user_id, event.message.id, message_text)
         sender_username = getattr(sender, "username", None)
         is_group_moderator = (
             not event.is_private
@@ -430,7 +439,6 @@ async def handle_new_message(bot, event):
                     )
                 return
 
-        save_history_message(chat_id, user_id, event.message.id, message_text)
         burst_key = (chat_id, user_id)
         if burst_key in bot.spam_burst_users:
             _queue_spam_burst_deletion(
