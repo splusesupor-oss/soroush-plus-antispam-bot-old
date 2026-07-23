@@ -9,7 +9,7 @@ from modules.group_stats import add_message, add_deleted, add_kick, add_mute, ma
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.owner_check import is_global_owner, normalize_username
+from modules.owner_check import get_owner, is_global_owner, normalize_username
 from modules.banned_storage import (
     add_banned,
     remove_banned,
@@ -375,10 +375,32 @@ class SoroushAntiSpamBot:
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
 
-            if event.out:
-                return
-
             text = (event.message.message or "").strip()
+            is_mode_command = text in {"فعال", "غیر فعال"}
+            if is_mode_command:
+                sender_for_mode = await event.get_sender()
+                sender_username_for_mode = getattr(sender_for_mode, "username", None)
+                normalized_username_for_mode = normalize_username(
+                    sender_username_for_mode
+                )
+                is_global_owner_for_mode = is_global_owner(
+                    sender_username_for_mode
+                )
+                self.logger.log_info(
+                    "OWNER COMMAND DEBUG\n"
+                    f"user_id={getattr(sender_for_mode, 'id', None)}\n"
+                    f"username={sender_username_for_mode!r}\n"
+                    f"normalized_username={normalized_username_for_mode!r}\n"
+                    f"stored_owner_id={self.config_manager.get('OWNER_ID')}\n"
+                    f"stored_owner_username={get_owner()!r}\n"
+                    f"is_owner={is_global_owner_for_mode}\n"
+                    f"command={text!r}\n"
+                    f"event_out={event.out}"
+                )
+                if event.out and not is_global_owner_for_mode:
+                    return
+            elif event.out:
+                return
 
             # MASTER GROUP MODE GATE: every incoming group message passes here first.
             if not event.is_private:
