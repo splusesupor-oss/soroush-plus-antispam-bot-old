@@ -1131,7 +1131,6 @@ async def handle_new_message(bot, event):
                   "👑 دستورات ادمین‌ها:",
                   "برای قفل کردن ارسال پیام گروه:",
                   "برای باز کردن ارسال پیام در گروه بنویسید:",
-                  "🎮 لیست بازی ها:",
                   "👑 مدیریت ادمین‌ها:",
                   "➕ افزودن ادمین:",
                   "برای برکناری ادمین بنویسید:",
@@ -1162,10 +1161,28 @@ async def handle_new_message(bot, event):
                         )
                     )
 
+            admin_command_quotes = (
+                ("برای قفل کردن ارسال پیام گروه:\nقفل", "قفل"),
+                ("برای باز کردن ارسال پیام در گروه بنویسید:\nباز", "باز"),
+                ("برای خالی کردن لیست اخراج شده ها:\nریست اخراجی ها", None),
+            )
+            for section, command in admin_command_quotes:
+                section_start = help_text.find(section)
+                if section_start == -1:
+                    continue
+                command_start = section_start
+                command_length = len(section)
+                if command is not None:
+                    command_start += section.rfind(command)
+                    command_length = len(command)
+                entities.append(
+                    MessageEntityBlockquote(
+                        offset=u16(help_text[:command_start]),
+                        length=u16(help_text[command_start:command_start + command_length]),
+                    )
+                )
+
             quote_sections = [
-                "قفل",
-                "باز",
-                "برای خالی کردن لیست اخراج شده ها:\nریست اخراجی ها",
                 "⚠️ اخطار دادن به کاربر:\nروی پیام ریپلای کنید و بنویسید:\nاخطار",
                 "🔤 فیلتر کلمات گروه:\n/فیلتر کلمه  ← افزودن کلمه ممنوعه\n/رفع کلمه  ← حذف کلمه از فیلتر\n/فیلترها  ← نمایش لیست فیلترهای گروه",
                 "📊 آمار گروه\nنمایش آمار پیام‌ها، تعداد اعضا و کاربران فعال گروه",
