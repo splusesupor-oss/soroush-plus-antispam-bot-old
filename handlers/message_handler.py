@@ -24,6 +24,7 @@ from modules.user_original_storage import (
 )
 from modules.jokes import get_joke
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
+from modules.gif_spam_detector import get_gif_media_id, reset_gif_history, track_gif
 from modules.group_stats import add_kick, add_mute, make_report, add_deleted_count
 from modules.spam_history import get_message_ids, get_user_history, clear_user
 from modules.web_search import can_search, search_web
@@ -406,7 +407,11 @@ async def handle_new_message(bot, event):
             except BaseException:
                 pass
 
-        if not message_text and not _get_forward_metadata(event.message)[0]:
+        if (
+            not message_text
+            and not _get_forward_metadata(event.message)[0]
+            and get_gif_media_id(event.message) is None
+        ):
             return
 
 
@@ -425,6 +430,38 @@ async def handle_new_message(bot, event):
                 bot, chat_id, user_id, sender_username
             )
         )
+        if not is_group_moderator:
+            gif_media_id = get_gif_media_id(event.message)
+            if gif_media_id is None:
+                reset_gif_history(chat_id, user_id)
+            else:
+                repeated_gif_ids = track_gif(
+                    chat_id,
+                    user_id,
+                    event.message.id,
+                    gif_media_id,
+                )
+                if repeated_gif_ids:
+                    print("REPEATED GIF DETECTED")
+                    deleted = 0
+                    for stored_message_id in repeated_gif_ids:
+                        print(f"DELETE GIF MESSAGE {stored_message_id}")
+                    try:
+                        await bot.client.delete_messages(chat_id, repeated_gif_ids)
+                        deleted = len(repeated_gif_ids)
+                    except Exception as error:
+                        bot.logger.log_error(
+                            f"خطا در حذف GIF تکراری {user_id}: {error}"
+                        )
+                    finally:
+                        reset_gif_history(chat_id, user_id)
+                        print("GIF HISTORY CLEARED")
+                    if deleted:
+                        bot.logger.log_info(
+                            f"GIF spam deleted chat_id={chat_id} user_id={user_id} count={deleted}"
+                        )
+                    return
+
         is_forwarded, forward_field, forward_fields = _get_forward_metadata(
             event.message
         )
