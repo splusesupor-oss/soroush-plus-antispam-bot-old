@@ -25,9 +25,7 @@ from modules.user_original_storage import (
 from modules.jokes import get_joke
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.gif_spam_detector import (
-    get_gif_event_info,
-    get_gif_fingerprint,
-    get_gif_media_id,
+    is_gif_message,
     reset_gif_history,
     track_gif,
 )
@@ -418,6 +416,15 @@ async def handle_new_message(bot, event):
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
         media = getattr(event.message, "media", None)
+        sender_username = getattr(sender, "username", None)
+        is_group_moderator = (
+            not event.is_private
+            and _has_group_management_permission(
+                bot, chat_id, user_id, sender_username
+            )
+        )
+        if not is_group_moderator and not is_gif_message(event.message):
+            reset_gif_history(chat_id, user_id)
         print(
             "MESSAGE RECEIVED DEBUG\n"
             f"message_id={getattr(event.message, 'id', None)}\n"
@@ -430,60 +437,22 @@ async def handle_new_message(bot, event):
         if (
             not message_text
             and not _get_forward_metadata(event.message)[0]
-            and get_gif_media_id(event.message) is None
+            and not is_gif_message(event.message)
         ):
             print("RETURN AFTER GIF CHECK reason=non_gif_media_or_empty_message")
             return
 
         clean_text = message_text.strip()
         save_history_message(chat_id, user_id, event.message.id, message_text)
-        sender_username = getattr(sender, "username", None)
-        is_group_moderator = (
-            not event.is_private
-            and _has_group_management_permission(
-                bot, chat_id, user_id, sender_username
-            )
-        )
         if not is_group_moderator:
-            gif_media_id = get_gif_media_id(event.message)
-            if gif_media_id is None:
-                reset_gif_history(chat_id, user_id)
-            else:
-                gif_fingerprint, fingerprint_source = await get_gif_fingerprint(
-                    bot.client, event.message
-                )
-                if gif_fingerprint is None:
-                    reset_gif_history(chat_id, user_id)
-                    return
-
-                gif_debug = get_gif_event_info(
-                    event.message,
-                    chat_id,
-                    user_id,
-                    gif_fingerprint,
-                    fingerprint_source,
-                )
-                print(
-                    "GIF EVENT RECEIVED\n"
-                    f"message_id={gif_debug['message_id']}\n"
-                    f"media_class={gif_debug['media_class']}\n"
-                    f"mime_type={gif_debug['mime_type']}\n"
-                    f"document_id={gif_debug['document_id']}\n"
-                    f"file_id={gif_debug['file_id']}\n"
-                    f"document_size={gif_debug['document_size']}\n"
-                    f"animation_attribute={gif_debug['animation_attribute']}\n"
-                    f"gif_fingerprint={gif_debug['fingerprint']}\n"
-                    f"fingerprint_source={gif_debug['fingerprint_source']}\n"
-                    f"current_history={gif_debug['current_history']}"
-                )
+            if is_gif_message(event.message):
                 repeated_gif_ids = track_gif(
                     chat_id,
                     user_id,
                     event.message.id,
-                    gif_fingerprint,
                 )
                 if repeated_gif_ids:
-                    print("REPEATED GIF DETECTED")
+                    print("CONSECUTIVE GIF SPAM")
                     deleted = 0
                     for stored_message_id in repeated_gif_ids:
                         print(f"DELETE GIF MESSAGE {stored_message_id}")
@@ -492,16 +461,25 @@ async def handle_new_message(bot, event):
                         deleted = len(repeated_gif_ids)
                     except Exception as error:
                         bot.logger.log_error(
-                            f"خطا در حذف GIF تکراری {user_id}: {error}"
+                            f"خطا در حذف GIF متوالی {user_id}: {error}"
+                        )
+                    try:
+                        muted = await bot.admin_actions.mute_user(
+                            chat_id, user_id, 3600
+                        )
+                        if muted:
+                            print("MUTE USER 3600")
+                    except Exception as error:
+                        bot.logger.log_error(
+                            f"خطا در mute GIF spam {user_id}: {error}"
                         )
                     finally:
                         reset_gif_history(chat_id, user_id)
                         print("GIF HISTORY CLEARED")
                     if deleted:
                         bot.logger.log_info(
-                            f"GIF spam deleted chat_id={chat_id} user_id={user_id} count={deleted}"
+                            f"consecutive GIF spam deleted chat_id={chat_id} user_id={user_id} count={deleted}"
                         )
-                    print("RETURN AFTER GIF CHECK reason=repeated_gif_deleted")
                     return
 
         is_forwarded, forward_field, forward_fields = _get_forward_metadata(
