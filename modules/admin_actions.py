@@ -118,6 +118,16 @@ class AdminActions:
         """بن دائمی و ثبت پایدار کاربر برای جلوگیری از بازگشت."""
         try:
             user = await self.client.get_entity(user_id)
+            me = await self.client.get_me()
+            if getattr(user, "id", user_id) == getattr(me, "id", None):
+                self.logger.log_error(
+                    "LEAVE REQUEST DEBUG\n"
+                    f"chat_id={chat_id}\n"
+                    "reason=blocked self-targeted ban\n"
+                    "trigger_file=modules/admin_actions.py\n"
+                    "trigger_function=AdminActions.ban_user"
+                )
+                return False
 
             await self.client.kick_participant(
                 chat_id,
