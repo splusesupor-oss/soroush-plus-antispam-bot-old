@@ -58,7 +58,14 @@ def _entry_matches(
     )
 
 
-def add_banned(group_id, user_id, username=None, display_name=None, reason=""):
+def add_banned(
+    group_id,
+    user_id,
+    username=None,
+    display_name=None,
+    reason="",
+    source="system",
+):
     """کاربر را با شناسه پایدار و اطلاعات نمایشی در ذخیرهٔ موجود ثبت می‌کند."""
     data = load_banned()
     gid = str(group_id)
@@ -68,6 +75,8 @@ def add_banned(group_id, user_id, username=None, display_name=None, reason=""):
         "username": username or None,
         "display_name": display_name or None,
         "reason": reason or "بن دائمی",
+        # source=manual از ورود اخراج‌های دستی به ریست اخراجی‌ها جلوگیری می‌کند.
+        "source": source,
         "username_aliases": [],
     }
 

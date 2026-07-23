@@ -38,6 +38,7 @@ from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.admin_storage import add_admin, remove_admin, is_admin
 from modules.banned_storage import add_banned, load_banned, save_banned
+from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
@@ -1251,45 +1252,20 @@ async def handle_new_message(bot, event):
             if str(user_id) != str(get_group_owner(chat_id)):
                 await event.reply("❌ فقط مالک ثبت‌شده اجازه استفاده از این دستور را دارد")
                 return
-            removed_ids = set()
-            try:
-                from splusthon import types
-                async for removed_user in bot.client.iter_participants(
-                    chat_id,
-                    filter=types.ChannelParticipantsKicked(),
-                ):
-                    try:
-                        await bot.client.edit_permissions(
-                            chat_id,
-                            removed_user,
-                            until_date=None,
-                            view_messages=True,
-                            send_messages=True,
-                            send_media=True,
-                            send_stickers=True,
-                            send_gifs=True,
-                            send_games=True,
-                            send_inline=True,
-                            send_polls=True,
-                        )
-                        removed_ids.add(getattr(removed_user, "id", None))
-                    except Exception as error:
-                        bot.logger.log_error(f"خطا در رفع اخراجی واقعی: {error}")
-            except Exception as error:
-                bot.logger.log_error(f"خطا در دریافت اخراجی‌های واقعی: {error}")
 
             banned_data = load_banned()
-            for entry in banned_data.get(str(chat_id), []):
-                try:
-                    target_id = entry.get("user_id") if isinstance(entry, dict) else entry
-                    target = await bot.client.get_entity(target_id)
-                    await bot.client.edit_permissions(chat_id, target, until_date=None, view_messages=True)
-                    removed_ids.add(getattr(target, "id", target_id))
-                except Exception:
-                    pass
-            banned_data.pop(str(chat_id), None)
+            group_key = str(chat_id)
+            removed_count, remaining_entries = await reset_system_removed_users(
+                bot.client,
+                chat_id,
+                banned_data.get(group_key, []),
+                bot.logger,
+            )
+            if remaining_entries:
+                banned_data[group_key] = remaining_entries
+            else:
+                banned_data.pop(group_key, None)
             save_banned(banned_data)
-            removed_count = len({item for item in removed_ids if item is not None})
             await event.reply(f"🔗[ {removed_count} کاربران اخراج شده ] از لیست خارج شد")
             return
 
@@ -1644,6 +1620,7 @@ async def handle_new_message(bot, event):
                     username=target_username,
                     display_name=target_display_name,
                     reason="اخراج دستی توسط مالک یا ادمین",
+                    source="manual",
                 )
 
                 await event.reply("✅ کاربر اخراج شد")
