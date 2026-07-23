@@ -460,10 +460,10 @@ class SoroushAntiSpamBot:
                         and (is_broadcast_trigger or has_broadcast_session)
                     ):
                         pass
-                    else:
-                        return
-                else:
-                    return
+                    # پیام‌های خروجی عادی باید به handler برسند؛ این ربات
+                    # userbot است و فرمان مالک نیز event.out=True دارد.
+                # پاسخ‌های خود ربات فرمان نیستند و در handler واکنش تازه‌ای
+                # تولید نمی‌کنند؛ پاسخ‌های broadcast هم با message id جدا می‌شوند.
 
             # MASTER GROUP MODE GATE: every incoming group message passes here first.
             if not is_private_splus:
@@ -645,8 +645,7 @@ class SoroushAntiSpamBot:
                         self.logger.log_error(
                             f"خطای صفر کردن از پیوی: {e}"
                         )
-
-                return
+                    return
 
             
                 # اجرای دستورات مدیریتی

@@ -2038,13 +2038,13 @@ async def handle_new_message(bot, event):
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی کلمات گروه: {e}")
 
-        # مدیر/مالک ثبت‌شده از فیلتر خودکار و فیلتر کلمات گروه عبور می‌کند.
+        # مدیر/مالک ثبت‌شده از فیلتر خودکار و فیلتر کلمات گروه عبور می‌کند،
+        # اما اجرای راهنما، بازی‌ها و فرمان‌های مدیریت باید ادامه داشته باشد.
         if is_group_moderator:
             print(f"✅ ADMIN BYPASS FILTER: {sender_username}")
-            return
-
-        # بررسی اسپم
-        if group_word_spam:
+            is_spam = False
+            reason = ""
+        elif group_word_spam:
             is_spam = True
             reason = group_word_reason
         else:
