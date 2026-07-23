@@ -24,7 +24,12 @@ from modules.user_original_storage import (
 )
 from modules.jokes import get_joke
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
-from modules.gif_spam_detector import get_gif_media_id, reset_gif_history, track_gif
+from modules.gif_spam_detector import (
+    get_gif_event_info,
+    get_gif_media_id,
+    reset_gif_history,
+    track_gif,
+)
 from modules.group_stats import add_kick, add_mute, make_report, add_deleted_count
 from modules.spam_history import get_message_ids, get_user_history, clear_user
 from modules.web_search import can_search, search_web
@@ -435,6 +440,17 @@ async def handle_new_message(bot, event):
             if gif_media_id is None:
                 reset_gif_history(chat_id, user_id)
             else:
+                gif_debug = get_gif_event_info(event.message, chat_id, user_id)
+                print(
+                    "GIF EVENT RECEIVED\n"
+                    f"message_id={gif_debug['message_id']}\n"
+                    f"media_class={gif_debug['media_class']}\n"
+                    f"mime_type={gif_debug['mime_type']}\n"
+                    f"document_id={gif_debug['document_id']}\n"
+                    f"file_id={gif_debug['file_id']}\n"
+                    f"animation_attribute={gif_debug['animation_attribute']}\n"
+                    f"current_history={gif_debug['current_history']}"
+                )
                 repeated_gif_ids = track_gif(
                     chat_id,
                     user_id,
