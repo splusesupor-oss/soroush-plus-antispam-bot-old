@@ -415,7 +415,6 @@ async def handle_new_message(bot, event):
         chat_id = getattr(event_chat, "id", event.chat_id)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
-        media = getattr(event.message, "media", None)
         sender_username = getattr(sender, "username", None)
         is_group_moderator = (
             not event.is_private
@@ -424,23 +423,13 @@ async def handle_new_message(bot, event):
             )
         )
         if not is_group_moderator and not is_gif_message(event.message):
-            print("GIF HISTORY RESET REQUEST reason=non_gif_message")
             reset_gif_history(chat_id, user_id)
-        print(
-            "MESSAGE RECEIVED DEBUG\n"
-            f"message_id={getattr(event.message, 'id', None)}\n"
-            f"user_id={user_id}\n"
-            f"chat_id={chat_id}\n"
-            f"has_media={bool(media or getattr(event.message, 'file', None))}\n"
-            f"media_class={media.__class__.__name__ if media else None}"
-        )
 
         if (
             not message_text
             and not _get_forward_metadata(event.message)[0]
             and not is_gif_message(event.message)
         ):
-            print("RETURN AFTER GIF CHECK reason=non_gif_media_or_empty_message")
             return
 
         clean_text = message_text.strip()
@@ -453,7 +442,7 @@ async def handle_new_message(bot, event):
                     event.message.id,
                 )
                 if repeated_gif_ids:
-                    print("CONSECUTIVE GIF SPAM")
+                    print("GIF SPAM DELETE")
                     deleted = 0
                     for stored_message_id in repeated_gif_ids:
                         print(f"DELETE GIF MESSAGE {stored_message_id}")
@@ -469,7 +458,7 @@ async def handle_new_message(bot, event):
                             chat_id, user_id, 3600
                         )
                         if muted:
-                            print("MUTE USER 3600")
+                            print("GIF USER MUTED 3600")
                     except Exception as error:
                         bot.logger.log_error(
                             f"خطا در mute GIF spam {user_id}: {error}"
@@ -515,7 +504,6 @@ async def handle_new_message(bot, event):
 
         burst_key = (chat_id, user_id)
         if burst_key in bot.spam_burst_users:
-            print("RETURN AFTER GIF CHECK reason=spam_burst_user")
             _queue_spam_burst_deletion(
                 bot, chat_id, user_id, {event.message.id}
             )
