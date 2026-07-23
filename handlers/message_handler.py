@@ -900,11 +900,11 @@ async def handle_new_message(bot, event):
         clean_text = message_text.strip()
 
         if clean_text in ["جرعت", "جرات", "جرئت"]:
-            await event.reply("🎯 جرعت:\n" + get_jorat())
+            await event.reply("🎯 جرعت:\n" + get_jorat(chat_id))
             return
 
         if clean_text in ["حقیقت", "حقیقت بگو"]:
-            await event.reply("🧠 حقیقت:\n" + get_haghighat())
+            await event.reply("🧠 حقیقت:\n" + get_haghighat(chat_id))
             return
 
 
