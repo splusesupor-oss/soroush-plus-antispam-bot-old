@@ -442,13 +442,14 @@ async def handle_new_message(bot, event):
                     event.message.id,
                 )
                 if repeated_gif_ids:
-                    print("GIF SPAM DELETE")
+                    print("GIF SPAM DETECTED COUNT=6")
                     deleted = 0
                     for stored_message_id in repeated_gif_ids:
                         print(f"DELETE GIF MESSAGE {stored_message_id}")
                     try:
                         await bot.client.delete_messages(chat_id, repeated_gif_ids)
                         deleted = len(repeated_gif_ids)
+                        print("GIF MESSAGES DELETED")
                     except Exception as error:
                         bot.logger.log_error(
                             f"خطا در حذف GIF متوالی {user_id}: {error}"
@@ -458,7 +459,14 @@ async def handle_new_message(bot, event):
                             chat_id, user_id, 3600
                         )
                         if muted:
-                            print("GIF USER MUTED 3600")
+                            print("USER MUTED 3600")
+                            await bot.client.send_message(
+                                chat_id,
+                                "🚫 کاربر "
+                                f"{_format_banned_user(sender, user_id)} "
+                                "به دلیل ارسال هرزنامه گیف یک ساعت سکوت شد"
+                            )
+                            print("GIF WARNING SENT")
                     except Exception as error:
                         bot.logger.log_error(
                             f"خطا در mute GIF spam {user_id}: {error}"

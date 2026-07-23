@@ -2,7 +2,7 @@
 from collections import defaultdict, deque
 
 
-GIF_COUNTER = defaultdict(lambda: deque(maxlen=5))
+GIF_COUNTER = defaultdict(lambda: deque(maxlen=6))
 
 
 def _document_from_message(message):
@@ -38,6 +38,6 @@ def track_gif(chat_id, user_id, message_id):
     history.append(message_id)
     print(f"GIF COUNT={len(history)}")
 
-    if len(history) == 5:
+    if len(history) == 6:
         return list(history)
     return None
