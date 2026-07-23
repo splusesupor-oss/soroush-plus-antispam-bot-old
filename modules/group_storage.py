@@ -6,6 +6,33 @@ FILE = Path(__file__).resolve().parent.parent / "config" / "groups.json"
 _cache = None
 _cache_mtime = None
 
+
+def _canonical_group_id(group_id):
+    """شناسهٔ کانالی SPlusthon را با شناسهٔ کوتاهِ ذخیره‌شده سازگار می‌کند."""
+    try:
+        numeric_id = int(group_id)
+    except (TypeError, ValueError):
+        return str(group_id)
+
+    # SPlusthon ممکن است یک گروه قدیمی با شناسهٔ 23164149 را به شکل
+    # -1000023164149 برگرداند. داده‌های قبلی config/groups.json با شکل کوتاه
+    # ذخیره شده‌اند؛ هر دو باید همان گروه باشند.
+    if numeric_id <= -1_000_000_000_000:
+        numeric_id = abs(numeric_id) - 1_000_000_000_000
+    return str(numeric_id)
+
+
+def _group_key(data, group_id):
+    """کلید موجود را بدون ساختن رکورد تکراری پیدا می‌کند."""
+    raw_key = str(group_id)
+    canonical_key = _canonical_group_id(group_id)
+    if raw_key in data:
+        return raw_key
+    if canonical_key in data:
+        return canonical_key
+    return canonical_key
+
+
 def _file_mtime():
     try:
         return FILE.stat().st_mtime_ns
@@ -40,43 +67,50 @@ def save_groups(data):
 
 def activate_group(group_id, title):
     data = load_groups()
-    group = data.get(str(group_id), {})
+    key = _group_key(data, group_id)
+    group = data.get(key, {})
 
     group.update({
         "title": title,
         "active": True
     })
-    data[str(group_id)] = group
+    data[key] = group
 
     save_groups(data)
 
+
 def deactivate_group(group_id, title):
     data = load_groups()
-    group = data.get(str(group_id), {})
+    key = _group_key(data, group_id)
+    group = data.get(key, {})
 
     group.update({
         "title": title,
         "active": False
     })
-    data[str(group_id)] = group
+    data[key] = group
 
     save_groups(data)
+
 
 def set_group_owner(group_id, owner_id):
     data = load_groups()
-    gid = str(group_id)
-    group = data.get(gid, {})
+    key = _group_key(data, group_id)
+    group = data.get(key, {})
     group["owner_id"] = int(owner_id)
-    data[gid] = group
+    data[key] = group
     save_groups(data)
+
 
 def get_group_owner(group_id):
     data = load_groups()
-    return data.get(str(group_id), {}).get("owner_id")
+    return data.get(_group_key(data, group_id), {}).get("owner_id")
+
 
 def remove_group_owner(group_id):
     data = load_groups()
-    group = data.get(str(group_id))
+    key = _group_key(data, group_id)
+    group = data.get(key)
     if not group or "owner_id" not in group:
         return False
 
@@ -84,6 +118,7 @@ def remove_group_owner(group_id):
     save_groups(data)
     return True
 
+
 def is_active(group_id):
     data = load_groups()
-    return data.get(str(group_id), {}).get("active", False)
+    return data.get(_group_key(data, group_id), {}).get("active", False)
