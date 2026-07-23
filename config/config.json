@@ -11,7 +11,7 @@
     "action_duration_seconds": 3600,
     "delete_spam": true,
     "send_warning": true,
-    "warning_message": "⚠️ کاربر @{username}\n\nپیام شما به دلیل {reason} تخلف محسوب شد و حذف گردید.\n\nتعداد اخطار: [{count}/{threshold}]",
+    "warning_message": "⚠️ کاربر @{username}\nپیام شما به دلیل {reason} تخلف محسوب شد و حذف گردید.\n\n**تعداد اخطار:** [{count}/{threshold}]",
     "check_links": true,
     "check_phone_numbers": true,
     "check_usernames": true,
