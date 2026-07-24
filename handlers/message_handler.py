@@ -46,6 +46,11 @@ from splusthon.tl import functions
 from splusthon import types
 
 
+def _math_digits(value):
+    """نمایش عدد فقط برای متن اعلان‌ها، بدون تغییر مقدار منطقی."""
+    return str(value).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
+
+
 def _format_group_member(user):
     username = getattr(user, "username", None)
     if username:
@@ -223,7 +228,7 @@ async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
           f"User: {user_id}\nStored messages: {len(history)}\n"
           f"Deleted messages: {deleted_count}\nFailed deletions: {failed_count}")
     if deleted_count:
-        await event.reply(f"🗑️ {deleted_count} پیام اسپم حذف شد.")
+        await event.reply(f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد")
     elif failed_count:
         print("HEAVY SPAM CLEANUP reason: delete failed")
 
@@ -502,9 +507,9 @@ async def handle_new_message(bot, event):
                                     user_id,
                                     "gif_mute",
                                     event.message.id,
-                                    "📡کاربر "
-                                    f"{_format_banned_user(sender, user_id)} "
-                                    "به دلیل ارسال هرزنامه گیف یک ساعت سکوت شد",
+                                    "🔹کاربر ← "
+                                    f"{_format_banned_user(sender, user_id)}\n\n"
+                                    "به دلیل ارسال گیف تکراری 𝟭 ساعت سکوت شد",
                                 )
                                 print("GIF WARNING SENT")
                     except Exception as error:
@@ -557,9 +562,9 @@ async def handle_new_message(bot, event):
                                     user_id,
                                     "forward_spam_mute",
                                     event.message.id,
-                                    "📡کاربر "
-                                    f"{_format_banned_user(sender, user_id)} "
-                                    "به دلیل ارسال فوروارد اسپم 24 ساعت سکوت شد",
+                                    "🔸کاربر ← "
+                                    f"{_format_banned_user(sender, user_id)}\n\n"
+                                    "به دلیل ارسال فوروارد تکراری 𝟮𝟰 ساعت سکوت شد",
                                 )
                         finally:
                             bot.forward_spam_counts.pop(forward_key, None)
@@ -1425,7 +1430,7 @@ async def handle_new_message(bot, event):
 
                 set_group_owner(chat_id, target_user.id)
                 await event.reply(
-                    f"✅ مالک گروه ثبت شد: {_format_group_member(target_user)}"
+                    f"مالک گروه 『 {_format_group_member(target_user)} 』 ثبت شد ✅"
                 )
             except Exception as e:
                 bot.logger.log_error(f"خطا در ثبت مالک گروه: {e}")
@@ -1464,10 +1469,7 @@ async def handle_new_message(bot, event):
                     title
                 )
 
-                await event.reply(
-                    f"✅ گروه «{title}» ثبت شد\\n"
-                    f"🆔 {gid}"
-                )
+                await event.reply(f"↻- گروه\n\n⏌ [{title}] ⎾ ثبت شد ☑️")
 
             except Exception as e:
                 await event.reply(
@@ -1785,8 +1787,9 @@ async def handle_new_message(bot, event):
                 threshold = bot.config_manager.get("spam_threshold", 5)
 
                 await event.reply(
-                    f"⚠️ کاربر @{username} اخطار دریافت کرد.\n"
-                    f"تعداد اخطار: {count}/{threshold}"
+                    f"⚠️ کاربر 「 {_format_banned_user(user, user.id)} 」\n\n"
+                    "اخطار دریافت کرد\n\n"
+                    f"تعداد اخطار: {_math_digits(count)}/{_math_digits(threshold)}"
                 )
 
                 if bot.tracker.should_punish(chat_id, user.id):
@@ -1869,7 +1872,7 @@ async def handle_new_message(bot, event):
                 if result:
                     add_mute(chat_id)
                     await event.reply(
-                        f"🔇 کاربر {getattr(target_user,'username','کاربر')} سکوت شد"
+                        f"🔕 کاربر 『 {_format_banned_user(target_user, target_user.id)} 』 سکوت شد"
                     )
                 else:
                     await event.reply("❌ انجام سکوت ناموفق بود")
