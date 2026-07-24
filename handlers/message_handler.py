@@ -1469,7 +1469,7 @@ async def handle_new_message(bot, event):
                     title
                 )
 
-                await event.reply(f"↻- گروه\n\n⏌ [{title}] ⎾ ثبت شد ☑️")
+                await event.reply(f"↻- گروه\n\n⏌ {title} ⎾ ثبت شد ☑️")
 
             except Exception as e:
                 await event.reply(
@@ -1788,7 +1788,7 @@ async def handle_new_message(bot, event):
 
                 await event.reply(
                     f"⚠️ کاربر 「 {_format_banned_user(user, user.id)} 」\n\n"
-                    "اخطار دریافت کرد\n\n"
+                    "اخطار دریافت کرد "
                     f"تعداد اخطار: {_math_digits(count)}/{_math_digits(threshold)}"
                 )
 
@@ -1807,9 +1807,9 @@ async def handle_new_message(bot, event):
                             user.id,
                             "warning_ban",
                             event.message.id,
-                            "🚫 کاربر "
-                            f"{_format_banned_user(user, user.id)} "
-                            "به دلیل تخلفات از گروه اخراج شد.",
+                            "🚫 کاربر 「"
+                            f"{_format_banned_user(user, user.id)}"
+                            "」\nبه دلیل تخلفات از گروه اخراج شد.",
                         )
                     bot.tracker.reset_count(chat_id, user.id)
 
@@ -2268,9 +2268,9 @@ async def handle_new_message(bot, event):
                             user_id,
                             "warning_ban",
                             event.message.id,
-                            "🚫 کاربر "
-                            f"{_format_banned_user(sender, user_id)} "
-                            "به دلیل تخلفات از گروه اخراج شد.",
+                            "🚫 کاربر 「"
+                            f"{_format_banned_user(sender, user_id)}"
+                            "」\nبه دلیل تخلفات از گروه اخراج شد.",
                         )
 
                     # بعد از بن دائمی گارد حفظ می‌شود تا پیام‌های صف‌شده
