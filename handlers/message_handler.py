@@ -673,9 +673,9 @@ async def handle_new_message(bot, event):
                         )
                         await _send_moderation_notification_once(
                             bot, chat_id, user_id, "spam_ban", event.message.id,
-                            "🚫 کاربر "
-                            f"{_format_banned_user(sender, user_id)} "
-                            "به دلیل اسپم مکرر از گروه اخراج شد.",
+                            "⚠️ کاربر ⏌ "
+                            f"{_format_banned_user(sender, user_id)}"
+                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                         )
                     else:
                         bot.punished_users.discard(punish_key)
@@ -2081,9 +2081,9 @@ async def handle_new_message(bot, event):
                             user_id,
                             "spam_ban",
                             event.message.id,
-                            "🚫 کاربر "
-                            f"{_format_banned_user(sender, user_id)} "
-                            "به دلیل اسپم مکرر از گروه اخراج شد.",
+                            "⚠️ کاربر ⏌ "
+                            f"{_format_banned_user(sender, user_id)}"
+                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                         )
 
                     if punished:
@@ -2194,9 +2194,9 @@ async def handle_new_message(bot, event):
                                     user_id,
                                     "spam_ban",
                                     event.message.id,
-                                    "🚫 کاربر "
-                                    f"{_format_banned_user(sender, user_id)} "
-                                    "به دلیل اسپم مکرر از گروه اخراج شد.",
+                                    "⚠️ کاربر ⏌ "
+                                    f"{_format_banned_user(sender, user_id)}"
+                                    " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                                 )
                             else:
                                 bot.punished_users.discard(punish_key)
