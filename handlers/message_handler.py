@@ -1,5 +1,6 @@
 import asyncio as _asyncio
 from collections import deque
+from datetime import date
 
 from modules.fill_blank import check_fill
 from modules.riddles import check_answer
@@ -49,6 +50,29 @@ from splusthon import types
 def _math_digits(value):
     """نمایش عدد فقط برای متن اعلان‌ها، بدون تغییر مقدار منطقی."""
     return str(value).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
+
+
+def _jalali_today():
+    """تاریخ امروز ایران در تقویم جلالی، بدون وابستگی خارجی."""
+    gy, gm, gd = date.today().year, date.today().month, date.today().day
+    g_days = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (
+        355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100
+        + (gy2 + 399) // 400 + gd + g_days[gm - 1]
+    )
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm, jd = 1 + days // 31, 1 + days % 31
+    else:
+        jm, jd = 7 + (days - 186) // 30, 1 + (days - 186) % 30
+    return f"{jy:04d}/{jm:02d}/{jd:02d}"
 
 
 def _format_group_member(user):
@@ -1379,34 +1403,17 @@ async def handle_new_message(bot, event):
             score = min(10, max(1, (messages // 10) + activity.get('gifs', 0) + activity.get('videos', 0)))
             display_name = " ".join(part for part in (getattr(sender, 'first_name', None), getattr(sender, 'last_name', None)) if part) or str(user_id)
             stats_text = (
-                f"⟣ [{display_name}] ⟢\n\n"
-                f"● تعداد پیامی که داده [ {messages} ]\n\n"
-                f"● تعداد گیف هایی که فرستاد [ {activity.get('gifs', 0)} ]\n\n"
-                f"● تعداد تخلف هایی که انجام داد [ {violations} ]\n\n"
-                f"● تعداد فیلم هایی که ارسال کرده [ {activity.get('videos', 0)} ]\n\n"
-                f"● ساعاتی که داخل گروه فعالیت کرد [ {hours:.1f} ]\n\n"
-                f"⎋ [ امتیاز کاربر: {score} از 10 ]"
+                f"📆 تاریخ : 『 {_jalali_today()} 』\n\n"
+                f"                 ⟣ {display_name} ⟢\n\n"
+                "     ═───────◇───────═\n\n"
+                f"● تعداد پیام [ {_math_digits(messages)} ]\n\n"
+                f"● تعداد گیف [ {_math_digits(activity.get('gifs', 0))} ]\n\n"
+                f"● تعداد تخلف [ {_math_digits(violations)} ]\n\n"
+                f"● تعداد فیلم‌ها [ {_math_digits(activity.get('videos', 0))} ]\n\n"
+                f"● ساعاتی که داخل گروه فعالیت کرد [ {_math_digits(f'{hours:.1f}')} ]\n\n"
+                f"⎋ [ امتیاز کاربر: {_math_digits(score)} از {_math_digits(10)} ]"
             )
-            def stat_u16(value):
-                return len(value.encode("utf-16-le")) // 2
-            entities = []
-            for label in (
-                "تعداد پیامی که داده",
-                "تعداد گیف هایی که فرستاد",
-                "تعداد تخلف هایی که انجام داد",
-                "تعداد فیلم هایی که ارسال کرده",
-                "ساعاتی که داخل گروه فعالیت کرد",
-            ):
-                pos = stats_text.find(label)
-                entities.append(MessageEntityBold(
-                    offset=stat_u16(stats_text[:pos]), length=stat_u16(label)
-                ))
-            score_text = f"⎋ [ امتیاز کاربر: {score} از 10 ]"
-            score_pos = stats_text.find(score_text)
-            entities.append(MessageEntityBlockquote(
-                offset=stat_u16(stats_text[:score_pos]), length=stat_u16(score_text)
-            ))
-            await event.reply(stats_text, formatting_entities=entities)
+            await event.reply(stats_text)
             return
 
         if clean_text == "ثبت مالک":
