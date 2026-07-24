@@ -1413,7 +1413,17 @@ async def handle_new_message(bot, event):
                 f"● ساعاتی که داخل گروه فعالیت کرد [ {_math_digits(f'{hours:.1f}')} ]\n\n"
                 f"⎋ [ امتیاز کاربر: {_math_digits(score)} از {_math_digits(10)} ]"
             )
-            await event.reply(stats_text)
+            score_text = f"⎋ [ امتیاز کاربر: {_math_digits(score)} از {_math_digits(10)} ]"
+            score_offset = len(stats_text[:stats_text.index(score_text)].encode("utf-16-le")) // 2
+            await event.reply(
+                stats_text,
+                formatting_entities=[
+                    MessageEntityBlockquote(
+                        offset=score_offset,
+                        length=len(score_text.encode("utf-16-le")) // 2,
+                    )
+                ],
+            )
             return
 
         if clean_text == "ثبت مالک":
