@@ -27,44 +27,36 @@ async def handle_admin_commands(bot, event, text: str, admin_id: int, chat_id: i
     ):
         return
 
+    special_word_command = text in {"لغو کلمات ممنوعه", "فعال کلمات ممنوعه"}
+    parts = []
+    cmd = None
+    if not special_word_command:
+        if not text.startswith(("!", "/", ".")):
+            return
+        parts = text[1:].strip().split()
+        if not parts:
+            return
+        cmd = parts[0].lower()
+        valid_commands = {
+            "addword", "addban", "افزودن", "remword", "removeword", "حذف",
+            "stats", "آمار", "reset", "ریست", "lock", "قفل", "unlock", "باز",
+            "timelock", "قفل_ساعتی", "photo", "عکس", "title", "اسم", "help", "راهنما",
+        }
+        if cmd not in valid_commands:
+            return
+
     if not await _can_manage_commands(bot, event, admin_id, chat_id):
         await event.respond("❌ فقط مالک یا ادمین گروه می‌تواند این دستور را اجرا کند")
         return
 
-    if text in ["لغو کلمات ممنوعه", "فعال کلمات ممنوعه"]:
-
+    if special_word_command:
         if text == "لغو کلمات ممنوعه":
             disable(chat_id)
             await event.respond("✅ کلمات ممنوعه برای این گروه خاموش شد")
-            return
-
-        if text == "فعال کلمات ممنوعه":
+        else:
             enable(chat_id)
             await event.respond("✅ کلمات ممنوعه برای این گروه فعال شد")
-            return
-
-    if not text.startswith(("!", "/", ".")):
         return
-
-    cmd_text = text[1:].strip()
-    parts = cmd_text.split()
-
-    if not parts:
-        return
-
-    cmd = parts[0].lower()
-
-    if text in ["لغو کلمات ممنوعه", "فعال کلمات ممنوعه"]:
-        if text == "لغو کلمات ممنوعه":
-            print("DEBUG BANNED DISABLE:", chat_id)
-            disable(chat_id)
-            print("DEBUG AFTER DISABLE DONE")
-            await event.respond("✅ کلمات ممنوعه برای این گروه خاموش شد")
-            return
-        if text == "فعال کلمات ممنوعه":
-            enable(chat_id)
-            await event.respond("✅ کلمات ممنوعه برای این گروه فعال شد")
-            return
 
     try:
         if cmd in ["addword", "addban", "افزودن"]:
