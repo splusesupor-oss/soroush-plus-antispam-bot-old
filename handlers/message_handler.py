@@ -1409,12 +1409,42 @@ async def handle_new_message(bot, event):
                 bot.logger.log_error(f"خطا در دریافت ادمین‌های گروه: {error}")
                 group_admins = []
 
-            await event.reply(
-                "ادمین‌های ثبت‌شده ربات\n"
-                f"{chr(10).join(registered_admins) if registered_admins else 'ندارد'}\n\n"
-                "ادمین‌های گروه\n"
-                f"{chr(10).join(group_admins) if group_admins else 'ندارد'}"
+            registered_text = "\n".join(
+                f"★ : {admin}" for admin in registered_admins
+            ) if registered_admins else "ندارد"
+            group_text = "\n".join(
+                f"☆ : {admin}" for admin in group_admins
+            ) if group_admins else "ندارد"
+            admin_text = (
+                "✍ ادمین‌های ثبت‌شده ربات\n"
+                f"{registered_text}\n\n"
+                "✍ ادمین‌های گروه\n"
+                f"{group_text}"
             )
+
+            def admin_u16(value):
+                return len(value.encode("utf-16-le")) // 2
+
+            registered_title = "✍ ادمین‌های ثبت‌شده ربات"
+            group_title = "✍ ادمین‌های گروه"
+            registered_start = len(registered_title) + 1
+            group_start = admin_text.index(group_title) + len(group_title) + 1
+            entities = [
+                MessageEntityBold(offset=0, length=admin_u16(registered_title)),
+                MessageEntityBlockquote(
+                    offset=admin_u16(admin_text[:registered_start]),
+                    length=admin_u16(registered_text),
+                ),
+                MessageEntityBold(
+                    offset=admin_u16(admin_text[:admin_text.index(group_title)]),
+                    length=admin_u16(group_title),
+                ),
+                MessageEntityBlockquote(
+                    offset=admin_u16(admin_text[:group_start]),
+                    length=admin_u16(group_text),
+                ),
+            ]
+            await event.reply(admin_text, formatting_entities=entities)
             return
 
         if clean_text in {"قفل", "باز"}:
