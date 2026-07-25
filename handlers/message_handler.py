@@ -24,6 +24,7 @@ from modules.user_original_storage import (
     get_original,
 )
 from modules.jokes import get_joke
+from modules.biographies import get_biography
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
 from modules.user_activity import record as record_activity, get as get_activity
@@ -37,7 +38,7 @@ from modules.spam_history import get_message_ids, get_user_history, clear_user
 from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.admin_storage import add_admin, remove_admin, is_admin
+from modules.admin_storage import add_admin, remove_admin, is_admin, load_admins
 from modules.banned_storage import add_banned, load_banned, save_banned
 from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
@@ -675,6 +676,11 @@ async def handle_new_message(bot, event):
         simple_reply = SIMPLE_REPLIES.get(clean_text)
         if simple_reply:
             await event.reply(simple_reply)
+            return
+
+        # بیوگرافی باید پیش از فیلتر گروهیِ کلمهٔ مستقل «بیو» اجرا شود.
+        if clean_text == "بیوگرافی":
+            await event.reply(get_biography(chat_id))
             return
 
         # ضدتکرار فقط برای پیام‌های سریع و یکسانِ کاربران عادی اجرا می‌شود.
@@ -1377,6 +1383,38 @@ async def handle_new_message(bot, event):
                 banned_data.pop(group_key, None)
             save_banned(banned_data)
             await event.reply(f"🔗[ {removed_count} کاربران اخراج شده ] از لیست خارج شد")
+            return
+
+        if clean_text == "لیست ادمین":
+            if not _has_group_management_permission(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            ):
+                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                return
+
+            registered_entries = load_admins().get(str(chat_id), [])
+            registered_admins = [
+                _format_group_member(type("RegisteredAdmin", (), entry)())
+                if isinstance(entry, dict) else f"@{entry}"
+                for entry in registered_entries
+            ]
+            try:
+                group_admins = []
+                async for participant in bot.client.iter_participants(chat_id):
+                    participant_info = getattr(participant, "participant", None)
+                    participant_type = participant_info.__class__.__name__ if participant_info else ""
+                    if getattr(participant, "admin_rights", None) or "Admin" in participant_type or "Creator" in participant_type:
+                        group_admins.append(_format_group_member(participant))
+            except Exception as error:
+                bot.logger.log_error(f"خطا در دریافت ادمین‌های گروه: {error}")
+                group_admins = []
+
+            await event.reply(
+                "ادمین‌های ثبت‌شده ربات\n"
+                f"{chr(10).join(registered_admins) if registered_admins else 'ندارد'}\n\n"
+                "ادمین‌های گروه\n"
+                f"{chr(10).join(group_admins) if group_admins else 'ندارد'}"
+            )
             return
 
         if clean_text in {"قفل", "باز"}:
