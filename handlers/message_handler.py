@@ -101,6 +101,12 @@ def _format_group_member(user):
     return "کاربر ناشناس"
 
 
+def _format_admin_display(user):
+    """نمایش امن ادمین بدون افشای شناسهٔ عددی."""
+    value = _format_group_member(user)
+    return "Unknown User" if value.startswith("ID:") else value
+
+
 def _format_banned_user(user, user_id):
     username = getattr(user, "username", None) if user else None
     if username:
@@ -1469,9 +1475,7 @@ async def handle_new_message(bot, event):
                 if user_id is not None:
                     try:
                         entity = await bot.client.get_entity(user_id)
-                        value = _format_group_member(entity)
-                        if not value.startswith("ID:"):
-                            return value
+                        return _format_admin_display(entity)
                     except Exception:
                         pass
                 return "Unknown User"
@@ -1495,8 +1499,8 @@ async def handle_new_message(bot, event):
                 async for participant in bot.client.iter_participants(
                     chat_id, filter=types.ChannelParticipantsAdmins()
                 ):
-                    formatted = _format_group_member(participant)
-                    if not formatted.startswith("ID:"):
+                    formatted = _format_admin_display(participant)
+                    if formatted != "Unknown User":
                         group_admins.append(formatted)
             except Exception as error:
                 bot.logger.log_error(f"خطا در دریافت ادمین‌های گروه: {error}")
@@ -1689,7 +1693,7 @@ async def handle_new_message(bot, event):
                 admin_username = getattr(admin_user, "username", None)
                 if add_admin(chat_id, admin_user.id, admin_username):
                     await event.reply(
-                        f"✅ ادمین @{admin_username or admin_user.id} ثبت شد"
+                        f"✅ ادمین {_format_admin_display(admin_user)} ثبت شد"
                     )
                 else:
                     await event.reply("⚠️ این کاربر قبلا ادمین ثبت شده است")
@@ -1731,7 +1735,7 @@ async def handle_new_message(bot, event):
                 admin_username = getattr(admin_user, "username", None)
                 if remove_admin(chat_id, admin_user.id):
                     await event.reply(
-                        f"✅ دسترسی ادمین @{admin_username or admin_user.id} حذف شد"
+                        f"✅ دسترسی ادمین {_format_admin_display(admin_user)} حذف شد"
                     )
                 else:
                     await event.reply("❌ این کاربر ادمین ثبت‌شده نیست")
