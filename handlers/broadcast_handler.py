@@ -2,7 +2,6 @@
 import asyncio
 
 from modules.broadcast_state import begin, clear, consume_confirmation, get, set_message
-from modules.group_id import normalize_group_id
 from modules.group_storage import is_active, load_groups
 
 
@@ -37,52 +36,42 @@ def _preview(text):
 
 
 async def _broadcast_to_groups(bot, text):
-    """پیام را فقط با entity معتبر SPlusthon به گروه‌های فعال می‌فرستد."""
-    active_groups = {
-        normalize_group_id(group_id)
-        for group_id in load_groups()
-        if is_active(group_id)
-    }
     successful = 0
     failed = 0
-    delivered = set()
-    bot.logger.log_info(f"BROADCAST LOADED {len(active_groups)} ACTIVE GROUPS")
+    seen_group_ids = set()
 
     try:
         async for dialog in bot.client.iter_dialogs():
-            entity = getattr(dialog, "entity", None)
-            group_id = normalize_group_id(getattr(dialog, "id", None))
-            entity_type = entity.__class__.__name__ if entity else ""
-            if group_id not in active_groups or entity_type not in {"Channel", "Chat"}:
+            if not getattr(dialog, "is_group", False):
                 continue
-            if group_id in delivered:
+            group_id = getattr(dialog, "id", None)
+            if group_id in seen_group_ids or not is_active(group_id):
                 continue
-            delivered.add(group_id)
-            bot.logger.log_info(f"BROADCAST SENDING TO GROUP: {group_id}")
+            seen_group_ids.add(group_id)
             try:
-                await bot.client.send_message(entity, text)
+                await bot.client.send_message(getattr(dialog, "entity", group_id), text)
                 successful += 1
-                bot.logger.log_info(f"BROADCAST SEND SUCCESS: {group_id}")
+                _log_phase(bot, f"GROUP SENT: {group_id}", "")
             except Exception as error:
                 failed += 1
-                bot.logger.log_error(f"BROADCAST SEND FAILED: {group_id}: {error!r}")
+                bot.logger.log_error(f"BROADCAST GROUP FAILED {group_id}: {error}")
             await asyncio.sleep(0.4)
+        return successful, failed
     except Exception as error:
-        bot.logger.log_error(f"BROADCAST DIALOG LOAD FAILED: {error!r}")
+        bot.logger.log_error(f"خطا در دریافت گروه‌های اطلاع‌رسانی: {error}")
 
-    # گروه‌های فعالِ بدون dialog/entity همچنان جداگانه تلاش می‌شوند.
-    for group_id in active_groups - delivered:
-        bot.logger.log_info(f"BROADCAST SENDING TO GROUP: {group_id} fallback")
+    # Fallback for SPlusthon clients that cannot enumerate dialogs.
+    for group_id in load_groups():
+        if group_id in seen_group_ids or not is_active(group_id):
+            continue
         try:
-            entity = await bot.client.get_input_entity(int(group_id))
-            await bot.client.send_message(entity, text)
+            await bot.client.send_message(int(group_id), text)
             successful += 1
-            bot.logger.log_info(f"BROADCAST SEND SUCCESS: {group_id}")
+            _log_phase(bot, f"GROUP SENT: {group_id}", "fallback")
         except Exception as error:
             failed += 1
-            bot.logger.log_error(f"BROADCAST SEND FAILED: {group_id}: {error!r}")
+            bot.logger.log_error(f"BROADCAST GROUP FAILED {group_id}: {error}")
         await asyncio.sleep(0.4)
-
     return successful, failed
 
 
@@ -93,7 +82,6 @@ async def handle_private_broadcast(bot, event, owner_id, text):
 
     if text == "اطلاع رسانی":
         begin(owner_id)
-        _log_phase(bot, "BROADCAST OWNER VERIFIED", owner_id)
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(bot, "WAITING_FOR_TEXT", owner_id)
         await _broadcast_reply(bot, event, PROMPT)
@@ -139,7 +127,6 @@ async def handle_private_broadcast(bot, event, owner_id, text):
             await _broadcast_reply(bot, event, "📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
             return True
         set_message(owner_id, text)
-        _log_phase(bot, "BROADCAST MESSAGE CAPTURED", owner_id)
         _log_phase(bot, "PREVIEW CREATED", owner_id)
         await _broadcast_reply(bot, event, _preview(text))
         return True

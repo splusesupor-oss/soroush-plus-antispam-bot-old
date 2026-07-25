@@ -457,27 +457,20 @@ class SoroushAntiSpamBot:
             elif event.out:
                 if is_private_splus:
                     private_sender = await event.get_sender()
-                    private_owner_id = getattr(self, "bot_account_id", None)
-                    if not private_owner_id:
-                        try:
-                            private_me = await self.client.get_me()
-                            private_owner_id = getattr(private_me, "id", None)
-                        except Exception as error:
-                            self.logger.log_error(
-                                f"BROADCAST OWNER RESOLUTION FAILED: {error!r}"
-                            )
-                    if not event.out:
+                    if event.out:
+                        private_me = await self.client.get_me()
+                        private_owner_id = getattr(private_me, "id", None)
+                    else:
                         private_owner_id = getattr(private_sender, "id", None)
                     is_broadcast_trigger = text == "اطلاع رسانی"
                     has_broadcast_session = bool(
                         get_broadcast_state(private_owner_id)
                     )
-                    self.logger.log_info(
-                        "BROADCAST OWNER CHECK RESULT "
-                        f"owner_id={private_owner_id} "
-                        f"allowed={is_global_owner(private_owner_id)} "
-                        f"trigger={is_broadcast_trigger} session={has_broadcast_session}"
-                    )
+                    if (
+                        is_global_owner(private_owner_id)
+                        and (is_broadcast_trigger or has_broadcast_session)
+                    ):
+                        pass
                     # پیام‌های خروجی عادی باید به handler برسند؛ این ربات
                     # userbot است و فرمان مالک نیز event.out=True دارد.
                 # پاسخ‌های خود ربات فرمان نیستند و در handler واکنش تازه‌ای
@@ -579,25 +572,18 @@ class SoroushAntiSpamBot:
             if is_private_splus:
                 text = (event.message.message or "").strip()
                 sender = await event.get_sender()
-                sender_id = getattr(self, "bot_account_id", None) if event.out else getattr(sender, "id", None)
-                if event.out and not sender_id:
-                    try:
-                        sender_id = getattr(await self.client.get_me(), "id", None)
-                    except Exception as error:
-                        self.logger.log_error(
-                            f"BROADCAST OWNER RESOLUTION FAILED: {error!r}"
-                        )
+                if event.out:
+                    private_me = await self.client.get_me()
+                    sender_id = getattr(private_me, "id", None)
+                else:
+                    sender_id = getattr(sender, "id", None)
 
-                owner_allowed = is_global_owner(sender_id)
-                self.logger.log_info(
-                    "BROADCAST OWNER CHECK RESULT "
-                    f"owner_id={sender_id} allowed={owner_allowed} text={text!r}"
-                )
-                if owner_allowed:
-                    self.logger.log_info("BROADCAST HANDLER ENTERED")
-                    handled = await handle_private_broadcast(self, event, sender_id, text)
-                    if handled:
-                        self.logger.log_info("BROADCAST STATE HANDLED")
+                if is_global_owner(sender_id):
+                    self.logger.log_info(
+                        "BROADCAST COMMAND RECEIVED "
+                        f"owner_id={sender_id} text={text!r} event_out={event.out}"
+                    )
+                    if await handle_private_broadcast(self, event, sender_id, text):
                         return
 
                 if "صفر" in text:
