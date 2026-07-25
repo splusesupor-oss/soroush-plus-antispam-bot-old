@@ -25,6 +25,7 @@ from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 from modules.coins import settle_previous_days
+from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.broadcast_state import get as get_broadcast_state
@@ -217,6 +218,25 @@ class SoroushAntiSpamBot:
                 await asyncio.sleep(3600)
 
         asyncio.create_task(settle_daily_coins())
+
+        async def reminder_loop():
+            while True:
+                for reminder in due_reminders():
+                    try:
+                        await self.client.send_message(
+                            int(reminder["chat_id"]),
+                            "⏰ یادآوری\n\n"
+                            f"سلام {reminder['name']} 👋\n\n"
+                            f"📝 {reminder['text']}",
+                        )
+                        mark_reminder_sent(reminder["id"])
+                    except Exception as error:
+                        self.logger.log_error(
+                            f"خطا در ارسال یادآوری {reminder.get('id')}: {error}"
+                        )
+                await asyncio.sleep(15)
+
+        asyncio.create_task(reminder_loop())
 
         async def is_currently_restricted(chat_id, user):
             """وضعیت فعلی عضو را از SPlusthon می‌خواند؛ خطا یعنی حفظ بن فعلی."""

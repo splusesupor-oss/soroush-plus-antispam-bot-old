@@ -30,6 +30,7 @@ from modules.word_correction import start as start_correction, answer as answer_
 from modules.name_family import start as start_name_family, submit as submit_name_family, finish as finish_name_family, is_active as name_family_active
 from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
 from modules.user_activity import record as record_activity, get as get_activity
+from modules.reminders import begin as begin_reminder, waiting as waiting_reminder, capture as capture_reminder
 from modules.coins import (
     award as award_coins,
     record_message as record_coin_message,
@@ -715,6 +716,23 @@ async def handle_new_message(bot, event):
         # بیوگرافی باید پیش از فیلتر گروهیِ کلمهٔ مستقل «بیو» اجرا شود.
         if clean_text == "بیوگرافی":
             await event.reply(get_biography(chat_id))
+            return
+
+        if clean_text == "یاد آوری":
+            begin_reminder(chat_id, user_id, _format_admin_display(sender))
+            await event.reply("📝 متن یادآوری و زمان موردنظر را ارسال کنید.")
+            return
+
+        if waiting_reminder(chat_id, user_id):
+            reminder = capture_reminder(chat_id, user_id, message_text)
+            if reminder is False:
+                await event.reply("❌ زمان را مانند «۳۰ دقیقه آب بخور» ارسال کنید.")
+            else:
+                await event.reply(
+                    "✅ یادآوری ثبت شد.\n\n"
+                    f"⏰ زمان: {reminder['time_label']}\n"
+                    f"📝 متن: {reminder['text']}"
+                )
             return
 
         # ضدتکرار فقط برای پیام‌های سریع و یکسانِ کاربران عادی اجرا می‌شود.
