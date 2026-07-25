@@ -41,6 +41,27 @@ def award(chat_id, user_id, name, coins, win=True):
     return user["coins"]
 
 
+def get_profile(chat_id, user_id):
+    user = _load().get("users", {}).get(str(chat_id), {}).get(str(user_id))
+    return dict(user) if user else {"name": "Unknown User", "coins": 0, "wins": 0}
+
+
+def leaderboard(chat_id, limit=10):
+    users = _load().get("users", {}).get(str(chat_id), {})
+    return sorted(
+        ((user_id, dict(value)) for user_id, value in users.items()),
+        key=lambda item: item[1].get("coins", 0),
+        reverse=True,
+    )[:limit]
+
+
+def rank(chat_id, user_id):
+    for index, (stored_id, _) in enumerate(leaderboard(chat_id, limit=10**9), 1):
+        if str(stored_id) == str(user_id):
+            return index
+    return None
+
+
 def record_message(chat_id, user_id, name):
     data = _load()
     today = _today()

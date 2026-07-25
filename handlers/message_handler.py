@@ -30,7 +30,13 @@ from modules.word_correction import start as start_correction, answer as answer_
 from modules.name_family import start as start_name_family, submit as submit_name_family, finish as finish_name_family, is_active as name_family_active
 from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
 from modules.user_activity import record as record_activity, get as get_activity
-from modules.coins import award as award_coins, record_message as record_coin_message
+from modules.coins import (
+    award as award_coins,
+    record_message as record_coin_message,
+    get_profile as get_coin_profile,
+    leaderboard as coin_leaderboard,
+    rank as coin_rank,
+)
 from modules.gif_spam_detector import (
     is_gif_message,
     reset_gif_history,
@@ -1583,6 +1589,49 @@ async def handle_new_message(bot, event):
                 bot.logger.log_info("UNLOCK COMMAND RECEIVED")
                 await bot.group_actions.unlock_group(chat_id)
                 await event.reply("🔓 گروه باز شد")
+            return
+
+        if clean_text == "راهنمای امتیاز":
+            await event.reply(
+                "🏅 راهنمای امتیاز\n\n"
+                "🧩 حدس چیستان:\n+3 سکه\n\n"
+                "😀 حدس ایموجی:\n+4 سکه\n\n"
+                "📝 اسم فامیل (70 امتیاز یا بیشتر):\n+6 سکه\n\n"
+                "✍️ تصحیح کلمات:\n+1 سکه\n\n"
+                "❓ چهار گزینه‌ای:\n+3 سکه\n\n"
+                "📈 پایان هر روز:\n\n"
+                "🥇 رتبه اول:\n+12 سکه\n\n"
+                "🥈 رتبه دوم:\n+8 سکه\n\n"
+                "🥉 رتبه سوم:\n+5 سکه"
+            )
+            return
+
+        if clean_text == "امتیاز من":
+            profile = get_coin_profile(chat_id, user_id)
+            activity = get_activity(chat_id, user_id)
+            first = activity.get("first", 0)
+            membership_days = 0
+            if first:
+                from time import time as _time
+                membership_days = max(0, int((_time() - first) // 86400))
+            await event.reply(
+                "🏅 پروفایل امتیاز\n\n"
+                f"👤 {_format_admin_display(sender)}\n\n"
+                f"🪙 سکه:\n{profile.get('coins', 0)}\n\n"
+                f"🏆 رتبه گروه:\n{coin_rank(chat_id, user_id) or 'ندارد'}\n\n"
+                f"🎮 برد در بازی‌ها:\n{profile.get('wins', 0)}\n\n"
+                f"📅 مدت عضویت:\n{membership_days} روز"
+            )
+            return
+
+        if clean_text == "رتبه ها":
+            ranking = coin_leaderboard(chat_id, 5)
+            medals = ("🥇", "🥈", "🥉")
+            lines = ["🏆 برترین کاربران گروه\n"]
+            for index, (_, profile) in enumerate(ranking, 1):
+                medal = medals[index - 1] if index <= 3 else f"{index}."
+                lines.append(f"{medal} {_format_admin_display(type('CoinUser', (), {'username': None, 'first_name': profile.get('name'), 'last_name': None})())} — {profile.get('coins', 0)} سکه")
+            await event.reply("\n\n".join(lines) if ranking else "🏆 برترین کاربران گروه\n\nندارد")
             return
 
         if clean_text == "آمارم":
