@@ -1392,22 +1392,24 @@ async def handle_new_message(bot, event):
                 await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
                 return
 
-            registered_entries = load_admins().get(str(chat_id), [])
-            registered_admins = [
+            # بخش اول فقط از تنظیمات ادمین‌های خود ربات خوانده می‌شود.
+            bot_admins = [
+                f"@{username}"
+                for username in bot.config_manager.get("admin_usernames", [])
+            ]
+            for admin_id in bot.config_manager.get("admin_user_ids", []):
+                formatted = f"ID: {admin_id}"
+                if formatted not in bot_admins:
+                    bot_admins.append(formatted)
+
+            # بخش دوم فقط از ادمین‌های ثبت‌شده برای همین گروه خوانده می‌شود.
+            group_entries = load_admins().get(str(chat_id), [])
+            group_admins = [
                 _format_group_member(type("RegisteredAdmin", (), entry)())
                 if isinstance(entry, dict) else f"@{entry}"
-                for entry in registered_entries
+                for entry in group_entries
             ]
-            try:
-                group_admins = []
-                async for participant in bot.client.iter_participants(chat_id):
-                    participant_info = getattr(participant, "participant", None)
-                    participant_type = participant_info.__class__.__name__ if participant_info else ""
-                    if getattr(participant, "admin_rights", None) or "Admin" in participant_type or "Creator" in participant_type:
-                        group_admins.append(_format_group_member(participant))
-            except Exception as error:
-                bot.logger.log_error(f"خطا در دریافت ادمین‌های گروه: {error}")
-                group_admins = []
+            registered_admins = bot_admins
 
             registered_text = "\n".join(
                 f"★ : {admin}" for admin in registered_admins
