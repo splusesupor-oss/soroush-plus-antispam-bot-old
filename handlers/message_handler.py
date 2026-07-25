@@ -985,7 +985,7 @@ async def handle_new_message(bot, event):
 
         # جک
         if clean_text == "جک":
-            await event.reply(get_joke())
+            await event.reply(get_joke(chat_id))
             return
 
         # پاسخ معرفی ربات
