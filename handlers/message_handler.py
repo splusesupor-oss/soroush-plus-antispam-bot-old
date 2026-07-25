@@ -103,8 +103,17 @@ def _format_group_member(user):
 
 def _format_admin_display(user):
     """نمایش امن ادمین بدون افشای شناسهٔ عددی."""
-    value = _format_group_member(user)
-    return "Unknown User" if value.startswith("ID:") else value
+    username = getattr(user, "username", None)
+    if username and not str(username).strip().isdigit():
+        return f"@{str(username).lstrip('@')}"
+
+    display_name = " ".join(
+        part for part in (
+            getattr(user, "first_name", None),
+            getattr(user, "last_name", None),
+        ) if part
+    ).strip()
+    return display_name or "Unknown User"
 
 
 def _format_banned_user(user, user_id):
