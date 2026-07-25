@@ -1,5 +1,6 @@
 """Guess the Emoji game state."""
 import random
+from itertools import count
 from modules.game_points import add
 
 PUZZLES = [
@@ -10,6 +11,7 @@ PUZZLES = [
     ("👻🚫", "شکارچیان روح"), ("🐠🔎", "در جستجوی نمو"), ("🌙🚀", "سفر به ماه"),
 ]
 _ACTIVE = {}
+_TOKENS = count(1)
 
 
 def _norm(text):
@@ -24,7 +26,11 @@ def start(chat_id):
     if chat_id in _ACTIVE:
         return None
     emoji, answer = random.SystemRandom().choice(PUZZLES)
-    _ACTIVE[chat_id] = {"emoji": emoji, "answer": answer}
+    _ACTIVE[chat_id] = {
+        "emoji": emoji,
+        "answer": answer,
+        "token": next(_TOKENS),
+    }
     return dict(_ACTIVE[chat_id])
 
 
@@ -37,6 +43,9 @@ def answer(chat_id, user_id, name, text):
     return state["answer"]
 
 
-def finish(chat_id):
-    state = _ACTIVE.pop(chat_id, None)
-    return state["answer"] if state else None
+def finish(chat_id, token=None):
+    state = _ACTIVE.get(chat_id)
+    if not state or (token is not None and state["token"] != token):
+        return None
+    _ACTIVE.pop(chat_id, None)
+    return state["answer"]

@@ -3,7 +3,7 @@ import random
 from modules.game_points import add
 
 LETTERS = list("ابتثجچحخدذرزسشصضطظعغفقکگلمنوهی")
-CATEGORIES = ("نام", "فامیل", "شهر", "غذا", "حیوان", "فیلم", "خواننده")
+CATEGORIES = ("نام", "فامیل", "شهر", "میوه", "وسیله", "حیوان", "خواننده")
 _ACTIVE = {}
 
 

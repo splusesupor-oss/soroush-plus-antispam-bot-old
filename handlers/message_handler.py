@@ -776,7 +776,7 @@ async def handle_new_message(bot, event):
                 "🎮 اسم فامیل\n\n"
                 f"حرف: {game['letter']}\n\n"
                 "⏳ زمان: 90 ثانیه\n\n"
-                "👤 نام\n👤 فامیل\n🌍 شهر\n🍎 غذا\n🐶 حیوان\n🎬 فیلم\n🎵 خواننده"
+                "👤 نام\n👤 فامیل\n🌍 شهر\n🍇 میوه\n📦 وسیله\n🐶 حیوان\n🎵 خواننده"
             )
             async def name_family_timer():
                 await _asyncio.sleep(90)
@@ -808,22 +808,16 @@ async def handle_new_message(bot, event):
             await event.reply(f"🎮 حدس ایموجی\n\n{puzzle['emoji']}\n\n⏳ 40 ثانیه فرصت دارید")
             async def emoji_timer():
                 await _asyncio.sleep(40)
-                answer = finish_emoji_guess(chat_id)
+                answer = finish_emoji_guess(chat_id, puzzle["token"])
                 if answer:
                     await event.reply(f"⏰ زمان تمام شد!\n\n✅ پاسخ درست:\n{answer}")
-                    next_puzzle = start_emoji_guess(chat_id)
-                    await event.reply(f"🎮 حدس ایموجی\n\n{next_puzzle['emoji']}\n\n⏳ 40 ثانیه فرصت دارید")
-                    _track_group_timer(bot, chat_id, _asyncio.create_task(emoji_timer()))
             _track_group_timer(bot, chat_id, _asyncio.create_task(emoji_timer()))
             return
 
         if emoji_guess_active(chat_id):
             winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
             if winner_answer:
-                await event.reply(
-                    "✅ Congratulations!\n"
-                    f"{_format_group_member(sender)} gave the correct answer."
-                )
+                await event.reply("✅ Congratulations! Correct answer.")
                 return
 
         # بازی تصحیح کلمات
