@@ -42,6 +42,7 @@ from modules.admin_storage import add_admin, remove_admin, is_admin, load_admins
 from modules.banned_storage import add_banned, load_banned, save_banned
 from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
+from modules.group_id import normalize_group_id
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
@@ -1403,7 +1404,7 @@ async def handle_new_message(bot, event):
                     bot_admins.append(formatted)
 
             # بخش دوم فقط از ادمین‌های ثبت‌شده برای همین گروه خوانده می‌شود.
-            group_entries = load_admins().get(str(chat_id), [])
+            group_entries = load_admins().get(normalize_group_id(chat_id), [])
             group_admins = []
             for entry in group_entries:
                 if not isinstance(entry, dict):
