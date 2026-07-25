@@ -685,9 +685,38 @@ class SoroushAntiSpamBot:
                 )
 
 
-        print("✅ ربات فعال شد و منتظر پیام است")
-
-        await self.client.run_until_disconnected()
+        reconnect_delay = 1
+        while True:
+            try:
+                print("✅ ربات فعال شد و منتظر پیام است")
+                await self.client.run_until_disconnected()
+                raise ConnectionError("SPlusthon connection closed")
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self.logger.log_error(
+                    "SPLUS RECONNECT "
+                    f"reason={error!r} retry_in={reconnect_delay}s"
+                )
+                try:
+                    await self.client.disconnect()
+                except Exception:
+                    pass
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, 30)
+                try:
+                    await self.client.connect()
+                    self.bot_account_id = getattr(
+                        await self.client.get_me(), "id", self.bot_account_id
+                    )
+                    reconnect_delay = 1
+                    self.logger.log_info("SPLUS RECONNECT SUCCESS")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as reconnect_error:
+                    self.logger.log_error(
+                        f"SPLUS RECONNECT FAILED: {reconnect_error!r}"
+                    )
 
 
     # ---------- SPAM HISTORY STORAGE ----------
