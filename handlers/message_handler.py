@@ -1406,28 +1406,30 @@ async def handle_new_message(bot, event):
                         pass
                 return "Unknown User"
 
-            # بخش اول فقط از تنظیمات ادمین‌های خود ربات خوانده می‌شود.
-            bot_admins = [
-                await admin_display(username=username)
-                for username in bot.config_manager.get("admin_usernames", [])
-            ]
-            for admin_id in bot.config_manager.get("admin_user_ids", []):
-                formatted = await admin_display(user_id=admin_id)
-                if formatted not in bot_admins:
-                    bot_admins.append(formatted)
-
-            # بخش دوم فقط از ادمین‌های ثبت‌شده برای همین گروه خوانده می‌شود.
-            group_entries = load_admins().get(normalize_group_id(chat_id), [])
-            group_admins = []
-            for entry in group_entries:
+            # بخش اول فقط از storage پایدار ادمین‌های ثبت‌شده توسط ربات.
+            registered_entries = load_admins().get(normalize_group_id(chat_id), [])
+            registered_admins = []
+            for entry in registered_entries:
                 if isinstance(entry, dict):
                     formatted = await admin_display(
                         user_id=entry.get("user_id"), username=entry.get("username")
                     )
                 else:
                     formatted = await admin_display(username=entry)
-                group_admins.append(formatted)
-            registered_admins = bot_admins
+                if formatted != "Unknown User":
+                    registered_admins.append(formatted)
+
+            # بخش دوم فقط از API ادمین‌های واقعی همین گروه.
+            group_admins = []
+            try:
+                async for participant in bot.client.iter_participants(
+                    chat_id, filter=types.ChannelParticipantsAdmins()
+                ):
+                    formatted = _format_group_member(participant)
+                    if not formatted.startswith("ID:"):
+                        group_admins.append(formatted)
+            except Exception as error:
+                bot.logger.log_error(f"خطا در دریافت ادمین‌های گروه: {error}")
 
             registered_text = "\n".join(
                 f"★ : {admin}" for admin in registered_admins
