@@ -31,6 +31,7 @@ from modules.name_family import start as start_name_family, submit as submit_nam
 from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
 from modules.user_activity import record as record_activity, get as get_activity
 from modules.reminders import begin as begin_reminder, waiting as waiting_reminder, capture as capture_reminder
+from modules.translation import begin as begin_translation, waiting as waiting_translation, clear as clear_translation, translate_to_persian
 from modules.coins import (
     award as award_coins,
     record_message as record_coin_message,
@@ -733,6 +734,24 @@ async def handle_new_message(bot, event):
                     "✅ یادآوری ثبت شد.\n\n"
                     f"⏰ زمان: {reminder['time_label']}\n"
                     f"📝 متن: {reminder['text']}"
+                )
+            return
+
+        if clean_text == "ترجمه":
+            begin_translation(chat_id, user_id)
+            await event.reply("🌐 متن انگلیسی خود را ارسال کنید.")
+            return
+
+        if waiting_translation(chat_id, user_id):
+            translated, error = translate_to_persian(message_text)
+            clear_translation(chat_id, user_id)
+            if error:
+                await event.reply(error)
+            else:
+                await event.reply(
+                    "🌐 ترجمه\n\n"
+                    f"🇬🇧 متن:\n\n{message_text}\n\n"
+                    f"🇮🇷 ترجمه:\n\n{translated}"
                 )
             return
 
