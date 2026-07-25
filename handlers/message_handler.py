@@ -748,11 +748,24 @@ async def handle_new_message(bot, event):
             if error:
                 await event.reply(error)
             else:
-                await event.reply(
+                translation_text = (
                     "🌐 ترجمه\n\n"
                     f"🇬🇧 متن:\n\n{message_text}\n\n"
                     f"🇮🇷 ترجمه:\n\n{translated}"
                 )
+                def translation_u16(value):
+                    return len(value.encode("utf-16-le")) // 2
+                title = "🌐 ترجمه"
+                source_title = "🇬🇧 متن:"
+                target_title = "🇮🇷 ترجمه:"
+                target_start = translation_text.rfind(translated)
+                entities = []
+                for label in (title, source_title, target_title):
+                    pos = translation_text.index(label)
+                    entities.append(MessageEntityBold(offset=translation_u16(translation_text[:pos]), length=translation_u16(label)))
+                entities.append(MessageEntityBold(offset=translation_u16(translation_text[:target_start]), length=translation_u16(translated)))
+                entities.append(MessageEntityBlockquote(offset=translation_u16(translation_text[:target_start]), length=translation_u16(translated)))
+                await event.reply(translation_text, formatting_entities=entities)
             return
 
         # ضدتکرار فقط برای پیام‌های سریع و یکسانِ کاربران عادی اجرا می‌شود.
@@ -1661,7 +1674,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "راهنمای امتیاز":
-            await event.reply(
+            guide_text = (
                 "🏅 راهنمای امتیاز\n\n"
                 "🧩 حدس چیستان:\n+3 سکه\n\n"
                 "😀 حدس ایموجی:\n+4 سکه\n\n"
@@ -1673,6 +1686,11 @@ async def handle_new_message(bot, event):
                 "🥈 رتبه دوم:\n+8 سکه\n\n"
                 "🥉 رتبه سوم:\n+5 سکه"
             )
+            def guide_u16(value):
+                return len(value.encode("utf-16-le")) // 2
+            guide_labels = ("🏅 راهنمای امتیاز", "🧩 حدس چیستان:", "😀 حدس ایموجی:", "📝 اسم فامیل (70 امتیاز یا بیشتر):", "✍️ تصحیح کلمات:", "❓ چهار گزینه‌ای:", "📈 پایان هر روز:", "🥇 رتبه اول:", "🥈 رتبه دوم:", "🥉 رتبه سوم:")
+            entities = [MessageEntityBold(offset=guide_u16(guide_text[:guide_text.index(label)]), length=guide_u16(label)) for label in guide_labels]
+            await event.reply(guide_text, formatting_entities=entities)
             return
 
         if clean_text == "امتیاز من":
@@ -1683,24 +1701,48 @@ async def handle_new_message(bot, event):
             if first:
                 from time import time as _time
                 membership_days = max(0, int((_time() - first) // 86400))
-            await event.reply(
+            profile_text = (
                 "🏅 پروفایل امتیاز\n\n"
-                f"👤 {_format_admin_display(sender)}\n\n"
-                f"🪙 سکه:\n{profile.get('coins', 0)}\n\n"
-                f"🏆 رتبه گروه:\n{coin_rank(chat_id, user_id) or 'ندارد'}\n\n"
-                f"🎮 برد در بازی‌ها:\n{profile.get('wins', 0)}\n\n"
-                f"📅 مدت عضویت:\n{membership_days} روز"
+                f"ᯓ نام کاربری: {_format_admin_display(sender)}\n\n"
+                f"⛁ سکه: ← {_math_digits(profile.get('coins', 0))}\n\n"
+                f"🏆 رتبه گروه: ← {_math_digits(coin_rank(chat_id, user_id)) if coin_rank(chat_id, user_id) else 'ندارد'}\n\n"
+                f"🎮 برد در بازی‌ها: ← {_math_digits(profile.get('wins', 0))}\n\n"
+                f"📅 مدت عضویت: 「 {_math_digits(membership_days)} 」"
             )
+            def profile_u16(value):
+                return len(value.encode("utf-16-le")) // 2
+            labels = ("🏅 پروفایل امتیاز", "ᯓ نام کاربری:", "⛁ سکه:", "🏆 رتبه گروه:", "🎮 برد در بازی‌ها:", "📅 مدت عضویت:")
+            entities = []
+            for label in labels:
+                pos = profile_text.index(label)
+                entities.append(MessageEntityBold(offset=profile_u16(profile_text[:pos]), length=profile_u16(label)))
+            duration = f"「 {_math_digits(membership_days)} 」"
+            duration_pos = profile_text.index(duration)
+            entities.append(MessageEntityBlockquote(offset=profile_u16(profile_text[:duration_pos]), length=profile_u16(duration)))
+            await event.reply(profile_text, formatting_entities=entities)
             return
 
         if clean_text == "رتبه ها":
             ranking = coin_leaderboard(chat_id, 5)
             medals = ("🥇", "🥈", "🥉")
-            lines = ["🏆 برترین کاربران گروه\n"]
+            ranking_text = "🏆 برترین کاربران گروه"
+            entries = []
             for index, (_, profile) in enumerate(ranking, 1):
-                medal = medals[index - 1] if index <= 3 else f"{index}."
-                lines.append(f"{medal} {_format_admin_display(type('CoinUser', (), {'username': None, 'first_name': profile.get('name'), 'last_name': None})())} — {profile.get('coins', 0)} سکه")
-            await event.reply("\n\n".join(lines) if ranking else "🏆 برترین کاربران گروه\n\nندارد")
+                medal = medals[index - 1] if index <= 3 else f"{_math_digits(index)}."
+                entry = f"{medal} {_format_admin_display(type('CoinUser', (), {'username': None, 'first_name': profile.get('name'), 'last_name': None})())} — {_math_digits(profile.get('coins', 0))} سکه"
+                entries.append(entry)
+            if entries:
+                ranking_text += "\n\n" + "\n\n".join(entries)
+            else:
+                ranking_text += "\n\nندارد"
+            def ranking_u16(value):
+                return len(value.encode("utf-16-le")) // 2
+            entities = [MessageEntityBold(offset=0, length=ranking_u16("🏆 برترین کاربران گروه"))]
+            cursor = len("🏆 برترین کاربران گروه\n\n")
+            for entry in entries:
+                entities.append(MessageEntityBlockquote(offset=ranking_u16(ranking_text[:cursor]), length=ranking_u16(entry)))
+                cursor += len(entry) + 2
+            await event.reply(ranking_text, formatting_entities=entities)
             return
 
         if clean_text == "آمارم":
