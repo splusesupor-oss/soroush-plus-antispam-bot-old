@@ -77,7 +77,10 @@ async def _broadcast_to_groups(bot, text):
 
 async def handle_private_broadcast(bot, event, owner_id, text):
     """Returns True only when the private message belongs to this workflow."""
-    text = text.strip()
+    # سروش پلاس ممکن است فاصلهٔ نیم‌فاصله/نامرئی در فرمان خصوصی بفرستد.
+    text = " ".join(
+        text.replace("\u200c", " ").replace("\u00a0", " ").split()
+    )
     state = get(owner_id)
 
     if text == "اطلاع رسانی":
