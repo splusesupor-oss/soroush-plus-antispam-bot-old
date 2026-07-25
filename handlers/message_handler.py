@@ -27,6 +27,8 @@ from modules.jokes import get_joke
 from modules.biographies import get_biography
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
+from modules.name_family import start as start_name_family, submit as submit_name_family, finish as finish_name_family, is_active as name_family_active
+from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
 from modules.user_activity import record as record_activity, get as get_activity
 from modules.gif_spam_detector import (
     is_gif_message,
@@ -765,6 +767,65 @@ async def handle_new_message(bot, event):
                 return
 
 
+        # بازی اسم فامیل
+        if clean_text == "اسم فامیل":
+            if name_family_active(chat_id) or emoji_guess_active(chat_id):
+                return
+            game = start_name_family(chat_id)
+            await event.reply(
+                "🎮 اسم فامیل\n\n"
+                f"حرف: {game['letter']}\n\n"
+                "⏳ زمان: 90 ثانیه\n\n"
+                "👤 نام\n👤 فامیل\n🌍 شهر\n🍎 غذا\n🐶 حیوان\n🎬 فیلم\n🎵 خواننده"
+            )
+            async def name_family_timer():
+                await _asyncio.sleep(90)
+                ranking = finish_name_family(chat_id)
+                if not ranking:
+                    await event.reply("🏆 نتایج\n\nشرکت‌کننده‌ای پاسخ صحیح ثبت نکرد.")
+                    return
+                medals = ("🥇", "🥈", "🥉")
+                lines = ["🏆 نتایج\n"]
+                for index, player in enumerate(ranking, 1):
+                    medal = medals[index - 1] if index <= 3 else "•"
+                    lines.append(f"{medal} {player['name']} — {player['points']} امتیاز")
+                await event.reply("\n".join(lines))
+            _track_group_timer(bot, chat_id, _asyncio.create_task(name_family_timer()))
+            return
+
+        # ثبت پاسخ اسم فامیل در همان بازی فعال
+        if name_family_active(chat_id):
+            submitted = submit_name_family(chat_id, user_id, _format_group_member(sender), clean_text)
+            if submitted is not None:
+                await event.reply("✅ پاسخ ثبت شد.")
+                return
+
+        # بازی حدس ایموجی
+        if clean_text == "حدس ایموجی":
+            if name_family_active(chat_id) or emoji_guess_active(chat_id):
+                return
+            puzzle = start_emoji_guess(chat_id)
+            await event.reply(f"🎮 حدس ایموجی\n\n{puzzle['emoji']}\n\n⏳ 40 ثانیه فرصت دارید")
+            async def emoji_timer():
+                await _asyncio.sleep(40)
+                answer = finish_emoji_guess(chat_id)
+                if answer:
+                    await event.reply(f"⏰ زمان تمام شد!\n\n✅ پاسخ درست:\n{answer}")
+                    next_puzzle = start_emoji_guess(chat_id)
+                    await event.reply(f"🎮 حدس ایموجی\n\n{next_puzzle['emoji']}\n\n⏳ 40 ثانیه فرصت دارید")
+                    _track_group_timer(bot, chat_id, _asyncio.create_task(emoji_timer()))
+            _track_group_timer(bot, chat_id, _asyncio.create_task(emoji_timer()))
+            return
+
+        if emoji_guess_active(chat_id):
+            winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
+            if winner_answer:
+                await event.reply(
+                    "✅ Congratulations!\n"
+                    f"{_format_group_member(sender)} gave the correct answer."
+                )
+                return
+
         # بازی تصحیح کلمات
         if clean_text == "تصحیح کلمات":
             game = start_correction(chat_id)
@@ -1061,6 +1122,10 @@ async def handle_new_message(bot, event):
                 "۳۰ ثانیه فرصت دارید جای خالی را کامل کنید\n\n"
                 "🎯 چهار گزینه‌ای\n"
                 "به سؤال پاسخ دهید: 1، 2، 3 یا 4\n\n"
+                "🎮 اسم فامیل\n"
+                "با حرف انتخاب‌شده دسته‌ها را کامل کنید\n\n"
+                "🎮 حدس ایموجی\n"
+                "جواب پازل ایموجی را حدس بزنید\n\n"
                 "🖌 تصحیح کلمات\n"
                 "یک کلمه با املای غلط نوشته میشود و شما باید صحیح آن را بنویسید"
             )
