@@ -455,9 +455,26 @@ class SoroushAntiSpamBot:
                     self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
                     return
             elif event.out:
-                # پیام‌های خروجی عادی باید به handler برسند؛ فرمان broadcast
-                # در مسیر private پایین‌تر با owner ID cache‌شده بررسی می‌شود.
-                pass
+                if is_private_splus:
+                    private_sender = await event.get_sender()
+                    if event.out:
+                        private_me = await self.client.get_me()
+                        private_owner_id = getattr(private_me, "id", None)
+                    else:
+                        private_owner_id = getattr(private_sender, "id", None)
+                    is_broadcast_trigger = text == "اطلاع رسانی"
+                    has_broadcast_session = bool(
+                        get_broadcast_state(private_owner_id)
+                    )
+                    if (
+                        is_global_owner(private_owner_id)
+                        and (is_broadcast_trigger or has_broadcast_session)
+                    ):
+                        pass
+                    # پیام‌های خروجی عادی باید به handler برسند؛ این ربات
+                    # userbot است و فرمان مالک نیز event.out=True دارد.
+                # پاسخ‌های خود ربات فرمان نیستند و در handler واکنش تازه‌ای
+                # تولید نمی‌کنند؛ پاسخ‌های broadcast هم با message id جدا می‌شوند.
 
             # MASTER GROUP MODE GATE: every incoming group message passes here first.
             if not is_private_splus:
@@ -555,37 +572,18 @@ class SoroushAntiSpamBot:
             if is_private_splus:
                 text = (event.message.message or "").strip()
                 sender = await event.get_sender()
-                sender_id = getattr(sender, "id", None)
-                sender_username = getattr(sender, "username", None)
-                self.logger.log_info(
-                    "PRIVATE MESSAGE RECEIVED "
-                    f"sender_id={sender_id} sender_username={sender_username!r} "
-                    f"event_out={event.out} text={text!r}"
-                )
-
                 if event.out:
-                    sender_id = getattr(self, "bot_account_id", None)
-                    if sender_id is None:
-                        try:
-                            sender_id = getattr(await self.client.get_me(), "id", None)
-                        except Exception as error:
-                            self.logger.log_error(
-                                f"BROADCAST OWNER RESOLUTION FAILED: {error!r}"
-                            )
+                    private_me = await self.client.get_me()
+                    sender_id = getattr(private_me, "id", None)
+                else:
+                    sender_id = getattr(sender, "id", None)
 
-                owner_allowed = is_global_owner(sender_id)
-                command_match = text == "اطلاع رسانی"
-                self.logger.log_info(
-                    "OWNER CHECK RESULT "
-                    f"sender_id={sender_id} is_global_owner={owner_allowed} "
-                    f"broadcast_command_match={command_match}"
-                )
-                if owner_allowed:
-                    self.logger.log_info("ENTERED BROADCAST HANDLER")
-                    handled = await handle_private_broadcast(self, event, sender_id, text)
-                    if handled:
-                        if command_match:
-                            self.logger.log_info("STATE CREATED")
+                if is_global_owner(sender_id):
+                    self.logger.log_info(
+                        "BROADCAST COMMAND RECEIVED "
+                        f"owner_id={sender_id} text={text!r} event_out={event.out}"
+                    )
+                    if await handle_private_broadcast(self, event, sender_id, text):
                         return
 
                 if "صفر" in text:
