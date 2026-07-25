@@ -35,7 +35,7 @@ def submit(chat_id, user_id, name, text):
     if not valid:
         return None
     points = len(valid) * 10
-    state["answers"][str(user_id)] = {"name": name, "points": points}
+    state["answers"][str(user_id)] = {"user_id": str(user_id), "name": name, "points": points}
     add(chat_id, user_id, name, points)
     return points
 

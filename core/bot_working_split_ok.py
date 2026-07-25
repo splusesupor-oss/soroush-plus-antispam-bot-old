@@ -24,6 +24,7 @@ from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
+from modules.coins import settle_previous_days
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.broadcast_state import get as get_broadcast_state
@@ -202,6 +203,20 @@ class SoroushAntiSpamBot:
             self.bot_account_id = None
             self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
         asyncio.create_task(process_delete(self))
+
+        async def settle_daily_coins():
+            while True:
+                try:
+                    awards = settle_previous_days()
+                    for chat_id, user_id, amount in awards:
+                        self.logger.log_info(
+                            f"DAILY COIN AWARD chat_id={chat_id} user_id={user_id} amount={amount}"
+                        )
+                except Exception as error:
+                    self.logger.log_error(f"خطا در تسویه سکه روزانه: {error}")
+                await asyncio.sleep(3600)
+
+        asyncio.create_task(settle_daily_coins())
 
         async def is_currently_restricted(chat_id, user):
             """وضعیت فعلی عضو را از SPlusthon می‌خواند؛ خطا یعنی حفظ بن فعلی."""

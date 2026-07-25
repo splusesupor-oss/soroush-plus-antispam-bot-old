@@ -30,6 +30,7 @@ from modules.word_correction import start as start_correction, answer as answer_
 from modules.name_family import start as start_name_family, submit as submit_name_family, finish as finish_name_family, is_active as name_family_active
 from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
 from modules.user_activity import record as record_activity, get as get_activity
+from modules.coins import award as award_coins, record_message as record_coin_message
 from modules.gif_spam_detector import (
     is_gif_message,
     reset_gif_history,
@@ -114,6 +115,15 @@ def _format_admin_display(user):
         ) if part
     ).strip()
     return display_name or "Unknown User"
+
+
+async def _reward_coin_reply(event, chat_id, user_id, user, amount):
+    balance = award_coins(chat_id, user_id, _format_admin_display(user), amount)
+    await event.reply(
+        "🎉 پاسخ صحیح بود.\n\n"
+        f"🪙 شما +{_math_digits(amount)} سکه دریافت کردید.\n\n"
+        f"💰 موجودی فعلی:\n{_math_digits(balance)} سکه"
+    )
 
 
 def _format_banned_user(user, user_id):
@@ -803,7 +813,11 @@ async def handle_new_message(bot, event):
                 lines = ["🏆 نتایج\n"]
                 for index, player in enumerate(ranking, 1):
                     medal = medals[index - 1] if index <= 3 else "•"
-                    lines.append(f"{medal} {player['name']} — {player['points']} امتیاز")
+                    reward = ""
+                    if player["points"] >= 70:
+                        award_coins(chat_id, player.get("user_id", "unknown"), player["name"], 6)
+                        reward = " — 🪙 +6 سکه"
+                    lines.append(f"{medal} {player['name']} — {player['points']} امتیاز{reward}")
                 await event.reply("\n".join(lines))
             _track_group_timer(bot, chat_id, _asyncio.create_task(name_family_timer()))
             return
@@ -832,7 +846,7 @@ async def handle_new_message(bot, event):
         if emoji_guess_active(chat_id):
             winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
             if winner_answer:
-                await event.reply("✅ تبریک می‌گویم! پاسخ صحیح.")
+                await _reward_coin_reply(event, chat_id, user_id, sender, 4)
                 return
 
         # بازی تصحیح کلمات
@@ -851,7 +865,7 @@ async def handle_new_message(bot, event):
         result_correction = answer_correction(chat_id, clean_text)
         if result_correction is not None:
             if result_correction:
-                await event.reply("✅ آفرین، پاسخ درست بود.")
+                await _reward_coin_reply(event, chat_id, user_id, sender, 1)
             return
 
         # بازی چهار گزینه‌ای
@@ -967,7 +981,7 @@ async def handle_new_message(bot, event):
 
         try:
             if check_answer(chat_id, user_id, clean_text):
-                await event.reply("✅ آفرین، پاسخ درست بود.")
+                await _reward_coin_reply(event, chat_id, user_id, sender, 3)
                 return
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی جواب چیستان: {e}")
@@ -977,7 +991,7 @@ async def handle_new_message(bot, event):
             if result is not None:
                 is_correct, correct_option = result
                 if is_correct:
-                    await event.reply("✅ آفرین! پاسخ درست بود 🎉")
+                    await _reward_coin_reply(event, chat_id, user_id, sender, 3)
                 else:
                     await event.reply(
                         f"❌ غلط بود. گزینه {correct_option} درست بود."
@@ -996,6 +1010,11 @@ async def handle_new_message(bot, event):
                     getattr(chat_stats, "id", 0),
                     getattr(sender_stats, "id", 0),
                     getattr(sender_stats, "username", "") or ""
+                )
+                record_coin_message(
+                    getattr(chat_stats, "id", 0),
+                    getattr(sender_stats, "id", 0),
+                    _format_admin_display(sender_stats),
                 )
 
         except Exception as e:
