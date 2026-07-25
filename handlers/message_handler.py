@@ -1251,8 +1251,9 @@ async def handle_new_message(bot, event):
             return
 
         # راهنمای ربات
-        if clean_text.strip() in ["راهنما", "/help", "!help", "help"]:
-            help_text = (
+        help_commands = {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی"}
+        if clean_text.strip() in help_commands:
+            full_help_text = (
                 "📌 راهنمای روباه\n\n"
 
                 "👤 کاربران:\n\n"
@@ -1340,6 +1341,20 @@ async def handle_new_message(bot, event):
                 "با سازنده ربات تماس بگیرید:\n"
                 "@osine1"
             )
+
+            admin_marker = "👑 دستورات ادمین‌ها:\n\n"
+            if clean_text.strip() == "لیست کاربران":
+                help_text = full_help_text[:full_help_text.index(admin_marker)]
+            elif clean_text.strip() == "لیست ادمینی":
+                help_text = full_help_text[full_help_text.index(admin_marker):]
+            else:
+                help_text = (
+                    "🦊 راهنمای روباه\n\n"
+                    "برای دریافت دستورات عمومی و کاربران بنویسید:\n\n"
+                    "لیست کاربران\n\n"
+                    "برای دریافت دستورات مالک و ادمین‌ها بنویسید:\n\n"
+                    "لیست ادمینی"
+                )
 
             entities = []
 
