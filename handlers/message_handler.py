@@ -1404,11 +1404,19 @@ async def handle_new_message(bot, event):
 
             # بخش دوم فقط از ادمین‌های ثبت‌شده برای همین گروه خوانده می‌شود.
             group_entries = load_admins().get(str(chat_id), [])
-            group_admins = [
-                _format_group_member(type("RegisteredAdmin", (), entry)())
-                if isinstance(entry, dict) else f"@{entry}"
-                for entry in group_entries
-            ]
+            group_admins = []
+            for entry in group_entries:
+                if not isinstance(entry, dict):
+                    group_admins.append(f"@{entry}")
+                    continue
+                if entry.get("username"):
+                    group_admins.append(f"@{entry['username']}")
+                    continue
+                try:
+                    admin_entity = await bot.client.get_entity(entry.get("user_id"))
+                    group_admins.append(_format_group_member(admin_entity))
+                except Exception:
+                    group_admins.append(f"ID: {entry.get('user_id')}")
             registered_admins = bot_admins
 
             registered_text = "\n".join(
