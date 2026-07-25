@@ -1393,13 +1393,26 @@ async def handle_new_message(bot, event):
                 await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
                 return
 
+            async def admin_display(user_id=None, username=None):
+                if username:
+                    return f"@{username.lstrip('@')}"
+                if user_id is not None:
+                    try:
+                        entity = await bot.client.get_entity(user_id)
+                        value = _format_group_member(entity)
+                        if not value.startswith("ID:"):
+                            return value
+                    except Exception:
+                        pass
+                return "Unknown User"
+
             # بخش اول فقط از تنظیمات ادمین‌های خود ربات خوانده می‌شود.
             bot_admins = [
-                f"@{username}"
+                await admin_display(username=username)
                 for username in bot.config_manager.get("admin_usernames", [])
             ]
             for admin_id in bot.config_manager.get("admin_user_ids", []):
-                formatted = f"ID: {admin_id}"
+                formatted = await admin_display(user_id=admin_id)
                 if formatted not in bot_admins:
                     bot_admins.append(formatted)
 
@@ -1407,17 +1420,13 @@ async def handle_new_message(bot, event):
             group_entries = load_admins().get(normalize_group_id(chat_id), [])
             group_admins = []
             for entry in group_entries:
-                if not isinstance(entry, dict):
-                    group_admins.append(f"@{entry}")
-                    continue
-                if entry.get("username"):
-                    group_admins.append(f"@{entry['username']}")
-                    continue
-                try:
-                    admin_entity = await bot.client.get_entity(entry.get("user_id"))
-                    group_admins.append(_format_group_member(admin_entity))
-                except Exception:
-                    group_admins.append(f"ID: {entry.get('user_id')}")
+                if isinstance(entry, dict):
+                    formatted = await admin_display(
+                        user_id=entry.get("user_id"), username=entry.get("username")
+                    )
+                else:
+                    formatted = await admin_display(username=entry)
+                group_admins.append(formatted)
             registered_admins = bot_admins
 
             registered_text = "\n".join(
