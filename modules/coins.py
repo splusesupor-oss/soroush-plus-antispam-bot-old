@@ -1,11 +1,15 @@
 """Persistent per-group coins, game wins, and daily message ranking."""
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "coins.json"
-TZ = ZoneInfo("Asia/Tehran")
+try:
+    TZ = ZoneInfo("Asia/Tehran")
+except ZoneInfoNotFoundError:
+    # Termux/Python installations without tzdata must not block bot startup.
+    TZ = timezone.utc
 
 
 def _today():
