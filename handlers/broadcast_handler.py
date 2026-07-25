@@ -77,11 +77,11 @@ async def _broadcast_to_groups(bot, text):
 
 async def handle_private_broadcast(bot, event, owner_id, text):
     """Returns True only when the private message belongs to this workflow."""
+    # متن خام فقط برای preview و ارسال نگه‌داری می‌شود؛ هیچ فاصله یا line breakی حذف نمی‌شود.
+    raw_text = text or ""
     # فقط برای تشخیص فرمان، فاصلهٔ نیم‌فاصله/نامرئی را عادی می‌کنیم.
-    # متن اصلی باید با تمام line breakهای کاربر برای اطلاع‌رسانی حفظ شود.
-    text = text.strip()
     command_text = " ".join(
-        text.replace("\u200c", " ").replace("\u00a0", " ").split()
+        raw_text.replace("\u200c", " ").replace("\u00a0", " ").split()
     )
     state = get(owner_id)
 
@@ -131,9 +131,9 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         if command_text in {"تایید", "✅ تایید", "لغو", "❌ لغو"}:
             await _broadcast_reply(bot, event, "📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
             return True
-        set_message(owner_id, text)
+        set_message(owner_id, raw_text)
         _log_phase(bot, "PREVIEW CREATED", owner_id)
-        await _broadcast_reply(bot, event, _preview(text))
+        await _broadcast_reply(bot, event, _preview(raw_text))
         return True
 
     # The sending state is intentionally not allowed to recreate a preview.
