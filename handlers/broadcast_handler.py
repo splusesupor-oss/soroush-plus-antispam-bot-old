@@ -77,13 +77,15 @@ async def _broadcast_to_groups(bot, text):
 
 async def handle_private_broadcast(bot, event, owner_id, text):
     """Returns True only when the private message belongs to this workflow."""
-    # سروش پلاس ممکن است فاصلهٔ نیم‌فاصله/نامرئی در فرمان خصوصی بفرستد.
-    text = " ".join(
+    # فقط برای تشخیص فرمان، فاصلهٔ نیم‌فاصله/نامرئی را عادی می‌کنیم.
+    # متن اصلی باید با تمام line breakهای کاربر برای اطلاع‌رسانی حفظ شود.
+    text = text.strip()
+    command_text = " ".join(
         text.replace("\u200c", " ").replace("\u00a0", " ").split()
     )
     state = get(owner_id)
 
-    if text == "اطلاع رسانی":
+    if command_text == "اطلاع رسانی":
         begin(owner_id)
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(bot, "WAITING_FOR_TEXT", owner_id)
@@ -94,13 +96,13 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         return False
 
     if state["phase"] == "awaiting_confirmation":
-        if text in {"لغو", "❌ لغو"}:
+        if command_text in {"لغو", "❌ لغو"}:
             clear(owner_id)
             _log_phase(bot, "STATE CLEARED", owner_id, "reason=cancel")
             await _broadcast_reply(bot, event, "❌ اطلاع‌رسانی لغو شد.")
             return True
 
-        if text in {"تایید", "✅ تایید"}:
+        if command_text in {"تایید", "✅ تایید"}:
             _log_phase(bot, "CONFIRMED", owner_id)
             announcement_text = consume_confirmation(owner_id)
             if announcement_text is None:
@@ -126,7 +128,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         return True
 
     if state["phase"] == "awaiting_message":
-        if text in {"تایید", "✅ تایید", "لغو", "❌ لغو"}:
+        if command_text in {"تایید", "✅ تایید", "لغو", "❌ لغو"}:
             await _broadcast_reply(bot, event, "📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
             return True
         set_message(owner_id, text)
