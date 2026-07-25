@@ -36,42 +36,22 @@ def _preview(text):
 
 
 async def _broadcast_to_groups(bot, text):
+    """هر گروه فعال ذخیره‌شده را مستقل ارسال می‌کند."""
     successful = 0
     failed = 0
-    seen_group_ids = set()
 
-    try:
-        async for dialog in bot.client.iter_dialogs():
-            if not getattr(dialog, "is_group", False):
-                continue
-            group_id = getattr(dialog, "id", None)
-            if group_id in seen_group_ids or not is_active(group_id):
-                continue
-            seen_group_ids.add(group_id)
-            try:
-                await bot.client.send_message(getattr(dialog, "entity", group_id), text)
-                successful += 1
-                _log_phase(bot, f"GROUP SENT: {group_id}", "")
-            except Exception as error:
-                failed += 1
-                bot.logger.log_error(f"BROADCAST GROUP FAILED {group_id}: {error}")
-            await asyncio.sleep(0.4)
-        return successful, failed
-    except Exception as error:
-        bot.logger.log_error(f"خطا در دریافت گروه‌های اطلاع‌رسانی: {error}")
-
-    # Fallback for SPlusthon clients that cannot enumerate dialogs.
     for group_id in load_groups():
-        if group_id in seen_group_ids or not is_active(group_id):
+        if not is_active(group_id):
             continue
         try:
             await bot.client.send_message(int(group_id), text)
             successful += 1
-            _log_phase(bot, f"GROUP SENT: {group_id}", "fallback")
+            _log_phase(bot, f"GROUP SENT: {group_id}", "")
         except Exception as error:
             failed += 1
             bot.logger.log_error(f"BROADCAST GROUP FAILED {group_id}: {error}")
         await asyncio.sleep(0.4)
+
     return successful, failed
 
 
