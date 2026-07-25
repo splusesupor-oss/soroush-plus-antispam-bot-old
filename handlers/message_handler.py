@@ -832,7 +832,7 @@ async def handle_new_message(bot, event):
         if emoji_guess_active(chat_id):
             winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
             if winner_answer:
-                await event.reply("✅ Congratulations! Correct answer.")
+                await event.reply("✅ تبریک می‌گویم! پاسخ صحیح.")
                 return
 
         # بازی تصحیح کلمات
