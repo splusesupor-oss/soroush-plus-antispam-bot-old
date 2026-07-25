@@ -53,6 +53,7 @@ from modules.banned_storage import add_banned, load_banned, save_banned
 from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from modules.group_id import normalize_group_id
+from modules.pinned_messages import save as save_pinned_message, get as get_pinned_message
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
@@ -1593,6 +1594,37 @@ async def handle_new_message(bot, event):
                 ),
             ]
             await event.reply(admin_text, formatting_entities=entities)
+            return
+
+        if clean_text == "سنجاق":
+            if not _has_group_management_permission(bot, chat_id, user_id, getattr(sender, "username", None)):
+                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                return
+            if not event.reply_to:
+                await event.reply("❌ باید روی پیام موردنظر ریپلای کنید")
+                return
+            message_id = event.reply_to.reply_to_msg_id
+            try:
+                await bot.client.pin_message(chat_id, message_id, notify=False)
+                save_pinned_message(chat_id, message_id)
+                await event.reply("📌 پیام با موفقیت سنجاق شد.")
+            except Exception as error:
+                bot.logger.log_error(f"خطا در سنجاق پیام: {error}")
+                await event.reply("❌ سنجاق پیام انجام نشد")
+            return
+
+        if clean_text == "پیام سنجاق":
+            message_id = get_pinned_message(chat_id)
+            if not message_id:
+                await event.reply("📌 پیامی سنجاق نشده است.")
+                return
+            try:
+                pinned = await bot.client.get_messages(chat_id, ids=message_id)
+                content = getattr(pinned, "message", None) if pinned else None
+                await event.reply(content or "📌 پیام سنجاق‌شده قابل نمایش نیست.")
+            except Exception as error:
+                bot.logger.log_error(f"خطا در نمایش پیام سنجاق: {error}")
+                await event.reply("📌 پیام سنجاق‌شده قابل نمایش نیست.")
             return
 
         if clean_text in {"قفل", "باز"}:
