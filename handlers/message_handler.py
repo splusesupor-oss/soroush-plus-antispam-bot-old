@@ -53,6 +53,7 @@ from modules.admin_storage import add_admin, remove_admin, is_admin, load_admins
 from modules.banned_storage import add_banned, load_banned, save_banned
 from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
+from modules.owner_greetings import registered_owner_greeting_response
 from modules.group_id import normalize_group_id
 from modules.pinned_messages import save as save_pinned_message, get as get_pinned_message
 from modules.performance import MessagePerformance
@@ -541,6 +542,18 @@ async def handle_new_message(bot, event):
                 and clean_text != "/فیلترها"
             )
         )
+        # پاسخ ویژه فقط برای مالکِ ثبت‌شدهٔ همین گروه، پیش از پاسخ‌های عمومی.
+        registered_owner_id = get_group_owner(chat_id) if not event.is_private else None
+        owner_reply = registered_owner_greeting_response(
+            clean_text,
+            user_id,
+            registered_owner_id,
+            is_private=event.is_private,
+        )
+        if owner_reply:
+            await event.reply(owner_reply)
+            return
+
         # پاسخ‌های ثابت بدون ورود به moderation و I/O پاسخ می‌گیرند.
         profiler.mark("COMMAND_MATCH")
         simple_reply = SIMPLE_REPLIES.get(clean_text)
@@ -749,20 +762,6 @@ async def handle_new_message(bot, event):
                 await event.reply(
                     "هنوز اصلی ثبت نکردی. برای ثبت بنویس: ثبت اصل"
                 )
-            return
-
-        owner_chat_id = chat_id
-        if not event.is_private and clean_text == "سلام":
-            owner_chat = await event.get_chat()
-            owner_chat_id = getattr(owner_chat, "id", chat_id)
-        registered_owner_id = get_group_owner(owner_chat_id)
-        if (
-            not event.is_private
-            and registered_owner_id is not None
-            and clean_text == "سلام"
-            and str(user_id) == str(registered_owner_id)
-        ):
-            await event.reply("سلام مالک جون 👑")
             return
 
         if clean_text in INSULTS:
