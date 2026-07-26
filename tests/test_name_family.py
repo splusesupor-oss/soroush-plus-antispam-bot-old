@@ -37,20 +37,13 @@ class NameFamilyValidationTests(unittest.TestCase):
     def test_database_coverage_and_full_score_for_every_playable_letter(self):
         # Every alphabet letter is classified; only fully covered letters are selectable.
         for letter in game.LETTERS:
-            covered = all(
-                letter in game.CATEGORY_LETTERS[category]
-                for category in game.CATEGORIES
-            )
-            self.assertEqual(letter in game.PLAYABLE_LETTERS, covered)
+            covered = all(game.LETTER_COVERAGE[letter].values())
+            has_unique_round = game.ROUND_EXAMPLES.get(letter) is not None
+            self.assertEqual(letter in game.PLAYABLE_LETTERS, covered and has_unique_round)
 
         for index, letter in enumerate(game.PLAYABLE_LETTERS):
-            answers = []
-            for category in game.CATEGORIES:
-                answer = next(
-                    word for word in game.VALID[category]
-                    if game._normalize(word).startswith(letter)
-                )
-                answers.append(answer)
+            answers = game.ROUND_EXAMPLES[letter]
+            self.assertEqual(len({game._normalize(answer) for answer in answers}), 7)
             chat_id = 1000 + index
             game._ACTIVE[chat_id] = {
                 "round_id": index + 1,
@@ -88,8 +81,16 @@ class NameFamilyValidationTests(unittest.TestCase):
             ),
             expected_valid,
         )
-        self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(answers)), 60)
-        self.assertEqual(self.awards, [(100, 7, 60)])
+        # "جهان" appears twice; the second occurrence cannot earn a second score.
+        self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(answers)), 50)
+        self.assertEqual(self.awards, [(100, 7, 50)])
+
+    def test_duplicate_answer_is_not_scored_twice(self):
+        game._ACTIVE[100] = {"round_id": 1, "letter": "ج", "answers": {}}
+        answers = "\n".join((
+            "جهان", "جوادی", "جیرفت", "جک فروت", "جعبه", "جغد", "جهان",
+        ))
+        self.assertEqual(game.submit(100, 7, "کاربر", answers), 60)
 
     def test_each_category_contributes_exactly_ten_points(self):
         answers = self.valid_answers().splitlines()
@@ -116,9 +117,9 @@ class NameFamilyValidationTests(unittest.TestCase):
             "ظاتمه", "ظفري", "نمی‌دونم", "نمی دانم", "ظرف", "نمیدونم", "نمی‌دونم",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 20)
-        self.assertIn("category=نام answer=ظاتمه valid=False score=0", logger.lines[0])
-        self.assertIn("category=فامیل answer=ظفري valid=True score=10", logger.lines[1])
-        self.assertIn("category=وسیله answer=ظرف valid=True score=10", logger.lines[4])
+        self.assertIn("category=نام answer=ظاتمه letter=ظ valid=False score=0", logger.lines[0])
+        self.assertIn("category=فامیل answer=ظفري letter=ظ valid=True score=10", logger.lines[1])
+        self.assertIn("category=وسیله answer=ظرف letter=ظ valid=True score=10", logger.lines[4])
         self.assertEqual(len(logger.lines), 7)
 
     def test_persian_normalization_and_empty_variants(self):
@@ -167,10 +168,10 @@ class NameFamilyValidationTests(unittest.TestCase):
             "وحید", "وحیدی", "ورامین", "نمی‌دونم", "وینچستر", "نمی‌دونم", "وحید",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 30)
-        self.assertIn("category=نام answer=وحید valid=True score=10", logger.lines[0])
-        self.assertIn("category=فامیل answer=وحیدی valid=True score=10", logger.lines[1])
-        self.assertIn("category=شهر answer=ورامین valid=True score=10", logger.lines[2])
-        self.assertIn("category=میوه answer=نمی‌دونم valid=False score=0", logger.lines[3])
+        self.assertIn("category=نام answer=وحید letter=و valid=True score=10", logger.lines[0])
+        self.assertIn("category=فامیل answer=وحیدی letter=و valid=True score=10", logger.lines[1])
+        self.assertIn("category=شهر answer=ورامین letter=و valid=True score=10", logger.lines[2])
+        self.assertIn("category=میوه answer=نمی‌دونم letter=و valid=False score=0", logger.lines[3])
         self.assertEqual(len(logger.lines), 7)
 
     def test_fabricated_answers_receive_zero_points(self):

@@ -58,14 +58,58 @@ def _category_letters(category):
 
 
 CATEGORY_LETTERS = {category: _category_letters(category) for category in CATEGORIES}
-# A selected letter must have at least one real answer in every displayed category.
-PLAYABLE_LETTERS = tuple(
-    letter for letter in LETTERS
-    if all(letter in CATEGORY_LETTERS[category] for category in CATEGORIES)
-)
+
+
+def _distinct_round_answers(letter):
+    """Find one unique valid answer per category, or declare the letter unplayable."""
+    candidates = {
+        category: tuple(
+            sorted(
+                answer for answer in VALID[category]
+                if _normalize(answer).startswith(letter)
+            )
+        )
+        for category in CATEGORIES
+    }
+
+    def choose(index, used, selected):
+        if index == len(CATEGORIES):
+            return tuple(selected)
+        category = CATEGORIES[index]
+        for answer in candidates[category]:
+            normalized = _normalize(answer)
+            if normalized not in used:
+                result = choose(index + 1, used | {normalized}, selected + [answer])
+                if result is not None:
+                    return result
+        return None
+
+    return choose(0, set(), [])
+
+
+def validate_database():
+    """Classify every alphabet letter and reject a database with no complete rounds."""
+    coverage = {
+        letter: {
+            category: letter in CATEGORY_LETTERS[category]
+            for category in CATEGORIES
+        }
+        for letter in LETTERS
+    }
+    examples = {
+        letter: _distinct_round_answers(letter)
+        for letter in LETTERS
+        if all(coverage[letter].values())
+    }
+    playable = tuple(letter for letter in LETTERS if examples.get(letter) is not None)
+    if not playable:
+        raise RuntimeError("Name & Family database has no fully covered playable letters")
+    return coverage, examples, playable
+
+
+# The runtime coverage check runs at import/startup, before a round can be built.
+LETTER_COVERAGE, ROUND_EXAMPLES, PLAYABLE_LETTERS = validate_database()
 UNPLAYABLE_LETTERS = tuple(letter for letter in LETTERS if letter not in PLAYABLE_LETTERS)
-if not PLAYABLE_LETTERS:
-    raise RuntimeError("Name & Family database has no playable letters")
 
 _INVALID_ANSWERS = frozenset({
     "نمیدونم", "نمی دونم", "نمی دانم", "نمیدانم", "ندارم", "هیچی", "نمیگم",
@@ -150,15 +194,21 @@ def submit(chat_id, user_id, name, text, logger=None):
     if parts is None:
         return None
     valid_parts = 0
+    seen_answers = set()
+    letter = state["letter"]
     for category, answer in zip(CATEGORIES, parts):
-        valid = _validate_answer(category, state["letter"], answer)
+        normalized = _normalize(answer)
+        duplicate = normalized in seen_answers
+        seen_answers.add(normalized)
+        valid = not duplicate and _validate_answer(category, letter, answer)
         score = 10 if valid else 0
         valid_parts += int(valid)
         if logger is not None:
             logger.log_info(
                 "NAME FAMILY VALIDATION "
                 f"chat_id={chat_id} user_id={user_id} "
-                f"category={category} answer={answer} valid={valid} score={score}"
+                f"category={category} answer={answer} letter={letter} "
+                f"valid={valid} score={score}"
             )
     points = valid_parts * 10
     state["answers"][user_key] = {
