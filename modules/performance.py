@@ -25,6 +25,10 @@ class MessagePerformance:
             self.values[stage] += (now - self._last_at) * 1000
         self._last_at = now
 
+    def set(self, stage, value_ms):
+        if stage in self.values:
+            self.values[stage] = max(0.0, float(value_ms))
+
     def finish(self, logger, chat_id, threshold_ms=50):
         now = time.perf_counter()
         total_ms = (now - self.started_at) * 1000

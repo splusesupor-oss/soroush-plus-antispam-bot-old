@@ -29,6 +29,7 @@ from modules.group_stats import flush as flush_group_stats
 from modules.user_activity import flush as flush_user_activity
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from modules.moderation_queue import ModerationQueue
+from modules.outgoing_profiler import instrument_client, instrument_event
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.broadcast_state import get as get_broadcast_state
@@ -152,6 +153,7 @@ class SoroushAntiSpamBot:
             self.client = SoroushClient(session)
 
         self.spammer_messages = defaultdict(lambda: deque(maxlen=5000))
+        instrument_client(self.client, self.logger)
 
         self.admin_actions = AdminActions(
             self.client, self.logger, self.config_manager)
@@ -432,6 +434,7 @@ class SoroushAntiSpamBot:
 
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
+            instrument_event(event, self.logger)
             raw_text = event.message.message or ""
             text = raw_text.strip()
             routing_chat = await event.get_chat()

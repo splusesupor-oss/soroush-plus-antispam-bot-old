@@ -56,6 +56,11 @@ from modules.group_storage import set_group_owner, get_group_owner, remove_group
 from modules.group_id import normalize_group_id
 from modules.pinned_messages import save as save_pinned_message, get as get_pinned_message
 from modules.performance import MessagePerformance
+from modules.outgoing_profiler import (
+    begin_response_measurement,
+    end_response_measurement,
+    response_rpc_ms,
+)
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
@@ -491,6 +496,7 @@ def _can_delete_messages(bot, chat_id, user_id, username):
 async def handle_new_message(bot, event):
     """هندلر اصلی برای پیام‌های جدید"""
     profiler = MessagePerformance()
+    response_token = begin_response_measurement()
     chat_id = getattr(event, "chat_id", None)
     try:
         # اگر پیام متنی نیست رد کن (مثلا سرویس)
@@ -2797,6 +2803,7 @@ async def handle_new_message(bot, event):
         import traceback
         traceback.print_exc()
     finally:
-        profiler.mark("SEND_RESPONSE")
+        profiler.set("SEND_RESPONSE", response_rpc_ms())
         profiler.finish(bot.logger, chat_id)
+        end_response_measurement(response_token)
 
