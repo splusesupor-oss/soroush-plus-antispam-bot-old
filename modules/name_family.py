@@ -38,12 +38,22 @@ def submit(chat_id, user_id, name, text):
     if not state:
         return None
     parts = [part.strip() for part in text.replace("|", "\n").replace("،", "\n").splitlines() if part.strip()]
+    # پاسخ‌های رایج «نام: داود» و فرم دوخطیِ عنوان/پاسخ را هم پشتیبانی می‌کنیم.
+    if len(parts) == len(CATEGORIES) * 2 and all(
+        _normalize(parts[index * 2]) == _normalize(category)
+        for index, category in enumerate(CATEGORIES)
+    ):
+        parts = parts[1::2]
     if len(parts) != len(CATEGORIES):
         return None
-    letter = state["letter"]
+
+    letter = _normalize(state["letter"])
     valid = 0
     for category, answer in zip(CATEGORIES, parts):
         normalized = _normalize(answer)
+        category_label = _normalize(category)
+        if normalized.startswith(category_label):
+            normalized = normalized[len(category_label):].lstrip(":：- ").strip()
         valid_answers = {_normalize(item) for item in VALID[category]}
         if normalized.startswith(letter) and normalized in valid_answers:
             valid += 1
