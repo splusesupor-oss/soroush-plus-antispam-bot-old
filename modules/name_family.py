@@ -47,8 +47,7 @@ def submit(chat_id, user_id, name, text):
         valid_answers = {_normalize(item) for item in VALID[category]}
         if normalized.startswith(letter) and normalized in valid_answers:
             valid += 1
-    if not valid:
-        return None
+    # ساختار کامل پاسخ، شرکت در بازی محسوب می‌شود؛ فقط بخش‌های معتبر امتیاز می‌گیرند.
     points = valid * 10
     state["answers"][str(user_id)] = {"user_id": str(user_id), "name": name, "points": points}
     add(chat_id, user_id, name, points)
