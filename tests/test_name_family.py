@@ -34,6 +34,18 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.assertEqual(game.submit(100, 7, "کاربر", self.valid_answers()), 70)
         self.assertEqual(self.awards, [(100, 7, 70)])
 
+    def test_jim_example_scores_each_category_independently(self):
+        answers = ("جهان", "جوادی", "جیرفت", "جمبو", "جعبه", "جغد", "جهان")
+        game._ACTIVE[100] = {
+            "round_id": 1,
+            "letter": "ج",
+            "answers": {},
+        }
+        for category, answer in zip(game.CATEGORIES, answers):
+            self.assertTrue(game._validate_answer(category, "ج", answer))
+        self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(answers)), 70)
+        self.assertEqual(self.awards, [(100, 7, 70)])
+
     def test_fabricated_answers_receive_zero_points(self):
         self.force_round(1)
         fabricated = "\n".join((
