@@ -61,8 +61,14 @@ def submit(chat_id, user_id, name, text):
         category_label = _normalize(category)
         if normalized.startswith(category_label):
             normalized = normalized[len(category_label):].lstrip(":：- ").strip()
-        # همان الگوریتم نسخه سالم: هر پاسخ معتبر با حرف درست 10 امتیاز می‌گیرد.
-        if normalized.startswith(letter) and normalized not in invalid_answers:
+        valid_answers = {_normalize(item) for item in VALID[category]}
+        # فقط پاسخ واقعی همان دسته با حرف انتخاب‌شده 10 امتیاز می‌گیرد.
+        if (
+            len(normalized) > 1
+            and normalized.startswith(letter)
+            and normalized not in invalid_answers
+            and normalized in valid_answers
+        ):
             valid += 1
     points = valid * 10
     state["answers"][str(user_id)] = {"user_id": str(user_id), "name": name, "points": points}
