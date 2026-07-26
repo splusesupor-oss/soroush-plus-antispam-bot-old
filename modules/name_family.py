@@ -48,16 +48,16 @@ def submit(chat_id, user_id, name, text):
         return None
 
     letter = _normalize(state["letter"])
+    invalid_answers = {"نمیدونم", "نمی دونم", "نمیدانم", "ندارم", "هیچی", "نمیگم"}
     valid = 0
     for category, answer in zip(CATEGORIES, parts):
         normalized = _normalize(answer)
         category_label = _normalize(category)
         if normalized.startswith(category_label):
             normalized = normalized[len(category_label):].lstrip(":：- ").strip()
-        valid_answers = {_normalize(item) for item in VALID[category]}
-        if normalized.startswith(letter) and normalized in valid_answers:
+        # همان الگوریتم نسخه سالم: هر پاسخ معتبر با حرف درست 10 امتیاز می‌گیرد.
+        if normalized.startswith(letter) and normalized not in invalid_answers:
             valid += 1
-    # ساختار کامل پاسخ، شرکت در بازی محسوب می‌شود؛ فقط بخش‌های معتبر امتیاز می‌گیرند.
     points = valid * 10
     state["answers"][str(user_id)] = {"user_id": str(user_id), "name": name, "points": points}
     add(chat_id, user_id, name, points)
