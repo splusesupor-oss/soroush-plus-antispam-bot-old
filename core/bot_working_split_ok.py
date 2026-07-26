@@ -24,7 +24,7 @@ from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
-from modules.coins import settle_previous_days
+from modules.coins import settle_previous_days, flush as flush_coin_cache
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
@@ -234,6 +234,7 @@ class SoroushAntiSpamBot:
                         self.logger.log_error(
                             f"خطا در ارسال یادآوری {reminder.get('id')}: {error}"
                         )
+                flush_coin_cache()
                 await asyncio.sleep(15)
 
         asyncio.create_task(reminder_loop())

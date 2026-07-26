@@ -8,23 +8,49 @@ FILE = Path(__file__).resolve().parent.parent / "config" / "coins.json"
 try:
     TZ = ZoneInfo("Asia/Tehran")
 except ZoneInfoNotFoundError:
-    # Termux/Python installations without tzdata must not block bot startup.
     TZ = timezone.utc
+
+_CACHE = None
+_CACHE_MTIME = None
+_DIRTY = False
 
 
 def _today():
     return datetime.now(TZ).date().isoformat()
 
 
-def _load():
+def _mtime():
     try:
-        return json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
+        return FILE.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _load():
+    global _CACHE, _CACHE_MTIME
+    mtime = _mtime()
+    if _CACHE is not None and (_DIRTY or mtime == _CACHE_MTIME):
+        return _CACHE
+    try:
+        _CACHE = json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
     except Exception:
-        return {}
+        _CACHE = {}
+    _CACHE_MTIME = mtime
+    return _CACHE
 
 
 def _save(data):
+    global _CACHE, _CACHE_MTIME, _DIRTY
     FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _CACHE = data
+    _CACHE_MTIME = _mtime()
+    _DIRTY = False
+
+
+def flush():
+    global _DIRTY
+    if _DIRTY:
+        _save(_CACHE or {})
 
 
 def _user(data, chat_id, user_id, name):
@@ -52,11 +78,7 @@ def get_profile(chat_id, user_id):
 
 def leaderboard(chat_id, limit=10):
     users = _load().get("users", {}).get(str(chat_id), {})
-    return sorted(
-        ((user_id, dict(value)) for user_id, value in users.items()),
-        key=lambda item: item[1].get("coins", 0),
-        reverse=True,
-    )[:limit]
+    return sorted(((user_id, dict(value)) for user_id, value in users.items()), key=lambda item: item[1].get("coins", 0), reverse=True)[:limit]
 
 
 def rank(chat_id, user_id):
@@ -67,6 +89,7 @@ def rank(chat_id, user_id):
 
 
 def record_message(chat_id, user_id, name):
+    global _DIRTY
     data = _load()
     today = _today()
     day = data.setdefault("daily_messages", {}).setdefault(today, {}).setdefault(str(chat_id), {})
@@ -74,11 +97,10 @@ def record_message(chat_id, user_id, name):
     if name:
         entry["name"] = name
     entry["messages"] += 1
-    _save(data)
+    _DIRTY = True
 
 
 def settle_previous_days():
-    """Award daily top three once; returns awarded records for optional logging."""
     data = _load()
     today = _today()
     paid = data.setdefault("paid_days", [])
