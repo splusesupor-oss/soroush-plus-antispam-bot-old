@@ -68,26 +68,30 @@ def start(chat_id):
 
 
 def _parse_answers(text):
-    parts = [
-        part.strip()
-        for part in str(text or "").replace("|", "\n").replace("،", "\n").splitlines()
-        if part.strip()
-    ]
-    # Supports alternating category/value input as well as seven raw answer lines.
-    if len(parts) == len(CATEGORIES) * 2 and all(
-        _normalize(parts[index * 2]) == _normalize(category)
-        for index, category in enumerate(CATEGORIES)
-    ):
-        parts = parts[1::2]
-    return parts if len(parts) == len(CATEGORIES) else None
+    """Accept only the exact seven raw answer lines requested by the game."""
+    raw_text = str(text or "")
+    if raw_text.endswith(("\n", "\r")):
+        return None
+    lines = raw_text.splitlines()
+    if len(lines) != len(CATEGORIES):
+        return None
+    parts = [line.strip() for line in lines]
+    if any(not part for part in parts):
+        return None
+    # Reject legacy separators and category labels: they are not seven raw answers.
+    for category, answer in zip(CATEGORIES, parts):
+        normalized = _normalize(answer)
+        label = _normalize(category)
+        if "|" in answer or "،" in answer or normalized == label:
+            return None
+        if normalized.startswith(label) and normalized[len(label):].lstrip(":：- ") != normalized[len(label):]:
+            return None
+    return parts
 
 
 def _validate_answer(category, letter, answer):
     """Returns True only for a real answer in the requested category."""
     normalized = _normalize(answer)
-    category_label = _normalize(category)
-    if normalized.startswith(category_label):
-        normalized = normalized[len(category_label):].lstrip(":：- ").strip()
     if (
         len(normalized) < 2
         or not _VALID_TEXT.fullmatch(normalized)

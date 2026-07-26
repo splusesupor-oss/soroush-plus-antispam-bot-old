@@ -949,7 +949,7 @@ async def handle_new_message(bot, event):
         if name_family_active(chat_id):
             submitted = submit_name_family(chat_id, user_id, _format_group_member(sender), clean_text)
             if submitted is not None:
-                await event.reply("✅ پاسخ شما ثبت شد.")
+                await event.reply("✅ پاسخ ثبت شد")
                 return
 
         # بازی حدس ایموجی

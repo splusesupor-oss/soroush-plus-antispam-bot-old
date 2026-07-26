@@ -47,6 +47,24 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.assertFalse(game._validate_answer("نام", "ف", "فریبا123"))
         self.assertTrue(game._validate_answer("نام", "ف", "فریبا"))
 
+    def test_only_seven_raw_nonempty_lines_are_accepted(self):
+        self.assertEqual(game._parse_answers(self.valid_answers()), self.valid_answers().splitlines())
+        self.assertIsNone(game._parse_answers("پیام عادی"))
+        self.assertIsNone(game._parse_answers(self.valid_answers().replace("\n", " | ")))
+        self.assertIsNone(game._parse_answers(self.valid_answers().replace("\n", "،")))
+        labelled = "\n".join(
+            f"{category}: {answer}"
+            for category, answer in zip(game.CATEGORIES, self.valid_answers().splitlines())
+        )
+        self.assertIsNone(game._parse_answers(labelled))
+        self.assertIsNone(game._parse_answers(self.valid_answers() + "\n"))
+
+    def test_unrelated_messages_do_not_create_a_submission(self):
+        self.force_round(1)
+        self.assertIsNone(game.submit(100, 7, "کاربر", "سلام ربات"))
+        self.assertEqual(game._ACTIVE[100]["answers"], {})
+        self.assertEqual(self.awards, [])
+
     def test_duplicate_submission_does_not_add_points_twice(self):
         self.force_round(1)
         self.assertEqual(game.submit(100, 7, "کاربر", self.valid_answers()), 70)
