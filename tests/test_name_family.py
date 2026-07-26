@@ -59,6 +59,36 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.force_round(2)
         self.assertEqual(game.submit(100, 8, "کاربر", "\n".join(answers[:2] + ["فوفوف"] * 5)), 20)
 
+    def test_zah_example_scores_twenty_without_zeroing_other_categories(self):
+        class Logger:
+            def __init__(self):
+                self.lines = []
+
+            def log_info(self, line):
+                self.lines.append(line)
+
+        logger = Logger()
+        game._ACTIVE[100] = {
+            "round_id": 1,
+            "letter": "ظ",
+            "answers": {},
+        }
+        answers = "\n".join((
+            "ظاتمه", "ظفري", "نمی‌دونم", "نمی دانم", "ظرف", "نمیدونم", "نمی‌دونم",
+        ))
+        self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 20)
+        self.assertIn("category=نام answer=ظاتمه valid=False score=0", logger.lines[0])
+        self.assertIn("category=فامیل answer=ظفري valid=True score=10", logger.lines[1])
+        self.assertIn("category=وسیله answer=ظرف valid=True score=10", logger.lines[4])
+        self.assertEqual(len(logger.lines), 7)
+
+    def test_persian_normalization_and_empty_variants(self):
+        self.assertEqual(game._normalize("  نمی‌دونم  "), "نمیدونم")
+        self.assertEqual(game._normalize("ظفري"), "ظفری")
+        self.assertEqual(game._normalize("فیروز  کوه"), "فیروز کوه")
+        self.assertFalse(game._validate_answer("نام", "ن", "نمی‌دونم"))
+        self.assertFalse(game._validate_answer("نام", "ن", "نمی دانم"))
+
     def test_yeh_examples_score_fifty_and_ten_independently(self):
         game._ACTIVE[100] = {
             "round_id": 1,
