@@ -502,19 +502,30 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "آمارم", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی"}
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی"}
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
                 and clean_text != "/فیلترها"
             )
         )
+        # پاسخ‌های ثابت بدون ورود به moderation و I/O پاسخ می‌گیرند.
+        simple_reply = SIMPLE_REPLIES.get(clean_text)
+        if simple_reply:
+            await event.reply(simple_reply)
+            return
+        if clean_text in INSULTS:
+            await event.reply(INSULT_REPLY)
+            return
+
         # فرمان‌های کوتاه نباید برای ثبت آمار/فعالیت منتظر I/O فایل بمانند.
         if not event.is_private and not fast_command:
             record_activity(chat_id, user_id, event.message)
         sender_username = getattr(sender, "username", None)
+        # فرمان‌های سریع permission مخصوص خود را در branch فرمان بررسی می‌کنند.
         is_group_moderator = (
             not event.is_private
+            and not fast_command
             and _has_group_management_permission(
                 bot, chat_id, user_id, sender_username
             )
