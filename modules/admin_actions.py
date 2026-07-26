@@ -13,11 +13,31 @@ except ImportError:
     class UserAdminInvalidError(Exception): pass
 
 
+def _is_flood_wait(error):
+    name = error.__class__.__name__.lower()
+    return "flood" in name or ("wait" in name and "second" in str(error).lower())
+
+
 class AdminActions:
     def __init__(self, client, logger, config_manager):
         self.client = client
         self.logger = logger
         self.config = config_manager
+
+    async def _run_moderation_with_timeout(self, action, user_id, timeout_seconds, operation):
+        """حد بالای عملیات؛ FloodWait را برای worker نگه می‌دارد."""
+        try:
+            return await asyncio.wait_for(operation, timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            self.logger.log_error(
+                f"MODERATION ACTION TIMEOUT action={action} user_id={user_id} "
+                f"timeout_seconds={timeout_seconds}"
+            )
+            return False
+        except Exception as error:
+            if _is_flood_wait(error):
+                raise
+            raise
 
     async def delete_message(self, chat_id, message_id=None, event=None) -> bool:
         """حذف پیام"""
@@ -43,6 +63,11 @@ class AdminActions:
         return False
 
     async def mute_user(self, chat_id, user_id, duration_seconds=None):
+        return await self._run_moderation_with_timeout(
+            "mute", user_id, 15, self._mute_user_rpc(chat_id, user_id, duration_seconds)
+        )
+
+    async def _mute_user_rpc(self, chat_id, user_id, duration_seconds=None):
         try:
             from datetime import datetime, timedelta, timezone
             from splusthon import types
@@ -85,11 +110,18 @@ class AdminActions:
             return True
 
         except Exception as e:
+            if _is_flood_wait(e):
+                raise
             print("MUTE ERROR:", repr(e))
             self.logger.log_error(f"خطا در سکوت کاربر: {e}")
             return False
 
     async def unmute_user(self, chat_id, user_id) -> bool:
+        return await self._run_moderation_with_timeout(
+            "unmute", user_id, 15, self._unmute_user_rpc(chat_id, user_id)
+        )
+
+    async def _unmute_user_rpc(self, chat_id, user_id) -> bool:
         try:
             user = await self.client.get_entity(user_id)
 
@@ -110,11 +142,18 @@ class AdminActions:
             return True
 
         except Exception as e:
+            if _is_flood_wait(e):
+                raise
             self.logger.log_error(f"خطا در unmute {user_id}: {e}")
             return False
 
 
     async def ban_user(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:
+        return await self._run_moderation_with_timeout(
+            "ban", user_id, 20, self._ban_user_rpc(chat_id, user_id, reason)
+        )
+
+    async def _ban_user_rpc(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:
         """بن دائمی و ثبت پایدار کاربر برای جلوگیری از بازگشت."""
         try:
             user = await self.client.get_entity(user_id)
@@ -141,6 +180,8 @@ class AdminActions:
                     view_messages=False,
                 )
             except Exception as permission_error:
+                if _is_flood_wait(permission_error):
+                    raise
                 self.logger.log_error(
                     f"خطا در اعمال محدودیت دائمی {user_id}: {permission_error}"
                 )
@@ -176,6 +217,8 @@ class AdminActions:
             return True
 
         except Exception as e:
+            if _is_flood_wait(e):
+                raise
             self.logger.log_error(f"خطا در بن دائمی {user_id}: {e}")
             return False
 
@@ -230,6 +273,11 @@ class AdminActions:
 
 
     async def unban_user(self, chat_id, user_id, username=None):
+        return await self._run_moderation_with_timeout(
+            "unban", user_id, 20, self._unban_user_rpc(chat_id, user_id, username)
+        )
+
+    async def _unban_user_rpc(self, chat_id, user_id, username=None):
         try:
             from modules.banned_storage import (
                 is_banned,
@@ -303,5 +351,7 @@ class AdminActions:
             return True
 
         except Exception as e:
+            if _is_flood_wait(e):
+                raise
             self.logger.log_error(f"خطا در unban {user_id}: {e}")
             return False

@@ -410,8 +410,10 @@ class SoroushAntiSpamBot:
 
                     self.moderation_queue.enqueue(
                         chat_id,
-                        "rejoin_ban",
-                        lambda: self.client.edit_permissions(
+                        "ban",
+                        user_id=user_id,
+                        timeout_seconds=20,
+                        operation=lambda: self.client.edit_permissions(
                             chat_id,
                             user,
                             until_date=None,
@@ -598,7 +600,9 @@ class SoroushAntiSpamBot:
                     self.moderation_queue.enqueue(
                         event.chat_id,
                         "unban",
-                        lambda: self.admin_actions.unban_user(
+                        user_id=user.id,
+                        timeout_seconds=20,
+                        operation=lambda: self.admin_actions.unban_user(
                             event.chat_id, user.id, getattr(user, "username", None)
                         ),
                         on_success=unban_succeeded,
