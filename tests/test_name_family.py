@@ -6,18 +6,20 @@ import modules.name_family as game
 class NameFamilyValidationTests(unittest.TestCase):
     def setUp(self):
         self.original_add = game.add
-        self.original_pending = game.record_pending
+        self.original_learning = game.record_learning
         self.awards = []
-        self.pending = []
+        self.learning = []
         game.add = lambda chat_id, user_id, name, points: self.awards.append(
             (chat_id, user_id, points)
         )
-        game.record_pending = lambda *args: self.pending.append(args)
+        game.record_learning = lambda *args, **kwargs: (
+            self.learning.append((args, kwargs)) or {"status": "learning"}
+        )
         game._ACTIVE.clear()
 
     def tearDown(self):
         game.add = self.original_add
-        game.record_pending = self.original_pending
+        game.record_learning = self.original_learning
         game._ACTIVE.clear()
 
     @staticmethod
@@ -147,7 +149,7 @@ class NameFamilyValidationTests(unittest.TestCase):
             "ظاتمه", "ظفري", "نمی‌دونم", "نمی دانم", "ظرف", "نمیدونم", "نمی‌دونم",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 20)
-        self.assertIn("category=نام raw_answer=ظاتمه normalized_answer=ظاتمه letter=ظ source=pending reason=unknown_database_answer valid=False score=0", logger.lines[0])
+        self.assertIn("category=نام raw_answer=ظاتمه normalized_answer=ظاتمه letter=ظ source=learning reason=insufficient_confidence valid=False score=0", logger.lines[0])
         self.assertIn("category=فامیل raw_answer=ظفري normalized_answer=ظفری letter=ظ source=database reason=database_match valid=True score=10", logger.lines[1])
         self.assertIn("category=وسیله raw_answer=ظرف normalized_answer=ظرف letter=ظ source=database reason=database_match valid=True score=10", logger.lines[4])
         self.assertEqual(len(logger.lines), 7)
@@ -218,19 +220,18 @@ class NameFamilyValidationTests(unittest.TestCase):
             "نازنین", "نادری", "نیکشهر", "نارنج", "نی", "نهنگ", "ناصر زینلی",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 60)
-        self.assertEqual(len(self.pending), 1)
-        self.assertEqual(self.pending[0][0:4], ("شهر", "ن", "نیکشهر", "نیکشهر"))
-        self.assertIn("source=pending reason=unknown_database_answer valid=False score=0", logger.lines[2])
+        self.assertEqual(len(self.learning), 1)
+        self.assertEqual(self.learning[0][0][0:4], ("شهر", "ن", "نیکشهر", "نیکشهر"))
+        self.assertIn("source=learning reason=insufficient_confidence valid=False score=0", logger.lines[2])
 
-    def test_unknown_score_is_configurable_but_not_default(self):
+    def test_unknown_answer_never_scores_before_learning(self):
         game._ACTIVE[100] = {"round_id": 1, "letter": "ن", "answers": {}}
         answers = "\n".join((
             "نمنمن", "نادری", "نیشابور", "نارنج", "نی", "نهنگ", "ناصر زینلی",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers), 60)
-        self.assertEqual(len(self.pending), 1)
-        game._ACTIVE[100] = {"round_id": 2, "letter": "ن", "answers": {}}
-        self.assertEqual(game.submit(100, 8, "کاربر", answers, unknown_score=5), 65)
+        self.assertEqual(len(self.learning), 1)
+
 
     def test_fabricated_answers_receive_zero_points(self):
         self.force_round(1)

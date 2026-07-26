@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from modules.game_points import add
-from modules.name_family_pending import record as record_pending
+from modules.name_family_learning import learned_words, record as record_learning
 
 LETTERS = (
     "ا", "ب", "پ", "ت", "ث", "ج", "چ", "ح", "خ", "د", "ذ", "ر", "ز", "ژ",
@@ -47,6 +47,10 @@ VALID = _load_valid_words()
 VALID_NORMALIZED = {
     category: frozenset(_normalize(answer) for answer in answers)
     for category, answers in VALID.items()
+}
+LEARNED_NORMALIZED = {
+    category: set(learned_words().get(category, set()))
+    for category in CATEGORIES
 }
 
 
@@ -179,37 +183,72 @@ def _validate_answer(category, letter, answer):
     return normalized in VALID_NORMALIZED[category]
 
 
-def _classify_answer(category, letter, answer, chat_id, user_id, seen_answers, unknown_score):
-    """Return score/source without accepting unknown words as database-valid."""
+def _classify_answer(
+    category,
+    letter,
+    answer,
+    chat_id,
+    user_id,
+    seen_answers,
+    learning_min_observations,
+    learning_min_unique_users,
+    learning_min_unique_chats,
+):
+    """Classify database, learned, learning, and invalid answers without heuristics."""
     normalized = _normalize(answer)
     duplicate = normalized in seen_answers
     seen_answers.add(normalized)
     if duplicate:
         return 0, "none", "duplicate", normalized
-    if not _validate_answer(category, letter, answer):
-        # A word with valid Persian shape and matching letter may still be a real
-        # answer outside the current curated database; queue it for review only.
-        basic_valid = (
-            len(normalized) >= 2
-            and _VALID_TEXT.fullmatch(normalized)
-            and normalized not in _INVALID_ANSWERS
-            and normalized.startswith(_normalize(letter))
-        )
-        if not basic_valid:
-            return 0, "none", "invalid", normalized
-        record_pending(category, letter, answer, normalized, chat_id, user_id)
-        return unknown_score, "pending", "unknown_database_answer", normalized
-    return 10, "database", "database_match", normalized
+    if _validate_answer(category, letter, answer):
+        return 10, "database", "database_match", normalized
+    if normalized in LEARNED_NORMALIZED[category]:
+        return 10, "learned", "learned_match", normalized
+
+    # Only structurally valid answers with the selected letter enter learning memory.
+    basic_valid = (
+        len(normalized) >= 2
+        and _VALID_TEXT.fullmatch(normalized)
+        and normalized not in _INVALID_ANSWERS
+        and normalized.startswith(_normalize(letter))
+    )
+    if not basic_valid:
+        return 0, "none", "invalid", normalized
+
+    item = record_learning(
+        category,
+        letter,
+        answer,
+        normalized,
+        chat_id,
+        user_id,
+        min_observations=learning_min_observations,
+        min_unique_users=learning_min_unique_users,
+        min_unique_chats=learning_min_unique_chats,
+    )
+    if item.get("status") == "learned":
+        LEARNED_NORMALIZED[category].add(normalized)
+        return 10, "learned", "auto_learned", normalized
+    return 0, "learning", "insufficient_confidence", normalized
 
 
-def _pending_score(value):
+def _learning_threshold(value, default):
     try:
-        return max(0, min(10, int(value)))
+        return max(1, int(value))
     except (TypeError, ValueError):
-        return 0
+        return default
 
 
-def submit(chat_id, user_id, name, text, logger=None, unknown_score=0):
+def submit(
+    chat_id,
+    user_id,
+    name,
+    text,
+    logger=None,
+    learning_min_observations=5,
+    learning_min_unique_users=3,
+    learning_min_unique_chats=2,
+):
     state = _ACTIVE.get(chat_id)
     if not state:
         return None
@@ -227,7 +266,9 @@ def submit(chat_id, user_id, name, text, logger=None, unknown_score=0):
     points = 0
     seen_answers = set()
     letter = state["letter"]
-    configured_unknown_score = _pending_score(unknown_score)
+    min_observations = _learning_threshold(learning_min_observations, 5)
+    min_unique_users = _learning_threshold(learning_min_unique_users, 3)
+    min_unique_chats = _learning_threshold(learning_min_unique_chats, 2)
     for category, answer in zip(CATEGORIES, parts):
         score, source, reason, normalized = _classify_answer(
             category,
@@ -236,7 +277,9 @@ def submit(chat_id, user_id, name, text, logger=None, unknown_score=0):
             chat_id,
             user_id,
             seen_answers,
-            configured_unknown_score,
+            min_observations,
+            min_unique_users,
+            min_unique_chats,
         )
         points += score
         if logger is not None:

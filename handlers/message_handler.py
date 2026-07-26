@@ -953,7 +953,9 @@ async def handle_new_message(bot, event):
                 _format_group_member(sender),
                 clean_text,
                 logger=bot.logger,
-                unknown_score=bot.config_manager.get("name_family_unknown_score", 0),
+                learning_min_observations=bot.config_manager.get("name_family_learning_min_observations", 5),
+                learning_min_unique_users=bot.config_manager.get("name_family_learning_min_unique_users", 3),
+                learning_min_unique_chats=bot.config_manager.get("name_family_learning_min_unique_chats", 2),
             )
             if submitted is not None:
                 await event.reply("✅ پاسخ ثبت شد")
