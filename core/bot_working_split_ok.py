@@ -615,7 +615,6 @@ class SoroushAntiSpamBot:
                         on_success=unban_succeeded,
                         on_failure=unban_failed,
                     )
-                    await event.reply("⏳ درخواست آزادسازی در صف اجرا قرار گرفت")
 
                 except Exception as e:
                     await event.reply(f"❌ خطا در آزاد کردن: {e}")

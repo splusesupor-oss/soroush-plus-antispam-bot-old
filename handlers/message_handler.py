@@ -2193,7 +2193,6 @@ async def handle_new_message(bot, event):
                     on_success=kick_succeeded,
                     on_failure=kick_failed,
                 )
-                await event.reply("⏳ درخواست اخراج در صف اجرا قرار گرفت")
 
             except Exception as e:
                 bot.logger.log_error(f"خطای اخراج: {e}")
@@ -2373,7 +2372,6 @@ async def handle_new_message(bot, event):
                     on_success=mute_succeeded,
                     on_failure=mute_failed,
                 )
-                await event.reply("⏳ درخواست سکوت در صف اجرا قرار گرفت")
 
             except Exception as e:
                 bot.logger.log_error(
@@ -2426,7 +2424,6 @@ async def handle_new_message(bot, event):
                     on_success=unmute_succeeded,
                     on_failure=unmute_failed,
                 )
-                await event.reply("⏳ درخواست رفع سکوت در صف اجرا قرار گرفت")
 
             except Exception as e:
                 bot.logger.log_error(f"خطای رفع سکوت: {e}")
