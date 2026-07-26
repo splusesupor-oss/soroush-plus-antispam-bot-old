@@ -562,7 +562,7 @@ class SoroushAntiSpamBot:
                     return
 
             # آزاد کردن کاربر محروم شده
-            if text == "آزاد":
+            if not is_private_splus and text == "آزاد":
                 try:
                     if not event.reply_to:
                         await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
@@ -692,6 +692,9 @@ class SoroushAntiSpamBot:
                             f"خطای صفر کردن از پیوی: {e}"
                         )
                     return
+
+                # پیام خصوصی پس از route اختصاصی هرگز وارد handler گروهی نمی‌شود.
+                return
 
             
                 # اجرای دستورات مدیریتی
