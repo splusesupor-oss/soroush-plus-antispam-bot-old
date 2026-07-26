@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from modules.game_points import add
+from modules.name_family_pending import record as record_pending
 
 LETTERS = (
     "ا", "ب", "پ", "ت", "ث", "ج", "چ", "ح", "خ", "د", "ذ", "ر", "ز", "ژ",
@@ -178,7 +179,37 @@ def _validate_answer(category, letter, answer):
     return normalized in VALID_NORMALIZED[category]
 
 
-def submit(chat_id, user_id, name, text, logger=None):
+def _classify_answer(category, letter, answer, chat_id, user_id, seen_answers, unknown_score):
+    """Return score/source without accepting unknown words as database-valid."""
+    normalized = _normalize(answer)
+    duplicate = normalized in seen_answers
+    seen_answers.add(normalized)
+    if duplicate:
+        return 0, "none", "duplicate", normalized
+    if not _validate_answer(category, letter, answer):
+        # A word with valid Persian shape and matching letter may still be a real
+        # answer outside the current curated database; queue it for review only.
+        basic_valid = (
+            len(normalized) >= 2
+            and _VALID_TEXT.fullmatch(normalized)
+            and normalized not in _INVALID_ANSWERS
+            and normalized.startswith(_normalize(letter))
+        )
+        if not basic_valid:
+            return 0, "none", "invalid", normalized
+        record_pending(category, letter, answer, normalized, chat_id, user_id)
+        return unknown_score, "pending", "unknown_database_answer", normalized
+    return 10, "database", "database_match", normalized
+
+
+def _pending_score(value):
+    try:
+        return max(0, min(10, int(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def submit(chat_id, user_id, name, text, logger=None, unknown_score=0):
     state = _ACTIVE.get(chat_id)
     if not state:
         return None
@@ -193,25 +224,30 @@ def submit(chat_id, user_id, name, text, logger=None):
     parts = _parse_answers(text)
     if parts is None:
         return None
-    valid_parts = 0
+    points = 0
     seen_answers = set()
     letter = state["letter"]
+    configured_unknown_score = _pending_score(unknown_score)
     for category, answer in zip(CATEGORIES, parts):
-        normalized = _normalize(answer)
-        duplicate = normalized in seen_answers
-        seen_answers.add(normalized)
-        valid = not duplicate and _validate_answer(category, letter, answer)
-        score = 10 if valid else 0
-        valid_parts += int(valid)
+        score, source, reason, normalized = _classify_answer(
+            category,
+            letter,
+            answer,
+            chat_id,
+            user_id,
+            seen_answers,
+            configured_unknown_score,
+        )
+        points += score
         if logger is not None:
             logger.log_info(
                 "NAME FAMILY VALIDATION "
                 f"chat_id={chat_id} user_id={user_id} "
                 f"category={category} raw_answer={answer} "
                 f"normalized_answer={normalized} letter={letter} "
-                f"valid={valid} score={score}"
+                f"source={source} reason={reason} "
+                f"valid={source == 'database'} score={score}"
             )
-    points = valid_parts * 10
     state["answers"][user_key] = {
         "user_id": user_key,
         "name": name,
