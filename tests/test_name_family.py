@@ -66,6 +66,32 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.assertEqual(set(drawn), set(game.PLAYABLE_LETTERS))
         self.assertTrue(set(drawn).isdisjoint(game.UNPLAYABLE_LETTERS))
 
+    def test_p_inputs_are_scored_per_category_and_emit_raw_normalized_logs(self):
+        class Logger:
+            def __init__(self):
+                self.lines = []
+
+            def log_info(self, line):
+                self.lines.append(line)
+
+        first = ("پریا", "پروینی", "پل دختر", "پرتقال", "پر", "پشه", "نمیدونم")
+        second = ("پونه", "پناهی", "پاریس", "پرتغالی", "پارو", "پشه", "پالت")
+        logger = Logger()
+        game._ACTIVE[100] = {"round_id": 1, "letter": "پ", "answers": {}}
+        self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(first), logger=logger), 60)
+        self.assertEqual(len(logger.lines), 7)
+        self.assertIn(
+            "category=نام raw_answer=پریا normalized_answer=پریا letter=پ valid=True score=10",
+            logger.lines[0],
+        )
+        self.assertIn(
+            "category=خواننده raw_answer=نمیدونم normalized_answer=نمیدونم letter=پ valid=False score=0",
+            logger.lines[6],
+        )
+
+        game._ACTIVE[100] = {"round_id": 2, "letter": "پ", "answers": {}}
+        self.assertEqual(game.submit(100, 8, "کاربر", "\n".join(second)), 70)
+
     def test_jim_example_scores_each_category_independently(self):
         answers = ("جهان", "جوادی", "جیرفت", "جمبو", "جعبه", "جغد", "جهان")
         game._ACTIVE[100] = {
@@ -117,9 +143,9 @@ class NameFamilyValidationTests(unittest.TestCase):
             "ظاتمه", "ظفري", "نمی‌دونم", "نمی دانم", "ظرف", "نمیدونم", "نمی‌دونم",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 20)
-        self.assertIn("category=نام answer=ظاتمه letter=ظ valid=False score=0", logger.lines[0])
-        self.assertIn("category=فامیل answer=ظفري letter=ظ valid=True score=10", logger.lines[1])
-        self.assertIn("category=وسیله answer=ظرف letter=ظ valid=True score=10", logger.lines[4])
+        self.assertIn("category=نام raw_answer=ظاتمه normalized_answer=ظاتمه letter=ظ valid=False score=0", logger.lines[0])
+        self.assertIn("category=فامیل raw_answer=ظفري normalized_answer=ظفری letter=ظ valid=True score=10", logger.lines[1])
+        self.assertIn("category=وسیله raw_answer=ظرف normalized_answer=ظرف letter=ظ valid=True score=10", logger.lines[4])
         self.assertEqual(len(logger.lines), 7)
 
     def test_persian_normalization_and_empty_variants(self):
@@ -168,10 +194,10 @@ class NameFamilyValidationTests(unittest.TestCase):
             "وحید", "وحیدی", "ورامین", "نمی‌دونم", "وینچستر", "نمی‌دونم", "وحید",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 30)
-        self.assertIn("category=نام answer=وحید letter=و valid=True score=10", logger.lines[0])
-        self.assertIn("category=فامیل answer=وحیدی letter=و valid=True score=10", logger.lines[1])
-        self.assertIn("category=شهر answer=ورامین letter=و valid=True score=10", logger.lines[2])
-        self.assertIn("category=میوه answer=نمی‌دونم letter=و valid=False score=0", logger.lines[3])
+        self.assertIn("category=نام raw_answer=وحید normalized_answer=وحید letter=و valid=True score=10", logger.lines[0])
+        self.assertIn("category=فامیل raw_answer=وحیدی normalized_answer=وحیدی letter=و valid=True score=10", logger.lines[1])
+        self.assertIn("category=شهر raw_answer=ورامین normalized_answer=ورامین letter=و valid=True score=10", logger.lines[2])
+        self.assertIn("category=میوه raw_answer=نمی‌دونم normalized_answer=نمیدونم letter=و valid=False score=0", logger.lines[3])
         self.assertEqual(len(logger.lines), 7)
 
     def test_fabricated_answers_receive_zero_points(self):

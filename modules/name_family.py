@@ -207,7 +207,8 @@ def submit(chat_id, user_id, name, text, logger=None):
             logger.log_info(
                 "NAME FAMILY VALIDATION "
                 f"chat_id={chat_id} user_id={user_id} "
-                f"category={category} answer={answer} letter={letter} "
+                f"category={category} raw_answer={answer} "
+                f"normalized_answer={normalized} letter={letter} "
                 f"valid={valid} score={score}"
             )
     points = valid_parts * 10
