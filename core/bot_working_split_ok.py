@@ -443,6 +443,9 @@ class SoroushAntiSpamBot:
                 or routing_chat.__class__.__name__ == "User"
             )
             is_broadcast_text = text in {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
+            is_name_family_trace_message = (
+                text == "اسم فامیل" or len(text.splitlines()) >= 7
+            )
             if is_broadcast_text:
                 self.logger.log_info(
                     "BROADCAST COMMAND RECEIVED "
@@ -554,6 +557,12 @@ class SoroushAntiSpamBot:
                     )
 
                 if not group_is_active:
+                    if is_name_family_trace_message:
+                        self.logger.log_info(
+                            "NAME FAMILY TRACE CORE_BLOCK "
+                            f"reason=group_inactive chat_id={lock_id} "
+                            f"message_id={getattr(event.message, 'id', None)}"
+                        )
                     if is_enable_command and can_change_group_mode:
                         title = getattr(chat_lock, "title", "")
                         activate_group(lock_id, title)
@@ -732,6 +741,12 @@ class SoroushAntiSpamBot:
                         self.logger.log_error(f"خطای اجرای دستور مدیر: {e}")
 
             started = time.perf_counter()
+            if is_name_family_trace_message:
+                self.logger.log_info(
+                    "NAME FAMILY TRACE CORE_DISPATCH "
+                    f"chat_id={event.chat_id} message_id={getattr(event.message, 'id', None)} "
+                    f"line_count={len(text.splitlines())}"
+                )
             await handle_new_message(self, event)
             elapsed = time.perf_counter() - started
             if elapsed >= 0.05:

@@ -530,8 +530,23 @@ async def handle_new_message(bot, event):
         # مالک اصلی باید به فرمان‌ها برسد؛ bypass امنیتی او از مسیر moderator
         # اعمال می‌شود، نه با return پیش از handler.
         if is_bot_account and not is_global_owner(user_id):
+            if message_text.strip() == "اسم فامیل" or len(message_text.splitlines()) >= 7:
+                bot.logger.log_info(
+                    "NAME FAMILY TRACE HANDLER_BLOCK "
+                    f"reason=bot_account chat_id={chat_id} user_id={user_id}"
+                )
             return
         clean_text = message_text.strip()
+        name_family_trace = (
+            clean_text == "اسم فامیل" or name_family_active(chat_id)
+        )
+        if name_family_trace:
+            bot.logger.log_info(
+                "NAME FAMILY TRACE HANDLER_ENTER "
+                f"chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} "
+                f"line_count={len(clean_text.splitlines())} char_count={len(clean_text)} "
+                f"round_active={name_family_active(chat_id)}"
+            )
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
@@ -710,6 +725,11 @@ async def handle_new_message(bot, event):
                         f"forward_field={forward_field} deleted={deleted} "
                         f"forward_count={forward_count}"
                     )
+                if name_family_trace:
+                    bot.logger.log_info(
+                        "NAME FAMILY TRACE HANDLER_BLOCK "
+                        f"reason=forwarded_message chat_id={chat_id} user_id={user_id}"
+                    )
                 return
 
         burst_key = (chat_id, user_id)
@@ -717,6 +737,11 @@ async def handle_new_message(bot, event):
             _queue_spam_burst_deletion(
                 bot, chat_id, user_id, {event.message.id}
             )
+            if name_family_trace:
+                bot.logger.log_info(
+                    "NAME FAMILY TRACE HANDLER_BLOCK "
+                    f"reason=spam_burst chat_id={chat_id} user_id={user_id}"
+                )
             return
 
         if clean_text == "صفر":
@@ -861,6 +886,11 @@ async def handle_new_message(bot, event):
                         on_success=repeat_history_ban_succeeded,
                         on_failure=repeat_history_ban_failed,
                     )
+                    if name_family_trace:
+                        bot.logger.log_info(
+                            "NAME FAMILY TRACE HANDLER_BLOCK "
+                            f"reason=repeat_spam chat_id={chat_id} user_id={user_id}"
+                        )
                     return
             except Exception as e:
                 print("history error:", e)
@@ -947,6 +977,11 @@ async def handle_new_message(bot, event):
 
         # ثبت پاسخ اسم فامیل در همان بازی فعال
         if name_family_active(chat_id):
+            bot.logger.log_info(
+                "NAME FAMILY TRACE HANDLER_BEFORE_SUBMIT "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"line_count={len(clean_text.splitlines())} char_count={len(clean_text)}"
+            )
             submitted = submit_name_family(
                 chat_id,
                 user_id,
@@ -956,6 +991,10 @@ async def handle_new_message(bot, event):
                 learning_min_observations=bot.config_manager.get("name_family_learning_min_observations", 5),
                 learning_min_unique_users=bot.config_manager.get("name_family_learning_min_unique_users", 3),
                 learning_min_unique_chats=bot.config_manager.get("name_family_learning_min_unique_chats", 2),
+            )
+            bot.logger.log_info(
+                "NAME FAMILY TRACE HANDLER_AFTER_SUBMIT "
+                f"chat_id={chat_id} user_id={user_id} submitted={submitted!r}"
             )
             if submitted is not None:
                 await event.reply("✅ پاسخ ثبت شد")

@@ -251,6 +251,11 @@ def submit(
 ):
     state = _ACTIVE.get(chat_id)
     if not state:
+        if logger is not None:
+            logger.log_info(
+                "NAME FAMILY TRACE SUBMIT_BLOCK "
+                f"reason=no_active_round chat_id={chat_id} user_id={user_id}"
+            )
         return None
     user_key = str(user_id)
     # A round accepts exactly one score per participant. This prevents the persistent
@@ -258,11 +263,27 @@ def submit(
     existing = state["answers"].get(user_key)
     if existing is not None:
         # Do not signal a second successful submission or mutate persistent points.
+        if logger is not None:
+            logger.log_info(
+                "NAME FAMILY TRACE SUBMIT_BLOCK "
+                f"reason=duplicate_submission chat_id={chat_id} user_id={user_id}"
+            )
         return None
 
     parts = _parse_answers(text)
     if parts is None:
+        if logger is not None:
+            logger.log_info(
+                "NAME FAMILY TRACE SUBMIT_BLOCK "
+                f"reason=parse_failed chat_id={chat_id} user_id={user_id} "
+                f"line_count={len(str(text or '').splitlines())}"
+            )
         return None
+    if logger is not None:
+        logger.log_info(
+            "NAME FAMILY TRACE SUBMIT_PARSED "
+            f"chat_id={chat_id} user_id={user_id} line_count={len(parts)}"
+        )
     points = 0
     seen_answers = set()
     letter = state["letter"]
