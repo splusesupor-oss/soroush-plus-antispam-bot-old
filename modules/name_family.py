@@ -3,8 +3,9 @@ import json
 import random
 import re
 import time
+from html import unescape
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from modules.game_points import add
@@ -127,13 +128,15 @@ _ACTIVE = {}
 _REMAINING_LETTERS = {}
 _ROUND_SEQUENCE = 0
 
-# Unknown answers are checked against Wikidata only after local database and
-# learned-answer checks. The cache is process-local: no runtime data file is made.
+# Unknown answers are checked only after local database and learned-answer
+# checks. The cache is process-local: no runtime data file is made.
 _WIKIDATA_API = "https://www.wikidata.org/w/api.php"
-_WIKIDATA_TIMEOUT_SECONDS = 2.5
-_WIKIDATA_CACHE_SECONDS = 60 * 60
-_WIKIDATA_CACHE = {}
-_WIKIDATA_CATEGORY_TERMS = {
+_WIKIPEDIA_API = "https://fa.wikipedia.org/w/api.php"
+_WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
+_EXTERNAL_TIMEOUT_SECONDS = 2.0
+_EXTERNAL_CACHE_SECONDS = 60 * 60
+_EXTERNAL_CACHE = {}
+_CATEGORY_TERMS = {
     "نام": ("given name", "first name", "forename", "personal name", "نام کوچک"),
     "فامیل": ("family name", "surname", "last name", "نام خانوادگی"),
     "شهر": ("city", "شهر"),
@@ -148,6 +151,9 @@ _WIKIDATA_CATEGORY_TERMS = {
     ),
     "خواننده": ("singer", "vocalist", "خواننده"),
 }
+_TRUSTED_WEB_HOSTS = frozenset({
+    "fa.wikipedia.org", "en.wikipedia.org", "www.wikidata.org",
+})
 
 
 def is_active(chat_id):
@@ -208,49 +214,147 @@ def _validate_answer(category, letter, answer):
     return normalized in VALID_NORMALIZED[category]
 
 
-def _wikidata_confirms_category(category, normalized_answer):
-    """Conservatively verify an unknown answer against an exact Wikidata match.
+def _category_terms_match(category, text):
+    normalized_text = _normalize(re.sub(r"<.*?>", " ", unescape(str(text or ""))))
+    return any(term in normalized_text for term in _CATEGORY_TERMS[category])
 
-    A failed or unavailable lookup never makes an answer valid.  This keeps the
-    local curated database and the confidence-based learning safeguards intact.
-    """
-    cache_key = (category, normalized_answer)
-    cached = _WIKIDATA_CACHE.get(cache_key)
-    now = time.monotonic()
-    if cached and now - cached[0] < _WIKIDATA_CACHE_SECONDS:
-        return cached[1]
 
-    params = urlencode({
-        "action": "wbsearchentities",
-        "search": normalized_answer,
-        "language": "fa",
-        "format": "json",
-        "limit": 10,
-    })
+def _exact_match(value, normalized_answer):
+    return _normalize(value) == normalized_answer
+
+
+def _request_json(url, params):
     request = Request(
-        f"{_WIKIDATA_API}?{params}",
+        f"{url}?{urlencode(params)}",
         headers={
             "Accept": "application/json",
             "User-Agent": "SoroushPlusNameFamily/1.0",
         },
     )
-    confirmed = False
+    with urlopen(request, timeout=_EXTERNAL_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _wikidata_confirms_category(category, answer, normalized_answer):
+    """Return the source name for an exact, category-matched Wikidata entity."""
     try:
-        with urlopen(request, timeout=_WIKIDATA_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = _request_json(_WIKIDATA_API, {
+            "action": "wbsearchentities",
+            "search": answer,
+            "language": "fa",
+            "format": "json",
+            "limit": 10,
+        })
         for result in payload.get("search", []):
             match = result.get("match") or {}
-            if _normalize(match.get("text")) != normalized_answer:
-                continue
-            description = _normalize(result.get("description"))
-            if any(term in description for term in _WIKIDATA_CATEGORY_TERMS[category]):
-                confirmed = True
-                break
+            aliases = result.get("aliases") or ()
+            exact = (
+                _exact_match(match.get("text"), normalized_answer)
+                or _exact_match(result.get("label"), normalized_answer)
+                or any(_exact_match(alias, normalized_answer) for alias in aliases)
+            )
+            if exact and _category_terms_match(category, result.get("description")):
+                return "wikidata"
     except (OSError, ValueError, TypeError):
-        confirmed = False
+        pass
+    return None
 
-    _WIKIDATA_CACHE[cache_key] = (now, confirmed)
-    return confirmed
+
+def _wikipedia_confirms_category(category, answer, normalized_answer):
+    """Return the source name for an exact title or redirect with matching context."""
+    try:
+        payload = _request_json(_WIKIPEDIA_API, {
+            "action": "query",
+            "titles": answer,
+            "redirects": 1,
+            "prop": "extracts|categories",
+            "exintro": 1,
+            "explaintext": 1,
+            "cllimit": 50,
+            "format": "json",
+        })
+        query = payload.get("query") or {}
+        redirects = query.get("redirects") or ()
+        is_exact_title = any(
+            _exact_match(page.get("title"), normalized_answer)
+            for page in (query.get("pages") or {}).values()
+        )
+        is_exact_redirect = any(
+            _exact_match(item.get("from"), normalized_answer)
+            for item in redirects
+        )
+        if not (is_exact_title or is_exact_redirect):
+            return None
+        for page in (query.get("pages") or {}).values():
+            if page.get("missing") is not None:
+                continue
+            categories = " ".join(
+                item.get("title", "") for item in page.get("categories", ())
+            )
+            context = " ".join((page.get("title", ""), page.get("extract", ""), categories))
+            if _category_terms_match(category, context):
+                return "wikipedia"
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _web_confirms_category(category, answer, normalized_answer):
+    """Use web search only as a final fallback and only trust Wikimedia results."""
+    try:
+        request = Request(
+            f"{_WEB_SEARCH_URL}?{urlencode({'q': f'\"{answer}\" {category}'})}",
+            headers={
+                "Accept": "text/html",
+                "User-Agent": "SoroushPlusNameFamily/1.0",
+            },
+        )
+        with urlopen(request, timeout=_EXTERNAL_TIMEOUT_SECONDS) as response:
+            html = response.read().decode("utf-8", errors="replace")
+        matches = re.finditer(
+            r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        for result in matches:
+            link, title = result.groups()
+            if "uddg=" in link:
+                link = unquote(parse_qs(urlparse(link).query).get("uddg", [link])[0])
+            if urlparse(link).netloc.lower() not in _TRUSTED_WEB_HOSTS:
+                continue
+            clean_title = re.sub(r"<.*?>", "", unescape(title)).strip()
+            nearby = html[result.end():result.end() + 1200]
+            snippet_match = re.search(
+                r'class="result__snippet"[^>]*>(.*?)</(?:a|div)>',
+                nearby,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            snippet = snippet_match.group(1) if snippet_match else ""
+            if (
+                _exact_match(clean_title, normalized_answer)
+                and _category_terms_match(category, f"{clean_title} {snippet}")
+            ):
+                return "web"
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _external_confirms_category(category, answer, normalized_answer):
+    """Try independent sources in order without trusting a failed lookup."""
+    cache_key = (category, normalized_answer)
+    cached = _EXTERNAL_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and now - cached[0] < _EXTERNAL_CACHE_SECONDS:
+        return cached[1]
+
+    source = (
+        _wikidata_confirms_category(category, answer, normalized_answer)
+        or _wikipedia_confirms_category(category, answer, normalized_answer)
+        or _web_confirms_category(category, answer, normalized_answer)
+    )
+    _EXTERNAL_CACHE[cache_key] = (now, source)
+    return source
 
 
 def _record_learning(
@@ -316,7 +420,8 @@ def _classify_answer(
     # Wikidata is queried only for a structurally valid local miss. An exact
     # category-confirmed result receives this round's point immediately, while
     # still passing through the existing confidence-based learning pipeline.
-    if _wikidata_confirms_category(category, normalized):
+    external_source = _external_confirms_category(category, answer, normalized)
+    if external_source:
         _record_learning(
             category,
             letter,
@@ -328,7 +433,7 @@ def _classify_answer(
             learning_min_unique_users,
             learning_min_unique_chats,
         )
-        return 10, "wikidata", "wikidata_category_match", normalized
+        return 10, external_source, f"{external_source}_category_match", normalized
 
     item = _record_learning(
         category,
@@ -424,7 +529,7 @@ def submit(
                 f"category={category} raw_answer={answer} "
                 f"normalized_answer={normalized} letter={letter} "
                 f"source={source} reason={reason} "
-                f"valid={source in {'database', 'learned', 'wikidata'}} score={score}"
+                f"valid={source in {'database', 'learned', 'wikidata', 'wikipedia', 'web'}} score={score}"
             )
     state["answers"][user_key] = {
         "user_id": user_key,
