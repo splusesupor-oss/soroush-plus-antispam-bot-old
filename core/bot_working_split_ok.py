@@ -26,6 +26,7 @@ from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 from modules.coins import settle_previous_days, flush as flush_coin_cache
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
+from modules.moderation_queue import ModerationQueue
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.broadcast_state import get as get_broadcast_state
@@ -102,6 +103,7 @@ class SoroushAntiSpamBot:
 
         self.client = None
         self.admin_actions = None
+        self.moderation_queue = ModerationQueue(self.logger)
         self.group_actions = None
         self.delete_notice_lock = set()
         self.punished_users = set()
@@ -406,16 +408,17 @@ class SoroushAntiSpamBot:
                         )
                         return
 
-                    await self.client.edit_permissions(
+                    self.moderation_queue.enqueue(
                         chat_id,
-                        user,
-                        until_date=None,
-                        view_messages=False
+                        "rejoin_ban",
+                        lambda: self.client.edit_permissions(
+                            chat_id,
+                            user,
+                            until_date=None,
+                            view_messages=False,
+                        ),
                     )
-
-                    print(
-                        f"🚫 blocked banned user rejoin: {user_id}"
-                    )
+                    print(f"🚫 queued banned user rejoin block: {user_id}")
 
             except Exception as e:
                 print(f"join ban check error: {e}")
@@ -423,7 +426,6 @@ class SoroushAntiSpamBot:
 
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
-
             raw_text = event.message.message or ""
             text = raw_text.strip()
             routing_chat = await event.get_chat()
@@ -579,24 +581,30 @@ class SoroushAntiSpamBot:
                         await event.reply("❌ کاربر پیدا نشد")
                         return
 
-                    released = await self.admin_actions.unban_user(
-                        event.chat_id,
-                        user.id,
-                        getattr(user, "username", None)
-                    )
-                    if not released:
-                        await event.reply("❌ آزاد کردن انجام نشد")
-                        return
+                    async def unban_succeeded(_result):
+                        self.tracker.banned_users.pop(
+                            f"{event.chat_id}:{user.id}", None
+                        )
+                        restore_rejoin_spam_state(event.chat_id, user.id)
+                        self.spammer_messages.pop(user.id, None)
+                        self.logger.log_info(
+                            f"UNBAN COMPLETE user_id={user.id} removed successfully"
+                        )
+                        await event.reply("♻️ کاربر آزاد شد")
 
-                    self.tracker.banned_users.pop(
-                        f"{event.chat_id}:{user.id}", None
+                    async def unban_failed(_error):
+                        await event.reply("❌ آزاد کردن انجام نشد")
+
+                    self.moderation_queue.enqueue(
+                        event.chat_id,
+                        "unban",
+                        lambda: self.admin_actions.unban_user(
+                            event.chat_id, user.id, getattr(user, "username", None)
+                        ),
+                        on_success=unban_succeeded,
+                        on_failure=unban_failed,
                     )
-                    restore_rejoin_spam_state(event.chat_id, user.id)
-                    self.spammer_messages.pop(user.id, None)
-                    self.logger.log_info(
-                        f"UNBAN COMPLETE user_id={user.id} removed successfully"
-                    )
-                    await event.reply("♻️ کاربر آزاد شد")
+                    await event.reply("⏳ درخواست آزادسازی در صف اجرا قرار گرفت")
 
                 except Exception as e:
                     await event.reply(f"❌ خطا در آزاد کردن: {e}")

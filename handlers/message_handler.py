@@ -562,39 +562,31 @@ async def handle_new_message(bot, event):
                         bot.logger.log_error(
                             f"خطا در حذف GIF متوالی {user_id}: {error}"
                         )
-                    try:
-                        muted = await bot.admin_actions.mute_user(
-                            chat_id, user_id, 3600
-                        )
-                        if muted:
-                            print("USER MUTED 3600")
-                            notification_key = (chat_id, user_id)
-                            now = _asyncio.get_running_loop().time()
-                            notified_until = getattr(
-                                bot, "gif_spam_notification_until", {}
+                    async def gif_mute_succeeded(_result):
+                        print("USER MUTED 3600")
+                        notification_key = (chat_id, user_id)
+                        now = _asyncio.get_running_loop().time()
+                        notified_until = getattr(bot, "gif_spam_notification_until", {})
+                        if notified_until.get(notification_key, 0) <= now:
+                            if not hasattr(bot, "gif_spam_notification_until"):
+                                bot.gif_spam_notification_until = {}
+                            bot.gif_spam_notification_until[notification_key] = now + 3600
+                            await _send_moderation_notification_once(
+                                bot, chat_id, user_id, "gif_mute", event.message.id,
+                                "🔹کاربر ← "
+                                f"{_format_banned_user(sender, user_id)}\n\n"
+                                "به دلیل ارسال گیف تکراری 𝟭 ساعت سکوت شد",
                             )
-                            if notified_until.get(notification_key, 0) <= now:
-                                if not hasattr(bot, "gif_spam_notification_until"):
-                                    bot.gif_spam_notification_until = {}
-                                bot.gif_spam_notification_until[notification_key] = now + 3600
-                                await _send_moderation_notification_once(
-                                    bot,
-                                    chat_id,
-                                    user_id,
-                                    "gif_mute",
-                                    event.message.id,
-                                    "🔹کاربر ← "
-                                    f"{_format_banned_user(sender, user_id)}\n\n"
-                                    "به دلیل ارسال گیف تکراری 𝟭 ساعت سکوت شد",
-                                )
-                                print("GIF WARNING SENT")
-                    except Exception as error:
-                        bot.logger.log_error(
-                            f"خطا در mute GIF spam {user_id}: {error}"
-                        )
-                    finally:
-                        reset_gif_history(chat_id, user_id)
-                        print("GIF HISTORY CLEARED")
+                            print("GIF WARNING SENT")
+
+                    bot.moderation_queue.enqueue(
+                        chat_id,
+                        "gif_mute",
+                        lambda: bot.admin_actions.mute_user(chat_id, user_id, 3600),
+                        on_success=gif_mute_succeeded,
+                    )
+                    reset_gif_history(chat_id, user_id)
+                    print("GIF HISTORY CLEARED")
                     if deleted:
                         bot.logger.log_info(
                             f"consecutive GIF spam deleted chat_id={chat_id} user_id={user_id} count={deleted}"
@@ -627,24 +619,32 @@ async def handle_new_message(bot, event):
                         if not hasattr(bot, "forward_spam_processing"):
                             bot.forward_spam_processing = set()
                         bot.forward_spam_processing.add(forward_key)
-                        try:
-                            muted = await bot.admin_actions.mute_user(
-                                chat_id, user_id, 24 * 60 * 60
-                            )
-                            if muted:
+                        async def forward_mute_finished(_result):
+                            try:
                                 await _send_moderation_notification_once(
-                                    bot,
-                                    chat_id,
-                                    user_id,
-                                    "forward_spam_mute",
+                                    bot, chat_id, user_id, "forward_spam_mute",
                                     event.message.id,
                                     "🔸کاربر ← "
                                     f"{_format_banned_user(sender, user_id)}\n\n"
                                     "به دلیل ارسال فوروارد تکراری 𝟮𝟰 ساعت سکوت شد",
                                 )
-                        finally:
+                            finally:
+                                bot.forward_spam_counts.pop(forward_key, None)
+                                bot.forward_spam_processing.discard(forward_key)
+
+                        async def forward_mute_failed(_error):
                             bot.forward_spam_counts.pop(forward_key, None)
                             bot.forward_spam_processing.discard(forward_key)
+
+                        bot.moderation_queue.enqueue(
+                            chat_id,
+                            "forward_mute",
+                            lambda: bot.admin_actions.mute_user(
+                                chat_id, user_id, 24 * 60 * 60
+                            ),
+                            on_success=forward_mute_finished,
+                            on_failure=forward_mute_failed,
+                        )
                 finally:
                     bot.logger.log_info(
                         "FORWARD DETECTED "
@@ -793,22 +793,28 @@ async def handle_new_message(bot, event):
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add(punish_key)
                     ids = get_message_ids(chat_id, user_id)
-                    banned = await bot.admin_actions.ban_user(
-                        chat_id, user_id, reason="اسپم تکراری"
-                    )
-                    if banned:
-                        _queue_spam_burst_deletion(
-                            bot, chat_id, user_id, set(ids)
-                        )
+                    async def repeat_history_ban_succeeded(_result):
+                        _queue_spam_burst_deletion(bot, chat_id, user_id, set(ids))
                         await _send_moderation_notification_once(
                             bot, chat_id, user_id, "spam_ban", event.message.id,
                             "⚠️ کاربر ⏌ "
                             f"{_format_banned_user(sender, user_id)}"
                             " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                         )
-                    else:
+
+                    async def repeat_history_ban_failed(_error):
                         bot.punished_users.discard(punish_key)
                         bot.spam_burst_users.discard(punish_key)
+
+                    bot.moderation_queue.enqueue(
+                        chat_id,
+                        "repeat_history_ban",
+                        lambda: bot.admin_actions.ban_user(
+                            chat_id, user_id, reason="اسپم تکراری"
+                        ),
+                        on_success=repeat_history_ban_succeeded,
+                        on_failure=repeat_history_ban_failed,
+                    )
                     return
             except Exception as e:
                 print("history error:", e)
@@ -1094,12 +1100,12 @@ async def handle_new_message(bot, event):
         # اتصال دستورات فیلتر کلمات گروه
         try:
             # از sender/chat resolve‌شده در ابتدای handler استفاده می‌کنیم.
-            if not fast_command and await bot.check_group_word_commands(
-                event,
-                clean_text,
-                chat_id,
-                user_id
-           ):
+            handled_group_word = (
+                not fast_command and await bot.check_group_word_commands(
+                    event, clean_text, chat_id, user_id
+                )
+            )
+            if handled_group_word:
                 return
 
         except Exception as e:
@@ -2105,30 +2111,38 @@ async def handle_new_message(bot, event):
                     await event.reply("❌ کاربر پیدا نشد")
                     return
 
-                add_kick(chat_id)
-                await bot.client.edit_permissions(
-                    chat_id,
-                    target_user,
-                    until_date=None,
-                    view_messages=False
-                )
-                target_username = getattr(target_user, "username", None)
-                target_display_name = " ".join(
-                    part for part in (
-                        getattr(target_user, "first_name", None),
-                        getattr(target_user, "last_name", None),
-                    ) if part
-                ).strip()
-                add_banned(
-                    chat_id,
-                    target_user.id,
-                    username=target_username,
-                    display_name=target_display_name,
-                    reason="اخراج دستی توسط مالک یا ادمین",
-                    source="manual",
-                )
+                async def kick_succeeded(_result):
+                    add_kick(chat_id)
+                    target_username = getattr(target_user, "username", None)
+                    target_display_name = " ".join(
+                        part for part in (
+                            getattr(target_user, "first_name", None),
+                            getattr(target_user, "last_name", None),
+                        ) if part
+                    ).strip()
+                    add_banned(
+                        chat_id,
+                        target_user.id,
+                        username=target_username,
+                        display_name=target_display_name,
+                        reason="اخراج دستی توسط مالک یا ادمین",
+                        source="manual",
+                    )
+                    await event.reply("✅ کاربر اخراج شد")
 
-                await event.reply("✅ کاربر اخراج شد")
+                async def kick_failed(_error):
+                    await event.reply("❌ اخراج کاربر انجام نشد")
+
+                bot.moderation_queue.enqueue(
+                    chat_id,
+                    "kick",
+                    lambda: bot.client.edit_permissions(
+                        chat_id, target_user, until_date=None, view_messages=False
+                    ),
+                    on_success=kick_succeeded,
+                    on_failure=kick_failed,
+                )
+                await event.reply("⏳ درخواست اخراج در صف اجرا قرار گرفت")
 
             except Exception as e:
                 bot.logger.log_error(f"خطای اخراج: {e}")
@@ -2215,24 +2229,26 @@ async def handle_new_message(bot, event):
                 )
 
                 if bot.tracker.should_punish(chat_id, user.id):
-                    punished = await bot.admin_actions.punish_user(
-                        chat_id, user.id, username, announce=False
+                    async def warning_punish_succeeded(_result):
+                        if (
+                            count >= 5
+                            and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
+                        ):
+                            await _send_moderation_notification_once(
+                                bot, chat_id, user.id, "warning_ban", event.message.id,
+                                "🚫 کاربر 「"
+                                f"{_format_banned_user(user, user.id)}"
+                                "」\nبه دلیل تخلفات از گروه اخراج شد.",
+                            )
+
+                    bot.moderation_queue.enqueue(
+                        chat_id,
+                        "warning_punish",
+                        lambda: bot.admin_actions.punish_user(
+                            chat_id, user.id, username, announce=False
+                        ),
+                        on_success=warning_punish_succeeded,
                     )
-                    if (
-                        punished
-                        and count >= 5
-                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
-                    ):
-                        await _send_moderation_notification_once(
-                            bot,
-                            chat_id,
-                            user.id,
-                            "warning_ban",
-                            event.message.id,
-                            "🚫 کاربر 「"
-                            f"{_format_banned_user(user, user.id)}"
-                            "」\nبه دلیل تخلفات از گروه اخراج شد.",
-                        )
                     bot.tracker.reset_count(chat_id, user.id)
 
             except Exception as e:
@@ -2286,18 +2302,23 @@ async def handle_new_message(bot, event):
                 except Exception:
                     pass
 
-                result = await bot.admin_actions.mute_user(
-                    chat_id,
-                    target_user.id
-                )
-
-                if result:
+                async def mute_succeeded(_result):
                     add_mute(chat_id)
                     await event.reply(
                         f"🔕 کاربر 『 {_format_banned_user(target_user, target_user.id)} 』 سکوت شد"
                     )
-                else:
+
+                async def mute_failed(_error):
                     await event.reply("❌ انجام سکوت ناموفق بود")
+
+                bot.moderation_queue.enqueue(
+                    chat_id,
+                    "mute",
+                    lambda: bot.admin_actions.mute_user(chat_id, target_user.id),
+                    on_success=mute_succeeded,
+                    on_failure=mute_failed,
+                )
+                await event.reply("⏳ درخواست سکوت در صف اجرا قرار گرفت")
 
             except Exception as e:
                 bot.logger.log_error(
@@ -2334,16 +2355,21 @@ async def handle_new_message(bot, event):
 
                 target_user = await reply_msg.get_sender()
 
-                result = await bot.admin_actions.unmute_user(
-                    chat_id,
-                    target_user.id
-                )
-
-                if result:
+                async def unmute_succeeded(_result):
                     add_mute(chat_id)
                     await event.reply("🔊 سکوت کاربر برداشته شد")
-                else:
+
+                async def unmute_failed(_error):
                     await event.reply("❌ رفع سکوت انجام نشد")
+
+                bot.moderation_queue.enqueue(
+                    chat_id,
+                    "unmute",
+                    lambda: bot.admin_actions.unmute_user(chat_id, target_user.id),
+                    on_success=unmute_succeeded,
+                    on_failure=unmute_failed,
+                )
+                await event.reply("⏳ درخواست رفع سکوت در صف اجرا قرار گرفت")
 
             except Exception as e:
                 bot.logger.log_error(f"خطای رفع سکوت: {e}")
@@ -2487,31 +2513,28 @@ async def handle_new_message(bot, event):
                 if punish_key not in bot.punished_users:
                     bot.punished_users.add(punish_key)
 
-                    punished = await bot.admin_actions.punish_user(
-                        chat_id,
-                        user_id,
-                        username,
-                        announce=False,
-                    )
-                    if (
-                        punished
-                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
-                    ):
-                        await _send_moderation_notification_once(
-                            bot,
-                            chat_id,
-                            user_id,
-                            "spam_ban",
-                            event.message.id,
-                            "⚠️ کاربر ⏌ "
-                            f"{_format_banned_user(sender, user_id)}"
-                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
-                        )
+                    async def heavy_repeat_succeeded(_result):
+                        if bot.config_manager.get("action_on_threshold") in ["ban", "kick"]:
+                            await _send_moderation_notification_once(
+                                bot, chat_id, user_id, "spam_ban", event.message.id,
+                                "⚠️ کاربر ⏌ "
+                                f"{_format_banned_user(sender, user_id)}"
+                                " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
+                            )
+                        await _cleanup_heavy_spam_history(bot, event, chat_id, user_id)
 
-                    if punished:
-                        await _cleanup_heavy_spam_history(
-                            bot, event, chat_id, user_id
-                        )
+                    async def heavy_repeat_failed(_error):
+                        bot.punished_users.discard(punish_key)
+
+                    bot.moderation_queue.enqueue(
+                        chat_id,
+                        "heavy_repeat_punish",
+                        lambda: bot.admin_actions.punish_user(
+                            chat_id, user_id, username, announce=False
+                        ),
+                        on_success=heavy_repeat_succeeded,
+                        on_failure=heavy_repeat_failed,
+                    )
 
                 return
 
@@ -2606,22 +2629,26 @@ async def handle_new_message(bot, event):
                         _log_ban_execution(bot, chat_id, user_id, "اسپم تکراری شدید")
                         if punish_key not in bot.punished_users:
                             bot.punished_users.add(punish_key)
-                            banned = await bot.admin_actions.ban_user(
-                                chat_id, user_id, reason="اسپم مکرر شدید"
-                            )
-                            if banned:
+                            async def repeat_ban_succeeded(_result):
                                 await _send_moderation_notification_once(
-                                    bot,
-                                    chat_id,
-                                    user_id,
-                                    "spam_ban",
-                                    event.message.id,
+                                    bot, chat_id, user_id, "spam_ban", event.message.id,
                                     "⚠️ کاربر ⏌ "
                                     f"{_format_banned_user(sender, user_id)}"
                                     " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                                 )
-                            else:
+
+                            async def repeat_ban_failed(_error):
                                 bot.punished_users.discard(punish_key)
+
+                            bot.moderation_queue.enqueue(
+                                chat_id,
+                                "repeat_spam_ban",
+                                lambda: bot.admin_actions.ban_user(
+                                    chat_id, user_id, reason="اسپم مکرر شدید"
+                                ),
+                                on_success=repeat_ban_succeeded,
+                                on_failure=repeat_ban_failed,
+                            )
 
                     return
             except Exception as e:
@@ -2676,33 +2703,31 @@ async def handle_new_message(bot, event):
                         f"⚠️ کاربر {username}({user_id}) به آستانه {threshold} رسید - اعمال مجازات"
                     )
 
-                    punished = await bot.admin_actions.punish_user(
-                        chat_id, user_id, username, announce=False
-                    )
-                    if (
-                        punished
-                        and count >= 5
-                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
-                    ):
-                        await _send_moderation_notification_once(
-                            bot,
-                            chat_id,
-                            user_id,
-                            "warning_ban",
-                            event.message.id,
-                            "🚫 کاربر 「"
-                            f"{_format_banned_user(sender, user_id)}"
-                            "」\nبه دلیل تخلفات از گروه اخراج شد.",
-                        )
+                    async def threshold_punish_succeeded(_result):
+                        permanent = bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
+                        if count >= 5 and permanent:
+                            await _send_moderation_notification_once(
+                                bot, chat_id, user_id, "warning_ban", event.message.id,
+                                "🚫 کاربر 「"
+                                f"{_format_banned_user(sender, user_id)}"
+                                "」\nبه دلیل تخلفات از گروه اخراج شد.",
+                            )
+                        bot.tracker.reset_count(chat_id, user_id)
+                        if not permanent:
+                            bot.punished_users.discard(punish_key)
 
-                    # بعد از بن دائمی گارد حفظ می‌شود تا پیام‌های صف‌شده
-                    # دوباره بن/اعلان تولید نکنند؛ برای mute گارد آزاد می‌شود.
-                    bot.tracker.reset_count(chat_id, user_id)
-                    if not (
-                        punished
-                        and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
-                    ):
+                    async def threshold_punish_failed(_error):
                         bot.punished_users.discard(punish_key)
+
+                    bot.moderation_queue.enqueue(
+                        chat_id,
+                        "threshold_punish",
+                        lambda: bot.admin_actions.punish_user(
+                            chat_id, user_id, username, announce=False
+                        ),
+                        on_success=threshold_punish_succeeded,
+                        on_failure=threshold_punish_failed,
+                    )
             # پیام سالم - می‌توان برای آنالیز بیشتر لاگ کرد
             pass
 
@@ -2710,5 +2735,4 @@ async def handle_new_message(bot, event):
         bot.logger.log_error(f"خطا در هندل پیام: {e}")
         import traceback
         traceback.print_exc()
-
 
