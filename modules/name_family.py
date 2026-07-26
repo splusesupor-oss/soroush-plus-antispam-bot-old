@@ -2,7 +2,7 @@
 import random
 from modules.game_points import add
 
-LETTERS = list("ابتثجچحخدذرزسشصضطظعغفقکگلمنوهی")
+LETTERS = ("ا", "ب", "پ", "ت", "ث", "ج", "چ", "ح", "خ", "د", "ذ", "ر", "ز", "ژ", "س", "ش", "ص", "ض", "ط", "ظ", "ع", "غ", "ف", "ق", "ک", "گ", "ل", "م", "ن", "و", "ه", "ی")
 CATEGORIES = ("نام", "فامیل", "شهر", "میوه", "وسیله", "حیوان", "خواننده")
 # Curated real answers; validation is category-specific rather than text-only.
 VALID = {
@@ -15,6 +15,7 @@ VALID = {
     "خواننده": {"ابی", "احسان خواجه امیری", "بهنام بانی", "حمید هیراد", "رضا صادقی", "شادمهر", "محسن چاوشی", "محسن یگانه", "مهدی احمدوند", "گوگوش", "همایون شجریان", "یاس", "داریوش اقبالی", "داریوش"},
 }
 _ACTIVE = {}
+_REMAINING_LETTERS = {}
 
 
 def is_active(chat_id):
@@ -24,7 +25,12 @@ def is_active(chat_id):
 def start(chat_id):
     if chat_id in _ACTIVE:
         return None
-    state = {"letter": random.SystemRandom().choice(LETTERS), "answers": {}}
+    remaining = _REMAINING_LETTERS.get(chat_id)
+    if not remaining:
+        remaining = list(LETTERS)
+        random.SystemRandom().shuffle(remaining)
+        _REMAINING_LETTERS[chat_id] = remaining
+    state = {"letter": remaining.pop(), "answers": {}}
     _ACTIVE[chat_id] = state
     return dict(state)
 
