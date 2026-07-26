@@ -443,8 +443,8 @@ def _has_group_management_permission(bot, chat_id, user_id, username):
         result, source = True, "global_owner"
     elif group_owner_id is not None and str(user_id) == str(group_owner_id):
         result, source = True, "registered_group_owner"
-    elif is_admin(chat_id, user_id):
-        result, source = True, "registered_group_admin_id"
+    elif is_admin(chat_id, user_id, username):
+        result, source = True, "registered_group_admin"
     else:
         result, source = False, "none"
 
