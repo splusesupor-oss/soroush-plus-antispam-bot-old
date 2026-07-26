@@ -59,6 +59,30 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.force_round(2)
         self.assertEqual(game.submit(100, 8, "کاربر", "\n".join(answers[:2] + ["فوفوف"] * 5)), 20)
 
+    def test_vahids_partial_answers_score_thirty_and_log_each_category(self):
+        class Logger:
+            def __init__(self):
+                self.lines = []
+
+            def log_info(self, line):
+                self.lines.append(line)
+
+        logger = Logger()
+        game._ACTIVE[100] = {
+            "round_id": 1,
+            "letter": "و",
+            "answers": {},
+        }
+        answers = "\n".join((
+            "وحید", "وحیدی", "ورامین", "نمی‌دونم", "وینچستر", "نمی‌دونم", "وحید",
+        ))
+        self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 30)
+        self.assertIn("category=نام answer=وحید valid=True score=10", logger.lines[0])
+        self.assertIn("category=فامیل answer=وحیدی valid=True score=10", logger.lines[1])
+        self.assertIn("category=شهر answer=ورامین valid=True score=10", logger.lines[2])
+        self.assertIn("category=میوه answer=نمی‌دونم valid=False score=0", logger.lines[3])
+        self.assertEqual(len(logger.lines), 7)
+
     def test_fabricated_answers_receive_zero_points(self):
         self.force_round(1)
         fabricated = "\n".join((
