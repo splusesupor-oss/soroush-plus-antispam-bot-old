@@ -448,11 +448,14 @@ def _has_group_management_permission(bot, chat_id, user_id, username):
     else:
         result, source = False, "none"
 
-    bot.logger.log_info(
-        "ADMIN CHECK DEBUG "
-        f"user_id={user_id} username={username} group_id={chat_id} "
-        f"result={result} source={source}"
-    )
+    # این helper برای هر پیام گروهی اجرا می‌شود؛ log synchronous فقط برای
+    # permission مثبت نگه داشته می‌شود تا مسیر عادی کاربران I/O اضافی نداشته باشد.
+    if result:
+        bot.logger.log_info(
+            "ADMIN CHECK DEBUG "
+            f"user_id={user_id} username={username} group_id={chat_id} "
+            f"result={result} source={source}"
+        )
     return result
 
 
