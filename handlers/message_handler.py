@@ -1063,18 +1063,16 @@ async def handle_new_message(bot, event):
 # ثبت آمار پیام گروه
         try:
             if not event.is_private and not fast_command:
-                sender_stats = await event.get_sender()
-                chat_stats = await event.get_chat()
-
+                # sender/chat در ابتدای handler resolve شده‌اند؛ دوباره API نخوان.
                 add_message(
-                    getattr(chat_stats, "id", 0),
-                    getattr(sender_stats, "id", 0),
-                    getattr(sender_stats, "username", "") or ""
+                    chat_id,
+                    user_id,
+                    getattr(sender, "username", "") or ""
                 )
                 record_coin_message(
-                    getattr(chat_stats, "id", 0),
-                    getattr(sender_stats, "id", 0),
-                    _format_admin_display(sender_stats),
+                    chat_id,
+                    user_id,
+                    _format_admin_display(sender),
                 )
 
         except Exception as e:
@@ -1084,18 +1082,13 @@ async def handle_new_message(bot, event):
 
         # اتصال دستورات فیلتر کلمات گروه
         try:
-            sender = await event.get_sender()
-            user_id = getattr(sender, "id", 0)
-
-            chat = await event.get_chat()
-            chat_id = getattr(chat, "id", 0)
-
+            # از sender/chat resolve‌شده در ابتدای handler استفاده می‌کنیم.
             if not fast_command and await bot.check_group_word_commands(
                 event,
                 clean_text,
                 chat_id,
                 user_id
-            ):
+           ):
                 return
 
         except Exception as e:
