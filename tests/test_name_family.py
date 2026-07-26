@@ -41,10 +41,23 @@ class NameFamilyValidationTests(unittest.TestCase):
             "letter": "ج",
             "answers": {},
         }
-        for category, answer in zip(game.CATEGORIES, answers):
-            self.assertTrue(game._validate_answer(category, "ج", answer))
-        self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(answers)), 70)
-        self.assertEqual(self.awards, [(100, 7, 70)])
+        expected_valid = (True, True, True, False, True, True, True)
+        self.assertEqual(
+            tuple(
+                game._validate_answer(category, "ج", answer)
+                for category, answer in zip(game.CATEGORIES, answers)
+            ),
+            expected_valid,
+        )
+        self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(answers)), 60)
+        self.assertEqual(self.awards, [(100, 7, 60)])
+
+    def test_each_category_contributes_exactly_ten_points(self):
+        answers = self.valid_answers().splitlines()
+        self.force_round(1)
+        self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(answers[:4] + ["فوفوف"] * 3)), 40)
+        self.force_round(2)
+        self.assertEqual(game.submit(100, 8, "کاربر", "\n".join(answers[:2] + ["فوفوف"] * 5)), 20)
 
     def test_fabricated_answers_receive_zero_points(self):
         self.force_round(1)
@@ -80,7 +93,7 @@ class NameFamilyValidationTests(unittest.TestCase):
     def test_duplicate_submission_does_not_add_points_twice(self):
         self.force_round(1)
         self.assertEqual(game.submit(100, 7, "کاربر", self.valid_answers()), 70)
-        self.assertEqual(game.submit(100, 7, "کاربر", "فوفوف\nفوفوف\nفوفوف\nفوفوف\nفوفوف\nفوفوف\nفوفوف"), 70)
+        self.assertIsNone(game.submit(100, 7, "کاربر", "فوفوف\nفوفوف\nفوفوف\nفوفوف\nفوفوف\nفوفوف\nفوفوف"))
         self.assertEqual(self.awards, [(100, 7, 70)])
 
     def test_scores_do_not_transfer_between_rounds(self):
