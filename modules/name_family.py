@@ -2,7 +2,10 @@
 import json
 import random
 import re
+import time
 from pathlib import Path
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from modules.game_points import add
 from modules.name_family_learning import learned_words, record as record_learning
@@ -124,6 +127,28 @@ _ACTIVE = {}
 _REMAINING_LETTERS = {}
 _ROUND_SEQUENCE = 0
 
+# Unknown answers are checked against Wikidata only after local database and
+# learned-answer checks. The cache is process-local: no runtime data file is made.
+_WIKIDATA_API = "https://www.wikidata.org/w/api.php"
+_WIKIDATA_TIMEOUT_SECONDS = 2.5
+_WIKIDATA_CACHE_SECONDS = 60 * 60
+_WIKIDATA_CACHE = {}
+_WIKIDATA_CATEGORY_TERMS = {
+    "نام": ("given name", "first name", "forename", "personal name", "نام کوچک"),
+    "فامیل": ("family name", "surname", "last name", "نام خانوادگی"),
+    "شهر": ("city", "شهر"),
+    "میوه": ("fruit", "میوه"),
+    "وسیله": (
+        "tool", "device", "appliance", "equipment", "instrument", "machine",
+        "utensil", "ابزار", "وسیله", "دستگاه",
+    ),
+    "حیوان": (
+        "animal", "mammal", "bird", "fish", "reptile", "amphibian", "insect",
+        "جانور", "حیوان", "پستاندار", "پرنده", "ماهی", "خزنده", "دوزیست", "حشره",
+    ),
+    "خواننده": ("singer", "vocalist", "خواننده"),
+}
+
 
 def is_active(chat_id):
     return chat_id in _ACTIVE
@@ -183,6 +208,79 @@ def _validate_answer(category, letter, answer):
     return normalized in VALID_NORMALIZED[category]
 
 
+def _wikidata_confirms_category(category, normalized_answer):
+    """Conservatively verify an unknown answer against an exact Wikidata match.
+
+    A failed or unavailable lookup never makes an answer valid.  This keeps the
+    local curated database and the confidence-based learning safeguards intact.
+    """
+    cache_key = (category, normalized_answer)
+    cached = _WIKIDATA_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and now - cached[0] < _WIKIDATA_CACHE_SECONDS:
+        return cached[1]
+
+    params = urlencode({
+        "action": "wbsearchentities",
+        "search": normalized_answer,
+        "language": "fa",
+        "format": "json",
+        "limit": 10,
+    })
+    request = Request(
+        f"{_WIKIDATA_API}?{params}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "SoroushPlusNameFamily/1.0",
+        },
+    )
+    confirmed = False
+    try:
+        with urlopen(request, timeout=_WIKIDATA_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        for result in payload.get("search", []):
+            match = result.get("match") or {}
+            if _normalize(match.get("text")) != normalized_answer:
+                continue
+            description = _normalize(result.get("description"))
+            if any(term in description for term in _WIKIDATA_CATEGORY_TERMS[category]):
+                confirmed = True
+                break
+    except (OSError, ValueError, TypeError):
+        confirmed = False
+
+    _WIKIDATA_CACHE[cache_key] = (now, confirmed)
+    return confirmed
+
+
+def _record_learning(
+    category,
+    letter,
+    answer,
+    normalized,
+    chat_id,
+    user_id,
+    min_observations,
+    min_unique_users,
+    min_unique_chats,
+):
+    """Keep the existing confidence thresholds for every newly seen answer."""
+    item = record_learning(
+        category,
+        letter,
+        answer,
+        normalized,
+        chat_id,
+        user_id,
+        min_observations=min_observations,
+        min_unique_users=min_unique_users,
+        min_unique_chats=min_unique_chats,
+    )
+    if item.get("status") == "learned":
+        LEARNED_NORMALIZED[category].add(normalized)
+    return item
+
+
 def _classify_answer(
     category,
     letter,
@@ -215,19 +313,35 @@ def _classify_answer(
     if not basic_valid:
         return 0, "none", "invalid", normalized
 
-    item = record_learning(
+    # Wikidata is queried only for a structurally valid local miss. An exact
+    # category-confirmed result receives this round's point immediately, while
+    # still passing through the existing confidence-based learning pipeline.
+    if _wikidata_confirms_category(category, normalized):
+        _record_learning(
+            category,
+            letter,
+            answer,
+            normalized,
+            chat_id,
+            user_id,
+            learning_min_observations,
+            learning_min_unique_users,
+            learning_min_unique_chats,
+        )
+        return 10, "wikidata", "wikidata_category_match", normalized
+
+    item = _record_learning(
         category,
         letter,
         answer,
         normalized,
         chat_id,
         user_id,
-        min_observations=learning_min_observations,
-        min_unique_users=learning_min_unique_users,
-        min_unique_chats=learning_min_unique_chats,
+        learning_min_observations,
+        learning_min_unique_users,
+        learning_min_unique_chats,
     )
     if item.get("status") == "learned":
-        LEARNED_NORMALIZED[category].add(normalized)
         return 10, "learned", "auto_learned", normalized
     return 0, "learning", "insufficient_confidence", normalized
 
@@ -310,7 +424,7 @@ def submit(
                 f"category={category} raw_answer={answer} "
                 f"normalized_answer={normalized} letter={letter} "
                 f"source={source} reason={reason} "
-                f"valid={source == 'database'} score={score}"
+                f"valid={source in {'database', 'learned', 'wikidata'}} score={score}"
             )
     state["answers"][user_key] = {
         "user_id": user_key,
