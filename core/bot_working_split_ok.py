@@ -25,6 +25,8 @@ from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 from modules.coins import settle_previous_days, flush as flush_coin_cache
+from modules.group_stats import flush as flush_group_stats
+from modules.user_activity import flush as flush_user_activity
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from modules.moderation_queue import ModerationQueue
 from handlers.message_handler import handle_new_message, send_activation_message
@@ -237,6 +239,8 @@ class SoroushAntiSpamBot:
                             f"خطا در ارسال یادآوری {reminder.get('id')}: {error}"
                         )
                 flush_coin_cache()
+                flush_group_stats()
+                flush_user_activity()
                 await asyncio.sleep(15)
 
         asyncio.create_task(reminder_loop())

@@ -36,8 +36,31 @@ class SpamDetector:
         # الگوی تبلیغاتی عمومی
         self.mention_spam_pattern = re.compile(r'@everyone|@all|@here', re.IGNORECASE)
 
+        self.persian_phone_pattern = re.compile(r'۰?۹[۰-۹]{9}|0?9\d{9}')
+        self.username_ad_pattern = re.compile(r'جوین|عضو|کانال|گروه|add|join', re.IGNORECASE)
+        self._banned_words_version = None
+        self._banned_word_patterns = ()
+        self._refresh_banned_word_patterns()
         # امتیاز برای تصمیم ترکیبی
         self.spam_score_threshold = 2
+
+    def _refresh_banned_word_patterns(self):
+        version = getattr(self.config, "_banned_words_version", 0)
+        if version == self._banned_words_version:
+            return
+        patterns = []
+        for raw_word in self.config.banned_words:
+            word = self._normalize_banned_word(raw_word)
+            if word:
+                patterns.append((word, re.compile(
+                    r"(?<![آ-یa-zA-Z0-9])" + re.escape(word) + r"(?![آ-یa-zA-Z0-9])"
+                )))
+        self._banned_word_patterns = tuple(patterns)
+        self._banned_words_version = version
+
+    @staticmethod
+    def _normalize_banned_word(value):
+        return str(value).strip().lower().replace("ي", "ی").replace("ك", "ک").replace("‌", " ")
 
     def check_links(self, text: str) -> Tuple[bool, Optional[str]]:
         if not self.config.get("check_links", True):
@@ -69,7 +92,7 @@ class SpamDetector:
                         return True, f"شماره تماس ({digits[:4]}...)"
                     return True, f"شماره تماس"
         # الگوی ساده‌تر برای شماره‌های فارسی با حروف
-        if re.search(r'۰?۹[۰-۹]{9}|0?9\d{9}', text):
+        if self.persian_phone_pattern.search(text):
             return True, "شماره تماس"
         return False, None
 
@@ -86,7 +109,7 @@ class SpamDetector:
             # اگر یک آیدی + کلمه تبلیغاتی
             if len(mentions) == 1:
                 # چک می‌کنیم آیا متن حاوی دستور جوین یا تبلیغ است
-                if re.search(r'جوین|عضو|کانال|گروه|add|join', text, re.IGNORECASE):
+                if self.username_ad_pattern.search(text):
                     return True, f"آیدی تبلیغاتی ({mentions[0]})"
                 # اگر تنظیمات سختگیرانه است، حتی تک آیدی را هم اسپم بگیر
                 # برای این پروژه طبق درخواست شما، آیدی به تنهایی اسپم محسوب می‌شود اگر در تنظیمات فعال باشد
@@ -98,26 +121,13 @@ class SpamDetector:
     def check_banned_words(self, text: str, chat_id=None) -> Tuple[bool, Optional[str]]:
         if not self.config.get("check_banned_words", True):
             return False, None
-
         if chat_id is not None and not is_enabled(chat_id):
             return False, None
-
-        text_lower = text.lower()
-        text_lower = text_lower.replace("ي", "ی").replace("ك", "ک").replace("‌", " ")
-
-        for word in self.config.banned_words:
-            if not word:
-                continue
-
-            word = word.strip().lower()
-            word = word.replace("ي", "ی").replace("ك", "ک").replace("‌", " ")
-
-            # فقط خود کلمه، نه داخل کلمه دیگر
-            pattern = r"(?<![آ-یa-zA-Z0-9])" + re.escape(word) + r"(?![آ-یa-zA-Z0-9])"
-
-            if re.search(pattern, text_lower):
+        self._refresh_banned_word_patterns()
+        text_lower = self._normalize_banned_word(text)
+        for word, pattern in self._banned_word_patterns:
+            if pattern.search(text_lower):
                 return True, f"کلمه ممنوعه ({word})"
-
         return False, None
 
     def check_spam_score(self, text: str, chat_id=None, include_banned_words=True) -> Tuple[int, List[str]]:
@@ -158,30 +168,26 @@ class SpamDetector:
         return score, reasons
 
     def is_spam(self, text: str, chat_id=None) -> Tuple[bool, str]:
-        """
-        تابع اصلی تشخیص
-        برمی‌گرداند: (آیا اسپم است, دلیل)
-        """
+        """تشخیص با early-exit؛ هر check مستقلِ مثبت به آستانهٔ ۲ می‌رسد."""
         if not text or not text.strip():
             return False, ""
-
-        # hot reload
         self.config.reload_if_needed()
-
-        # بررسی مستقیم کلمات ممنوعه
-        is_banned, reason_banned = self.check_banned_words(text, chat_id)
+        is_banned, reason = self.check_banned_words(text, chat_id)
         if is_banned:
-            return True, reason_banned
-
-        score, reasons = self.check_spam_score(
-            text, chat_id, include_banned_words=False
-        )
-
-        if score >= self.spam_score_threshold:
-            return True, " و ".join(reasons)
-        
+            return True, reason
+        is_link, reason = self.check_links(text)
+        if is_link:
+            return True, reason
+        is_phone, reason = self.check_phone_numbers(text)
+        if is_phone:
+            return True, reason
+        is_user, reason = self.check_usernames(text)
+        if is_user:
+            return True, reason
+        if self.mention_spam_pattern.search(text):
+            return True, "منشن گروهی"
         return False, ""
-    
+
     def analyze(self, text: str) -> dict:
         """تحلیل کامل برای لاگ"""
         score, reasons = self.check_spam_score(text, chat_id)

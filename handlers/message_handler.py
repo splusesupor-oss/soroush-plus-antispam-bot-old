@@ -55,6 +55,7 @@ from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from modules.group_id import normalize_group_id
 from modules.pinned_messages import save as save_pinned_message, get as get_pinned_message
+from modules.performance import MessagePerformance
 from handlers.admin_handler import handle_admin_commands
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
@@ -199,6 +200,16 @@ async def _send_moderation_notification_once(
     except Exception:
         bot.moderation_notification_guard.discard(key)
         raise
+
+
+def _run_background(bot, name, callback, *args):
+    """کارهای غیرامنیتیِ پس از پاسخ را از مسیر پیام جدا می‌کند."""
+    async def run():
+        try:
+            callback(*args)
+        except Exception as error:
+            bot.logger.log_error(f"BACKGROUND {name} FAILED: {error}")
+    return _asyncio.create_task(run())
 
 
 def _track_group_timer(bot, chat_id, task):
@@ -435,9 +446,18 @@ def _can_manage_group_admins(bot, chat_id, user_id, username):
 
 
 DELETE_COMMAND_COOLDOWNS = {}
+ADMIN_PERMISSION_CACHE = {}
+ADMIN_PERMISSION_CACHE_TTL_SECONDS = 45
 
 
 def _has_group_management_permission(bot, chat_id, user_id, username):
+    normalized_username = (username or "").lstrip("@").lower()
+    cache_key = (chat_id, user_id, normalized_username)
+    now = _asyncio.get_running_loop().time()
+    cached = ADMIN_PERMISSION_CACHE.get(cache_key)
+    if cached and cached[0] > now:
+        return cached[1]
+
     group_owner_id = get_group_owner(chat_id)
     if is_global_owner(user_id):
         result, source = True, "global_owner"
@@ -448,6 +468,9 @@ def _has_group_management_permission(bot, chat_id, user_id, username):
     else:
         result, source = False, "none"
 
+    ADMIN_PERMISSION_CACHE[cache_key] = (
+        now + ADMIN_PERMISSION_CACHE_TTL_SECONDS, result
+    )
     # این helper برای هر پیام گروهی اجرا می‌شود؛ log synchronous فقط برای
     # permission مثبت نگه داشته می‌شود تا مسیر عادی کاربران I/O اضافی نداشته باشد.
     if result:
@@ -467,6 +490,8 @@ def _can_delete_messages(bot, chat_id, user_id, username):
 
 async def handle_new_message(bot, event):
     """هندلر اصلی برای پیام‌های جدید"""
+    profiler = MessagePerformance()
+    chat_id = getattr(event, "chat_id", None)
     try:
         # اگر پیام متنی نیست رد کن (مثلا سرویس)
         if not event.message or not hasattr(event.message, 'message'):
@@ -489,6 +514,7 @@ async def handle_new_message(bot, event):
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+        profiler.mark("RECEIVE")
         # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
         is_bot_account = (
             user_id == getattr(bot, "bot_account_id", None)
@@ -510,6 +536,7 @@ async def handle_new_message(bot, event):
             )
         )
         # پاسخ‌های ثابت بدون ورود به moderation و I/O پاسخ می‌گیرند.
+        profiler.mark("COMMAND_MATCH")
         simple_reply = SIMPLE_REPLIES.get(clean_text)
         if simple_reply:
             await event.reply(simple_reply)
@@ -520,7 +547,9 @@ async def handle_new_message(bot, event):
 
         # فرمان‌های کوتاه نباید برای ثبت آمار/فعالیت منتظر I/O فایل بمانند.
         if not event.is_private and not fast_command:
-            record_activity(chat_id, user_id, event.message)
+            _run_background(
+                bot, "user_activity", record_activity, chat_id, user_id, event.message
+            )
         sender_username = getattr(sender, "username", None)
         # فرمان‌های سریع permission مخصوص خود را در branch فرمان بررسی می‌کنند.
         is_group_moderator = (
@@ -530,6 +559,7 @@ async def handle_new_message(bot, event):
                 bot, chat_id, user_id, sender_username
             )
         )
+        profiler.mark("ADMIN_CHECK")
         if not is_group_moderator and not is_gif_message(event.message):
             reset_gif_history(chat_id, user_id)
 
@@ -602,6 +632,7 @@ async def handle_new_message(bot, event):
         is_forwarded, forward_field, forward_fields = _get_forward_metadata(
             event.message
         )
+        profiler.mark("FORWARD_CHECK")
         if is_forwarded:
             bot.logger.log_info(
                 "FORWARD DETECTED "
@@ -1091,10 +1122,13 @@ async def handle_new_message(bot, event):
         try:
             if not event.is_private and not fast_command:
                 # sender/chat در ابتدای handler resolve شده‌اند؛ دوباره API نخوان.
-                add_message(
+                _run_background(
+                    bot,
+                    "group_stats",
+                    add_message,
                     chat_id,
                     user_id,
-                    getattr(sender, "username", "") or ""
+                    getattr(sender, "username", "") or "",
                 )
                 record_coin_message(
                     chat_id,
@@ -2506,6 +2540,7 @@ async def handle_new_message(bot, event):
             )
 
 
+        profiler.mark("FILTER")
         # بررسی تکرار شدید داخل یک پیام
         try:
             import re
@@ -2604,7 +2639,9 @@ async def handle_new_message(bot, event):
         else:
             is_spam, reason = bot.detector.is_spam(message_text, chat_id)
 
+        profiler.mark("SPAM_CHECK")
         if is_spam:
+            profiler.mark("AUTO_MODERATION")
             rejoin_state = getattr(bot, "rejoin_spam_state", {}).get(
                 (chat_id, user_id), {}
             )
@@ -2759,4 +2796,7 @@ async def handle_new_message(bot, event):
         bot.logger.log_error(f"خطا در هندل پیام: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        profiler.mark("SEND_RESPONSE")
+        profiler.finish(bot.logger, chat_id)
 

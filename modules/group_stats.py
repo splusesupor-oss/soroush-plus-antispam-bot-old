@@ -8,6 +8,7 @@ FILE = "logs/group_stats.json"
 
 _stats_cache = None
 _stats_cache_mtime = None
+_stats_dirty = False
 
 def _file_mtime():
     try:
@@ -36,11 +37,22 @@ def load_stats():
 
 
 def save_stats(data):
-    global _stats_cache, _stats_cache_mtime
-    with open(FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """به‌روزرسانی حافظه؛ flush دوره‌ای از نوشتن برای هر پیام جلوگیری می‌کند."""
+    global _stats_cache, _stats_dirty
     _stats_cache = data
+    _stats_dirty = True
+
+
+def flush():
+    global _stats_cache_mtime, _stats_dirty
+    if not _stats_dirty:
+        return False
+    os.makedirs(os.path.dirname(FILE) or ".", exist_ok=True)
+    with open(FILE, "w", encoding="utf-8") as f:
+        json.dump(_stats_cache or {}, f, ensure_ascii=False, indent=2)
     _stats_cache_mtime = _file_mtime()
+    _stats_dirty = False
+    return True
 
 
 def ensure_group(data, chat_id):

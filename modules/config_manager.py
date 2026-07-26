@@ -16,6 +16,7 @@ class ConfigManager:
         self.whitelisted_usernames: Set[str] = set()
         self._banned_words_mtime = None
         self._whitelist_mtime = None
+        self._banned_words_version = 0
         self.load_all()
 
     def load_all(self):
@@ -48,6 +49,7 @@ class ConfigManager:
                 words.add(str(w).lower())
         
         self.banned_words = words
+        self._banned_words_version += 1
         self._banned_words_mtime = self._file_mtime(self.banned_words_path)
         return words
 
@@ -119,6 +121,7 @@ class ConfigManager:
         with open(self.banned_words_path, 'a', encoding='utf-8') as f:
             f.write(f"\n{word}\n")
         self.banned_words.add(word)
+        self._banned_words_version += 1
         return True
 
     def remove_banned_word(self, word: str) -> bool:
@@ -138,6 +141,7 @@ class ConfigManager:
                         f.write(line)
         
         self.banned_words.discard(word)
+        self._banned_words_version += 1
         return True
 
     def get(self, key, default=None):
