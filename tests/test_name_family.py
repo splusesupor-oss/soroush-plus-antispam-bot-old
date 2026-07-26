@@ -59,6 +59,27 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.force_round(2)
         self.assertEqual(game.submit(100, 8, "کاربر", "\n".join(answers[:2] + ["فوفوف"] * 5)), 20)
 
+    def test_yeh_examples_score_fifty_and_ten_independently(self):
+        game._ACTIVE[100] = {
+            "round_id": 1,
+            "letter": "ی",
+            "answers": {},
+        }
+        fifty_answers = "\n".join((
+            "یسنا", "یاوری", "یزد", "نمیدونم", "یویو", "یوزپلنگ", "نمیدونم",
+        ))
+        self.assertEqual(game.submit(100, 7, "کاربر", fifty_answers), 50)
+
+        game._ACTIVE[100] = {
+            "round_id": 2,
+            "letter": "ی",
+            "answers": {},
+        }
+        ten_answers = "\n".join((
+            "یارو", "یاوری", "نمیدونم", "نمیدونم", "یخ", "نمیدونم", "نمیدونم",
+        ))
+        self.assertEqual(game.submit(100, 8, "کاربر", ten_answers), 10)
+
     def test_vahids_partial_answers_score_thirty_and_log_each_category(self):
         class Logger:
             def __init__(self):
