@@ -1,6 +1,8 @@
-"""Name & Family group game state and strict category-aware validation."""
+"""Name & Family group state with a curated category-specific word database."""
+import json
 import random
 import re
+from pathlib import Path
 
 from modules.game_points import add
 
@@ -10,26 +12,7 @@ LETTERS = (
     "ن", "و", "ه", "ی",
 )
 CATEGORIES = ("نام", "فامیل", "شهر", "میوه", "وسیله", "حیوان", "خواننده")
-
-# Curated answers are deliberately category-specific. A matching first letter alone is never enough.
-VALID = {
-    "نام": {"علی", "امیر", "احمد", "آرمان", "بهرام", "بهزاد", "پارسا", "پرهام", "تینا", "ترانه", "جواد", "حسین", "حامد", "رضا", "رامین", "سارا", "سمیرا", "شادی", "شهرزاد", "صبا", "فاطمه", "فرهاد", "فریبا", "مریم", "محمد", "میلاد", "نازنین", "نگار", "نیما", "یاسمن", "یسنا", "یوسف", "داود", "داریوش", "دانیال", "جهان", "وحید", "ظفر", "ضیا", "ثریا", "ژاله", "ژیلا"},
-    "فامیل": {"احمدی", "اکبری", "امیری", "بهرامی", "پارسا", "پورمحمدی", "جعفری", "حسینی", "رضایی", "رستمی", "سلیمانی", "صادقی", "عباسی", "فرهادی", "فری", "کریمی", "محمدی", "مرادی", "نادری", "نوروزی", "یوسفی", "یاوری", "دارایی", "داودی", "دهقان", "جوادی", "وحیدی", "ظفری", "ضیایی", "ثابتی"},
-    "شهر": {"اراک", "اردبیل", "اصفهان", "اهواز", "بابل", "بجنورد", "بندرعباس", "تبریز", "تهران", "جهرم", "زاهدان", "رشت", "رامسر", "ساری", "سنندج", "شیراز", "قم", "کرج", "کرمان", "مشهد", "همدان", "یزد", "دهدشت", "دزفول", "دامغان", "فیروزکوه", "فیروز کوه", "فردوس", "جیرفت", "ورامین"},
-    "میوه": {"آلبالو", "انار", "انگور", "آناناس", "به", "پرتقال", "توت", "خرمالو", "سیب", "شلیل", "طالبی", "گلابی", "گیلاس", "لیمو", "موز", "نارنج", "هندوانه", "هلو", "یوسفی", "فندق", "فراوله"},
-    "وسیله": {"آینه", "اتو", "آچار", "باتری", "پنکه", "تلفن", "چراغ", "چتر", "دفتر", "رادیو", "ساعت", "صندلی", "قفل", "قیچی", "کامپیوتر", "کوله", "لپتاپ", "مداد", "میز", "هدفون", "یخچال", "یویو", "دستکش", "دوربین", "دریل", "فرغون", "فلاسک", "جعبه", "ظرف", "ضبط"},
-    "حیوان": {"اسب", "آهو", "ببر", "پلنگ", "پنگوئن", "تمساح", "جغد", "خرس", "روباه", "زرافه", "سگ", "شیر", "فیل", "گربه", "گوسفند", "مار", "میمون", "نهنگ", "یوزپلنگ", "دارکوب", "دلفین", "دال"},
-    "خواننده": {"ابی", "احسان خواجه امیری", "بهنام بانی", "حمید هیراد", "رضا صادقی", "شادمهر", "محسن چاوشی", "محسن یگانه", "مهدی احمدوند", "گوگوش", "همایون شجریان", "یاس", "داریوش اقبالی", "داریوش", "فرهاد", "فرهاد مهراد", "جهان"},
-}
-
-_INVALID_ANSWERS = frozenset({
-    "نمیدونم", "نمی دونم", "نمی دانم", "نمیدانم", "ندارم", "هیچی", "نمیگم",
-})
-# Spaces are allowed for compound names; digits, Latin letters, emoji and punctuation are rejected.
-_VALID_TEXT = re.compile(r"^[آ-یءئؤة\s]+$")
-_ACTIVE = {}
-_REMAINING_LETTERS = {}
-_ROUND_SEQUENCE = 0
+DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "name_family_words.json"
 
 
 def _normalize(value):
@@ -42,10 +25,55 @@ def _normalize(value):
     return " ".join(normalized.split())
 
 
+def _load_valid_words():
+    try:
+        raw = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"Name & Family word database is unavailable: {error}") from error
+    if set(raw) != set(CATEGORIES):
+        raise RuntimeError("Name & Family word database categories are invalid")
+    valid = {}
+    for category in CATEGORIES:
+        words = raw[category]
+        if not isinstance(words, list) or not all(isinstance(word, str) for word in words):
+            raise RuntimeError(f"Name & Family database category is invalid: {category}")
+        valid[category] = frozenset(words)
+    return valid
+
+
+# A versioned data file replaces the small hard-coded list. Answers remain category-specific.
+VALID = _load_valid_words()
 VALID_NORMALIZED = {
     category: frozenset(_normalize(answer) for answer in answers)
     for category, answers in VALID.items()
 }
+
+
+def _category_letters(category):
+    return {
+        normalized[0]
+        for answer in VALID_NORMALIZED[category]
+        if (normalized := _normalize(answer)) and normalized[0] in LETTERS
+    }
+
+
+CATEGORY_LETTERS = {category: _category_letters(category) for category in CATEGORIES}
+# A selected letter must have at least one real answer in every displayed category.
+PLAYABLE_LETTERS = tuple(
+    letter for letter in LETTERS
+    if all(letter in CATEGORY_LETTERS[category] for category in CATEGORIES)
+)
+UNPLAYABLE_LETTERS = tuple(letter for letter in LETTERS if letter not in PLAYABLE_LETTERS)
+if not PLAYABLE_LETTERS:
+    raise RuntimeError("Name & Family database has no playable letters")
+
+_INVALID_ANSWERS = frozenset({
+    "نمیدونم", "نمی دونم", "نمی دانم", "نمیدانم", "ندارم", "هیچی", "نمیگم",
+})
+_VALID_TEXT = re.compile(r"^[آ-یءئؤة\s]+$")
+_ACTIVE = {}
+_REMAINING_LETTERS = {}
+_ROUND_SEQUENCE = 0
 
 
 def is_active(chat_id):
@@ -58,7 +86,7 @@ def start(chat_id):
         return None
     remaining = _REMAINING_LETTERS.get(chat_id)
     if not remaining:
-        remaining = list(LETTERS)
+        remaining = list(PLAYABLE_LETTERS)
         random.SystemRandom().shuffle(remaining)
         _REMAINING_LETTERS[chat_id] = remaining
     _ROUND_SEQUENCE += 1

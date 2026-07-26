@@ -34,6 +34,45 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.assertEqual(game.submit(100, 7, "کاربر", self.valid_answers()), 70)
         self.assertEqual(self.awards, [(100, 7, 70)])
 
+    def test_database_coverage_and_full_score_for_every_playable_letter(self):
+        # Every alphabet letter is classified; only fully covered letters are selectable.
+        for letter in game.LETTERS:
+            covered = all(
+                letter in game.CATEGORY_LETTERS[category]
+                for category in game.CATEGORIES
+            )
+            self.assertEqual(letter in game.PLAYABLE_LETTERS, covered)
+
+        for index, letter in enumerate(game.PLAYABLE_LETTERS):
+            answers = []
+            for category in game.CATEGORIES:
+                answer = next(
+                    word for word in game.VALID[category]
+                    if game._normalize(word).startswith(letter)
+                )
+                answers.append(answer)
+            chat_id = 1000 + index
+            game._ACTIVE[chat_id] = {
+                "round_id": index + 1,
+                "letter": letter,
+                "answers": {},
+            }
+            self.assertEqual(
+                game.submit(chat_id, index + 1, "کاربر", "\n".join(answers)),
+                70,
+            )
+            self.assertFalse(game._validate_answer("نام", letter, letter + "چیچی"))
+
+    def test_start_draws_only_fully_covered_letters(self):
+        game._REMAINING_LETTERS.clear()
+        drawn = []
+        for _ in game.PLAYABLE_LETTERS:
+            round_state = game.start(500)
+            drawn.append(round_state["letter"])
+            game.finish(500)
+        self.assertEqual(set(drawn), set(game.PLAYABLE_LETTERS))
+        self.assertTrue(set(drawn).isdisjoint(game.UNPLAYABLE_LETTERS))
+
     def test_jim_example_scores_each_category_independently(self):
         answers = ("جهان", "جوادی", "جیرفت", "جمبو", "جعبه", "جغد", "جهان")
         game._ACTIVE[100] = {
