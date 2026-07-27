@@ -5,6 +5,8 @@ Soroush Plus announcement is only faithful if bold, blockquote and every other
 entity survive the preview/confirm round trip. Storing text alone silently
 downgrades a formatted announcement to plain text.
 """
+import hashlib as _hashlib
+import time as _time
 
 
 _PENDING_BROADCASTS = {}
@@ -88,3 +90,118 @@ def consume_confirmation(owner_id):
     entities = list(state.get("entities") or [])
     clear(owner_id)
     return text, entities
+
+
+# ---------------------------------------------------------------------------
+# Delivery ledger
+#
+# ``_broadcast_to_groups`` keeps a *local* "seen" set, which cannot stop a
+# second, concurrent invocation from delivering to the same groups. A dropped
+# connection mid-broadcast, a replayed update after reconnect, or any future
+# caller can start a second run while the first is still awaiting.
+#
+# The ledger below lives at module scope, so every invocation shares it. A
+# group is claimed *before* the network call, and the claim is keyed by the
+# normalized group id so the short and -100… forms are the same group.
+# ---------------------------------------------------------------------------
+
+_DELIVERY_LEDGER = {}
+_LEDGER_ORDER = []
+_LEDGER_LIMIT = 20
+_BROADCAST_IN_FLIGHT = set()
+_CONTENT_FINGERPRINTS = {}
+_FINGERPRINT_ORDER = []
+_FINGERPRINT_LIMIT = 20
+
+
+def content_fingerprint(text, entities=None):
+    """کلید پایدار برای «همین اطلاعیه».
+
+    دو اجرای هم‌زمان با متن یکسان باید یک ledger مشترک داشته باشند، وگرنه هر
+    کدام گروه‌ها را جداگانه claim می‌کند و پیام دو بار می‌رود. UUID تصادفی
+    این اشتراک را از بین می‌برد، پس اثرانگشت از خودِ محتوا ساخته می‌شود.
+    """
+    parts = [str(text or "")]
+    for entity in entities or ():
+        parts.append(
+            f"{type(entity).__name__}:{getattr(entity, 'offset', '')}:"
+            f"{getattr(entity, 'length', '')}"
+        )
+    raw = "\u0000".join(parts).encode("utf-8", "replace")
+    return _hashlib.sha256(raw).hexdigest()[:16]
+
+
+def ledger_key_for_content(text, entities=None, window_seconds=300):
+    """broadcast_id مشترک برای محتوای یکسان در یک بازهٔ زمانی کوتاه.
+
+    اگر همان متن در بازهٔ ``window_seconds`` دوباره ارسال شود، همان کلید
+    برگردانده می‌شود تا ledger قبلی دوباره استفاده شود و تحویل تکراری رد شود.
+    پس از آن بازه، ارسال مجدد عمدی محسوب و کلید تازه ساخته می‌شود.
+    """
+    fingerprint = content_fingerprint(text, entities)
+    now = _time.monotonic()
+    existing = _CONTENT_FINGERPRINTS.get(fingerprint)
+    if existing and now - existing[1] <= window_seconds:
+        _CONTENT_FINGERPRINTS[fingerprint] = (existing[0], now)
+        return existing[0], True
+
+    key = f"{fingerprint}-{int(now * 1000) & 0xFFFFFF:06x}"
+    _CONTENT_FINGERPRINTS[fingerprint] = (key, now)
+    _FINGERPRINT_ORDER.append(fingerprint)
+    while len(_FINGERPRINT_ORDER) > _FINGERPRINT_LIMIT:
+        _CONTENT_FINGERPRINTS.pop(_FINGERPRINT_ORDER.pop(0), None)
+    return key, False
+
+
+def start_delivery(broadcast_id):
+    """Register a new broadcast and return its (empty) delivered-group set."""
+    key = str(broadcast_id)
+    if key not in _DELIVERY_LEDGER:
+        _DELIVERY_LEDGER[key] = set()
+        _LEDGER_ORDER.append(key)
+        while len(_LEDGER_ORDER) > _LEDGER_LIMIT:
+            _DELIVERY_LEDGER.pop(_LEDGER_ORDER.pop(0), None)
+    return _DELIVERY_LEDGER[key]
+
+
+def claim_group(broadcast_id, group_key):
+    """Claim a group for this broadcast.
+
+    Returns True only for the first caller; every later caller gets False.
+    Synchronous on purpose: no ``await`` between the check and the insert, so
+    concurrent tasks cannot both win the claim.
+    """
+    delivered = start_delivery(broadcast_id)
+    key = str(group_key)
+    if key in delivered:
+        return False
+    delivered.add(key)
+    return True
+
+
+def delivered_count(broadcast_id):
+    return len(_DELIVERY_LEDGER.get(str(broadcast_id), ()))
+
+
+def acquire_broadcast_slot(owner_id):
+    """Global one-at-a-time guard. False when a broadcast is already running."""
+    key = str(owner_id)
+    if key in _BROADCAST_IN_FLIGHT:
+        return False
+    _BROADCAST_IN_FLIGHT.add(key)
+    return True
+
+
+def release_broadcast_slot(owner_id):
+    _BROADCAST_IN_FLIGHT.discard(str(owner_id))
+
+
+def is_broadcast_in_flight(owner_id):
+    return str(owner_id) in _BROADCAST_IN_FLIGHT
+
+
+def reset_delivery_state():
+    """Test helper: forget every ledger entry and in-flight slot."""
+    _DELIVERY_LEDGER.clear()
+    _LEDGER_ORDER.clear()
+    _BROADCAST_IN_FLIGHT.clear()

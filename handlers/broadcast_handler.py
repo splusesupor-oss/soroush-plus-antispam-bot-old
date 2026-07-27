@@ -19,15 +19,20 @@ Two details are easy to get wrong and are handled explicitly here:
   only; the entity list must be passed through on every send.
 """
 import asyncio
-import uuid
 
 from modules.broadcast_state import (
+    acquire_broadcast_slot,
     begin,
+    claim_group,
     clear,
     consume_confirmation,
+    delivered_count,
     get,
+    ledger_key_for_content,
     normalize_command_text,
+    release_broadcast_slot,
     set_message,
+    start_delivery,
 )
 from modules.group_id import normalize_group_id
 from modules.group_storage import is_active, load_groups
@@ -116,7 +121,7 @@ def _preview(text, entities=None):
     return preview_text, preview_entities
 
 
-async def _broadcast_to_groups(bot, text, entities=None):
+async def _broadcast_to_groups(bot, text, entities=None, origin="unknown"):
     successful = 0
     failed = 0
     # کلیدها همیشه نرمال‌سازی می‌شوند: iter_dialogs شناسهٔ کامل (-100…) می‌دهد
@@ -124,13 +129,26 @@ async def _broadcast_to_groups(bot, text, entities=None):
     # «دیده‌نشده» به نظر می‌رسد و پیام دو بار ارسال می‌شود.
     seen_group_ids = set()
     entities = list(entities) if entities else []
-    broadcast_id = uuid.uuid4().hex[:12]
+    # کلید ledger از محتوا ساخته می‌شود، نه UUID تصادفی: دو اجرای هم‌زمان با
+    # همان اطلاعیه باید یک دفتر مشترک داشته باشند تا گروه دوباره claim نشود.
+    broadcast_id, reused_ledger = ledger_key_for_content(text, entities)
+    start_delivery(broadcast_id)
+    send_calls = 0
+    if reused_ledger:
+        _log_phase(
+            bot,
+            "BROADCAST LEDGER REUSED",
+            "",
+            f"broadcast_id={broadcast_id} origin={origin} "
+            f"already_delivered={delivered_count(broadcast_id)} "
+            "reason=identical_content_recently_sent",
+        )
 
     _log_phase(
         bot,
         "BROADCAST SEND START",
         "",
-        f"broadcast_id={broadcast_id} "
+        f"broadcast_id={broadcast_id} origin={origin} "
         f"text_len={len(text)} u16_len={_u16_len(text)} "
         f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
     )
@@ -156,23 +174,26 @@ async def _broadcast_to_groups(bot, text, entities=None):
     async def deliver(target, group_id, route):
         """یک گروه را دقیقاً یک بار در هر broadcast تحویل می‌گیرد.
 
-        قفل بر پایهٔ کلید نرمال‌شده است، پس شکل کوتاه و شکل -100… یک گروه
-        محسوب می‌شوند. بازگشت True یعنی واقعاً ارسال شد.
+        قفل روی دفتر ثبت سراسری (module-level) است، نه یک مجموعهٔ محلی؛ پس
+        حتی اگر دو اجرای هم‌زمانِ این تابع وجود داشته باشد، فقط یکی می‌تواند
+        هر گروه را claim کند. کلید نرمال‌شده است تا شکل کوتاه و -100… یکی
+        شمرده شوند. بازگشت True یعنی واقعاً ارسال شد.
         """
-        nonlocal successful, failed
+        nonlocal successful, failed, send_calls
         group_key = normalize_group_id(group_id)
-        if group_key in seen_group_ids:
+        # claim_group هم‌زمان چک و ثبت می‌کند و هیچ awaitی وسطش نیست.
+        if not claim_group(broadcast_id, group_key):
             _log_phase(
                 bot,
                 "BROADCAST GROUP SKIPPED",
                 "",
                 f"broadcast_id={broadcast_id} group_id={group_id} "
-                f"group_key={group_key} route={route} reason=already_sent",
+                f"group_key={group_key} route={route} reason=already_claimed",
             )
             return False
-        # پیش از await ثبت می‌شود تا هم‌روندی نتواند ارسال دوم را شروع کند.
         seen_group_ids.add(group_key)
         try:
+            send_calls += 1
             await bot.client.send_message(
                 target,
                 text,
@@ -232,9 +253,17 @@ async def _broadcast_to_groups(bot, text, entities=None):
         bot,
         "BROADCAST SEND RESULT",
         "",
-        f"broadcast_id={broadcast_id} successful={successful} failed={failed} "
-        f"unique_groups={len(seen_group_ids)}",
+        f"broadcast_id={broadcast_id} origin={origin} "
+        f"successful={successful} failed={failed} "
+        f"send_message_calls={send_calls} "
+        f"unique_groups={len(seen_group_ids)} "
+        f"ledger_groups={delivered_count(broadcast_id)}",
     )
+    if send_calls != len(seen_group_ids):
+        bot.logger.log_error(
+            f"BROADCAST DUPLICATE DETECTED broadcast_id={broadcast_id} "
+            f"send_message_calls={send_calls} unique_groups={len(seen_group_ids)}"
+        )
     _log_phase(
         bot,
         "BROADCAST GROUP SUMMARY",
@@ -307,6 +336,20 @@ async def handle_private_broadcast(bot, event, owner_id, text):
                 _log_phase(bot, "STATE CLEARED", owner_id, "reason=no_active_session")
                 return False
             _log_phase(bot, "STATE CLEARED", owner_id, "reason=confirmed")
+            # قفل سراسری: حتی اگر رویداد «تایید» دوباره تحویل داده شود (تپ
+            # دوباره، replay بعد از reconnect یا هر مسیر دیگر)، ارسال دوم
+            # هم‌زمان شروع نمی‌شود.
+            if not acquire_broadcast_slot(owner_id):
+                _log_phase(
+                    bot,
+                    "BROADCAST REJECTED",
+                    owner_id,
+                    "reason=already_in_flight",
+                )
+                await _broadcast_reply(
+                    bot, event, "⏳ یک اطلاع‌رسانی در حال ارسال است."
+                )
+                return True
             _log_phase(
                 bot,
                 "BROADCAST STARTED",
@@ -316,7 +359,10 @@ async def handle_private_broadcast(bot, event, owner_id, text):
             )
             try:
                 successful, failed = await _broadcast_to_groups(
-                    bot, announcement_text, announcement_entities
+                    bot,
+                    announcement_text,
+                    announcement_entities,
+                    origin=f"confirm:owner={owner_id}",
                 )
                 await _broadcast_reply(
                     bot,
@@ -327,6 +373,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
                 )
                 _log_phase(bot, "BROADCAST FINISHED", owner_id)
             finally:
+                release_broadcast_slot(owner_id)
                 clear(owner_id)
             return True
 

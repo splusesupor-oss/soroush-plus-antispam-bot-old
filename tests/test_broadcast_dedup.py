@@ -115,6 +115,7 @@ def target_key(t):
 
 
 def run_broadcast(client, body="اطلاعیه", entities=None):
+    bstate.reset_delivery_state()
     bstate.clear(OWNER_ID)
     bot = Bot(client)
     asyncio.run(bh.handle_private_broadcast(
@@ -190,6 +191,7 @@ def test_enumeration_failure_still_delivers_once():
 def test_double_confirm_sends_once():
     print("\n### pressing تایید twice sends only one broadcast")
     client = Client()
+    bstate.reset_delivery_state()
     bstate.clear(OWNER_ID)
     bot = Bot(client)
     asyncio.run(bh.handle_private_broadcast(
@@ -206,17 +208,51 @@ def test_double_confirm_sends_once():
     bstate.clear(OWNER_ID)
 
 
-def test_unique_broadcast_id():
-    print("\n### each broadcast carries its own id")
-    ids = []
-    for _ in range(2):
-        client = Client()
-        bot, _ = run_broadcast(client)
-        line = next((m for m in bot.logger.lines if "BROADCAST SEND START" in m), "")
-        bid = line.split("broadcast_id=")[1].split()[0] if "broadcast_id=" in line else None
-        ids.append(bid)
-    check("broadcast_id present", all(ids), f"-> {ids}")
-    check("ids differ between runs", ids[0] != ids[1], f"-> {ids}")
+def _broadcast_id_of(bot):
+    line = next((m for m in bot.logger.lines if "BROADCAST SEND START" in m), "")
+    return line.split("broadcast_id=")[1].split()[0] if "broadcast_id=" in line else None
+
+
+def test_broadcast_id_semantics():
+    print("\n### broadcast_id is content-derived, not random")
+    # Same content within the dedup window -> same ledger key, so a repeat
+    # cannot re-deliver to groups already served.
+    client_a = Client()
+    bot_a, _ = run_broadcast(client_a, body="متن یکسان")
+    id_a = _broadcast_id_of(bot_a)
+
+    bstate.clear(OWNER_ID)          # keep the ledger, only clear the session
+    client_b = Client()
+    bot_b = Bot(client_b)
+    asyncio.run(bh.handle_private_broadcast(
+        bot_b, Event("اطلاع رسانی"), OWNER_ID, "اطلاع رسانی"))
+    asyncio.run(bh.handle_private_broadcast(
+        bot_b, Event("متن یکسان"), OWNER_ID, "متن یکسان"))
+    asyncio.run(bh.handle_private_broadcast(bot_b, Event("تایید"), OWNER_ID, "تایید"))
+    id_b = _broadcast_id_of(bot_b)
+
+    check("broadcast_id present", bool(id_a), f"-> {id_a}")
+    check("identical content reuses the same ledger key", id_a == id_b,
+          f"-> {id_a} vs {id_b}")
+    check("repeat of identical content sends nothing again",
+          len(client_b.sent) == 0, f"-> {len(client_b.sent)} sends")
+    check("ledger reuse logged", bot_b.logger.has("BROADCAST LEDGER REUSED"))
+
+    # Different content -> different key -> delivered normally.
+    bstate.clear(OWNER_ID)
+    client_c = Client()
+    bot_c = Bot(client_c)
+    asyncio.run(bh.handle_private_broadcast(
+        bot_c, Event("اطلاع رسانی"), OWNER_ID, "اطلاع رسانی"))
+    asyncio.run(bh.handle_private_broadcast(
+        bot_c, Event("متن متفاوت"), OWNER_ID, "متن متفاوت"))
+    asyncio.run(bh.handle_private_broadcast(bot_c, Event("تایید"), OWNER_ID, "تایید"))
+    check("different content gets a new key",
+          _broadcast_id_of(bot_c) != id_a, f"-> {_broadcast_id_of(bot_c)}")
+    check("different content is delivered once per group",
+          len(client_c.sent) == len(SHORT_IDS), f"-> {len(client_c.sent)}")
+    bstate.reset_delivery_state()
+    bstate.clear(OWNER_ID)
 
 
 def test_entities_survive_dedup():
@@ -227,6 +263,76 @@ def test_entities_survive_dedup():
     check(f"one message per group", len(client.sent) == len(SHORT_IDS),
           f"-> {len(client.sent)}")
     check("entity count logged", bot.logger.has("entity_count=1"))
+
+
+def test_concurrent_confirms_send_once():
+    """Two «تایید» events dispatched as concurrent tasks (SPlusthon behaviour)."""
+    print("\n### two concurrent تایید events")
+
+    async def drive():
+        bstate.reset_delivery_state()
+        bstate.clear(OWNER_ID)
+        client = Client()
+        bot = Bot(client)
+        await bh.handle_private_broadcast(
+            bot, Event("اطلاع رسانی"), OWNER_ID, "اطلاع رسانی")
+        await bh.handle_private_broadcast(bot, Event("متن"), OWNER_ID, "متن")
+        await asyncio.gather(
+            bh.handle_private_broadcast(bot, Event("تایید"), OWNER_ID, "تایید"),
+            bh.handle_private_broadcast(bot, Event("تایید"), OWNER_ID, "تایید"),
+        )
+        return client, bot
+
+    client, bot = asyncio.run(drive())
+    counts = Counter(target_key(t) for t in client.sent)
+    check("no group double-sent under concurrency",
+          all(c == 1 for c in counts.values()), f"-> {dict(counts)}")
+    check(f"exactly {len(SHORT_IDS)} sends total",
+          len(client.sent) == len(SHORT_IDS), f"-> {len(client.sent)}")
+    bstate.reset_delivery_state()
+    bstate.clear(OWNER_ID)
+
+
+def test_concurrent_direct_invocations():
+    """_broadcast_to_groups started twice concurrently must not double-send."""
+    print("\n### two concurrent _broadcast_to_groups invocations")
+
+    async def drive():
+        bstate.reset_delivery_state()
+        client = Client()
+        bot = Bot(client)
+        await asyncio.gather(
+            bh._broadcast_to_groups(bot, "متن یکسان", [], origin="probe-a"),
+            bh._broadcast_to_groups(bot, "متن یکسان", [], origin="probe-b"),
+        )
+        return client, bot
+
+    client, bot = asyncio.run(drive())
+    counts = Counter(target_key(t) for t in client.sent)
+    check("each group got exactly one send_message",
+          all(c == 1 for c in counts.values()) and len(counts) == len(SHORT_IDS),
+          f"-> {dict(counts)}")
+    check("shared ledger was reused by the second run",
+          bot.logger.has("BROADCAST LEDGER REUSED"))
+    check("no duplicate-detection error raised",
+          not bot.logger.has("BROADCAST DUPLICATE DETECTED"))
+    bstate.reset_delivery_state()
+
+
+def test_send_call_accounting():
+    """send_message_calls must equal the number of unique groups."""
+    print("\n### per-broadcast accounting")
+    client = Client()
+    bot, _ = run_broadcast(client)
+    line = next((m for m in bot.logger.lines if "BROADCAST SEND RESULT" in m), "")
+    check("send_message_calls logged", "send_message_calls=" in line, f"-> {line}")
+    check(f"send_message_calls={len(SHORT_IDS)}",
+          f"send_message_calls={len(SHORT_IDS)}" in line, f"-> {line}")
+    check(f"unique_groups={len(SHORT_IDS)}",
+          f"unique_groups={len(SHORT_IDS)}" in line, f"-> {line}")
+    check("ledger_groups logged", "ledger_groups=" in line, f"-> {line}")
+    check("origin logged", "origin=" in line, f"-> {line}")
+    check("no duplicate detected", not bot.logger.has("BROADCAST DUPLICATE DETECTED"))
 
 
 def main():
@@ -240,8 +346,11 @@ def main():
     test_mixed_short_and_full_dialog_ids()
     test_enumeration_failure_still_delivers_once()
     test_double_confirm_sends_once()
-    test_unique_broadcast_id()
+    test_broadcast_id_semantics()
     test_entities_survive_dedup()
+    test_concurrent_confirms_send_once()
+    test_concurrent_direct_invocations()
+    test_send_call_accounting()
 
     print(f"\n{'=' * 52}")
     print(f"passed={PASSED} failed={FAILED}")
