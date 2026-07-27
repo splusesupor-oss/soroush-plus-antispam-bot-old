@@ -448,6 +448,106 @@ async def send_activation_message(bot, event, chat_id, title):
     await event.respond(activation_text, formatting_entities=entities)
 
 
+# ---------------------------------------------------------------------------
+# Command routing
+#
+# «ثبت اسم علی» و «ثبت ادمین» هر دو با «ثبت » شروع می‌شوند. اگر مسیر حافظهٔ گروه
+# با startswith("ثبت ") کار کند، دستور «ثبت ادمین» را می‌بلعد و چون آن مسیر در
+# پایان return می‌کند، هرگز به admin handler نمی‌رسد.
+#
+# راه‌حل: هر دستور چندکلمه‌ای و حساس اینجا صریح ثبت می‌شود و *پیش از* هر
+# الگوی عمومی بررسی می‌گردد. ترتیب این tuple اهمیت دارد: طولانی‌ترین و
+# دقیق‌ترین دستور اول.
+# ---------------------------------------------------------------------------
+
+# (متن دقیق دستور، نام handler مقصد) — هیچ‌کدام نباید به مسیر حافظهٔ گروه بروند.
+RESERVED_COMMANDS = (
+    ("ثبت ادمین", "admin_registration"),
+    ("لغو ادمین", "admin_removal"),
+    ("برکناری ادمین", "admin_removal"),
+    ("ثبت قوانین", "group_rules.set"),
+    ("حذف قوانین", "group_rules.remove"),
+    ("ثبت اصل", "user_original.set"),
+    ("حذف حافظه", "group_memory.remove_other"),
+    ("حذف اسم", "group_memory.remove_self"),
+    ("حافظه من", "group_memory.show"),
+    ("قوانین", "group_rules.show"),
+    ("اصلم", "user_original.show"),
+)
+
+# پیشوندهایی که مسیر حافظهٔ گروه می‌پذیرد، به ترتیب دقیق‌بودن.
+MEMORY_REGISTER_PREFIXES = ("ثبت اسم ", "ثبت ")
+
+# فاصلهٔ مجازی/نیم‌فاصله و نویسه‌های عربی که کاربر ممکن است تایپ کند.
+_NORMALIZE_MAP = {
+    "\u200c": " ",  # ZWNJ
+    "\u200f": "",   # RTL mark
+    "\u200e": "",   # LTR mark
+    "\u064a": "\u06cc",  # Arabic yeh -> Persian yeh
+    "\u0643": "\u06a9",  # Arabic kaf -> Persian kaf
+}
+
+
+def normalize_command(text):
+    """متن را برای مقایسهٔ دقیق دستور یکسان‌سازی می‌کند.
+
+    فاصله‌های تکراری، نیم‌فاصله و نویسه‌های عربی حذف/تبدیل می‌شوند تا
+    «ثبت  ادمین» و «ثبت ادمين» هم درست تشخیص داده شوند. متن اصلی دست‌نخورده
+    می‌ماند؛ این فقط برای تصمیم‌گیری routing است.
+    """
+    if not text:
+        return ""
+    normalized = str(text)
+    for source, target in _NORMALIZE_MAP.items():
+        normalized = normalized.replace(source, target)
+    return " ".join(normalized.split())
+
+
+def match_reserved_command(text):
+    """اگر متن یک دستور رزروشده باشد، (دستور، handler) را برمی‌گرداند.
+
+    تطبیق دقیق است: یا کل متن برابر دستور است، یا دستور به‌همراه یک آرگومان
+    آمده (مثل «ثبت ادمین @ali»). «ثبت اسمی» یا «ثبت ادمینها» تطبیق نمی‌کند.
+    """
+    normalized = normalize_command(text)
+    for command, handler in RESERVED_COMMANDS:
+        if normalized == command or normalized.startswith(command + " "):
+            return command, handler
+    return None, None
+
+
+def resolve_registration_prefix(text):
+    """پیشوند حافظهٔ گروه را برمی‌گرداند، یا None اگر دستور رزروشده باشد.
+
+    این تنها نقطه‌ای است که تصمیم می‌گیرد یک پیام «ثبت …» به حافظهٔ گروه برود.
+    """
+    command, _handler = match_reserved_command(text)
+    if command is not None:
+        return None
+    normalized = normalize_command(text)
+    # «ثبت اسم» بدون نام نباید با پیشوند کوتاه‌تر «ثبت » تطبیق کند و کلمهٔ
+    # «اسم» را به‌عنوان نام کاربر ذخیره کند.
+    if normalized in {"ثبت", "ثبت اسم"}:
+        return None
+    for prefix in MEMORY_REGISTER_PREFIXES:
+        if normalized.startswith(prefix) and normalized[len(prefix):].strip():
+            return prefix
+    return None
+
+
+def _log_command_route(bot, text, matched_command, handler):
+    """ردیابی تصمیم routing برای هر دستور حساس."""
+    try:
+        bot.logger.log_info(
+            "COMMAND ROUTE MATCH "
+            f"text={text[:60]!r} "
+            f"matched_command={matched_command!r} "
+            f"handler={handler!r}"
+        )
+    except Exception:
+        pass
+
+
 def _can_manage_group_admins(bot, chat_id, user_id, username):
     if is_global_owner(user_id):
         return True
@@ -554,12 +654,12 @@ async def handle_new_message(bot, event):
             )
 
         # حافظهٔ گروه: هر کاربر فقط نام متصل به user_id خودش را ثبت می‌کند.
-        register_prefix = None
-        if clean_text.startswith("ثبت اسم "):
-            register_prefix = "ثبت اسم "
-        elif clean_text.startswith("ثبت ") and clean_text not in {"ثبت اصل", "ثبت قوانین"}:
-            register_prefix = "ثبت "
+        # ⚠️ دستورهای رزروشده (مثل «ثبت ادمین») هرگز نباید به این مسیر برسند؛
+        # تفکیک آن‌ها در resolve_registration_prefix انجام می‌شود.
+        register_prefix = resolve_registration_prefix(clean_text)
         if register_prefix is not None:
+            _log_command_route(bot, clean_text, f"{register_prefix.strip()} …",
+                               "group_memory.set_name")
             if event.is_private:
                 await event.reply("❌ حافظه گروه فقط داخل گروه فعال است.")
                 return
@@ -2182,7 +2282,10 @@ async def handle_new_message(bot, event):
         # فعال و غیرفعال کردن گروه توسط مالک اصلی
         # ثبت ادمین توسط مالک ربات
 
-        if clean_text.startswith("ثبت ادمین"):
+        _reserved_command, _reserved_handler = match_reserved_command(clean_text)
+
+        if _reserved_command == "ثبت ادمین":
+            _log_command_route(bot, clean_text, _reserved_command, _reserved_handler)
             if not _can_manage_group_admins(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
@@ -2224,7 +2327,8 @@ async def handle_new_message(bot, event):
 
 
         # حذف ادمین توسط مالک اصلی یا مالک ثبت‌شده گروه
-        if clean_text.startswith(("برکناری ادمین", "لغو ادمین")):
+        if _reserved_command in {"برکناری ادمین", "لغو ادمین"}:
+            _log_command_route(bot, clean_text, _reserved_command, _reserved_handler)
             if not _can_manage_group_admins(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
