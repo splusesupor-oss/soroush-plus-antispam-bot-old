@@ -19,6 +19,7 @@ Two details are easy to get wrong and are handled explicitly here:
   only; the entity list must be passed through on every send.
 """
 import asyncio
+import uuid
 
 from modules.broadcast_state import (
     begin,
@@ -28,6 +29,7 @@ from modules.broadcast_state import (
     normalize_command_text,
     set_message,
 )
+from modules.group_id import normalize_group_id
 from modules.group_storage import is_active, load_groups
 
 
@@ -117,13 +119,18 @@ def _preview(text, entities=None):
 async def _broadcast_to_groups(bot, text, entities=None):
     successful = 0
     failed = 0
+    # کلیدها همیشه نرمال‌سازی می‌شوند: iter_dialogs شناسهٔ کامل (-100…) می‌دهد
+    # ولی config کلید کوتاه دارد. بدون نرمال‌سازی، یک گروه در هر دو حلقه
+    # «دیده‌نشده» به نظر می‌رسد و پیام دو بار ارسال می‌شود.
     seen_group_ids = set()
     entities = list(entities) if entities else []
+    broadcast_id = uuid.uuid4().hex[:12]
 
     _log_phase(
         bot,
         "BROADCAST SEND START",
         "",
+        f"broadcast_id={broadcast_id} "
         f"text_len={len(text)} u16_len={_u16_len(text)} "
         f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
     )
@@ -147,7 +154,24 @@ async def _broadcast_to_groups(bot, text, entities=None):
         )
 
     async def deliver(target, group_id, route):
+        """یک گروه را دقیقاً یک بار در هر broadcast تحویل می‌گیرد.
+
+        قفل بر پایهٔ کلید نرمال‌شده است، پس شکل کوتاه و شکل -100… یک گروه
+        محسوب می‌شوند. بازگشت True یعنی واقعاً ارسال شد.
+        """
         nonlocal successful, failed
+        group_key = normalize_group_id(group_id)
+        if group_key in seen_group_ids:
+            _log_phase(
+                bot,
+                "BROADCAST GROUP SKIPPED",
+                "",
+                f"broadcast_id={broadcast_id} group_id={group_id} "
+                f"group_key={group_key} route={route} reason=already_sent",
+            )
+            return False
+        # پیش از await ثبت می‌شود تا هم‌روندی نتواند ارسال دوم را شروع کند.
+        seen_group_ids.add(group_key)
         try:
             await bot.client.send_message(
                 target,
@@ -159,44 +183,57 @@ async def _broadcast_to_groups(bot, text, entities=None):
                 bot,
                 "BROADCAST GROUP SENT",
                 "",
-                f"group_id={group_id} route={route} entity_count={len(entities)}",
+                f"broadcast_id={broadcast_id} group_id={group_id} "
+                f"group_key={group_key} route={route} entity_count={len(entities)}",
             )
+            return True
         except Exception as error:
             failed += 1
             bot.logger.log_error(
-                f"BROADCAST GROUP FAILED group_id={group_id} route={route}: {error}"
+                f"BROADCAST GROUP FAILED broadcast_id={broadcast_id} "
+                f"group_id={group_id} group_key={group_key} route={route}: {error}"
             )
+            return False
 
     try:
         async for dialog in bot.client.iter_dialogs():
             if not getattr(dialog, "is_group", False):
                 continue
             group_id = getattr(dialog, "id", None)
-            group_key = str(group_id)
-            if group_id is None or group_key in seen_group_ids or not is_active(group_id):
+            if group_id is None or not is_active(group_id):
                 continue
-            seen_group_ids.add(group_key)
-            await deliver(getattr(dialog, "entity", group_id), group_id, "dialog")
-            await asyncio.sleep(0.4)
+            if normalize_group_id(group_id) in seen_group_ids:
+                continue
+            if await deliver(getattr(dialog, "entity", group_id), group_id, "dialog"):
+                await asyncio.sleep(0.4)
     except Exception as error:
         # Enumeration is optional: configured active groups are still attempted below.
         bot.logger.log_error(f"BROADCAST DIALOG ENUMERATION FAILED: {error}")
 
     # Always include configured active groups. This covers clients that omit a
     # dialog, return no is_group flag, or cannot enumerate dialogs at all.
-    for group_id in load_groups():
-        group_key = str(group_id)
-        if group_key in seen_group_ids or not is_active(group_id):
+    for group_id in list(load_groups()):
+        if not is_active(group_id):
             continue
-        seen_group_ids.add(group_key)
-        await deliver(int(group_id), group_id, "configured_fallback")
-        await asyncio.sleep(0.4)
+        if normalize_group_id(group_id) in seen_group_ids:
+            continue
+        try:
+            target = int(group_id)
+        except (TypeError, ValueError):
+            bot.logger.log_error(
+                f"BROADCAST GROUP FAILED broadcast_id={broadcast_id} "
+                f"group_id={group_id!r}: not a numeric id"
+            )
+            continue
+        if await deliver(target, group_id, "configured_fallback"):
+            await asyncio.sleep(0.4)
 
     _log_phase(
         bot,
         "BROADCAST SEND RESULT",
         "",
-        f"successful={successful} failed={failed} attempted={len(seen_group_ids)}",
+        f"broadcast_id={broadcast_id} successful={successful} failed={failed} "
+        f"unique_groups={len(seen_group_ids)}",
     )
     _log_phase(
         bot,
