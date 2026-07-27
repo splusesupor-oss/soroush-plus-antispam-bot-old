@@ -10,4 +10,5 @@ logs/
 # Runtime-persisted feature data
 config/group_memory.json
 config/group_rules.json
+config/group_message_lock_state.json
 config/name_family_learning.json
