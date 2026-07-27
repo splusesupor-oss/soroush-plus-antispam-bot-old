@@ -45,33 +45,37 @@ async def _broadcast_to_groups(bot, text):
             if not getattr(dialog, "is_group", False):
                 continue
             group_id = getattr(dialog, "id", None)
-            if group_id in seen_group_ids or not is_active(group_id):
+            group_key = str(group_id)
+            if group_id is None or group_key in seen_group_ids or not is_active(group_id):
                 continue
-            seen_group_ids.add(group_id)
+            seen_group_ids.add(group_key)
             try:
                 await bot.client.send_message(getattr(dialog, "entity", group_id), text)
                 successful += 1
-                _log_phase(bot, f"GROUP SENT: {group_id}", "")
+                _log_phase(bot, f"GROUP SENT: {group_id}", "dialog")
             except Exception as error:
                 failed += 1
                 bot.logger.log_error(f"BROADCAST GROUP FAILED {group_id}: {error}")
             await asyncio.sleep(0.4)
-        return successful, failed
     except Exception as error:
-        bot.logger.log_error(f"خطا در دریافت گروه‌های اطلاع‌رسانی: {error}")
+        # Enumeration is optional: configured active groups are still attempted below.
+        bot.logger.log_error(f"BROADCAST DIALOG ENUMERATION FAILED: {error}")
 
-    # Fallback for SPlusthon clients that cannot enumerate dialogs.
+    # Always include configured active groups. This covers clients that omit a
+    # dialog, return no is_group flag, or cannot enumerate dialogs at all.
     for group_id in load_groups():
-        if group_id in seen_group_ids or not is_active(group_id):
+        group_key = str(group_id)
+        if group_key in seen_group_ids or not is_active(group_id):
             continue
         try:
             await bot.client.send_message(int(group_id), text)
             successful += 1
-            _log_phase(bot, f"GROUP SENT: {group_id}", "fallback")
+            _log_phase(bot, f"GROUP SENT: {group_id}", "configured_fallback")
         except Exception as error:
             failed += 1
             bot.logger.log_error(f"BROADCAST GROUP FAILED {group_id}: {error}")
         await asyncio.sleep(0.4)
+    _log_phase(bot, "BROADCAST GROUP SUMMARY", "", f"successful={successful} failed={failed}")
     return successful, failed
 
 

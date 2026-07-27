@@ -12,30 +12,19 @@ class GroupActions:
         self.logger = logger
 
     async def lock_group(self, chat_id, minutes=None):
-        # SPlusthon user=None updates default member permissions for the group.
+        # Only message sending is changed; every unrelated group permission stays intact.
         await self.client.edit_permissions(
             chat_id,
             None,
             send_messages=False,
-            send_media=False,
-            send_stickers=False,
-            send_gifs=False,
-            send_games=False,
-            send_inline=False,
-            send_polls=False,
         )
 
     async def unlock_group(self, chat_id):
+        # Mirror lock_group: re-enable only the permission that lock changed.
         await self.client.edit_permissions(
             chat_id,
             None,
             send_messages=True,
-            send_media=True,
-            send_stickers=True,
-            send_gifs=True,
-            send_games=True,
-            send_inline=True,
-            send_polls=True,
         )
 
     async def change_title(self, chat_id, title):
