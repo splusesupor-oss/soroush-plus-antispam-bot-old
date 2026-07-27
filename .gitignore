@@ -1,0 +1,13 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+
+# Runtime logs and client sessions
+logs/
+*.session
+*.session-*
+
+# Runtime-persisted feature data
+config/group_memory.json
+config/group_rules.json
+config/name_family_learning.json

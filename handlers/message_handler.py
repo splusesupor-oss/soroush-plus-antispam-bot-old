@@ -29,6 +29,11 @@ from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
 from modules.name_family import start as start_name_family, submit as submit_name_family, finish as finish_name_family, is_active as name_family_active
 from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
+from modules.flag_guess import start as start_flag_guess, answer as answer_flag_guess, finish as finish_flag_guess, is_active as flag_guess_active
+from modules.group_memory import extract_name, friendly_reply, get_name as get_memory_name, remove_name as remove_memory_name, set_name as set_memory_name
+from modules.group_rules import begin as begin_rules, cancel as cancel_rules, format_rules, remove as remove_rules, save as save_rules, waiting as waiting_rules
+from modules.name_insights import report as name_personality_report
+from modules.did_you_know import get_fact
 from modules.user_activity import record as record_activity, get as get_activity
 from modules.reminders import begin as begin_reminder, waiting as waiting_reminder, capture as capture_reminder
 from modules.translation import begin as begin_translation, waiting as waiting_translation, clear as clear_translation, translate_to_persian
@@ -547,10 +552,60 @@ async def handle_new_message(bot, event):
                 f"line_count={len(clean_text.splitlines())} char_count={len(clean_text)} "
                 f"round_active={name_family_active(chat_id)}"
             )
+
+        # حافظهٔ گروه: هر کاربر فقط نام متصل به user_id خودش را ثبت می‌کند.
+        register_prefix = None
+        if clean_text.startswith("ثبت اسم "):
+            register_prefix = "ثبت اسم "
+        elif clean_text.startswith("ثبت ") and clean_text not in {"ثبت اصل", "ثبت قوانین"}:
+            register_prefix = "ثبت "
+        if register_prefix is not None:
+            if event.is_private:
+                await event.reply("❌ حافظه گروه فقط داخل گروه فعال است.")
+                return
+            display_name, error = extract_name(clean_text[len(register_prefix):])
+            if error == "too_long":
+                await event.reply("❌ نام خیلی طولانی است.")
+            elif error:
+                await event.reply("❌ نام معتبر نیست، لطفاً یک اسم یا لقب مناسب وارد کنید.")
+            else:
+                set_memory_name(chat_id, user_id, display_name)
+                await event.reply(f"✅ حافظه شما ثبت شد: {display_name}")
+            return
+
+        if clean_text == "حافظه من":
+            saved_name = get_memory_name(chat_id, user_id)
+            await event.reply(
+                f"🧠 حافظه شما: {saved_name}" if saved_name else "🧠 هنوز اسمی ثبت نکردی."
+            )
+            return
+
+        if clean_text == "حذف اسم":
+            if remove_memory_name(chat_id, user_id):
+                await event.reply("✅ حافظه شما حذف شد.")
+            else:
+                await event.reply("🧠 حافظه‌ای برای حذف ندارید.")
+            return
+
+        if clean_text.startswith("شخصیت "):
+            report = name_personality_report(clean_text.replace("شخصیت ", "", 1))
+            await event.reply(report or "❌ نام معتبر وارد کنید.")
+            return
+
+        if clean_text == "دانستی":
+            await event.reply(f"🧠 دانستی:\n\n{get_fact()}")
+            return
+
+        saved_name = get_memory_name(chat_id, user_id)
+        personal_reply = friendly_reply(saved_name, clean_text) if saved_name else None
+        if personal_reply:
+            await event.reply(personal_reply)
+            return
+
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی"}
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه"}
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -596,6 +651,62 @@ async def handle_new_message(bot, event):
         profiler.mark("ADMIN_CHECK")
         if not is_group_moderator and not is_gif_message(event.message):
             reset_gif_history(chat_id, user_id)
+
+        # قوانین گروه فقط توسط مدیر/مالک ثبت، تغییر یا حذف می‌شوند.
+        can_manage_group = (
+            not event.is_private
+            and _has_group_management_permission(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            )
+        )
+        if clean_text == "ثبت قوانین":
+            if not can_manage_group:
+                await event.reply("❌ فقط مدیر گروه اجازه ثبت قوانین دارد.")
+            else:
+                begin_rules(chat_id, user_id)
+                await event.reply("📜 لطفاً قوانین گروه را ارسال کنید.")
+            return
+
+        if waiting_rules(chat_id, user_id):
+            if not can_manage_group:
+                cancel_rules(chat_id, user_id)
+                await event.reply("❌ فقط مدیر گروه اجازه ثبت قوانین دارد.")
+            elif save_rules(chat_id, user_id, message_text):
+                await event.reply("📜 قوانین گروه ثبت شد ✅")
+            else:
+                await event.reply("❌ متن قوانین معتبر نیست یا خیلی طولانی است.")
+            return
+
+        if clean_text == "حذف قوانین":
+            if not can_manage_group:
+                await event.reply("❌ فقط مدیر گروه اجازه حذف قوانین دارد.")
+            elif remove_rules(chat_id):
+                await event.reply("✅ قوانین گروه حذف شد.")
+            else:
+                await event.reply("📜 قانونی برای حذف ثبت نشده است.")
+            return
+
+        if clean_text == "قوانین":
+            await event.reply(format_rules(chat_id) or "📜 هنوز قانونی برای این گروه ثبت نشده است.")
+            return
+
+        # مدیر با ریپلای روی پیام کاربر می‌تواند حافظهٔ همان کاربر را حذف کند.
+        if clean_text == "حذف حافظه":
+            if not can_manage_group:
+                await event.reply("❌ فقط مدیر گروه اجازه مدیریت حافظه‌ها را دارد.")
+                return
+            if not event.reply_to:
+                await event.reply("❌ روی پیام کاربر ریپلای کنید.")
+                return
+            reply_msg = await bot.client.get_messages(chat_id, ids=event.reply_to.reply_to_msg_id)
+            target_user = await reply_msg.get_sender() if reply_msg else None
+            if not target_user:
+                await event.reply("❌ کاربر پیدا نشد.")
+            elif remove_memory_name(chat_id, target_user.id):
+                await event.reply("✅ حافظه کاربر حذف شد.")
+            else:
+                await event.reply("🧠 حافظه‌ای برای این کاربر ثبت نشده است.")
+            return
 
         if (
             not message_text
@@ -947,7 +1058,7 @@ async def handle_new_message(bot, event):
 
         # بازی اسم فامیل
         if clean_text == "اسم فامیل":
-            if name_family_active(chat_id) or emoji_guess_active(chat_id):
+            if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
                 return
             game = start_name_family(chat_id)
             await event.reply(
@@ -1002,7 +1113,7 @@ async def handle_new_message(bot, event):
 
         # بازی حدس ایموجی
         if clean_text == "حدس ایموجی":
-            if name_family_active(chat_id) or emoji_guess_active(chat_id):
+            if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
                 return
             puzzle = start_emoji_guess(chat_id)
             await event.reply(f"🎮 حدس ایموجی\n\n{puzzle['emoji']}\n\n⏳ 40 ثانیه فرصت دارید")
@@ -1018,6 +1129,34 @@ async def handle_new_message(bot, event):
             winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
             if winner_answer:
                 await _reward_coin_reply(event, chat_id, user_id, sender, 4)
+                return
+
+        # بازی حدس پرچم؛ پرچم Unicode برای نمایش پایدار در Soroush Plus استفاده می‌شود.
+        if clean_text == "حدس پرچم":
+            if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
+                return
+            flag_game = start_flag_guess(chat_id)
+            await event.reply(
+                "🌍 حدس پرچم\n\n"
+                f"{flag_game['flag']}\n\n"
+                "این پرچم متعلق به کدام کشور است؟\n\n"
+                "⏳ زمان: 30 ثانیه"
+            )
+
+            async def flag_timer():
+                await _asyncio.sleep(30)
+                answer = finish_flag_guess(chat_id, flag_game["token"])
+                if answer:
+                    await event.reply(f"⏰ زمان تمام شد!\n\n✅ پاسخ درست: {answer}")
+
+            _track_group_timer(bot, chat_id, _asyncio.create_task(flag_timer()))
+            return
+
+        if flag_guess_active(chat_id):
+            country = answer_flag_guess(chat_id, clean_text)
+            if country:
+                await event.reply("✅ پاسخ درست بود!\n+3 🪙 سکه")
+                award_coins(chat_id, user_id, _format_group_member(sender), 3)
                 return
 
         # بازی تصحیح کلمات
@@ -1321,6 +1460,8 @@ async def handle_new_message(bot, event):
                 "دسته‌ها را با حرف انتخاب‌شده در 90 ثانیه کامل کنید.\n\n"
                 "🎯 حدس ایموجی\n"
                 "ایموجی‌ها را حدس بزنید تا کلمه، فیلم، شخصیت، شیء، برند یا عبارت درست را پیدا کنید.\n\n"
+                "🌍 حدس پرچم\n"
+                "پرچم کشور را در 30 ثانیه حدس بزنید.\n\n"
                 "🖌 تصحیح کلمات\n"
                 "یک کلمه با املای غلط نوشته میشود و شما باید صحیح آن را بنویسید"
             )
@@ -1343,6 +1484,7 @@ async def handle_new_message(bot, event):
                 "🎯 چهار گزینه‌ای",
                 "✏️ اسم فامیل",
                 "🎯 حدس ایموجی",
+                "🌍 حدس پرچم",
                 "🖌 تصحیح کلمات"
             ]:
                 pos = games_text.find(word)
@@ -1398,6 +1540,15 @@ async def handle_new_message(bot, event):
                 "رتبه ها\n\n"
                 "برای ثبت یادآوری\n"
                 "یاد آوری\n\n"
+                "🧠 حافظه گروه:\n"
+                "ثبت اسم علی  یا  ثبت علی\n"
+                "حافظه من  |  حذف اسم\n\n"
+                "🧩 تحلیل نام و دانستی:\n"
+                "شخصیت علی\n"
+                "دانستی\n\n"
+                "📜 قوانین گروه (مدیر):\n"
+                "ثبت قوانین  |  قوانین  |  حذف قوانین\n"
+                "برای حذف حافظهٔ کاربر روی پیام او ریپلای کنید و بنویسید: حذف حافظه\n\n"
                 "🛡️ امنیت گروه:\n"
                 "پیام‌های تبلیغاتی، فورواردی، تکراری و هرزنامه‌ها خودکار بررسی می‌شوند.\n\n"
 
@@ -1834,6 +1985,7 @@ async def handle_new_message(bot, event):
                 "🏅 راهنمای امتیاز\n\n"
                 "🧩 حدس چیستان:\n+3 سکه\n\n"
                 "😀 حدس ایموجی:\n+4 سکه\n\n"
+                "🌍 حدس پرچم:\n+3 سکه\n\n"
                 "📝 اسم فامیل (70 امتیاز یا بیشتر):\n+6 سکه\n\n"
                 "✍️ تصحیح کلمات:\n+1 سکه\n\n"
                 "❓ چهار گزینه‌ای:\n+3 سکه\n\n"
@@ -1844,7 +1996,7 @@ async def handle_new_message(bot, event):
             )
             def guide_u16(value):
                 return len(value.encode("utf-16-le")) // 2
-            guide_labels = ("🏅 راهنمای امتیاز", "🧩 حدس چیستان:", "😀 حدس ایموجی:", "📝 اسم فامیل (70 امتیاز یا بیشتر):", "✍️ تصحیح کلمات:", "❓ چهار گزینه‌ای:", "📈 پایان هر روز:", "🥇 رتبه اول:", "🥈 رتبه دوم:", "🥉 رتبه سوم:")
+            guide_labels = ("🏅 راهنمای امتیاز", "🧩 حدس چیستان:", "😀 حدس ایموجی:", "🌍 حدس پرچم:", "📝 اسم فامیل (70 امتیاز یا بیشتر):", "✍️ تصحیح کلمات:", "❓ چهار گزینه‌ای:", "📈 پایان هر روز:", "🥇 رتبه اول:", "🥈 رتبه دوم:", "🥉 رتبه سوم:")
             entities = [MessageEntityBold(offset=guide_u16(guide_text[:guide_text.index(label)]), length=guide_u16(label)) for label in guide_labels]
             await event.reply(guide_text, formatting_entities=entities)
             return
