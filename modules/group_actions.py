@@ -28,20 +28,35 @@ class GroupActions:
         self.client = client
         self.logger = logger
 
-    async def _default_banned_rights(self, chat_id):
-        """Fetch a copy of the current default rights, never a blank allow-all set."""
-        chat = await self.client.get_entity(chat_id)
-        rights = getattr(chat, "default_banned_rights", None)
+    async def _input_peer_and_rights(self, chat_id):
+        """Resolve an InputPeer, then fetch default rights without get_entity().
+
+        get_entity(chat_id) relies on the client's entity cache and can raise a
+        KeyError for numeric group IDs. Raw GetChannels/GetChats requests work
+        from the resolved peer and return the current server-side rights.
+        """
+        peer = await self.client.get_input_entity(chat_id)
+        if hasattr(peer, "channel_id") and hasattr(peer, "access_hash"):
+            input_channel = types.InputChannel(peer.channel_id, peer.access_hash)
+            result = await self.client(functions.channels.GetChannelsRequest([input_channel]))
+        elif hasattr(peer, "chat_id"):
+            result = await self.client(functions.messages.GetChatsRequest([peer.chat_id]))
+        else:
+            raise ValueError(f"Unsupported group peer for permission update: {peer!r}")
+
+        chats = getattr(result, "chats", ())
+        if not chats:
+            raise ValueError(f"Group rights could not be resolved for chat_id={chat_id}")
+        rights = getattr(chats[0], "default_banned_rights", None)
         if rights is None:
-            # No default restrictions exist, so only the requested flag is needed.
+            # No default restrictions exist. Keep every other permission unset.
             rights = types.ChatBannedRights(until_date=None)
-        return copy(rights)
+        return peer, copy(rights)
 
     async def _set_send_messages(self, chat_id, banned):
-        """Change only ChatBannedRights.send_messages and preserve every other flag."""
-        rights = await self._default_banned_rights(chat_id)
+        """Change only send_messages; all other ChatBannedRights flags are copied."""
+        peer, rights = await self._input_peer_and_rights(chat_id)
         rights.send_messages = bool(banned)
-        peer = await self.client.get_input_entity(chat_id)
         return await self.client(
             functions.messages.EditChatDefaultBannedRightsRequest(
                 peer=peer,
@@ -50,8 +65,8 @@ class GroupActions:
         )
 
     async def lock_group(self, chat_id, minutes=None):
-        # Save the old send-messages bit. It may already be restricted by the group.
-        rights = await self._default_banned_rights(chat_id)
+        # Capture the exact previous bit before changing it.
+        _peer, rights = await self._input_peer_and_rights(chat_id)
         state = _load_lock_state()
         state[str(chat_id)] = {"send_messages_banned": bool(rights.send_messages)}
         _save_lock_state(state)
@@ -60,8 +75,8 @@ class GroupActions:
         return True
 
     async def unlock_group(self, chat_id):
-        # Restore exactly the value captured by lock_group. If this bot has no
-        # captured state (for example an old lock), enable only text messages.
+        # Restore only the bit recorded by lock_group. For old locks without a
+        # record, enable just text messages and leave every other right intact.
         state = _load_lock_state()
         previous = state.pop(str(chat_id), {}).get("send_messages_banned", False)
         _save_lock_state(state)
@@ -73,13 +88,7 @@ class GroupActions:
 
     async def change_title(self, chat_id, title):
         chat = await self.client.get_input_entity(chat_id)
-
-        await self.client(
-            EditTitleRequest(
-                chat,
-                title,
-            )
-        )
+        await self.client(EditTitleRequest(chat, title))
 
     async def change_photo(self, chat_id, file_path):
         chat = await self.client.get_input_entity(chat_id)
@@ -88,10 +97,5 @@ class GroupActions:
         from splusthon.tl.types import InputChatUploadedPhoto
 
         await self.client(
-            EditPhotoRequest(
-                chat,
-                InputChatUploadedPhoto(
-                    file=uploaded,
-                )
-            )
+            EditPhotoRequest(chat, InputChatUploadedPhoto(file=uploaded))
         )
