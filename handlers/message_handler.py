@@ -462,18 +462,40 @@ async def send_activation_message(bot, event, chat_id, title):
 
 # (متن دقیق دستور، نام handler مقصد) — هیچ‌کدام نباید به مسیر حافظهٔ گروه بروند.
 RESERVED_COMMANDS = (
+    # --- مدیریت ادمین و مالک ---
     ("ثبت ادمین", "admin_registration"),
     ("لغو ادمین", "admin_removal"),
     ("برکناری ادمین", "admin_removal"),
+    ("ثبت مالک", "group_owner.set"),
+    ("لغو مالک", "group_owner.remove"),
+    ("برکناری مالک", "group_owner.remove"),
+    ("لیست ادمین", "admin_list"),
+    # --- مدیریت گروه ---
+    ("ثبت گروه", "group_registration"),
+    ("حذف گروه", "group_removal"),
     ("ثبت قوانین", "group_rules.set"),
     ("حذف قوانین", "group_rules.remove"),
+    ("قوانین", "group_rules.show"),
+    # --- حافظه و اطلاعات کاربر ---
     ("ثبت اصل", "user_original.set"),
+    ("اصلم", "user_original.show"),
     ("حذف حافظه", "group_memory.remove_other"),
     ("حذف اسم", "group_memory.remove_self"),
     ("حافظه من", "group_memory.show"),
-    ("قوانین", "group_rules.show"),
-    ("اصلم", "user_original.show"),
 )
+
+# واژهٔ دوم در «ثبت …» که هرگز یک اسم نیست، بلکه نشانهٔ یک دستور مدیریتی است.
+# این نگهبان ساختاری تضمین می‌کند حتی اگر دستور تازه‌ای به کد اضافه شود و
+# ثبتش در RESERVED_COMMANDS فراموش شود، باز هم به مسیر «ثبت اسم» نشت نکند.
+ADMIN_OBJECT_WORDS = frozenset({
+    "ادمین", "ادمین‌ها", "ادمینها", "مدیر", "مدیران",
+    "مالک", "مالکیت", "صاحب",
+    "گروه", "گپ", "چت", "کانال",
+    "قوانین", "قانون", "رول", "رولز",
+    "اصل", "اصلیت",
+    "کاربر", "عضو", "ربات", "بات",
+    "فیلتر", "کلمه", "کلمات", "لیست",
+})
 
 # پیشوندهایی که مسیر حافظهٔ گروه می‌پذیرد، به ترتیب دقیق‌بودن.
 MEMORY_REGISTER_PREFIXES = ("ثبت اسم ", "ثبت ")
@@ -521,17 +543,27 @@ def resolve_registration_prefix(text):
 
     این تنها نقطه‌ای است که تصمیم می‌گیرد یک پیام «ثبت …» به حافظهٔ گروه برود.
     """
+    # ۱) هر دستور رزروشده مطلقاً بیرون از مسیر ثبت اسم است.
     command, _handler = match_reserved_command(text)
     if command is not None:
         return None
+
     normalized = normalize_command(text)
-    # «ثبت اسم» بدون نام نباید با پیشوند کوتاه‌تر «ثبت » تطبیق کند و کلمهٔ
-    # «اسم» را به‌عنوان نام کاربر ذخیره کند.
+    # ۲) «ثبت» یا «ثبت اسم» بدون نام، ثبت نیست.
     if normalized in {"ثبت", "ثبت اسم"}:
         return None
+
     for prefix in MEMORY_REGISTER_PREFIXES:
-        if normalized.startswith(prefix) and normalized[len(prefix):].strip():
-            return prefix
+        if not normalized.startswith(prefix):
+            continue
+        remainder = normalized[len(prefix):].strip()
+        if not remainder:
+            return None
+        # ۳) نگهبان ساختاری: «ثبت <واژهٔ مدیریتی>» هرگز ثبت اسم نیست، حتی اگر
+        #    آن دستور هنوز در RESERVED_COMMANDS ثبت نشده باشد.
+        if prefix == "ثبت " and remainder.split()[0] in ADMIN_OBJECT_WORDS:
+            return None
+        return prefix
     return None
 
 
@@ -760,6 +792,7 @@ async def handle_new_message(bot, event):
             )
         )
         if clean_text == "ثبت قوانین":
+            _log_command_route(bot, clean_text, "ثبت قوانین", "group_rules.set")
             if not can_manage_group:
                 await event.reply("❌ فقط مدیر گروه اجازه ثبت قوانین دارد.")
             else:
@@ -778,6 +811,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "حذف قوانین":
+            _log_command_route(bot, clean_text, "حذف قوانین", "group_rules.remove")
             if not can_manage_group:
                 await event.reply("❌ فقط مدیر گروه اجازه حذف قوانین دارد.")
             elif remove_rules(chat_id):
@@ -981,6 +1015,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "ثبت اصل":
+            _log_command_route(bot, clean_text, "ثبت اصل", "user_original.set")
             begin_registration(user_id)
             await event.reply("لقب یا اصل خودتو بنویس")
             return
@@ -1978,6 +2013,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "لیست ادمین":
+            _log_command_route(bot, clean_text, "لیست ادمین", "admin_list")
             if not _has_group_management_permission(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
@@ -2210,6 +2246,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "ثبت مالک":
+            _log_command_route(bot, clean_text, "ثبت مالک", "group_owner.set")
             if not is_global_owner(getattr(sender, "id", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه ثبت مالک گروه را دارد")
                 return
@@ -2238,6 +2275,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "لغو مالک":
+            _log_command_route(bot, clean_text, "لغو مالک", "group_owner.remove")
             if not is_global_owner(getattr(sender, "id", None)):
                 await event.reply("❌ فقط مالک اصلی ربات اجازه لغو مالک گروه را دارد")
                 return
@@ -2251,6 +2289,7 @@ async def handle_new_message(bot, event):
 
         # ثبت گروه توسط مالک ربات
         if clean_text == "ثبت گروه":
+            _log_command_route(bot, clean_text, "ثبت گروه", "group_registration")
 
             try:
                 if not is_global_owner(getattr(sender, "id", None)):

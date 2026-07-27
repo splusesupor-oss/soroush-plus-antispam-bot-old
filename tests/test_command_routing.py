@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from handlers.message_handler import (
+    ADMIN_OBJECT_WORDS,
     MEMORY_REGISTER_PREFIXES,
     RESERVED_COMMANDS,
     match_reserved_command,
@@ -45,6 +46,51 @@ def route(text):
 
 
 # --------------------------------------------------------------------------
+def test_reported_admin_commands():
+    """هر دستور مدیریتی «ثبت …» باید به handler خودش برود، نه ثبت اسم."""
+    print("\n### دستورهای مدیریتی گزارش‌شده")
+    expected = {
+        "ثبت مالک": "group_owner.set",
+        "ثبت گروه": "group_registration",
+        "ثبت ادمین": "admin_registration",
+        "ثبت قوانین": "group_rules.set",
+        "ثبت اصل": "user_original.set",
+        "لغو مالک": "group_owner.remove",
+        "لغو ادمین": "admin_removal",
+        "برکناری ادمین": "admin_removal",
+        "حذف گروه": "group_removal",
+        "لیست ادمین": "admin_list",
+    }
+    for text, handler in expected.items():
+        check(f"{text!r} -> {handler}", route(text) == handler, f"-> {route(text)}")
+        check(f"{text!r} never enters name validation",
+              resolve_registration_prefix(text) is None,
+              f"-> prefix={resolve_registration_prefix(text)!r}")
+
+
+def test_reported_name_registrations():
+    """فقط «ثبت <اسم>» و «ثبت اسم <اسم>» وارد حافظهٔ گروه می‌شوند."""
+    print("\n### ثبت اسم‌های گزارش‌شده")
+    for text in ("ثبت کیانا", "ثبت اسم کیانا", "ثبت علی", "ثبت اسم علی"):
+        check(f"{text!r} -> group_memory.set_name",
+              route(text) == "group_memory.set_name", f"-> {route(text)}")
+
+
+def test_structural_guard():
+    """«ثبت <واژهٔ مدیریتی>» حتی بدون ثبت در جدول هم به اسم نمی‌رود."""
+    print("\n### نگهبان ساختاری ADMIN_OBJECT_WORDS")
+    for word in ("مدیر", "کاربر", "عضو", "ربات", "کانال", "فیلتر", "لیست"):
+        text = f"ثبت {word}"
+        check(f"{text!r} به ثبت اسم نمی‌رود",
+              resolve_registration_prefix(text) is None,
+              f"-> prefix={resolve_registration_prefix(text)!r}")
+    check("همهٔ دستورهای رزروشدهٔ «ثبت …» واژهٔ دومشان پوشش دارد",
+          all(c.split()[1] in ADMIN_OBJECT_WORDS
+              for c, _ in RESERVED_COMMANDS
+              if c.startswith("ثبت ") and len(c.split()) == 2),
+          "-> یک دستور جا افتاده")
+
+
 def test_required_cases():
     print("\n### the three cases from the bug report")
     check("«ثبت ادمین» -> admin_registration",
@@ -109,10 +155,15 @@ def test_no_false_positives():
         command, _ = match_reserved_command(text)
         check(f"{text!r} does not match a reserved command", command is None,
               f"-> matched {command!r}")
-    # ...but they may legitimately be a memory name
-    check("«ثبت ادمینها» is treated as a name, not admin registration",
-          route("ثبت ادمینها") == "group_memory.set_name",
+    # ...and the structural guard keeps admin-object plurals out of name
+    # registration too: «ادمینها» is never a person's name.
+    check("«ثبت ادمینها» does not become a stored name",
+          route("ثبت ادمینها") != "group_memory.set_name",
           f"-> {route('ثبت ادمینها')}")
+    # A real name that merely *starts* like an admin word is still a name.
+    check("«ثبت مالکه» (a real name) still registers",
+          resolve_registration_prefix("ثبت مالکه") == "ثبت ",
+          f"-> {resolve_registration_prefix('ثبت مالکه')!r}")
 
 
 def test_normalization():
@@ -161,6 +212,9 @@ def test_no_generic_startswith_remains():
 
 
 def main():
+    test_reported_admin_commands()
+    test_reported_name_registrations()
+    test_structural_guard()
     test_required_cases()
     test_admin_commands_never_reach_memory()
     test_memory_commands_still_work()
