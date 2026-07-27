@@ -28,7 +28,7 @@ from modules.broadcast_state import (
     consume_confirmation,
     delivered_count,
     get,
-    ledger_key_for_content,
+    new_broadcast_id,
     normalize_command_text,
     release_broadcast_slot,
     set_message,
@@ -129,20 +129,11 @@ async def _broadcast_to_groups(bot, text, entities=None, origin="unknown"):
     # «دیده‌نشده» به نظر می‌رسد و پیام دو بار ارسال می‌شود.
     seen_group_ids = set()
     entities = list(entities) if entities else []
-    # کلید ledger از محتوا ساخته می‌شود، نه UUID تصادفی: دو اجرای هم‌زمان با
-    # همان اطلاعیه باید یک دفتر مشترک داشته باشند تا گروه دوباره claim نشود.
-    broadcast_id, reused_ledger = ledger_key_for_content(text, entities)
+    # هر اجرا شناسهٔ یکتای خودش را دارد. ledger فقط تحویل تکراری *در همین
+    # اجرا* را می‌بندد؛ ارسال دوبارهٔ عمدیِ همان متن باید کاملاً کار کند.
+    broadcast_id = new_broadcast_id()
     start_delivery(broadcast_id)
     send_calls = 0
-    if reused_ledger:
-        _log_phase(
-            bot,
-            "BROADCAST LEDGER REUSED",
-            "",
-            f"broadcast_id={broadcast_id} origin={origin} "
-            f"already_delivered={delivered_count(broadcast_id)} "
-            "reason=identical_content_recently_sent",
-        )
 
     _log_phase(
         bot,

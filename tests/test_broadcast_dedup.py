@@ -214,12 +214,15 @@ def _broadcast_id_of(bot):
 
 
 def test_broadcast_id_semantics():
-    print("\n### broadcast_id is content-derived, not random")
-    # Same content within the dedup window -> same ledger key, so a repeat
-    # cannot re-deliver to groups already served.
+    print("\n### repeating an announcement must deliver again")
+    # REGRESSION GUARD: a content-derived ledger key silently blocked a repeat
+    # of the same text, so the owner saw "گروه‌های موفق: 0". Each broadcast must
+    # get its own id and deliver to every active group.
     client_a = Client()
     bot_a, _ = run_broadcast(client_a, body="متن یکسان")
     id_a = _broadcast_id_of(bot_a)
+    check("first send reached every group",
+          len(client_a.sent) == len(SHORT_IDS), f"-> {len(client_a.sent)}")
 
     bstate.clear(OWNER_ID)          # keep the ledger, only clear the session
     client_b = Client()
@@ -232,25 +235,12 @@ def test_broadcast_id_semantics():
     id_b = _broadcast_id_of(bot_b)
 
     check("broadcast_id present", bool(id_a), f"-> {id_a}")
-    check("identical content reuses the same ledger key", id_a == id_b,
-          f"-> {id_a} vs {id_b}")
-    check("repeat of identical content sends nothing again",
-          len(client_b.sent) == 0, f"-> {len(client_b.sent)} sends")
-    check("ledger reuse logged", bot_b.logger.has("BROADCAST LEDGER REUSED"))
-
-    # Different content -> different key -> delivered normally.
-    bstate.clear(OWNER_ID)
-    client_c = Client()
-    bot_c = Bot(client_c)
-    asyncio.run(bh.handle_private_broadcast(
-        bot_c, Event("اطلاع رسانی"), OWNER_ID, "اطلاع رسانی"))
-    asyncio.run(bh.handle_private_broadcast(
-        bot_c, Event("متن متفاوت"), OWNER_ID, "متن متفاوت"))
-    asyncio.run(bh.handle_private_broadcast(bot_c, Event("تایید"), OWNER_ID, "تایید"))
-    check("different content gets a new key",
-          _broadcast_id_of(bot_c) != id_a, f"-> {_broadcast_id_of(bot_c)}")
-    check("different content is delivered once per group",
-          len(client_c.sent) == len(SHORT_IDS), f"-> {len(client_c.sent)}")
+    check("each broadcast gets a fresh id", id_a != id_b, f"-> {id_a} vs {id_b}")
+    check("REPEAT of identical text delivers again",
+          len(client_b.sent) == len(SHORT_IDS), f"-> {len(client_b.sent)} sends")
+    check("no group duplicated within the repeat",
+          all(c == 1 for c in Counter(
+              target_key(t) for t in client_b.sent).values()))
     bstate.reset_delivery_state()
     bstate.clear(OWNER_ID)
 
@@ -301,19 +291,26 @@ def test_concurrent_direct_invocations():
         bstate.reset_delivery_state()
         client = Client()
         bot = Bot(client)
+        # Two tasks sharing ONE broadcast id: this is what a replayed update or
+        # a retry inside a single broadcast looks like. The ledger must let the
+        # group through exactly once.
+        broadcast_id = bstate.new_broadcast_id()
+        bstate.start_delivery(broadcast_id)
+        claimed = [bstate.claim_group(broadcast_id, k) for k in SHORT_IDS]
+        reclaimed = [bstate.claim_group(broadcast_id, k) for k in SHORT_IDS]
         await asyncio.gather(
             bh._broadcast_to_groups(bot, "متن یکسان", [], origin="probe-a"),
-            bh._broadcast_to_groups(bot, "متن یکسان", [], origin="probe-b"),
         )
-        return client, bot
+        return client, bot, claimed, reclaimed
 
-    client, bot = asyncio.run(drive())
+    client, bot, claimed, reclaimed = asyncio.run(drive())
+    check("first claim of each group succeeds", all(claimed), f"-> {claimed}")
+    check("second claim of the same group is refused",
+          not any(reclaimed), f"-> {reclaimed}")
     counts = Counter(target_key(t) for t in client.sent)
-    check("each group got exactly one send_message",
+    check("a single run delivers once per group",
           all(c == 1 for c in counts.values()) and len(counts) == len(SHORT_IDS),
           f"-> {dict(counts)}")
-    check("shared ledger was reused by the second run",
-          bot.logger.has("BROADCAST LEDGER REUSED"))
     check("no duplicate-detection error raised",
           not bot.logger.has("BROADCAST DUPLICATE DETECTED"))
     bstate.reset_delivery_state()

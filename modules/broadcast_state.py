@@ -5,8 +5,7 @@ Soroush Plus announcement is only faithful if bold, blockquote and every other
 entity survive the preview/confirm round trip. Storing text alone silently
 downgrades a formatted announcement to plain text.
 """
-import hashlib as _hashlib
-import time as _time
+import uuid as _uuid
 
 
 _PENDING_BROADCASTS = {}
@@ -109,48 +108,16 @@ _DELIVERY_LEDGER = {}
 _LEDGER_ORDER = []
 _LEDGER_LIMIT = 20
 _BROADCAST_IN_FLIGHT = set()
-_CONTENT_FINGERPRINTS = {}
-_FINGERPRINT_ORDER = []
-_FINGERPRINT_LIMIT = 20
 
 
-def content_fingerprint(text, entities=None):
-    """کلید پایدار برای «همین اطلاعیه».
+def new_broadcast_id():
+    """شناسهٔ تازه برای هر عملیات اطلاع‌رسانی.
 
-    دو اجرای هم‌زمان با متن یکسان باید یک ledger مشترک داشته باشند، وگرنه هر
-    کدام گروه‌ها را جداگانه claim می‌کند و پیام دو بار می‌رود. UUID تصادفی
-    این اشتراک را از بین می‌برد، پس اثرانگشت از خودِ محتوا ساخته می‌شود.
+    عمداً یکتا است: ledger فقط باید تحویل تکراری *در همان اجرا* را ببندد.
+    اگر کلید از روی محتوا ساخته شود، ارسال دوبارهٔ عمدیِ همان اطلاعیه هم
+    مسدود می‌شود و کاربر «۰ گروه» می‌گیرد — که یک باگ است، نه محافظت.
     """
-    parts = [str(text or "")]
-    for entity in entities or ():
-        parts.append(
-            f"{type(entity).__name__}:{getattr(entity, 'offset', '')}:"
-            f"{getattr(entity, 'length', '')}"
-        )
-    raw = "\u0000".join(parts).encode("utf-8", "replace")
-    return _hashlib.sha256(raw).hexdigest()[:16]
-
-
-def ledger_key_for_content(text, entities=None, window_seconds=300):
-    """broadcast_id مشترک برای محتوای یکسان در یک بازهٔ زمانی کوتاه.
-
-    اگر همان متن در بازهٔ ``window_seconds`` دوباره ارسال شود، همان کلید
-    برگردانده می‌شود تا ledger قبلی دوباره استفاده شود و تحویل تکراری رد شود.
-    پس از آن بازه، ارسال مجدد عمدی محسوب و کلید تازه ساخته می‌شود.
-    """
-    fingerprint = content_fingerprint(text, entities)
-    now = _time.monotonic()
-    existing = _CONTENT_FINGERPRINTS.get(fingerprint)
-    if existing and now - existing[1] <= window_seconds:
-        _CONTENT_FINGERPRINTS[fingerprint] = (existing[0], now)
-        return existing[0], True
-
-    key = f"{fingerprint}-{int(now * 1000) & 0xFFFFFF:06x}"
-    _CONTENT_FINGERPRINTS[fingerprint] = (key, now)
-    _FINGERPRINT_ORDER.append(fingerprint)
-    while len(_FINGERPRINT_ORDER) > _FINGERPRINT_LIMIT:
-        _CONTENT_FINGERPRINTS.pop(_FINGERPRINT_ORDER.pop(0), None)
-    return key, False
+    return _uuid.uuid4().hex[:12]
 
 
 def start_delivery(broadcast_id):
