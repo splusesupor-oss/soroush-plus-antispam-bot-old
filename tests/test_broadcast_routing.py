@@ -278,6 +278,24 @@ def main():
     check("negative chat_id stays group (not misrouted to private)",
           not bot.logger.has("private_route=True"))
 
+    # --- ZWNJ spelling: the real-world failure ----------------------------
+    print("\n### «اطلاع‌رسانی» written with ZWNJ (half-space)")
+    ZWNJ = "\u200c"
+    scenario(bot, "ZWNJ spelling reaches the handler",
+             Event("اطلاع" + ZWNJ + "رسانی"))
+    check("BROADCAST_COMMAND_RECEIVED logged for ZWNJ spelling",
+          bot.logger.has("BROADCAST_COMMAND_RECEIVED"))
+
+    print("\n### mandatory log fields present")
+    e = Event("اطلاع رسانی")
+    fire(bot, e)
+    line = next((m for _, m in bot.logger.lines
+                 if "BROADCAST_COMMAND_RECEIVED" in m), "")
+    for field in ("raw_text=", "normalized_text=", "event_out=", "is_private=",
+                  "owner_id_from_config="):
+        check(f"log contains {field}", field in line, f"-> {line[:120]}")
+    bstate.clear(OWNER_ID)
+
     print(f"\n{'=' * 52}")
     print(f"passed={PASSED} failed={FAILED}")
     print("=" * 52)

@@ -32,7 +32,12 @@ from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
-from modules.broadcast_state import get as get_broadcast_state
+from modules.broadcast_state import (
+    BROADCAST_COMMAND_WORDS,
+    get as get_broadcast_state,
+    is_broadcast_command,
+    normalize_command_text,
+)
 from handlers.admin_handler import handle_admin_commands
 import random
 """
@@ -436,15 +441,26 @@ class SoroushAntiSpamBot:
         async def new_message_handler(event):
             instrument_event(event, self.logger)
             raw_text = event.message.message or ""
-            text = raw_text.strip()
-            # BROADCAST TRACE: قبل از هر await، ورود خام رویداد ثبت می‌شود تا اگر
-            # یکی از فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
-            _broadcast_words = {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
-            if text in _broadcast_words:
+            # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
+            # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
+            # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
+            text = normalize_command_text(raw_text)
+            # BROADCAST TRACE: قبل از هر await ثبت می‌شود تا اگر یکی از
+            # فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
+            _broadcast_words = BROADCAST_COMMAND_WORDS
+            if is_broadcast_command(raw_text):
+                try:
+                    _owner_cfg = get_owner()
+                except Exception as _owner_error:
+                    _owner_cfg = {"error": repr(_owner_error)}
                 self.logger.log_info(
-                    "BROADCAST ROUTE ENTER "
-                    f"text={text!r} event_out={getattr(event, 'out', None)} "
-                    f"event_is_private={getattr(event, 'is_private', None)} "
+                    "BROADCAST_COMMAND_RECEIVED "
+                    f"raw_text={raw_text!r} "
+                    f"normalized_text={text!r} "
+                    f"event_out={getattr(event, 'out', None)} "
+                    f"is_private={getattr(event, 'is_private', None)} "
+                    f"event_chat_id={getattr(event, 'chat_id', None)} "
+                    f"owner_id_from_config={_owner_cfg} "
                     f"message_id={getattr(event.message, 'id', None)} "
                     f"entity_count={len(getattr(event.message, 'entities', None) or [])}"
                 )

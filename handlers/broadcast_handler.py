@@ -20,7 +20,14 @@ Two details are easy to get wrong and are handled explicitly here:
 """
 import asyncio
 
-from modules.broadcast_state import begin, clear, consume_confirmation, get, set_message
+from modules.broadcast_state import (
+    begin,
+    clear,
+    consume_confirmation,
+    get,
+    normalize_command_text,
+    set_message,
+)
 from modules.group_storage import is_active, load_groups
 
 
@@ -203,7 +210,10 @@ async def _broadcast_to_groups(bot, text, entities=None):
 async def handle_private_broadcast(bot, event, owner_id, text):
     """Returns True only when the private message belongs to this workflow."""
     raw_text = getattr(getattr(event, "message", None), "message", None) or text or ""
-    text = (text or "").strip()
+    # فرمان‌ها با متن نرمال‌شده مقایسه می‌شوند تا «اطلاع‌رسانی» با نیم‌فاصله هم
+    # پذیرفته شود؛ اما بدنهٔ اطلاعیه همیشه از raw_text خوانده می‌شود تا offsetهای
+    # entity دست‌نخورده بمانند.
+    text = normalize_command_text(text if text is not None else raw_text)
     entities = _extract_message_entities(event)
     state = get(owner_id)
 
@@ -215,7 +225,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
     )
 
-    if text == "اطلاع رسانی":
+    if text in {"اطلاع رسانی", "اطلاعرسانی"}:
         begin(owner_id)
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(
@@ -246,13 +256,13 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         return False
 
     if state["phase"] == "awaiting_confirmation":
-        if text in {"لغو", "❌ لغو"}:
+        if text in {"لغو", "❌ لغو"}:  # normalized above
             clear(owner_id)
             _log_phase(bot, "STATE CLEARED", owner_id, "reason=cancel")
             await _broadcast_reply(bot, event, "❌ اطلاع‌رسانی لغو شد.")
             return True
 
-        if text in {"تایید", "✅ تایید"}:
+        if text in {"تایید", "تأیید", "✅ تایید"}:
             _log_phase(bot, "CONFIRMED", owner_id)
             _log_phase(bot, "BROADCAST CONFIRM", owner_id, "action=consume_state")
             announcement_text, announcement_entities = consume_confirmation(owner_id)
@@ -294,7 +304,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
             f"text_len={len(raw_text)} u16_len={_u16_len(raw_text)} "
             f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
         )
-        if text in {"تایید", "✅ تایید", "لغو", "❌ لغو"}:
+        if text in {"تایید", "تأیید", "✅ تایید", "لغو", "❌ لغو"}:
             await _broadcast_reply(bot, event, "📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
             return True
 
