@@ -1,6 +1,8 @@
 """Responsible cultural and etymological name information for شخصیت."""
 import re
 
+from modules import persian_names
+
 # Each entry contains cultural/linguistic information, never personality claims.
 _NAME_INFO = {
     "علی": {
@@ -131,11 +133,58 @@ def _unknown_info(value):
     }
 
 
+def _database_info(value):
+    """اطلاعات پایه از دیتابیس جامع نام‌ها، وقتی رکورد تفصیلی نداریم.
+
+    نام در ``data/persian_names.json`` (~۲۴٬۵۰۰ نام) جستجو می‌شود؛ اگر پیدا شد
+    دست‌کم وجود و جنسیت رایج آن تأیید می‌شود، به‌جای اینکه «نامشخص» اعلام گردد.
+    برگرداندن None یعنی نام در هیچ منبعی نیست.
+    """
+    matched, gender = persian_names.lookup(value)
+    if matched is None:
+        matched = persian_names.first_known_token(value)
+        gender = persian_names.gender_of(matched) if matched else None
+    if matched is None:
+        return None
+
+    label = {"F": "دخترانه", "M": "پسرانه", "B": "دخترانه و پسرانه"}.get(
+        gender, "نامشخص"
+    )
+    return {
+        "origin": "ثبت‌شده در دیتابیس نام‌های ایرانی",
+        "language": "فارسی/ایرانی",
+        "origin_note": (
+            f"نام «{value}» در پایگاه دادهٔ نام‌های ایرانی ثبت شده است "
+            f"و به‌عنوان نامی {label} شناخته می‌شود."
+        ),
+        "meaning": "در دادهٔ داخلی معنای تفصیلی ثبت نشده است",
+        "common_meanings": (
+            "برای جلوگیری از ساختن اطلاعات نادرست، معنای قطعی اعلام نمی‌شود؛ "
+            "اما اصالت و رواج این نام تأیید شده است."
+        ),
+        "culture": f"این نام در فرهنگ ایرانی به‌صورت {label} به کار می‌رود.",
+        "popularity": "ثبت‌شده در فهرست نام‌های رایج ایرانی",
+        "regions": "ایران و حوزهٔ فرهنگی فارسی‌زبان",
+        "history": "نکتهٔ تاریخی تفصیلی در دادهٔ داخلی موجود نیست.",
+        "symbolic": (
+            "هر برداشت نمادین از این نام به پیوند فرهنگی و تجربهٔ شخصی افراد "
+            "وابسته است."
+        ),
+        "summary": (
+            f"«{value}» یک نام معتبر و ثبت‌شدهٔ ایرانی ({label}) است و برای "
+            "صاحب آن بخشی ارزشمند از هویت فردی و خانوادگی به شمار می‌رود."
+        ),
+    }
+
+
 def report(name):
     value = " ".join(str(name or "").strip().split())
     if not value or len(value) > 40 or not re.fullmatch(r"[A-Za-zآ-یءئؤة -]+", value):
         return None
-    info = _NAME_INFO.get(_norm(value.split()[0]), _unknown_info(value))
+    # ۱) رکورد تفصیلی دست‌نویس  ۲) دیتابیس جامع  ۳) پاسخ محتاطانه
+    info = _NAME_INFO.get(_norm(value.split()[0]))
+    if info is None:
+        info = _database_info(value) or _unknown_info(value)
     return (
         f"🧩 تحلیل کلی نام «{value}»\n\n"
         "📖 ریشه و خاستگاه\n"
