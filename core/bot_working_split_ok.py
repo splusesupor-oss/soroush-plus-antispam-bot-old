@@ -437,11 +437,36 @@ class SoroushAntiSpamBot:
             instrument_event(event, self.logger)
             raw_text = event.message.message or ""
             text = raw_text.strip()
-            routing_chat = await event.get_chat()
+            # BROADCAST TRACE: قبل از هر await، ورود خام رویداد ثبت می‌شود تا اگر
+            # یکی از فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
+            _broadcast_words = {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
+            if text in _broadcast_words:
+                self.logger.log_info(
+                    "BROADCAST ROUTE ENTER "
+                    f"text={text!r} event_out={getattr(event, 'out', None)} "
+                    f"event_is_private={getattr(event, 'is_private', None)} "
+                    f"message_id={getattr(event.message, 'id', None)} "
+                    f"entity_count={len(getattr(event.message, 'entities', None) or [])}"
+                )
+            try:
+                routing_chat = await event.get_chat()
+            except Exception as error:
+                self.logger.log_error(
+                    "BROADCAST ROUTE ENTER get_chat FAILED "
+                    f"text={text!r} error={error!r}"
+                )
+                raise
             is_private_splus = (
                 event.is_private
                 or routing_chat.__class__.__name__ == "User"
             )
+            if text in _broadcast_words:
+                self.logger.log_info(
+                    "BROADCAST ROUTE CHAT RESOLVED "
+                    f"chat_type={routing_chat.__class__.__name__} "
+                    f"chat_id={getattr(routing_chat, 'id', None)} "
+                    f"private_route={is_private_splus}"
+                )
             is_broadcast_text = text in {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
             is_name_family_trace_message = (
                 text == "اسم فامیل" or len(text.splitlines()) >= 7
@@ -634,20 +659,61 @@ class SoroushAntiSpamBot:
               # پیوی فقط دستور صفر کردن تخلف
             if is_private_splus:
                 text = (event.message.message or "").strip()
-                sender = await event.get_sender()
+                _is_broadcast_word = text in _broadcast_words
+                if _is_broadcast_word:
+                    self.logger.log_info(
+                        f"BROADCAST ROUTE PRIVATE BRANCH text={text!r}"
+                    )
+                try:
+                    sender = await event.get_sender()
+                except Exception as error:
+                    self.logger.log_error(
+                        f"BROADCAST OWNER CHECK get_sender FAILED error={error!r}"
+                    )
+                    raise
                 if event.out:
-                    private_me = await self.client.get_me()
+                    try:
+                        private_me = await self.client.get_me()
+                    except Exception as error:
+                        self.logger.log_error(
+                            f"BROADCAST OWNER CHECK get_me FAILED error={error!r}"
+                        )
+                        raise
                     sender_id = getattr(private_me, "id", None)
                 else:
                     sender_id = getattr(sender, "id", None)
 
-                if is_global_owner(sender_id):
+                _owner_ok = is_global_owner(sender_id)
+                if _is_broadcast_word or _owner_ok:
+                    self.logger.log_info(
+                        "BROADCAST OWNER CHECK "
+                        f"sender_id={sender_id} "
+                        f"sender_username={getattr(sender, 'username', None)!r} "
+                        f"event_out={event.out} "
+                        f"configured_owner={get_owner()!r} "
+                        f"is_global_owner={_owner_ok}"
+                    )
+                if not _owner_ok and _is_broadcast_word:
+                    self.logger.log_info(
+                        "BROADCAST ROUTE STOP reason=not_global_owner "
+                        f"sender_id={sender_id}"
+                    )
+
+                if _owner_ok:
                     self.logger.log_info(
                         "BROADCAST COMMAND RECEIVED "
                         f"owner_id={sender_id} text={text!r} event_out={event.out}"
                     )
                     if await handle_private_broadcast(self, event, sender_id, text):
+                        self.logger.log_info(
+                            f"BROADCAST ROUTE HANDLED text={text!r}"
+                        )
                         return
+                    if _is_broadcast_word:
+                        self.logger.log_info(
+                            "BROADCAST ROUTE NOT HANDLED "
+                            f"text={text!r} (handler returned False)"
+                        )
 
                 if "صفر" in text:
                     sender = await event.get_sender()

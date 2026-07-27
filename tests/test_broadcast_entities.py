@@ -267,10 +267,13 @@ def test_logging():
         MessageEntityBlockquote(offset=u16("عنوان\n"), length=u16("متن")),
     ]
     bot, _ = run_workflow(body, ents)
-    for needle in ("BROADCAST ROUTE", "BROADCAST START", "BROADCAST MESSAGE STORED",
-                   "PREVIEW CREATED", "BROADCAST STARTED", "BROADCAST SEND PAYLOAD",
-                   "BROADCAST GROUP SENT", "BROADCAST GROUP SUMMARY",
-                   "BROADCAST FINISHED"):
+    for needle in ("BROADCAST ROUTE ENTER HANDLER", "BROADCAST START",
+                   "BROADCAST STATE CREATE", "BROADCAST MESSAGE RECEIVED",
+                   "BROADCAST MESSAGE STORED", "PREVIEW CREATED",
+                   "BROADCAST CONFIRM", "BROADCAST STARTED",
+                   "BROADCAST SEND START", "BROADCAST SEND TARGETS",
+                   "BROADCAST GROUP SENT", "BROADCAST SEND RESULT",
+                   "BROADCAST GROUP SUMMARY", "BROADCAST FINISHED"):
         check(f"logged: {needle}", bool(bot.logger.lines(needle)))
     check("entity count logged", any("entity_count=2" in m for m in bot.logger.info))
     check("entity types logged",

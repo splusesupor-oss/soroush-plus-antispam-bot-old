@@ -115,11 +115,29 @@ async def _broadcast_to_groups(bot, text, entities=None):
 
     _log_phase(
         bot,
-        "BROADCAST SEND PAYLOAD",
+        "BROADCAST SEND START",
         "",
         f"text_len={len(text)} u16_len={_u16_len(text)} "
         f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
     )
+    try:
+        configured = list(load_groups())
+    except Exception as error:
+        configured = []
+        bot.logger.log_error(f"BROADCAST SEND START load_groups FAILED: {error}")
+    active_configured = [g for g in configured if is_active(g)]
+    _log_phase(
+        bot,
+        "BROADCAST SEND TARGETS",
+        "",
+        f"configured_groups={len(configured)} active_configured={len(active_configured)} "
+        f"active_ids={active_configured[:10]}",
+    )
+    if not active_configured:
+        bot.logger.log_error(
+            "BROADCAST SEND START no active configured groups; "
+            "delivery depends entirely on dialog enumeration"
+        )
 
     async def deliver(target, group_id, route):
         nonlocal successful, failed
@@ -169,6 +187,12 @@ async def _broadcast_to_groups(bot, text, entities=None):
 
     _log_phase(
         bot,
+        "BROADCAST SEND RESULT",
+        "",
+        f"successful={successful} failed={failed} attempted={len(seen_group_ids)}",
+    )
+    _log_phase(
+        bot,
         "BROADCAST GROUP SUMMARY",
         "",
         f"successful={successful} failed={failed}",
@@ -185,7 +209,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
 
     _log_phase(
         bot,
-        "BROADCAST ROUTE",
+        "BROADCAST ROUTE ENTER HANDLER",
         owner_id,
         f"text={text[:60]!r} phase={(state or {}).get('phase', '<none>')!r} "
         f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
@@ -194,11 +218,31 @@ async def handle_private_broadcast(bot, event, owner_id, text):
     if text == "اطلاع رسانی":
         begin(owner_id)
         _log_phase(bot, "BROADCAST START", owner_id)
+        _log_phase(
+            bot,
+            "BROADCAST STATE CREATE",
+            owner_id,
+            f"phase={(get(owner_id) or {}).get('phase')!r}",
+        )
         _log_phase(bot, "WAITING_FOR_TEXT", owner_id)
-        await _broadcast_reply(bot, event, PROMPT)
+        try:
+            await _broadcast_reply(bot, event, PROMPT)
+        except Exception as error:
+            bot.logger.log_error(
+                f"BROADCAST STATE CREATE reply FAILED owner_id={owner_id} "
+                f"error={error!r}"
+            )
+            raise
+        _log_phase(bot, "BROADCAST PROMPT SENT", owner_id)
         return True
 
     if not state:
+        _log_phase(
+            bot,
+            "BROADCAST ROUTE SKIP",
+            owner_id,
+            "reason=no_active_session (text is not اطلاع رسانی)",
+        )
         return False
 
     if state["phase"] == "awaiting_confirmation":
@@ -210,6 +254,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
 
         if text in {"تایید", "✅ تایید"}:
             _log_phase(bot, "CONFIRMED", owner_id)
+            _log_phase(bot, "BROADCAST CONFIRM", owner_id, "action=consume_state")
             announcement_text, announcement_entities = consume_confirmation(owner_id)
             if announcement_text is None:
                 _log_phase(bot, "STATE CLEARED", owner_id, "reason=no_active_session")
@@ -242,6 +287,13 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         return True
 
     if state["phase"] == "awaiting_message":
+        _log_phase(
+            bot,
+            "BROADCAST MESSAGE RECEIVED",
+            owner_id,
+            f"text_len={len(raw_text)} u16_len={_u16_len(raw_text)} "
+            f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
+        )
         if text in {"تایید", "✅ تایید", "لغو", "❌ لغو"}:
             await _broadcast_reply(bot, event, "📢 ابتدا متن اطلاع‌رسانی را ارسال کنید.")
             return True
