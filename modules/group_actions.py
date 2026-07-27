@@ -6,6 +6,8 @@ from pathlib import Path
 from splusthon.tl import functions, types
 from splusthon.tl.functions.channels import EditPhotoRequest, EditTitleRequest
 
+from modules.group_id import CHANNEL_ID_OFFSET, normalize_group_id
+
 
 _LOCK_STATE_FILE = Path(__file__).resolve().parent.parent / "config" / "group_message_lock_state.json"
 
@@ -28,30 +30,69 @@ class GroupActions:
         self.client = client
         self.logger = logger
 
+    @staticmethod
+    def _lock_key(chat_id):
+        """Use one persistent key for short IDs and SPlusthon's -100 IDs."""
+        return normalize_group_id(chat_id)
+
+    @staticmethod
+    def _peer_id_candidates(chat_id):
+        """Try SPlusthon's full channel ID before a short internal storage ID."""
+        try:
+            raw_id = int(chat_id)
+            short_id = int(normalize_group_id(chat_id))
+        except (TypeError, ValueError):
+            return (chat_id,)
+
+        # Internal storage keeps a channel ID without the -1000000000000 offset.
+        full_channel_id = -(CHANNEL_ID_OFFSET + short_id)
+        candidates = [full_channel_id]
+        if raw_id not in candidates:
+            candidates.append(raw_id)
+        return tuple(candidates)
+
     async def _input_peer_and_rights(self, chat_id):
-        """Resolve an InputPeer, then fetch default rights without get_entity().
+        """Resolve current rights using the full SPlusthon peer ID, never get_entity()."""
+        last_error = None
+        for candidate_id in self._peer_id_candidates(chat_id):
+            try:
+                peer = await self.client.get_input_entity(candidate_id)
+                if hasattr(peer, "channel_id") and hasattr(peer, "access_hash"):
+                    input_channel = types.InputChannel(peer.channel_id, peer.access_hash)
+                    result = await self.client(
+                        functions.channels.GetChannelsRequest([input_channel])
+                    )
+                elif hasattr(peer, "chat_id"):
+                    result = await self.client(
+                        functions.messages.GetChatsRequest([peer.chat_id])
+                    )
+                else:
+                    raise ValueError(f"Unsupported group peer: {peer!r}")
 
-        get_entity(chat_id) relies on the client's entity cache and can raise a
-        KeyError for numeric group IDs. Raw GetChannels/GetChats requests work
-        from the resolved peer and return the current server-side rights.
-        """
-        peer = await self.client.get_input_entity(chat_id)
-        if hasattr(peer, "channel_id") and hasattr(peer, "access_hash"):
-            input_channel = types.InputChannel(peer.channel_id, peer.access_hash)
-            result = await self.client(functions.channels.GetChannelsRequest([input_channel]))
-        elif hasattr(peer, "chat_id"):
-            result = await self.client(functions.messages.GetChatsRequest([peer.chat_id]))
-        else:
-            raise ValueError(f"Unsupported group peer for permission update: {peer!r}")
+                chats = getattr(result, "chats", ())
+                if not chats:
+                    raise ValueError(
+                        f"Group rights were empty for resolved_chat_id={candidate_id}"
+                    )
+                rights = getattr(chats[0], "default_banned_rights", None)
+                if rights is None:
+                    rights = types.ChatBannedRights(until_date=None)
+                self.logger.log_info(
+                    f"GROUP RIGHTS RESOLVED chat_id={chat_id} resolved_chat_id={candidate_id} "
+                    f"peer_type={type(peer).__name__}"
+                )
+                return peer, copy(rights)
+            except Exception as error:
+                last_error = error
+                self.logger.log_info(
+                    f"GROUP RIGHTS RESOLVE RETRY chat_id={chat_id} candidate_id={candidate_id} "
+                    f"error={error!r}"
+                )
 
-        chats = getattr(result, "chats", ())
-        if not chats:
-            raise ValueError(f"Group rights could not be resolved for chat_id={chat_id}")
-        rights = getattr(chats[0], "default_banned_rights", None)
-        if rights is None:
-            # No default restrictions exist. Keep every other permission unset.
-            rights = types.ChatBannedRights(until_date=None)
-        return peer, copy(rights)
+        raise ValueError(
+            f"Group rights could not be resolved for chat_id={chat_id}; "
+            f"candidates={self._peer_id_candidates(chat_id)}"
+        ) from last_error
 
     async def _set_send_messages(self, chat_id, banned):
         """Change only send_messages; all other ChatBannedRights flags are copied."""
@@ -68,7 +109,7 @@ class GroupActions:
         # Capture the exact previous bit before changing it.
         _peer, rights = await self._input_peer_and_rights(chat_id)
         state = _load_lock_state()
-        state[str(chat_id)] = {"send_messages_banned": bool(rights.send_messages)}
+        state[self._lock_key(chat_id)] = {"send_messages_banned": bool(rights.send_messages)}
         _save_lock_state(state)
         await self._set_send_messages(chat_id, banned=True)
         self.logger.log_info(f"GROUP MESSAGE LOCKED chat_id={chat_id}")
@@ -78,7 +119,7 @@ class GroupActions:
         # Restore only the bit recorded by lock_group. For old locks without a
         # record, enable just text messages and leave every other right intact.
         state = _load_lock_state()
-        previous = state.pop(str(chat_id), {}).get("send_messages_banned", False)
+        previous = state.pop(self._lock_key(chat_id), {}).get("send_messages_banned", False)
         _save_lock_state(state)
         await self._set_send_messages(chat_id, banned=previous)
         self.logger.log_info(
