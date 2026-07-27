@@ -448,17 +448,37 @@ class SoroushAntiSpamBot:
                     f"message_id={getattr(event.message, 'id', None)} "
                     f"entity_count={len(getattr(event.message, 'entities', None) or [])}"
                 )
+            # get_chat() نیازمند resolve شدن peer است و روی session تازه (کش
+            # entity خالی) می‌تواند خطا بدهد. چون هیچ try/except بیرونی وجود
+            # ندارد، آن خطا کل handler را بی‌صدا از بین می‌برد و دستور کاربر
+            # هرگز اجرا نمی‌شود. اینجا خطا مهار می‌شود تا مسیر ادامه یابد.
+            routing_chat = None
             try:
                 routing_chat = await event.get_chat()
             except Exception as error:
                 self.logger.log_error(
                     "BROADCAST ROUTE ENTER get_chat FAILED "
-                    f"text={text!r} error={error!r}"
+                    f"text={text!r} error={error!r} -> continuing with peer fallback"
                 )
-                raise
-            is_private_splus = (
+
+            # وقتی get_chat ناموفق است، نوع چت از خودِ peer رویداد استنتاج
+            # می‌شود؛ PeerUser یعنی پیوی. این مسیر به کش entity وابسته نیست.
+            peer_is_user = isinstance(
+                getattr(event, "_chat_peer", None), types.PeerUser
+            )
+            # آخرین fallback: در سروش پلاس شناسهٔ مثبت یعنی کاربر و شناسهٔ منفی
+            # یعنی گروه/کانال. فقط وقتی استفاده می‌شود که chat اصلاً resolve نشده.
+            event_chat_id = getattr(event, "chat_id", None)
+            positive_chat_id = (
+                routing_chat is None
+                and isinstance(event_chat_id, int)
+                and event_chat_id > 0
+            )
+            is_private_splus = bool(
                 event.is_private
                 or routing_chat.__class__.__name__ == "User"
+                or peer_is_user
+                or positive_chat_id
             )
             if text in _broadcast_words:
                 self.logger.log_info(
@@ -553,10 +573,30 @@ class SoroushAntiSpamBot:
 
             # MASTER GROUP MODE GATE: every incoming group message passes here first.
             if not is_private_splus:
-                chat_lock = await event.get_chat()
+                try:
+                    chat_lock = await event.get_chat()
+                except Exception as error:
+                    chat_lock = routing_chat
+                    self.logger.log_error(
+                        f"GROUP GATE get_chat FAILED error={error!r}"
+                    )
                 lock_id = getattr(chat_lock, "id", None)
-                sender_lock = await event.get_sender()
+                try:
+                    sender_lock = await event.get_sender()
+                except Exception as error:
+                    sender_lock = None
+                    self.logger.log_error(
+                        f"GROUP GATE get_sender FAILED error={error!r}"
+                    )
                 sender_id = getattr(sender_lock, "id", None)
+                if lock_id is None:
+                    # چت resolve نشده است؛ is_active(None) همیشه False است و
+                    # پیام بی‌صدا دور ریخته می‌شود. این حالت باید دیده شود.
+                    self.logger.log_error(
+                        "GROUP GATE UNRESOLVED CHAT "
+                        f"text={text[:40]!r} event_chat_id={event_chat_id} "
+                        f"event_is_private={event.is_private} -> message dropped"
+                    )
                 group_is_active = is_active(lock_id)
                 sender_username = (
                     mode_username if is_mode_command else getattr(
