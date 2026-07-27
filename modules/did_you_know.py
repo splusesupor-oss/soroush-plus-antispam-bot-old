@@ -1,4 +1,4 @@
-"""Short, broadly established facts for the دانستی command."""
+"""Short, broadly established facts for the دانستنی command."""
 import random
 
 FACTS = (
