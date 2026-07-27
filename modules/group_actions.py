@@ -1,4 +1,6 @@
 """Administrative actions using the SPlusthon method used by this bot's working history."""
+import traceback
+
 from splusthon.tl.functions.channels import (
     EditPhotoRequest,
     ToggleJoinToSendRequest,
@@ -58,15 +60,29 @@ class GroupActions:
         construct, reset, or allow any ChatBannedRights permission flags.
         """
         peer = await self._group_peer(chat_id)
-        await self.client(ToggleJoinToSendRequest(peer, True))
-        self.logger.log_info(f"GROUP LOCKED chat_id={chat_id} mode=join_to_send")
+        self.logger.log_info(f"LOCK RPC START chat_id={chat_id}")
+        try:
+            await self.client(ToggleJoinToSendRequest(peer, True))
+        except Exception:
+            self.logger.log_error(
+                f"LOCK RPC FAILED chat_id={chat_id}\n{traceback.format_exc()}"
+            )
+            raise
+        self.logger.log_info(f"LOCK RPC SUCCESS chat_id={chat_id}")
         return True
 
     async def unlock_group(self, chat_id):
         """Restore the original matching unlock request without touching rights."""
         peer = await self._group_peer(chat_id)
-        await self.client(ToggleJoinToSendRequest(peer, False))
-        self.logger.log_info(f"GROUP UNLOCKED chat_id={chat_id} mode=join_to_send")
+        self.logger.log_info(f"UNLOCK RPC START chat_id={chat_id}")
+        try:
+            await self.client(ToggleJoinToSendRequest(peer, False))
+        except Exception:
+            self.logger.log_error(
+                f"UNLOCK RPC FAILED chat_id={chat_id}\n{traceback.format_exc()}"
+            )
+            raise
+        self.logger.log_info(f"UNLOCK RPC SUCCESS chat_id={chat_id}")
         return True
 
     async def change_title(self, chat_id, title):
