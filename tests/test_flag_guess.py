@@ -25,12 +25,14 @@ def check(label, cond, detail=""):
         print(f"  FAIL  {label} {detail}")
 
 
-def play(chat_id, rounds):
+def play(chat_id, rounds, user_id=None):
     """rounds دور کامل بازی و برگرداندن ترتیب پاسخ‌ها."""
+    if user_id is None:
+        user_id = chat_id
     out = []
     for _ in range(rounds):
-        game = fg.start(chat_id)
-        assert game is not None, "start returned None while no game was active"
+        game = fg.start(chat_id, user_id)
+        assert game is not None, "start returned None while flags remained"
         out.append(game["answer"])
         fg.finish(chat_id, game["token"])
     return out
@@ -86,18 +88,74 @@ def test_first_ten_are_distinct():
     check("۱۰ دور اول همگی متفاوت‌اند", len(set(seq)) == 10, f"-> {len(set(seq))}")
 
 
-def test_cycle_reset_keeps_boundary():
-    print("\n### پس از پایان دور، پرچم آخر بلافاصله تکرار نمی‌شود")
+def test_exhaustion_locks_the_user():
+    """پس از دیدن همهٔ پرچم‌ها، بازی برای همان کاربر بسته می‌شود."""
+    print("\n### اتمام پرچم‌ها و قفل شدن بازی")
     fg.reset_history()
     total = len(fg.COUNTRIES)
-    seq = play(-100004, total)
-    last_of_cycle = seq[-1]
-    first_of_next = play(-100004, 1)[0]
-    check("تاریخچه پس از دور کامل صفر شد", fg.seen_count(-100004) == 1,
-          f"-> {fg.seen_count(-100004)}")
-    check("اولین پرچم دور جدید با آخرین پرچم دور قبل فرق دارد",
-          first_of_next != last_of_cycle,
-          f"-> {last_of_cycle} → {first_of_next}")
+    chat, user = -100700, 7001
+
+    check("در ابتدا کاربر محدود نیست", not fg.is_exhausted(user))
+    check(f"در ابتدا {total} پرچم باقی است",
+          fg.remaining_count(user) == total, f"-> {fg.remaining_count(user)}")
+
+    seq = play(chat, total, user)
+    check(f"همهٔ {total} پرچم یکتا نمایش داده شد",
+          len(set(seq)) == total, f"-> {len(set(seq))}")
+    check("کاربر اکنون محدود است", fg.is_exhausted(user))
+    check("هیچ پرچمی باقی نمانده", fg.remaining_count(user) == 0,
+          f"-> {fg.remaining_count(user)}")
+
+    check("start دیگر پرچم نمی‌دهد", fg.start(chat, user) is None)
+    check("هیچ بازی فعالی ساخته نشد", not fg.is_active(chat))
+    for _ in range(5):
+        check("تلاش‌های بعدی هم رد می‌شوند", fg.start(chat, user) is None)
+        break
+
+
+def test_exhausted_user_earns_nothing():
+    """کاربر محدودشده نباید بتواند امتیاز بگیرد."""
+    print("\n### کاربر محدودشده امتیاز نمی‌گیرد")
+    fg.reset_history()
+    chat, locked, fresh = -100701, 7002, 7003
+    play(chat, len(fg.COUNTRIES), locked)
+    check("کاربر محدود شد", fg.is_exhausted(locked))
+
+    # بازی‌ای که کاربر دیگری شروع کرده
+    game = fg.start(chat, fresh)
+    check("کاربر آزاد توانست بازی بگیرد", game is not None)
+    check("پاسخ درستِ کاربر محدودشده پذیرفته نمی‌شود",
+          fg.answer(chat, game["answer"], locked) is None)
+    check("بازی هنوز فعال است", fg.is_active(chat))
+    check("پاسخ درستِ کاربر آزاد پذیرفته می‌شود",
+          fg.answer(chat, game["answer"], fresh) == game["answer"])
+
+
+def test_lock_is_per_user_only():
+    """محدودیت فقط برای همان کاربر است."""
+    print("\n### محدودیت فقط برای همان کاربر")
+    fg.reset_history()
+    chat, locked, other = -100702, 7004, 7005
+    play(chat, len(fg.COUNTRIES), locked)
+    check("کاربر اول محدود شد", fg.is_exhausted(locked))
+    check("کاربر دوم محدود نیست", not fg.is_exhausted(other))
+    game = fg.start(chat, other)
+    check("کاربر دوم در همان چت پرچم می‌گیرد", game is not None)
+    check("کاربر دوم تاریخچهٔ خودش را دارد", fg.seen_count(other) == 1,
+          f"-> {fg.seen_count(other)}")
+    check("تاریخچهٔ کاربر اول دست‌نخورده است",
+          fg.seen_count(locked) == len(fg.COUNTRIES))
+    fg.finish(chat, game["token"])
+
+
+def test_exhausted_message_text():
+    print("\n### متن پیام پایان بازی")
+    msg = fg.EXHAUSTED_MESSAGE
+    for part in ("🏁 تمام پرچم‌های این بازی برای شما نمایش داده شد.",
+                 "🔒 برای جلوگیری از سوءاستفاده و کسب امتیاز تکراری",
+                 "این بازی برای شما به پایان رسیده است.",
+                 "🎮 لطفاً از سایر بازی‌های ربات استفاده کنید."):
+        check(f"شامل: {part[:40]}", part in msg)
 
 
 def test_multiple_chats_independent():
@@ -112,7 +170,7 @@ def test_multiple_chats_independent():
     firsts = [seq[0] for seq in results.values()]
     check("شروع بازی برای چت‌های مختلف یکسان نیست",
           len(set(firsts)) >= 3, f"-> {firsts}")
-    check("هر چت تاریخچهٔ مستقل دارد",
+    check("هر کاربر تاریخچهٔ مستقل دارد",
           all(fg.seen_count(c) == 10 for c in chats),
           f"-> {[fg.seen_count(c) for c in chats]}")
 
@@ -182,7 +240,10 @@ def main():
     test_no_immediate_repeat()
     test_no_repeat_within_cycle()
     test_first_ten_are_distinct()
-    test_cycle_reset_keeps_boundary()
+    test_exhaustion_locks_the_user()
+    test_exhausted_user_earns_nothing()
+    test_lock_is_per_user_only()
+    test_exhausted_message_text()
     test_multiple_chats_independent()
     test_concurrent_games_isolated()
     test_randomness_across_restarts()

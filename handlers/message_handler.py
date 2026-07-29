@@ -29,7 +29,14 @@ from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
 from modules.name_family import start as start_name_family, submit as submit_name_family, finish as finish_name_family, is_active as name_family_active
 from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
-from modules.flag_guess import start as start_flag_guess, answer as answer_flag_guess, finish as finish_flag_guess, is_active as flag_guess_active
+from modules.flag_guess import (
+    EXHAUSTED_MESSAGE as FLAG_GUESS_EXHAUSTED_MESSAGE,
+    answer as answer_flag_guess,
+    finish as finish_flag_guess,
+    is_active as flag_guess_active,
+    is_exhausted as flag_guess_exhausted,
+    start as start_flag_guess,
+)
 from modules.group_memory import extract_name, friendly_reply, get_name as get_memory_name, remove_name as remove_memory_name, set_name as set_memory_name
 from modules.group_rules import begin as begin_rules, cancel as cancel_rules, format_rules, remove as remove_rules, save as save_rules, waiting as waiting_rules
 from modules.name_insights import report as name_personality_report
@@ -1270,7 +1277,15 @@ async def handle_new_message(bot, event):
         if clean_text == "حدس پرچم":
             if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
                 return
-            flag_game = start_flag_guess(chat_id)
+            # محدودیت به تفکیک کاربر: وقتی کاربری همهٔ پرچم‌ها را دید، بازی
+            # برای او بسته می‌شود تا امتیاز تکراری نگیرد. سایر کاربران آزادند.
+            if flag_guess_exhausted(user_id):
+                await event.reply(FLAG_GUESS_EXHAUSTED_MESSAGE)
+                return
+            flag_game = start_flag_guess(chat_id, user_id)
+            if flag_game is None:
+                await event.reply(FLAG_GUESS_EXHAUSTED_MESSAGE)
+                return
             await event.reply(
                 "🌍 حدس پرچم\n\n"
                 f"{flag_game['flag']}\n\n"
@@ -1288,7 +1303,7 @@ async def handle_new_message(bot, event):
             return
 
         if flag_guess_active(chat_id):
-            country = answer_flag_guess(chat_id, clean_text)
+            country = answer_flag_guess(chat_id, clean_text, user_id)
             if country:
                 await event.reply("✅ پاسخ درست بود!\n+3 🪙 سکه")
                 award_coins(chat_id, user_id, _format_group_member(sender), 3)
