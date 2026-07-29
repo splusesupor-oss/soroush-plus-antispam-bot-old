@@ -52,7 +52,9 @@ from modules.coins import (
     rank as coin_rank,
 )
 from modules.gif_spam_detector import (
+    handle_gif as handle_gif_message,
     is_gif_message,
+    pending_count as gif_pending_count,
     reset_gif_history,
     track_gif,
 )
@@ -860,24 +862,22 @@ async def handle_new_message(bot, event):
             save_history_message(chat_id, user_id, event.message.id, message_text)
         if not is_group_moderator:
             if is_gif_message(event.message):
-                repeated_gif_ids = track_gif(
+                # مسیر مستقل GIF: ثبت، صف‌بندی و حذف دسته‌ای با تلاش مجدد.
+                repeated_gif_ids, newly_flagged = handle_gif_message(
                     chat_id,
                     user_id,
                     event.message.id,
+                    client=bot.client,
+                    logger=bot.logger,
                 )
+                deleted = len(repeated_gif_ids)
                 if repeated_gif_ids:
-                    print("GIF SPAM DETECTED COUNT=6")
-                    deleted = 0
-                    for stored_message_id in repeated_gif_ids:
-                        print(f"DELETE GIF MESSAGE {stored_message_id}")
-                    try:
-                        await bot.client.delete_messages(chat_id, repeated_gif_ids)
-                        deleted = len(repeated_gif_ids)
-                        print("GIF MESSAGES DELETED")
-                    except Exception as error:
-                        bot.logger.log_error(
-                            f"خطا در حذف GIF متوالی {user_id}: {error}"
-                        )
+                    bot.logger.log_info(
+                        f"GIF SPAM QUEUED chat_id={chat_id} user_id={user_id} "
+                        f"ids={repeated_gif_ids} newly_flagged={newly_flagged} "
+                        f"pending={gif_pending_count(chat_id)}"
+                    )
+                if newly_flagged:
                     async def gif_mute_succeeded(_result):
                         print("USER MUTED 3600")
                         notification_key = (chat_id, user_id)
@@ -907,12 +907,13 @@ async def handle_new_message(bot, event):
                         on_success=gif_mute_succeeded,
                         on_failure=gif_mute_failed,
                     )
-                    reset_gif_history(chat_id, user_id)
-                    print("GIF HISTORY CLEARED")
                     if deleted:
                         bot.logger.log_info(
                             f"consecutive GIF spam deleted chat_id={chat_id} user_id={user_id} count={deleted}"
                         )
+                # هر GIF مشمول، چه در آستانه و چه پس از آن، همین‌جا پایان
+                # می‌یابد و وارد فیلترهای دیگر نمی‌شود.
+                if repeated_gif_ids:
                     return
 
         is_forwarded, forward_field, forward_fields = _get_forward_metadata(
