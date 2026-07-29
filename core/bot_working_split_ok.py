@@ -32,6 +32,7 @@ from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
+from modules.name_family import cancel_round as cancel_name_family_round
 from modules.broadcast_state import (
     BROADCAST_COMMAND_WORDS,
     get as get_broadcast_state,
@@ -658,6 +659,9 @@ class SoroushAntiSpamBot:
                         deactivate_group(lock_id, title)
                         for task in self.group_timer_tasks.pop(lock_id, set()):
                             task.cancel()
+                        # اسم فامیل صف تایمر مستقل خودش را دارد و باید
+                        # جداگانه و تمیز بسته شود.
+                        cancel_name_family_round(lock_id)
                         await event.reply(
                             f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
                         )

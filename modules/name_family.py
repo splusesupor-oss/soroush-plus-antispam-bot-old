@@ -124,9 +124,20 @@ _INVALID_ANSWERS = frozenset({
     "نمیدونم", "نمی دونم", "نمی دانم", "نمیدانم", "ندارم", "هیچی", "نمیگم",
 })
 _VALID_TEXT = re.compile(r"^[آ-یءئؤة\s]+$")
+# ---------------------------------------------------------------------------
+# State for this game ONLY. Nothing here is shared with حدس پرچم، چیستان،
+# جای خالی or any other game, so no other module can cancel, clear or
+# overwrite a Name & Family round.
+# ---------------------------------------------------------------------------
 _ACTIVE = {}
 _REMAINING_LETTERS = {}
 _ROUND_SEQUENCE = 0
+ROUND_SECONDS = 90
+
+# Timer tasks owned exclusively by this game: chat_id -> asyncio.Task
+_ROUND_TASKS = {}
+# Rounds already finished, so results can never be produced twice.
+_FINISHED_ROUNDS = set()
 
 # Unknown answers are checked only after local database and learned-answer
 # checks. The cache is process-local: no runtime data file is made.
@@ -174,21 +185,32 @@ def start(chat_id):
         "round_id": _ROUND_SEQUENCE,
         "letter": remaining.pop(),
         "answers": {},
+        "started_at": time.monotonic(),
+        "deadline": time.monotonic() + ROUND_SECONDS,
     }
     _ACTIVE[chat_id] = state
-    return {"round_id": state["round_id"], "letter": state["letter"], "answers": {}}
+    return {
+        "round_id": state["round_id"],
+        "letter": state["letter"],
+        "answers": {},
+        "deadline": state["deadline"],
+        "seconds": ROUND_SECONDS,
+    }
 
 
 def _parse_answers(text):
-    """Accept only the exact seven raw answer lines requested by the game."""
+    """Accept the seven answer lines, tolerating real-keyboard whitespace.
+
+    Mobile keyboards routinely append a trailing newline and users often leave
+    a blank line between answers. Rejecting those silently dropped valid
+    submissions, which is why answers "sometimes" were not recorded. Blank
+    lines are ignored; category labels and legacy separators are still
+    rejected.
+    """
     raw_text = str(text or "")
-    if raw_text.endswith(("\n", "\r")):
-        return None
-    lines = raw_text.splitlines()
-    if len(lines) != len(CATEGORIES):
-        return None
-    parts = [line.strip() for line in lines]
-    if any(not part for part in parts):
+    lines = [line.strip() for line in raw_text.splitlines()]
+    parts = [line for line in lines if line]
+    if len(parts) != len(CATEGORIES):
         return None
     # Reject legacy separators and category labels: they are not seven raw answers.
     for category, answer in zip(CATEGORIES, parts):
@@ -541,12 +563,135 @@ def submit(
     return points
 
 
-def finish(chat_id):
-    state = _ACTIVE.pop(chat_id, None)
+def finish(chat_id, round_id=None):
+    """Close a round and return its ranking. Safe to call more than once.
+
+    ``round_id`` guards against a stale timer from a previous round closing a
+    freshly started one.
+    """
+    state = _ACTIVE.get(chat_id)
     if not state:
         return []
+    if round_id is not None and state["round_id"] != round_id:
+        return []
+    if state["round_id"] in _FINISHED_ROUNDS:
+        return []
+    _ACTIVE.pop(chat_id, None)
+    _FINISHED_ROUNDS.add(state["round_id"])
+    if len(_FINISHED_ROUNDS) > 500:
+        _FINISHED_ROUNDS.clear()
+        _FINISHED_ROUNDS.add(state["round_id"])
     return sorted(
         state["answers"].values(),
         key=lambda item: item["points"],
         reverse=True,
     )
+
+
+def cancel_round(chat_id):
+    """Abort a round without producing results (admin disabling the bot)."""
+    task = _ROUND_TASKS.pop(chat_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+    state = _ACTIVE.pop(chat_id, None)
+    if state:
+        _FINISHED_ROUNDS.add(state["round_id"])
+    return bool(state)
+
+
+def active_round_id(chat_id):
+    state = _ACTIVE.get(chat_id)
+    return state["round_id"] if state else None
+
+
+def seconds_left(chat_id):
+    state = _ACTIVE.get(chat_id)
+    if not state:
+        return 0
+    return max(0.0, state["deadline"] - time.monotonic())
+
+
+def reset_all():
+    """Test helper: clear every Name & Family structure."""
+    for task in list(_ROUND_TASKS.values()):
+        if not task.done():
+            task.cancel()
+    _ROUND_TASKS.clear()
+    _ACTIVE.clear()
+    _FINISHED_ROUNDS.clear()
+    _REMAINING_LETTERS.clear()
+
+
+async def run_round(chat_id, round_id, on_results, logger=None, seconds=None):
+    """Own the whole 90-second lifetime of one round.
+
+    Results are delivered in a ``finally`` block, so they are sent even if the
+    task is cancelled or ``on_results`` raises. This is what makes "results
+    sometimes never appear" impossible.
+    """
+    import asyncio as _aio
+
+    delay = ROUND_SECONDS if seconds is None else seconds
+    cancelled = False
+    try:
+        await _aio.sleep(delay)
+    except _aio.CancelledError:
+        cancelled = True
+        if logger is not None:
+            logger.log_info(
+                f"NAME FAMILY TIMER CANCELLED chat_id={chat_id} round_id={round_id} "
+                "-> results will still be delivered"
+            )
+    finally:
+        _ROUND_TASKS.pop(chat_id, None)
+        if logger is not None:
+            logger.log_info(
+                f"NAME FAMILY TIMER END chat_id={chat_id} round_id={round_id} "
+                f"cancelled={cancelled}"
+            )
+        state = _ACTIVE.get(chat_id)
+        already_done = state is None or state["round_id"] != round_id
+        if not already_done:
+            ranking = finish(chat_id, round_id)
+            if logger is not None:
+                logger.log_info(
+                    f"NAME FAMILY RESULTS START chat_id={chat_id} "
+                    f"round_id={round_id} players={len(ranking)}"
+                )
+            try:
+                await on_results(ranking)
+                if logger is not None:
+                    logger.log_info(
+                        f"NAME FAMILY RESULTS SENT chat_id={chat_id} "
+                        f"round_id={round_id} players={len(ranking)}"
+                    )
+            except Exception as error:
+                if logger is not None:
+                    logger.log_error(
+                        f"NAME FAMILY RESULTS FAILED chat_id={chat_id} "
+                        f"round_id={round_id} error={error!r}"
+                    )
+        if cancelled:
+            raise _aio.CancelledError
+
+
+def schedule_round(chat_id, round_id, on_results, logger=None, seconds=None):
+    """Create and own the round timer task, replacing any stale one."""
+    import asyncio as _aio
+
+    previous = _ROUND_TASKS.pop(chat_id, None)
+    if previous is not None and not previous.done():
+        previous.cancel()
+    try:
+        loop = _aio.get_running_loop()
+    except RuntimeError:
+        return None
+    task = loop.create_task(run_round(chat_id, round_id, on_results, logger, seconds))
+    _ROUND_TASKS[chat_id] = task
+
+    def _cleanup(done_task):
+        if _ROUND_TASKS.get(chat_id) is done_task:
+            _ROUND_TASKS.pop(chat_id, None)
+
+    task.add_done_callback(_cleanup)
+    return task

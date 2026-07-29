@@ -27,7 +27,14 @@ from modules.jokes import get_joke
 from modules.biographies import get_biography
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
-from modules.name_family import start as start_name_family, submit as submit_name_family, finish as finish_name_family, is_active as name_family_active
+from modules.name_family import (
+    cancel_round as cancel_name_family_round,
+    finish as finish_name_family,
+    is_active as name_family_active,
+    schedule_round as schedule_name_family_round,
+    start as start_name_family,
+    submit as submit_name_family,
+)
 from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
 from modules.flag_guess import (
     EXHAUSTED_MESSAGE as FLAG_GUESS_EXHAUSTED_MESSAGE,
@@ -1210,9 +1217,8 @@ async def handle_new_message(bot, event):
                 "⏳ زمان: 90 ثانیه\n\n"
                 "👤 نام\n👤 فامیل\n🌍 شهر\n🍇 میوه\n📦 وسیله\n🐶 حیوان\n🎵 خواننده"
             )
-            async def name_family_timer():
-                await _asyncio.sleep(90)
-                ranking = finish_name_family(chat_id)
+            async def name_family_results(ranking):
+                """نمایش نتایج؛ توسط مسیر اختصاصی همین بازی فراخوانی می‌شود."""
                 if not ranking:
                     await event.reply("🏆 نتایج\n\nشرکت‌کننده‌ای پاسخ صحیح ثبت نکرد.")
                     return
@@ -1222,11 +1228,35 @@ async def handle_new_message(bot, event):
                     medal = medals[index - 1] if index <= 3 else "•"
                     reward = ""
                     if player["points"] >= 70:
-                        award_coins(chat_id, player.get("user_id", "unknown"), player["name"], 6)
-                        reward = " — 🪙 +6 سکه"
+                        try:
+                            award_coins(
+                                chat_id, player.get("user_id", "unknown"),
+                                player["name"], 6,
+                            )
+                            reward = " — 🪙 +6 سکه"
+                        except Exception as error:
+                            # پاداش نباید مانع نمایش نتایج شود.
+                            bot.logger.log_error(
+                                f"NAME FAMILY REWARD FAILED chat_id={chat_id} "
+                                f"player={player['name']} error={error!r}"
+                            )
                     lines.append(f"{medal} {player['name']} — {player['points']} امتیاز{reward}")
                 await event.reply("\n".join(lines))
-            _track_group_timer(bot, chat_id, _asyncio.create_task(name_family_timer()))
+
+            # تایمر این بازی در صف اختصاصی خودش نگه داشته می‌شود، نه در
+            # group_timer_tasks مشترک؛ پس هیچ بازی یا دستور دیگری نمی‌تواند
+            # آن را لغو کند و نتایج همیشه ارسال می‌شوند.
+            schedule_name_family_round(
+                chat_id,
+                game["round_id"],
+                name_family_results,
+                logger=bot.logger,
+            )
+            bot.logger.log_info(
+                "NAME FAMILY ROUND STARTED "
+                f"chat_id={chat_id} round_id={game['round_id']} "
+                f"letter={game['letter']} seconds={game.get('seconds', 90)}"
+            )
             return
 
         # ثبت پاسخ اسم فامیل در همان بازی فعال
