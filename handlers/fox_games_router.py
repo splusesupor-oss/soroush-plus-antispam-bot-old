@@ -146,9 +146,22 @@ async def _start_survival(bot, event, chat_id, logger):
             return
         paid = _coins(bot, chat_id, champion["user_id"], champion["name"],
                       survival.WINNER_COINS, logger)
-        reward = (f"\n\n🪙 +{to_persian_digits(survival.WINNER_COINS)} سکه"
-                  if paid else "")
-        await event.reply(f"🏆 برندهٔ بقا: {champion['name']}{reward}")
+        rounds = champion.get("round_coins", 0)
+        lines = [f"🏆 برندهٔ بقا: {champion['name']}"]
+        if paid:
+            lines.append("")
+            if rounds:
+                lines.append(
+                    f"🪙 سکهٔ مراحل: +{to_persian_digits(rounds)}"
+                )
+            lines.append(
+                f"🪙 جایزهٔ برنده: +{to_persian_digits(survival.WINNER_COINS)}"
+            )
+            lines.append(
+                f"مجموع این بازی: "
+                f"{to_persian_digits(rounds + survival.WINNER_COINS)} سکه"
+            )
+        await event.reply("\n".join(lines))
 
     survival.schedule(chat_id, session["session_id"], {
         "on_abort": on_abort,
@@ -182,13 +195,19 @@ async def _survival_message(bot, event, chat_id, user_id, sender, text, logger):
         return True
 
     if state == "playing":
-        result, _player = survival.answer(chat_id, user_id, text, logger)
+        result, player = survival.answer(chat_id, user_id, text, logger)
         if result in {"no_question", "not_player"}:
             return False
         if result == "already":
             return True
         if result == "correct":
-            await event.reply("✅ درست بود!")
+            # سکهٔ مرحله بلافاصله پرداخت می‌شود؛ حذف شدن در مراحل بعد آن را
+            # پس نمی‌گیرد.
+            paid = _coins(bot, chat_id, user_id, player["name"],
+                          survival.CORRECT_COINS, logger)
+            reward = (f" 🪙 +{to_persian_digits(survival.CORRECT_COINS)} سکه"
+                      if paid else "")
+            await event.reply(f"✅ درست بود!{reward}")
         elif result == "wrong":
             await event.reply("❌ پاسخ اشتباه — حذف شدید.")
         return True

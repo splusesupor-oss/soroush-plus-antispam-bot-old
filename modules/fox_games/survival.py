@@ -16,15 +16,21 @@ COMMAND = "بقا"
 JOIN_WORD = "شرکت"
 
 MAX_PLAYERS = 4
-MIN_PLAYERS = 2
+MIN_PLAYERS = 1            # با ۱ تا ۴ نفر هم بازی مرحله‌ای اجرا می‌شود
 JOIN_SECONDS = 60
 ANSWER_SECONDS = 30
-WINNER_COINS = 8           # جایزهٔ قابل تنظیم
+CORRECT_COINS = 1          # سکهٔ هر پاسخ صحیح در هر مرحله
+WINNER_COINS = 8           # جایزهٔ برندهٔ نهایی، علاوه بر سکه‌های مراحل
 # سقف مرحله‌ها: بازی حتی اگر همه ساکت بمانند هم باید پایان بپذیرد.
 MAX_ROUNDS = 20
 
 _STORE = SessionStore(GAME_NAME)
 _RANDOM = random.SystemRandom()
+
+# تاریخچهٔ سوال‌های استفاده‌شده به تفکیک گروه؛ بین بازی‌های پشت‌سرهم باقی
+# می‌ماند تا سوال تکراری کمتر تکرار شود. وقتی یک سطح تمام شد، همان سطح برای
+# آن گروه از نو باز می‌شود.
+_CHAT_HISTORY = {}
 
 ALREADY_RUNNING = "🏕 بازی بقا همین حالا در جریان است."
 NOT_ENOUGH = "🏕 تعداد شرکت‌کننده کافی نبود؛ بازی لغو شد."
@@ -72,7 +78,9 @@ def join(chat_id, user_id, user, logger=None):
         return "full", list(session["order"])
 
     name = display_name(user)
-    session["players"][key] = {"user_id": user_id, "name": name, "alive": True}
+    session["players"][key] = {
+        "user_id": user_id, "name": name, "alive": True, "round_coins": 0,
+    }
     session["order"].append(name)
     log(logger,
         f"FOX SURVIVAL JOIN chat_id={chat_id} user_id={user_id} name={name} "
@@ -102,7 +110,7 @@ def begin_rounds(chat_id, logger=None):
     if not session or session.get("phase") != "joining":
         return False
     if len(session["players"]) < MIN_PLAYERS:
-        log(logger, f"FOX SURVIVAL ABORT chat_id={chat_id} reason=not_enough_players "
+        log(logger, f"FOX SURVIVAL ABORT chat_id={chat_id} reason=no_players "
                     f"count={len(session['players'])}")
         return False
     session["phase"] = "playing"
@@ -111,20 +119,40 @@ def begin_rounds(chat_id, logger=None):
 
 
 def next_question(chat_id, logger=None):
-    """سوال مرحلهٔ بعد؛ هر مرحله سخت‌تر و بدون تکرار."""
+    """سوال مرحلهٔ بعد؛ تصادفی، سخت‌تر از مرحلهٔ قبل و بدون تکرار.
+
+    انتخاب سه‌مرحله‌ای است تا سوال تکراری تا حد ممکن دیده نشود:
+      ۱. سوالی که نه در همین بازی و نه در بازی‌های قبلی همین گروه آمده.
+      ۲. اگر نبود، سوالی که فقط در همین بازی نیامده.
+      ۳. اگر باز هم نبود، کل بانک آن سطح از نو باز می‌شود.
+    """
     session = _STORE.get(chat_id)
     if not session or session.get("phase") != "playing":
         return None
     session["level"] += 1
+    pool_all = list(level_pool(session["level"]))
+    chat_seen = _CHAT_HISTORY.setdefault(str(chat_id), set())
+
     pool = [
-        item for item in level_pool(session["level"])
-        if item[0] not in session["used_questions"]
+        item for item in pool_all
+        if item[0] not in session["used_questions"] and item[0] not in chat_seen
     ]
     if not pool:
-        pool = list(level_pool(session["level"]))
-        session["used_questions"].clear()
+        pool = [item for item in pool_all if item[0] not in session["used_questions"]]
+        if pool:
+            # سطح برای این گروه تمام شد؛ تاریخچهٔ همین سطح آزاد می‌شود.
+            chat_seen.difference_update(item[0] for item in pool_all)
+    if not pool:
+        pool = pool_all
+        session["used_questions"].difference_update(item[0] for item in pool_all)
+        chat_seen.difference_update(item[0] for item in pool_all)
+
     question, answer, aliases = _RANDOM.choice(pool)
     session["used_questions"].add(question)
+    chat_seen.add(question)
+    if len(chat_seen) > 400:
+        chat_seen.clear()
+        chat_seen.add(question)
     session["question"] = {
         "text": question,
         "answer": answer,
@@ -165,8 +193,11 @@ def answer(chat_id, user_id, text, logger=None):
 
     session["answered"].add(key)
     if normalize_text(text) in _accepted(session["question"]):
+        # سکهٔ مرحله فقط یک بار برای هر مرحله و فقط به پاسخ صحیح تعلق می‌گیرد.
+        player["round_coins"] = player.get("round_coins", 0) + CORRECT_COINS
         log(logger, f"FOX SURVIVAL CORRECT chat_id={chat_id} user_id={user_id} "
-                    f"level={session['level']}")
+                    f"level={session['level']} coins={CORRECT_COINS} "
+                    f"total_round_coins={player['round_coins']}")
         return "correct", player
 
     player["alive"] = False

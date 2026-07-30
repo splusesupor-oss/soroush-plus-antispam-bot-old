@@ -592,6 +592,185 @@ def test_sequential_sessions():
     router.reset_all()
 
 
+def test_survival_per_round_coins():
+    """سکهٔ هر مرحله باید بلافاصله و فقط به پاسخ صحیح پرداخت شود."""
+    print("\n### 🏕 سکهٔ مرحله‌ای بقا (مثال درخواست)")
+    import tempfile
+    import pathlib
+    import modules.coins as coins
+
+    original = coins.FILE
+    coins.FILE = pathlib.Path(tempfile.mkdtemp()) / "coins.json"
+    coins._cache = None
+    coins._cache_mtime = None
+
+    class RealBot:
+        def __init__(self):
+            self.client = Client()
+            self.logger = Logger()
+
+    names = {1: "علی", 2: "حسین", 3: "رضا", 4: "میلاد"}
+
+    try:
+        async def scenario():
+            router.reset_all()
+            sv._CHAT_HISTORY.clear()
+            bot, event = RealBot(), Event()
+            sv.start(CHAT, bot.logger)
+            for uid, name in names.items():
+                sv.join(CHAT, uid, User(uid, name), bot.logger)
+            sv._STORE.cancel_task(CHAT)
+            sv.begin_rounds(CHAT, bot.logger)
+
+            # مرحله اول: علی و حسین درست، رضا غلط، میلاد ساکت
+            sv.next_question(CHAT, bot.logger)
+            answer = sv._STORE.get(CHAT)["question"]["answer"]
+            for uid in (1, 2):
+                await router.handle(bot, event, CHAT, uid,
+                                    User(uid, names[uid]), answer, bot.logger)
+            await router.handle(bot, event, CHAT, 3, User(3, names[3]),
+                                "پاسخ کاملا غلط", bot.logger)
+            sv.eliminate_silent(CHAT, bot.logger)
+            round1 = {uid: coins.get_profile(CHAT, uid)["coins"] for uid in names}
+
+            # مرحله دوم: علی درست، حسین غلط
+            sv.next_question(CHAT, bot.logger)
+            answer = sv._STORE.get(CHAT)["question"]["answer"]
+            await router.handle(bot, event, CHAT, 1, User(1, names[1]),
+                                answer, bot.logger)
+            await router.handle(bot, event, CHAT, 2, User(2, names[2]),
+                                "غلط", bot.logger)
+            sv.eliminate_silent(CHAT, bot.logger)
+
+            champion = sv.finish(CHAT, None, bot.logger)
+            router._coins(bot, CHAT, champion["user_id"], champion["name"],
+                          sv.WINNER_COINS, bot.logger)
+            return round1, champion
+
+        round1, champion = asyncio.run(scenario())
+
+        check("علی پس از مرحله ۱: ۱ سکه", round1[1] == 1, f"-> {round1[1]}")
+        check("حسین پس از مرحله ۱: ۱ سکه", round1[2] == 1, f"-> {round1[2]}")
+        check("رضا (پاسخ غلط) سکه نگرفت", round1[3] == 0, f"-> {round1[3]}")
+        check("میلاد (ساکت) سکه نگرفت", round1[4] == 0, f"-> {round1[4]}")
+
+        check("برنده علی است", champion["name"] == "علی", f"-> {champion['name']}")
+        check("سکهٔ مراحل برنده = ۲", champion["round_coins"] == 2,
+              f"-> {champion['round_coins']}")
+        check("مجموع علی = ۱۰ سکه",
+              coins.get_profile(CHAT, 1)["coins"] == 10,
+              f"-> {coins.get_profile(CHAT, 1)['coins']}")
+        check("حسین سکهٔ مرحله‌اش را پس از حذف نگه داشت",
+              coins.get_profile(CHAT, 2)["coins"] == 1,
+              f"-> {coins.get_profile(CHAT, 2)['coins']}")
+        check("مقدار سکهٔ هر مرحله = ۱", sv.CORRECT_COINS == 1)
+    finally:
+        coins.FILE = original
+        coins._cache = None
+        coins._cache_mtime = None
+        router.reset_all()
+        sv._CHAT_HISTORY.clear()
+
+
+def test_survival_question_variety():
+    """سؤال اول هر بازی یکسان نباشد و بانک پس از اتمام دوباره باز شود."""
+    print("\n### 🏕 تنوع سؤال بقا")
+    from modules.fox_games.survival_questions import LEVELS
+
+    sv.reset_all()
+    sv._CHAT_HISTORY.clear()
+    firsts = []
+    for _ in range(5):
+        sv.start(CHAT)
+        for uid in (1, 2):
+            sv.join(CHAT, uid, User(uid, f"P{uid}"))
+        sv.begin_rounds(CHAT)
+        firsts.append(sv.next_question(CHAT)["text"])
+        sv.finish(CHAT)
+    check("سؤال اول در ۵ بازی پیاپی تکرار نشد",
+          len(set(firsts)) == 5, f"-> {len(set(firsts))}/5")
+
+    # سختی مرحله‌به‌مرحله
+    sv.reset_all()
+    sv._CHAT_HISTORY.clear()
+    sv.start(CHAT)
+    for uid in (1, 2):
+        sv.join(CHAT, uid, User(uid, f"P{uid}"))
+    sv.begin_rounds(CHAT)
+    correct_tier = True
+    for _ in range(6):
+        question = sv.next_question(CHAT)
+        tier = min(question["level"], len(LEVELS)) - 1
+        if question["text"] not in [q[0] for q in LEVELS[tier]]:
+            correct_tier = False
+    check("هر مرحله از سطح سخت‌تر انتخاب می‌شود", correct_tier)
+
+    # اتمام یک سطح و بازگشایی بانک
+    sv.reset_all()
+    sv._CHAT_HISTORY.clear()
+    tier_size = len(LEVELS[0])
+    seen = []
+    for _ in range(tier_size + 3):
+        sv.start(CHAT)
+        for uid in (1, 2):
+            sv.join(CHAT, uid, User(uid, f"P{uid}"))
+        sv.begin_rounds(CHAT)
+        seen.append(sv.next_question(CHAT)["text"])
+        sv.finish(CHAT)
+    check("پس از اتمام بانک، بازی بدون خطا ادامه یافت",
+          len(seen) == tier_size + 3)
+    check("همهٔ سؤال‌های سطح یک استفاده شدند",
+          len(set(seen)) == tier_size, f"-> {len(set(seen))}/{tier_size}")
+    sv.reset_all()
+    sv._CHAT_HISTORY.clear()
+
+
+def test_survival_solo_allowed():
+    print("\n### 🏕 بازی با ۱ تا ۴ نفر")
+    check("حداقل بازیکن ۱ است", sv.MIN_PLAYERS == 1, f"-> {sv.MIN_PLAYERS}")
+    sv.reset_all()
+    sv.start(CHAT)
+    sv.join(CHAT, 1, User(1, "تنها"))
+    check("با یک نفر هم بازی آغاز می‌شود", sv.begin_rounds(CHAT) is True)
+    sv.reset_all()
+
+
+def test_vampire_cannot_self_guess():
+    """خون‌آشام نه می‌تواند خودش را حدس بزند، نه فرصت حدس مصرف می‌کند."""
+    print("\n### 🧛 خون‌آشام نمی‌تواند خودش را حدس بزند")
+    router.reset_all()
+    logger = Logger()
+    vp.start(CHAT, logger)
+    for uid, name in ((1, "علی"), (2, "حسین"), (3, "رضا"), (4, "محمد")):
+        vp.join(CHAT, uid, User(uid, name), logger)
+    chosen = vp.choose_vampire(CHAT, logger)
+    vampire_uid = chosen["player"]["user_id"]
+    number = chosen["number"]
+
+    state, _ = vp.guess(CHAT, vampire_uid, str(number), logger)
+    check("حدس خودِ خون‌آشام رد می‌شود", state == "is_vampire", f"-> {state}")
+    check("بازی همچنان فعال است", vp.is_active(CHAT))
+    check("فرصت حدس او مصرف نشد",
+          vampire_uid not in vp._STORE.get(CHAT)["guessed"])
+
+    other = str(1 if number != 1 else 2)
+    state, _ = vp.guess(CHAT, vampire_uid, other, logger)
+    check("حدس خون‌آشام روی نفر دیگر هم رد می‌شود", state == "is_vampire",
+          f"-> {state}")
+    check("رد شدن لاگ شد", logger.has("reason=is_vampire"))
+
+    # بقیه یک بار حدس دارند
+    guesser = next(p["user_id"] for p in chosen["players"]
+                   if p["user_id"] != vampire_uid)
+    wrong = str(1 if number != 1 else 2)
+    first, _ = vp.guess(CHAT, guesser, wrong, logger)
+    second, _ = vp.guess(CHAT, guesser, str(number), logger)
+    check("حدس اول بازیکن پذیرفته شد", first in {"correct", "wrong"},
+          f"-> {first}")
+    check("حدس دوم همان بازیکن رد شد", second == "already", f"-> {second}")
+    router.reset_all()
+
+
 def test_real_coin_payout():
     """جایزه باید روی موجودی واقعی بنشیند، حتی وقتی bot متد award_coins ندارد.
 
@@ -717,6 +896,10 @@ def main():
     test_isolation_from_legacy_games()
     test_router_ignores_unrelated_text()
     test_sequential_sessions()
+    test_survival_per_round_coins()
+    test_survival_question_variety()
+    test_survival_solo_allowed()
+    test_vampire_cannot_self_guess()
     test_real_coin_payout()
     test_reward_values()
     test_logging()
