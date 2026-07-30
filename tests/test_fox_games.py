@@ -414,7 +414,9 @@ def test_vampire_full_game():
           len(bot.client.dm) == 1 and bot.client.dm[0][0] == vampire_uid,
           f"-> {bot.client.dm}")
     check("متن نقش درست است", bot.client.dm[0][1] == vp.ROLE_MESSAGE)
-    check("فهرست شماره‌دار نمایش داده شد", event.said("۱."))
+    check("فهرست شماره‌دار با ارقام لاتین نمایش داده شد", event.said("1."))
+    check("پیام اعلام ارسال پیوی نمایش داده شد",
+          event.said("🩸 پیام خصوصی خون‌آشام برای یکی از بازیکنان ارسال شد"))
     check("اعلام انتخاب خون‌آشام", event.said(vp.CHOSEN_MESSAGE))
     check("خون‌آشام نمی‌تواند حدس بزند", self_guess)
     check("حدس دوم همان نفر نادیده گرفته شد", second_guess)
@@ -1005,6 +1007,8 @@ def test_vampire_cannot_self_guess():
     for uid, name in ((1, "علی"), (2, "حسین"), (3, "رضا"), (4, "محمد")):
         vp.join(CHAT, uid, User(uid, name), logger)
     chosen = vp.choose_vampire(CHAT, logger)
+    # مرحلهٔ حدس فقط بعد از ارسال موفق پیوی باز می‌شود.
+    vp.open_guessing(CHAT, logger=logger)
     vampire_uid = chosen["player"]["user_id"]
     number = chosen["number"]
 
@@ -1082,6 +1086,7 @@ def test_real_coin_payout():
             for uid, name in ((41, "a"), (42, "b"), (43, "c"), (44, "d")):
                 vp.join(CHAT, uid, User(uid, name), bot.logger)
             chosen = vp.choose_vampire(CHAT, bot.logger)
+            vp.open_guessing(CHAT, logger=bot.logger)
             guesser = next(p["user_id"] for p in chosen["players"]
                            if p["user_id"] != chosen["player"]["user_id"])
             await send(bot, event, guesser, str(chosen["number"]))

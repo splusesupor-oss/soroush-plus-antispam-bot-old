@@ -771,6 +771,12 @@ def test_vampire():
 
     chosen = vp.choose_vampire(CHAT, logger)
     check("خون‌آشام انتخاب شد", chosen is not None)
+    check("پیش از ارسال پیوی مرحله assigning است",
+          vp.phase(CHAT) == "assigning", f"-> {vp.phase(CHAT)}")
+    check("پیش از ارسال پیوی حدس پذیرفته نمی‌شود",
+          vp.guess(CHAT, 1, "1", logger)[0] == "closed")
+    check("باز شدن مرحلهٔ حدس موفق بود",
+          vp.open_guessing(CHAT, logger=logger) is True)
     check("مرحله به حدس تغییر کرد", vp.phase(CHAT) == "guessing")
     vampire_uid = chosen["player"]["user_id"]
     number = chosen["number"]
@@ -815,6 +821,7 @@ def test_vampire_random_and_reveal():
         for uid in range(1, 5):
             vp.join(CHAT, uid, User(uid, f"u{uid}"), logger)
         picks[vp.choose_vampire(CHAT, logger)["player"]["user_id"]] += 1
+        vp.open_guessing(CHAT, logger=logger)
         vp.abandon(CHAT, logger=logger)
     check("انتخاب خون‌آشام تصادفی است و همه شانس دارند",
           len(picks) == 4, f"-> {dict(picks)}")
@@ -823,6 +830,7 @@ def test_vampire_random_and_reveal():
     for uid in range(1, 5):
         vp.join(CHAT, uid, User(uid, f"u{uid}"), logger)
     chosen = vp.choose_vampire(CHAT, logger)
+    vp.open_guessing(CHAT, logger=logger)
     revealed = vp.reveal(CHAT, logger=logger)
     check("در پایان هویت خون‌آشام برگردانده می‌شود",
           revealed and revealed["user_id"] == chosen["player"]["user_id"])

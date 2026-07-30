@@ -297,22 +297,19 @@ async def _start_vampire(bot, event, chat_id, logger):
         await event.reply(vampire.NOT_ENOUGH)
 
     async def on_roles(chosen):
-        await event.reply(
-            "🧛 شرکت‌کنندگان:\n\n"
-            f"{vampire.roster_lines(chosen['players'])}\n\n"
-            f"{vampire.CHOSEN_MESSAGE}\n\n"
-            "شمارهٔ خون‌آشام را حدس بزنید (هر نفر فقط یک بار)"
+        """پیام خصوصی نقش. خروجی False یعنی بازی نباید ادامه یابد."""
+        ok, _error = await vampire.send_role_dm(
+            bot.client, chosen["player"], logger=logger, chat_id=chat_id,
         )
-        # نقش فقط در پیوی خودِ خون‌آشام اعلام می‌شود.
-        try:
-            await bot.client.send_message(
-                chosen["player"]["user_id"], vampire.ROLE_MESSAGE
-            )
-            log(logger, f"FOX VAMPIRE ROLE SENT chat_id={chat_id} "
-                        f"user_id={chosen['player']['user_id']}")
-        except Exception as error:
-            log_error(logger, f"FOX VAMPIRE ROLE DM FAILED chat_id={chat_id} "
-                              f"user_id={chosen['player']['user_id']} error={error!r}")
+        return ok
+
+    async def on_dm_failed():
+        await event.reply(vampire.DM_FAILED_MESSAGE)
+
+    async def on_roster(chosen):
+        # فقط بعد از ارسال موفق پیوی: اعلام + فهرست شماره‌دار بازیکنان.
+        await event.reply(vampire.CHOSEN_MESSAGE)
+        await event.reply(vampire.roster_lines(chosen["players"]))
 
     async def on_timeout(revealed):
         await event.reply(vampire.format_reveal(revealed))
@@ -320,6 +317,8 @@ async def _start_vampire(bot, event, chat_id, logger):
     vampire.schedule(chat_id, session["session_id"], {
         "on_abort": on_abort,
         "on_roles": on_roles,
+        "on_dm_failed": on_dm_failed,
+        "on_roster": on_roster,
         "on_timeout": on_timeout,
     }, logger=logger)
     return True
