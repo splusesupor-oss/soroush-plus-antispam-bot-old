@@ -9,8 +9,20 @@ from modules.group_storage import activate_group, deactivate_group
 from modules.owner_check import is_global_owner
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
-from modules.fill_blank import new_fill, get_fill_answer
-from modules.riddles import new_riddle, get_answer
+from modules.fill_blank import (
+    TIMEOUT as FILL_TIMEOUT,
+    clear as clear_fill,
+    get_fill_answer,
+    get_token as get_fill_token,
+    new_fill,
+)
+from modules.riddles import (
+    RIDDLE_TIMEOUT,
+    clear as clear_riddle,
+    get_answer,
+    get_token as get_riddle_token,
+    new_riddle,
+)
 from modules.multiple_choice import (
     start_question,
     answer_question,
@@ -248,6 +260,26 @@ def _run_background(bot, name, callback, *args):
         except Exception as error:
             bot.logger.log_error(f"BACKGROUND {name} FAILED: {error}")
     return _asyncio.create_task(run())
+
+
+def _chat_game_busy(chat_id):
+    """آیا یکی از بازی‌های «چت‌محور» همین حالا در این گروه فعال است.
+
+    این بازی‌ها state خود را با کلید chat_id نگه می‌دارند، پس اجرای دوبارهٔ
+    دستور، دور قبلی را بازنویسی و خراب می‌کرد. بازی‌های کاربرمحور (چیستان و
+    جای خالی) عمداً در این فهرست نیستند؛ آن‌ها با کلید (chat_id, user_id)
+    کار می‌کنند و چند کاربر می‌توانند هم‌زمان بازی کنند.
+    """
+    return (
+        name_family_active(chat_id)
+        or emoji_guess_active(chat_id)
+        or flag_guess_active(chat_id)
+        or get_correction(chat_id) is not None
+        or get_active_question(chat_id) is not None
+    )
+
+
+GAME_BUSY_MESSAGE = "⏳ یک بازی دیگر در این گروه در جریان است؛ لطفاً تا پایان آن صبر کنید."
 
 
 def _track_group_timer(bot, chat_id, task):
@@ -1225,7 +1257,8 @@ async def handle_new_message(bot, event):
 
         # بازی اسم فامیل
         if clean_text == "اسم فامیل":
-            if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
+            if _chat_game_busy(chat_id):
+                await event.reply(GAME_BUSY_MESSAGE)
                 return
             game = start_name_family(chat_id)
             await event.reply(
@@ -1303,7 +1336,8 @@ async def handle_new_message(bot, event):
 
         # بازی حدس ایموجی
         if clean_text == "حدس ایموجی":
-            if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
+            if _chat_game_busy(chat_id):
+                await event.reply(GAME_BUSY_MESSAGE)
                 return
             # تاریخچه به تفکیک کاربر: هیچ معمای تکراری برای همان کاربر
             # ارسال نمی‌شود تا از گرفتن سکه با پاسخ قبلی جلوگیری شود.
@@ -1331,7 +1365,8 @@ async def handle_new_message(bot, event):
 
         # بازی حدس پرچم؛ پرچم Unicode برای نمایش پایدار در Soroush Plus استفاده می‌شود.
         if clean_text == "حدس پرچم":
-            if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
+            if _chat_game_busy(chat_id):
+                await event.reply(GAME_BUSY_MESSAGE)
                 return
             # محدودیت به تفکیک کاربر: وقتی کاربری همهٔ پرچم‌ها را دید، بازی
             # برای او بسته می‌شود تا امتیاز تکراری نگیرد. سایر کاربران آزادند.
@@ -1367,6 +1402,9 @@ async def handle_new_message(bot, event):
 
         # بازی تصحیح کلمات
         if clean_text == "تصحیح کلمات":
+            if _chat_game_busy(chat_id):
+                await event.reply(GAME_BUSY_MESSAGE)
+                return
             game = start_correction(chat_id)
             await event.reply(f"{game['wrong']}\n\n۳۰ ثانیه زمان دارید صحیح کلمه را بنویسید")
             async def correction_timer():
@@ -1389,6 +1427,9 @@ async def handle_new_message(bot, event):
             clean_text.replace("‌", " ").split()
         )
         if normalized_game_command == "چهار گزینه ای":
+            if _chat_game_busy(chat_id):
+                await event.reply(GAME_BUSY_MESSAGE)
+                return
             try:
                 quiz = start_question(chat_id)
                 options_text = "\n".join(
@@ -1444,12 +1485,18 @@ async def handle_new_message(bot, event):
         if clean_text == "جای خالی":
             try:
                 q = new_fill(chat_id, user_id)
-                await event.reply("📝 جای خالی:\n\n" + q + "\n\n⏳ ۳۰ ثانیه فرصت داری")
+                fill_token = get_fill_token(chat_id, user_id)
+                await event.reply(
+                    "📝 جای خالی:\n\n" + q
+                    + f"\n\n⏳ {_math_digits(FILL_TIMEOUT)} ثانیه فرصت داری"
+                )
 
                 async def fill_timer():
-                    import asyncio
-                    await asyncio.sleep(30)
-                    ans = get_fill_answer(chat_id, user_id)
+                    # مهلت تایمر دقیقاً برابر مهلت پذیرش پاسخ است و پاک‌سازی
+                    # با توکن انجام می‌شود، پس تایمر دور قبلی نمی‌تواند پاسخ
+                    # دور جدید را لو بدهد.
+                    await _asyncio.sleep(FILL_TIMEOUT)
+                    ans = clear_fill(chat_id, user_id, fill_token)
                     if ans:
                         await event.reply(f"⏰ زمان تمام شد!\n✅ پاسخ: {ans}")
 
@@ -1467,12 +1514,17 @@ async def handle_new_message(bot, event):
         if clean_text == "چیستان":
             try:
                 q = new_riddle(chat_id, user_id)
-                await event.reply("🧩 چیستان:\n\n" + q + "\n\n⏳ ۵۰ ثانیه فرصت داری جواب بده")
+                riddle_token = get_riddle_token(chat_id, user_id)
+                await event.reply(
+                    "🧩 چیستان:\n\n" + q
+                    + f"\n\n⏳ {_math_digits(RIDDLE_TIMEOUT)} ثانیه فرصت داری جواب بده"
+                )
 
                 async def riddle_timer():
-                    import asyncio
-                    await asyncio.sleep(60)
-                    answer = get_answer(chat_id, user_id)
+                    # قبلاً تایمر ۶۰ ثانیه بود ولی پذیرش پاسخ ۵۰ ثانیه؛ یعنی
+                    # ۱۰ ثانیه کاربر پاسخ درست می‌داد و هیچ اتفاقی نمی‌افتاد.
+                    await _asyncio.sleep(RIDDLE_TIMEOUT)
+                    answer = clear_riddle(chat_id, user_id, riddle_token)
                     if answer:
                         await event.reply(f"⏰ زمان چیستان تمام شد!\n✅ پاسخ: {answer}")
 

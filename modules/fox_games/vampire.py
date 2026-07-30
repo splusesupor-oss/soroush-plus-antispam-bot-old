@@ -121,7 +121,7 @@ def guess(chat_id, user_id, text, logger=None):
     """یک حدس. خروجی ``(state, info)``.
 
     state در ``{"correct","wrong","not_player","already","is_vampire",
-    "bad_number","closed"}``.
+    "self_guess","bad_number","closed"}``.
     """
     session = _STORE.get(chat_id)
     if not session or session.get("phase") != "guessing":
@@ -140,6 +140,13 @@ def guess(chat_id, user_id, text, logger=None):
     number = parse_int(text)
     if number is None or not 1 <= number <= len(session["players"]):
         return "bad_number", None
+
+    # کسی نمی‌تواند خودش را به عنوان خون‌آشام معرفی کند. این حدس اصلاً ثبت
+    # نمی‌شود تا نوبت واقعی کاربر سوخته نشود.
+    if session["players"][number - 1]["user_id"] == user_id:
+        log(logger, f"FOX VAMPIRE GUESS BLOCKED chat_id={chat_id} "
+                    f"user_id={user_id} reason=self_guess")
+        return "self_guess", None
 
     session["guessed"].add(user_id)
     guesser = next(p for p in session["players"] if p["user_id"] == user_id)

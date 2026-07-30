@@ -1,5 +1,6 @@
 import random
 import time
+from itertools import count
 
 
 # ۱۰۰ چیستان متنوع: منطقی، فکری، خلاقانه و روزمره.
@@ -126,52 +127,114 @@ RIDDLES = [
 
 
 active_riddles = {}
-used_riddles = set()
+# تاریخچهٔ چیستان‌های دیده‌شده «به تفکیک کاربر».
+# پیش از این یک مجموعهٔ سراسری بود، پس چیستان‌هایی که کاربر A دیده بود برای
+# کاربر B هم مصرف‌شده حساب می‌شد و کاربر تازه‌وارد فقط باقی‌ماندهٔ لیست را
+# می‌گرفت. حالا هر کاربر دور کامل و مستقل خودش را دارد.
+used_riddles = set()          # سازگاری با کد قدیمی؛ دیگر مبنای انتخاب نیست
+_SEEN_BY_USER = {}
+_TOKENS = count(1)
+_RANDOM = random.SystemRandom()
 RIDDLE_TIMEOUT = 50
 
+
+def _user_key(user_id):
+    return str(user_id)
+
+
+def seen_count(user_id):
+    return len(_SEEN_BY_USER.get(_user_key(user_id), ()))
+
+
+def remaining_count(user_id):
+    return max(len(RIDDLES) - seen_count(user_id), 0)
+
+
+def reset_user(user_id=None):
+    if user_id is None:
+        _SEEN_BY_USER.clear()
+        return
+    _SEEN_BY_USER.pop(_user_key(user_id), None)
+
+
+def reset_all():
+    """پاک‌سازی کامل — برای تست و ری‌استارت."""
+    active_riddles.clear()
+    used_riddles.clear()
+    _SEEN_BY_USER.clear()
+
+
+def _norm(value):
+    return (
+        str(value or "").strip()
+        .replace("ي", "ی").replace("ك", "ک")
+        .replace("\u200c", "").replace(" ", "")
+    )
+
+
 def new_riddle(chat_id, user_id):
-    global used_riddles
+    """چیستان تازه‌ای که این کاربر ندیده است.
 
-    if len(used_riddles) >= len(RIDDLES):
-        used_riddles.clear()
+    اگر کاربر همهٔ چیستان‌ها را دیده باشد، دور او از نو باز می‌شود (بازی
+    چیستان محدودیت دائمی ندارد؛ فقط تکرار درون یک دور ممنوع است).
+    """
+    key = _user_key(user_id)
+    seen = _SEEN_BY_USER.setdefault(key, set())
+    remaining = [item for item in RIDDLES if item[0] not in seen]
+    if not remaining:
+        seen.clear()
+        remaining = list(RIDDLES)
 
-    available = [
-        r for i, r in enumerate(RIDDLES)
-        if i not in used_riddles
-    ]
-
-    index = random.randrange(len(available))
-    q, a = available[index]
-
-    real_index = RIDDLES.index((q, a))
-    used_riddles.add(real_index)
+    question, answer = _RANDOM.choice(remaining)
+    seen.add(question)
+    used_riddles.add(RIDDLES.index((question, answer)))
 
     active_riddles[(chat_id, user_id)] = {
-        'answer': a,
-        'time': time.time()
+        "question": question,
+        "answer": answer,
+        "token": next(_TOKENS),
+        "time": time.time(),
     }
+    return question
 
-    return q
+
+def get_token(chat_id, user_id):
+    data = active_riddles.get((chat_id, user_id))
+    return data["token"] if data else None
+
 
 def check_answer(chat_id, user_id, answer):
+    """پاسخ را فقط برای همان کاربری که چیستان را گرفته بررسی می‌کند."""
     key = (chat_id, user_id)
-    if key in active_riddles:
-        data = active_riddles[key]
+    data = active_riddles.get(key)
+    if not data:
+        return False
 
-        if time.time() - data['time'] > RIDDLE_TIMEOUT:
-            del active_riddles[key]
-            return False
+    if time.time() - data["time"] > RIDDLE_TIMEOUT:
+        # زمان تمام شده: پاسخ درست هم امتیاز نمی‌گیرد و state پاک می‌شود.
+        del active_riddles[key]
+        return False
 
-        user_answer = answer.strip().replace("ي", "ی").replace("ك", "ک").replace(" ", "")
-        correct_answer = data['answer'].strip().replace("ي", "ی").replace("ك", "ک").replace(" ", "")
-
-        if user_answer == correct_answer:
-            del active_riddles[key]
-            return True
+    if _norm(answer) == _norm(data["answer"]):
+        # پاک کردن پیش از بازگشت: هر چیستان فقط یک بار سکه می‌دهد.
+        del active_riddles[key]
+        return True
     return False
+
 
 def get_answer(chat_id, user_id):
     data = active_riddles.get((chat_id, user_id))
-    if data:
-        return data['answer']
-    return None
+    return data["answer"] if data else None
+
+
+def clear(chat_id, user_id, token=None):
+    """پایان دادن به چیستان فعال؛ فقط اگر توکن همان دور باشد.
+
+    تایمرِ دورِ قبلی نمی‌تواند پاسخ دور جدید را لو بدهد.
+    """
+    key = (chat_id, user_id)
+    data = active_riddles.get(key)
+    if not data or (token is not None and data["token"] != token):
+        return None
+    del active_riddles[key]
+    return data["answer"]

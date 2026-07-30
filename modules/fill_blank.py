@@ -1,5 +1,6 @@
 import random
 import time
+from itertools import count
 
 # ۹۰ جای خالی سطح متوسط: ترکیبی از دانستنی، علمی، منطقی، عملی و روزمره.
 # پاسخ هر مورد یکتا و قابل راستی‌آزمایی است.
@@ -109,39 +110,111 @@ FILLS = [
     ('در بازی شطرنج مهره‌ای که فقط مورب حرکت می‌کند ____ نام دارد', 'فیل'),
 ]
 
-active_fill={}
-score={}
-TIMEOUT=30
+active_fill = {}
+# امتیاز به تفکیک «گروه و کاربر». پیش از این کلید فقط user_id بود، پس امتیاز
+# یک کاربر بین همهٔ گروه‌ها قاطی می‌شد.
+score = {}
+# تاریخچهٔ سوال‌های دیده‌شده به تفکیک کاربر: تا پایان یک دور کامل هیچ سوال
+# تکراری داده نمی‌شود (قبلاً random.choice خالص بود و تکرار می‌داد).
+_SEEN_BY_USER = {}
+_TOKENS = count(1)
+_RANDOM = random.SystemRandom()
+TIMEOUT = 30
 
-def new_fill(chat_id,user_id):
-    q,a=random.choice(FILLS)
-    active_fill[(chat_id,user_id)]={"answer":a,"time":time.time()}
-    return q
 
-def check_fill(chat_id,user_id,answer):
-    key=(chat_id,user_id)
-    if key not in active_fill:
+def _user_key(user_id):
+    return str(user_id)
+
+
+def _score_key(chat_id, user_id):
+    return (str(chat_id), str(user_id))
+
+
+def _norm(value):
+    return (
+        str(value or "").strip()
+        .replace("ي", "ی").replace("ك", "ک")
+        .replace("\u200c", "").replace(" ", "")
+    )
+
+
+def seen_count(user_id):
+    return len(_SEEN_BY_USER.get(_user_key(user_id), ()))
+
+
+def remaining_count(user_id):
+    return max(len(FILLS) - seen_count(user_id), 0)
+
+
+def reset_all():
+    """پاک‌سازی کامل — برای تست و ری‌استارت."""
+    active_fill.clear()
+    score.clear()
+    _SEEN_BY_USER.clear()
+
+
+def new_fill(chat_id, user_id):
+    """سوالی که این کاربر ندیده است؛ پس از اتمام لیست، دور از نو باز می‌شود."""
+    key = _user_key(user_id)
+    seen = _SEEN_BY_USER.setdefault(key, set())
+    remaining = [item for item in FILLS if item[0] not in seen]
+    if not remaining:
+        seen.clear()
+        remaining = list(FILLS)
+
+    question, answer = _RANDOM.choice(remaining)
+    seen.add(question)
+    active_fill[(chat_id, user_id)] = {
+        "question": question,
+        "answer": answer,
+        "token": next(_TOKENS),
+        "time": time.time(),
+    }
+    return question
+
+
+def get_token(chat_id, user_id):
+    data = active_fill.get((chat_id, user_id))
+    return data["token"] if data else None
+
+
+def check_fill(chat_id, user_id, answer):
+    key = (chat_id, user_id)
+    data = active_fill.get(key)
+    if not data:
         return False
 
-    data=active_fill[key]
-
-    if time.time()-data["time"]>TIMEOUT:
+    if time.time() - data["time"] > TIMEOUT:
         del active_fill[key]
         return False
 
-    user_answer = answer.strip().replace(" ", "").replace("‌", "")
-    correct_answer = data["answer"].strip().replace(" ", "").replace("‌", "")
-
-    if user_answer == correct_answer:
-        score[user_id]=score.get(user_id,0)+1
+    if _norm(answer) == _norm(data["answer"]):
+        skey = _score_key(chat_id, user_id)
+        score[skey] = score.get(skey, 0) + 1
+        # پاک کردن پیش از بازگشت: هر سوال فقط یک بار امتیاز می‌دهد.
         del active_fill[key]
         return True
-
     return False
 
-def get_fill_answer(chat_id,user_id):
-    data=active_fill.get((chat_id,user_id))
+
+def get_fill_answer(chat_id, user_id):
+    data = active_fill.get((chat_id, user_id))
     return data["answer"] if data else None
 
-def get_score(user_id):
-    return score.get(user_id,0)
+
+def get_score(user_id, chat_id=None):
+    """امتیاز یک کاربر؛ با chat_id فقط همان گروه، بدون آن مجموع همه."""
+    if chat_id is not None:
+        return score.get(_score_key(chat_id, user_id), 0)
+    target = str(user_id)
+    return sum(value for (_, uid), value in score.items() if uid == target)
+
+
+def clear(chat_id, user_id, token=None):
+    """پایان دادن به سوال فعال؛ تایمر دور قبلی نباید پاسخ دور جدید را لو بدهد."""
+    key = (chat_id, user_id)
+    data = active_fill.get(key)
+    if not data or (token is not None and data["token"] != token):
+        return None
+    del active_fill[key]
+    return data["answer"]

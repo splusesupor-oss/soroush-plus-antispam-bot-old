@@ -30,14 +30,38 @@ def start(chat_id):
     _active[chat_id] = {'wrong': wrong, 'correct': correct, 'token': token}
     return dict(_active[chat_id])
 
+def _norm(value):
+    """یکسان‌سازی برای مقایسه: نیم‌فاصله، فاصله و شکل‌های عربی حروف."""
+    return (
+        str(value or "").strip()
+        .replace("\u200c", "").replace("\u200f", "").replace("\u200e", "")
+        .replace("ي", "ی").replace("ك", "ک")
+        .replace(" ", "")
+    )
+
+
 def answer(chat_id, text):
+    """پاسخ را بررسی می‌کند.
+
+    ``None`` یعنی «این پیام به بازی تصحیح کلمات ربطی ندارد» و هندلر باید
+    به بازی‌های بعدی اجازهٔ بررسی بدهد. پیش از این هر متنی ``False``
+    برمی‌گرداند و چون هندلر روی مقدار غیر-None زودتر return می‌کرد، بازیِ
+    فعالِ تصحیح کلمات جلوی «چیستان»، «جای خالی» و بقیه را می‌گرفت.
+    """
     data = _active.get(chat_id)
     if not data:
         return None
-    if str(text).strip() == data['correct']:
+    candidate = _norm(text)
+    if not candidate:
+        return None
+    if candidate == _norm(data['correct']):
         _active.pop(chat_id, None)
         return True
-    return False
+    # فقط وقتی «پاسخ غلط» اعلام می‌شود که کاربر واقعاً روی همین کلمه تلاش
+    # کرده باشد؛ پیام‌های نامرتبط اصلاً مصرف نمی‌شوند.
+    if candidate == _norm(data['wrong']):
+        return False
+    return None
 
 def get(chat_id):
     return dict(_active[chat_id]) if chat_id in _active else None

@@ -343,6 +343,9 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
         result, info = vampire.guess(chat_id, user_id, text, logger)
         if result in {"closed", "not_player", "bad_number"}:
             return False
+        if result == "self_guess":
+            await event.reply("⚠️ نمی‌توانید خودتان را انتخاب کنید.")
+            return True
         if result in {"already", "is_vampire"}:
             return True
         if result == "wrong":

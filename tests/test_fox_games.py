@@ -396,7 +396,12 @@ def test_vampire_full_game():
         self_guess = self_state == "is_vampire"
         others = [p["user_id"] for p in session["players"]
                   if p["user_id"] != vampire_uid]
-        wrong_number = 1 if number != 1 else 2
+        # عدد اشتباه باید نه خون‌آشام باشد و نه خودِ حدس‌زننده: انتخاب خود
+        # شخص اکنون رد می‌شود و نوبتش را مصرف نمی‌کند.
+        own_number = next(i for i, p in enumerate(session["players"], 1)
+                          if p["user_id"] == others[0])
+        wrong_number = next(i for i in range(1, len(session["players"]) + 1)
+                            if i not in {number, own_number})
         await send(bot, event, others[0], str(wrong_number))
         second_guess = await send(bot, event, others[0], str(number))
         await send(bot, event, others[1], str(number))
@@ -760,9 +765,21 @@ def test_vampire_cannot_self_guess():
     check("رد شدن لاگ شد", logger.has("reason=is_vampire"))
 
     # بقیه یک بار حدس دارند
-    guesser = next(p["user_id"] for p in chosen["players"]
+    # هیچ‌کس نمی‌تواند خودش را انتخاب کند و این تلاش نوبتش را نمی‌سوزاند.
+    players = vp._STORE.get(CHAT)["players"]
+    guesser = next(p["user_id"] for p in players
                    if p["user_id"] != vampire_uid)
-    wrong = str(1 if number != 1 else 2)
+    own_number = next(i for i, p in enumerate(players, 1)
+                      if p["user_id"] == guesser)
+    self_state, _ = vp.guess(CHAT, guesser, str(own_number), logger)
+    check("بازیکن عادی نمی‌تواند خودش را انتخاب کند",
+          self_state == "self_guess", f"-> {self_state}")
+    check("این تلاش نوبت او را مصرف نکرد",
+          guesser not in vp._STORE.get(CHAT)["guessed"])
+    check("رد شدن انتخاب خود لاگ شد", logger.has("reason=self_guess"))
+
+    wrong = str(next(i for i in range(1, len(players) + 1)
+                     if i not in {number, own_number}))
     first, _ = vp.guess(CHAT, guesser, wrong, logger)
     second, _ = vp.guess(CHAT, guesser, str(number), logger)
     check("حدس اول بازیکن پذیرفته شد", first in {"correct", "wrong"},

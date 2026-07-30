@@ -142,7 +142,7 @@ def test_riddle_variety():
 def test_riddle_gameplay():
     print("\n### چیستان: عملکرد بازی")
     chat, user = -100999, 777
-    rd.used_riddles.clear()
+    rd.reset_all()
     q = rd.new_riddle(chat, user)
     check("چیستان تولید شد", bool(q))
     answer = rd.get_answer(chat, user)
@@ -153,19 +153,29 @@ def test_riddle_gameplay():
 
 
 def test_riddle_rotation():
-    """new_riddle نباید تا پایان دور، چیستان تکراری بدهد."""
-    print("\n### چیستان: چرخش بدون تکرار")
-    rd.used_riddles.clear()
-    rd.active_riddles.clear()
+    """چرخش چیستان اکنون «به تفکیک کاربر» است.
+
+    قبلاً تاریخچه سراسری بود: چیستان‌هایی که کاربر A دیده بود برای کاربر B
+    هم مصرف‌شده حساب می‌شد. حالا هر کاربر دور کامل و مستقل خودش را دارد.
+    """
+    print("\n### چیستان: چرخش بدون تکرار (به تفکیک کاربر)")
+    rd.reset_all()
     seen = []
-    for i in range(len(rd.RIDDLES)):
-        seen.append(rd.new_riddle(-100777, 1000 + i))
+    for _ in range(len(rd.RIDDLES)):
+        seen.append(rd.new_riddle(-100777, 4242))
     dupes = [q for q, c in Counter(seen).items() if c > 1]
     check("در یک دور کامل هیچ تکراری رخ نداد", not dupes, f"-> {len(dupes)} تکرار")
     check(f"همهٔ {len(rd.RIDDLES)} چیستان استفاده شدند",
           len(set(seen)) == len(rd.RIDDLES), f"-> {len(set(seen))}")
-    rd.used_riddles.clear()
-    rd.active_riddles.clear()
+
+    # کاربر تازه باید دور کامل خودش را داشته باشد، نه باقی‌ماندهٔ دیگران.
+    fresh = [rd.new_riddle(-100777, 9999) for _ in range(len(rd.RIDDLES))]
+    check("کاربر دوم دور کامل و مستقل گرفت",
+          len(set(fresh)) == len(rd.RIDDLES), f"-> {len(set(fresh))}")
+
+    # بعد از اتمام لیست، دور از نو باز می‌شود (بازی قفل دائمی ندارد).
+    check("پس از اتمام، دور جدید آغاز می‌شود", bool(rd.new_riddle(-100777, 4242)))
+    rd.reset_all()
 
 
 def main():

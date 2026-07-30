@@ -257,6 +257,11 @@ def answer(chat_id, text, user_id=None):
     if _norm(text) not in accepted:
         return None
     _ACTIVE.pop(chat_id, None)
+    if user_id is not None:
+        # پاسخ‌دهنده هم این پرچم را «دیده» ثبت می‌شود، نه فقط شروع‌کننده.
+        # در غیر این صورت یک نفر می‌توانست با شروع دادن دستور توسط دیگران
+        # بی‌نهایت بار همان پرچم‌ها را جواب دهد و سکه بگیرد.
+        _SEEN_HISTORY.setdefault(_user_key(user_id), set()).add(state["answer"])
     return state["answer"]
 
 

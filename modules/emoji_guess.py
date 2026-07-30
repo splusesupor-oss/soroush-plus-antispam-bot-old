@@ -117,13 +117,26 @@ def start(chat_id, user_id=None):
 
 
 def answer(chat_id, user_id, name, text):
+    """پاسخ را بررسی و در صورت درستی معما را می‌بندد.
+
+    دو محافظ ضدسوءاستفاده:
+
+    ۱. کاربری که همهٔ معماها را دیده دیگر امتیاز نمی‌گیرد، حتی اگر معما را
+       شخص دیگری شروع کرده باشد. پیش از این می‌شد با شروع دادن دستور توسط
+       نفر دوم، بی‌نهایت سکه گرفت.
+    ۲. پاسخ‌دهنده (نه فقط شروع‌کننده) این معما را «دیده» ثبت می‌شود، پس همان
+       معما دیگر هرگز برای او تکرار نمی‌شود.
+    """
     state = _ACTIVE.get(chat_id)
     if not state:
+        return None
+    if is_exhausted(user_id):
         return None
     accepted = {_norm(state["answer"])} | {_norm(value) for value in ALIASES.get(state["answer"], ())}
     if _norm(text) not in accepted:
         return None
     _ACTIVE.pop(chat_id, None)
+    _SEEN_BY_USER.setdefault(_user_key(user_id), set()).add(state["answer"])
     add(chat_id, user_id, name, 20)
     return state["answer"]
 
