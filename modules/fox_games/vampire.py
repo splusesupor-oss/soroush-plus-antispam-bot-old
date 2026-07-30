@@ -19,8 +19,8 @@ JOIN_WORD = "شرکت"
 MIN_PLAYERS = 4
 MAX_PLAYERS = 5
 JOIN_SECONDS = 60
-GUESS_SECONDS = 90
-WINNER_COINS = 10
+GUESS_SECONDS = 50
+WINNER_COINS = 7
 
 _STORE = SessionStore(GAME_NAME)
 _RANDOM = random.SystemRandom()
@@ -188,8 +188,15 @@ def abandon(chat_id, session_id=None, logger=None):
 
 
 def format_reveal(vampire):
-    tag = f" ({vampire['tag']})" if vampire.get("tag") else ""
-    return f"⏰ زمان تمام شد.\n\n🧛 خون‌آشام:\n\n{vampire['name']}{tag}"
+    """نام نمایشی و در صورت وجود، یوزرنیم را کنارش نشان می‌دهد.
+
+    اگر نام نمایشی خودش همان یوزرنیم باشد (کاربری که Display Name ندارد)،
+    دوباره تکرار نمی‌شود.
+    """
+    name = vampire["name"]
+    tag = vampire.get("tag") or ""
+    suffix = f" ({tag})" if tag and tag != name else ""
+    return f"⏰ زمان تمام شد.\n\n🧛 خون‌آشام:\n\n{name}{suffix}"
 
 
 async def run_game(chat_id, session_id, callbacks, logger=None,

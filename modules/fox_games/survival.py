@@ -19,7 +19,7 @@ MAX_PLAYERS = 4
 MIN_PLAYERS = 2
 JOIN_SECONDS = 60
 ANSWER_SECONDS = 30
-WINNER_COINS = 15          # جایزهٔ قابل تنظیم
+WINNER_COINS = 8           # جایزهٔ قابل تنظیم
 # سقف مرحله‌ها: بازی حتی اگر همه ساکت بمانند هم باید پایان بپذیرد.
 MAX_ROUNDS = 20
 

@@ -6,6 +6,7 @@
 ``handle`` مقدار True برمی‌گرداند یعنی پیام مصرف شد و هندلر اصلی نباید
 ادامه دهد.
 """
+from modules.coins import award as coins_award
 from modules.fox_games import laugh_or_lose, lucky_box, survival, vampire
 from modules.fox_games.session_core import (
     log,
@@ -35,12 +36,17 @@ def any_active(chat_id):
 
 
 def _coins(bot, chat_id, user_id, name, amount, logger=None):
-    """پرداخت جایزه؛ خطای سکه نباید بازی را متوقف کند."""
-    award = getattr(bot, "award_coins", None)
-    if award is None:
-        return False
+    """سکه را مستقیماً به موجودی کاربر اضافه می‌کند.
+
+    از خودِ ماژول coins استفاده می‌شود، نه یک attribute روی bot: شیء ربات
+    متد ``award_coins`` ندارد و اتکا به آن باعث می‌شد هیچ جایزه‌ای پرداخت
+    نشود. اگر تست یا کد دیگری متد را روی bot گذاشته باشد، همان ترجیح دارد.
+    """
+    award = getattr(bot, "award_coins", None) or coins_award
     try:
-        award(chat_id, user_id, name, amount)
+        balance = award(chat_id, user_id, name, amount)
+        log(logger, f"FOX REWARD PAID chat_id={chat_id} user_id={user_id} "
+                    f"amount={amount} balance={balance}")
         return True
     except Exception as error:
         log_error(logger, f"FOX REWARD FAILED chat_id={chat_id} "
@@ -328,10 +334,12 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
                           info["coins"], logger)
             reward = (f"\n🪙 +{to_persian_digits(info['coins'])} سکه"
                       if paid else "")
-            tag = f" ({info['vampire']['tag']})" if info["vampire"].get("tag") else ""
+            v_name = info["vampire"]["name"]
+            v_tag = info["vampire"].get("tag") or ""
+            tag = f" ({v_tag})" if v_tag and v_tag != v_name else ""
             await event.reply(
                 f"🎯 درست حدس زدی، {info['guesser']['name']}!{reward}\n\n"
-                f"🧛 خون‌آشام: {info['vampire']['name']}{tag}"
+                f"🧛 خون‌آشام: {v_name}{tag}"
             )
             return True
     return False

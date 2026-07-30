@@ -414,7 +414,8 @@ def test_vampire_full_game():
     check("خون‌آشام نمی‌تواند حدس بزند", self_guess)
     check("حدس دوم همان نفر نادیده گرفته شد", second_guess)
     check("حدس درست بازی را تمام کرد", not vp.is_active(CHAT))
-    check("برنده ۱۰ سکه گرفت", bot.paid == [(others[1], 10)], f"-> {bot.paid}")
+    check("برنده ۷ سکه گرفت", bot.paid == [(others[1], vp.WINNER_COINS)],
+          f"-> {bot.paid}")
     check("نام خون‌آشام اعلام شد", event.said("🧛 خون‌آشام:"))
     router.reset_all()
 
@@ -591,6 +592,92 @@ def test_sequential_sessions():
     router.reset_all()
 
 
+def test_real_coin_payout():
+    """جایزه باید روی موجودی واقعی بنشیند، حتی وقتی bot متد award_coins ندارد.
+
+    گارد رگرسیون: قبلاً روتر به ``getattr(bot, "award_coins")`` تکیه می‌کرد و
+    چون شیء واقعی ربات چنین متدی ندارد، هیچ سکه‌ای پرداخت نمی‌شد.
+    """
+    print("\n### پرداخت واقعی سکه (بدون award_coins روی bot)")
+    import tempfile
+    import pathlib
+    import modules.coins as coins
+
+    original_file = coins.FILE
+    coins.FILE = pathlib.Path(tempfile.mkdtemp()) / "coins.json"
+    coins._cache = None
+    coins._cache_mtime = None
+
+    class RealBot:
+        """مثل شیء واقعی ربات: هیچ متد award_coins ندارد."""
+
+        def __init__(self):
+            self.client = Client()
+            self.logger = Logger()
+
+    try:
+        check("شیء ربات واقعی متد award_coins ندارد",
+              not hasattr(RealBot(), "award_coins"))
+
+        async def scenario():
+            router.reset_all()
+            bot, event = RealBot(), Event()
+            await send(bot, event, 1, "بخند یا بباز")
+            ll.open_round(CHAT, ll._STORE.get(CHAT)["session_id"], bot.logger)
+            await send(bot, event, 10, "😂", "Ali")
+
+            vp.start(CHAT, bot.logger)
+            for uid, name in ((41, "a"), (42, "b"), (43, "c"), (44, "d")):
+                vp.join(CHAT, uid, User(uid, name), bot.logger)
+            chosen = vp.choose_vampire(CHAT, bot.logger)
+            guesser = next(p["user_id"] for p in chosen["players"]
+                           if p["user_id"] != chosen["player"]["user_id"])
+            await send(bot, event, guesser, str(chosen["number"]))
+            return bot, guesser
+
+        bot, guesser = asyncio.run(scenario())
+        check("برندهٔ بخند یا بباز ۱ سکه گرفت",
+              coins.get_profile(CHAT, 10)["coins"] == 1,
+              f"-> {coins.get_profile(CHAT, 10)['coins']}")
+        check("برندهٔ خون‌آشام ۷ سکه گرفت",
+              coins.get_profile(CHAT, guesser)["coins"] == 7,
+              f"-> {coins.get_profile(CHAT, guesser)['coins']}")
+        check("پرداخت لاگ شد", bot.logger.has("FOX REWARD PAID"))
+
+        # بقا
+        router.reset_all()
+        logger = Logger()
+        sv.start(CHAT, logger)
+        for uid in (61, 62, 63, 64):
+            sv.join(CHAT, uid, User(uid, f"P{uid}"), logger)
+        sv._STORE.cancel_task(CHAT)
+        sv.begin_rounds(CHAT, logger)
+        sv.next_question(CHAT, logger)
+        session = sv._STORE.get(CHAT)
+        sv.answer(CHAT, 61, session["question"]["answer"], logger)
+        sv.eliminate_silent(CHAT, logger)
+        champion = sv.finish(CHAT, None, logger)
+        router._coins(RealBot(), CHAT, champion["user_id"],
+                      champion["name"], sv.WINNER_COINS, logger)
+        check("برندهٔ بقا ۸ سکه گرفت",
+              coins.get_profile(CHAT, champion["user_id"])["coins"] == 8,
+              f"-> {coins.get_profile(CHAT, champion['user_id'])['coins']}")
+    finally:
+        coins.FILE = original_file
+        coins._cache = None
+        coins._cache_mtime = None
+        router.reset_all()
+
+
+def test_reward_values():
+    print("\n### مقادیر جایزه مطابق راهنما")
+    check("بخند یا بباز = ۱ سکه", ll.WINNER_COINS == 1, f"-> {ll.WINNER_COINS}")
+    check("بقا = ۸ سکه", sv.WINNER_COINS == 8, f"-> {sv.WINNER_COINS}")
+    check("خون‌آشام = ۷ سکه", vp.WINNER_COINS == 7, f"-> {vp.WINNER_COINS}")
+    check("زمان حدس خون‌آشام = ۵۰ ثانیه", vp.GUESS_SECONDS == 50,
+          f"-> {vp.GUESS_SECONDS}")
+
+
 def test_logging():
     print("\n### لاگ کامل")
 
@@ -630,6 +717,8 @@ def main():
     test_isolation_from_legacy_games()
     test_router_ignores_unrelated_text()
     test_sequential_sessions()
+    test_real_coin_payout()
+    test_reward_values()
     test_logging()
 
     print(f"\n{'=' * 52}")
