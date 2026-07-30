@@ -41,18 +41,39 @@ def play(chat_id, user_id, rounds):
 def test_catalogue():
     print("\n### بانک معماها")
     total = len(eg.PUZZLES)
-    check(f"بانک موجود است ({total} معما)", total >= 50, f"-> {total}")
-    answers = [answer for _emoji, answer in eg.PUZZLES]
+    check(f"بانک دقیقاً ۱۲۰ مرحله دارد ({total})", total == 120, f"-> {total}")
+    answers = [item[1] for item in eg.PUZZLES]
     check("هیچ پاسخ تکراری در بانک نیست",
           len(answers) == len(set(answers)),
           f"-> {[a for a, c in Counter(answers).items() if c > 1]}")
+    emojis = [item[0] for item in eg.PUZZLES]
+    check("هیچ ترکیب ایموجی تکراری نیست", len(emojis) == len(set(emojis)))
     check("همهٔ ورودی‌ها ایموجی و پاسخ دارند",
-          all(e and a for e, a in eg.PUZZLES))
+          all(item[0] and item[1] for item in eg.PUZZLES))
+    check("هر رکورد سه بخش دارد", all(len(item) == 3 for item in eg.PUZZLES))
+    check("سه سطح سختی وجود دارد", len(eg.TIERS) == 3)
+    check("هر سطح ۴۰ مرحله دارد",
+          all(len(tier) == 40 for tier in eg.TIERS),
+          f"-> {[len(t) for t in eg.TIERS]}")
+
+    def emoji_count(value):
+        return sum(
+            1 for ch in value
+            if ch not in ("\ufe0f", "\u200d")
+            and not "\U0001F3FB" <= ch <= "\U0001F3FF"
+        )
+
+    counts = [emoji_count(item[0]) for item in eg.PUZZLES]
+    check("هر معما بین ۲ تا ۴ ایموجی دارد",
+          all(2 <= n <= 4 for n in counts),
+          f"-> {[e for e, n in zip(emojis, counts) if not 2 <= n <= 4][:3]}")
+    check("هیچ معمای تک‌ایموجی نیست", min(counts) >= 2)
+
     check("پیام اتمام تعریف شده است", bool(eg.EXHAUSTED_MESSAGE))
-    check("متن پیام اتمام درست است",
+    check("متن پیام اتمام دقیقاً مطابق خواسته است",
           eg.EXHAUSTED_MESSAGE == (
-              "تمام ایموجی‌ها را قبلاً حدس زده‌اید، "
-              "برای جلوگیری از سوءاستفاده از بازی‌های دیگر استفاده کنید."
+              "✅ تمام مراحل حدس ایموجی را انجام داده‌اید. "
+              "به‌زودی مراحل جدید اضافه می‌شود."
           ),
           f"-> {eg.EXHAUSTED_MESSAGE}")
 
@@ -174,11 +195,11 @@ def test_answer_and_coins():
 
     # نام مستعار انگلیسی همچنان کار می‌کند
     eg.reset_all()
-    target = next(p for p in eg.PUZZLES if p[1] == "بتمن")
+    target = next(p for p in eg.PUZZLES if p[1] == "مرد عنکبوتی")
     eg._ACTIVE[CHAT] = {"emoji": target[0], "answer": target[1],
-                        "token": 0, "user_id": 951}
-    check("نام مستعار انگلیسی پذیرفته می‌شود",
-          eg.answer(CHAT, 951, "U", "batman") == "بتمن")
+                        "aliases": target[2], "token": 0, "user_id": 951}
+    check("نام مستعار فارسی پذیرفته می‌شود",
+          eg.answer(CHAT, 951, "U", "اسپایدرمن") == "مرد عنکبوتی")
 
 
 def test_double_start_guard():

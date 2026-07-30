@@ -1,6 +1,15 @@
-"""بازی چهار گزینه‌ای با وضعیت مستقل برای هر گروه."""
+"""بازی چهار گزینه‌ای — ۱۶۰ سوال، تاریخچه به تفکیک کاربر."""
 import random
 from itertools import count
+
+_PERSIAN_DIGITS = {ord(p): str(i) for i, p in enumerate("۰۱۲۳۴۵۶۷۸۹")}
+_PERSIAN_DIGITS.update({ord(a): str(i) for i, a in enumerate("٠١٢٣٤٥٦٧٨٩")})
+
+
+def _english_digits(text):
+    """ارقام فارسی/عربی را به انگلیسی تبدیل می‌کند تا «۲» هم پذیرفته شود."""
+    return str(text or "").translate(_PERSIAN_DIGITS)
+
 
 
 QUESTIONS = [
@@ -88,58 +97,215 @@ QUESTIONS = [
     {"question": "رود کارون از کدام استان ایران می‌گذرد؟", "options": ["خوزستان", "گیلان", "فارس", "خراسان رضوی"], "answer": 1, "category": "ایرانی"},
     {"question": "کدام اثر ادبی با بیت «بنی‌آدم اعضای یکدیگرند» شناخته می‌شود؟", "options": ["گلستان سعدی", "شاهنامه", "مثنوی معنوی", "دیوان حافظ"], "answer": 1, "category": "ایرانی"},
     {"question": "کدام شهر ایران به زعفران مشهور است؟", "options": ["قائن", "بندرعباس", "اردبیل", "ساری"], "answer": 1, "category": "ایرانی"},
+
+    # =====================================================================
+    # ۸۰ سوال جدید: جغرافیا، فناوری، ورزش، سینما، حیوانات، قرآن، ایران، عمومی
+    # =====================================================================
+    # --- جغرافیا ---
+    {"question": "طولانی‌ترین رود جهان کدام است؟", "options": ["آمازون", "نیل", "می‌سی‌سی‌پی", "دانوب"], "answer": 2, "category": "جغرافیا"},
+    {"question": "بزرگ‌ترین صحرای گرم جهان کدام است؟", "options": ["گبی", "کالاهاری", "صحرای آفریقا", "آتاکاما"], "answer": 3, "category": "جغرافیا"},
+    {"question": "کدام کشور بیشترین مرز آبی با دریای خزر را دارد؟", "options": ["ترکمنستان", "قزاقستان", "ایران", "آذربایجان"], "answer": 2, "category": "جغرافیا"},
+    {"question": "پایتخت برزیل کدام شهر است؟", "options": ["ریودوژانیرو", "سائوپائولو", "برازیلیا", "سالوادور"], "answer": 3, "category": "جغرافیا"},
+    {"question": "مرتفع‌ترین آبشار جهان در کدام کشور است؟", "options": ["ونزوئلا", "کانادا", "نروژ", "آفریقای جنوبی"], "answer": 1, "category": "جغرافیا"},
+    {"question": "کدام دریا شورترین دریای جهان محسوب می‌شود؟", "options": ["دریای سرخ", "دریای مرده", "دریای سیاه", "دریای بالتیک"], "answer": 2, "category": "جغرافیا"},
+    {"question": "کوه‌های آند در کدام قاره قرار دارند؟", "options": ["آسیا", "آفریقا", "آمریکای جنوبی", "اروپا"], "answer": 3, "category": "جغرافیا"},
+    {"question": "تنگه بسفر کدام دو قاره را جدا می‌کند؟", "options": ["آسیا و آفریقا", "اروپا و آسیا", "اروپا و آفریقا", "آسیا و اقیانوسیه"], "answer": 2, "category": "جغرافیا"},
+    {"question": "بزرگ‌ترین کشور جهان از نظر مساحت کدام است؟", "options": ["چین", "کانادا", "روسیه", "آمریکا"], "answer": 3, "category": "جغرافیا"},
+    {"question": "جزیره کیش در کدام استان ایران واقع است؟", "options": ["بوشهر", "هرمزگان", "خوزستان", "سیستان و بلوچستان"], "answer": 2, "category": "جغرافیا"},
+    # --- فناوری ---
+    {"question": "HTML مخفف چیست؟", "options": ["High Text Markup Language", "Hyper Text Markup Language", "Home Tool Markup Language", "Hyper Transfer Markup Language"], "answer": 2, "category": "فناوری"},
+    {"question": "کدام شرکت سیستم‌عامل اندروید را توسعه می‌دهد؟", "options": ["اپل", "مایکروسافت", "گوگل", "سامسونگ"], "answer": 3, "category": "فناوری"},
+    {"question": "واحد اندازه‌گیری سرعت پردازنده چیست؟", "options": ["بایت", "هرتز", "ولت", "پیکسل"], "answer": 2, "category": "فناوری"},
+    {"question": "بنیان‌گذار شرکت مایکروسافت چه کسی بود؟", "options": ["استیو جابز", "بیل گیتس", "مارک زاکربرگ", "لری پیج"], "answer": 2, "category": "فناوری"},
+    {"question": "کدام حافظه با قطع برق اطلاعات خود را از دست می‌دهد؟", "options": ["هارد دیسک", "رم", "حافظه فلش", "سی دی"], "answer": 2, "category": "فناوری"},
+    {"question": "پروتکل امن انتقال صفحات وب کدام است؟", "options": ["FTP", "HTTPS", "SMTP", "TELNET"], "answer": 2, "category": "فناوری"},
+    {"question": "زبان برنامه‌نویسی پایتون توسط چه کسی ساخته شد؟", "options": ["دنیس ریچی", "خیدو ون روسوم", "جیمز گاسلینگ", "بی یارنه استروستروپ"], "answer": 2, "category": "فناوری"},
+    {"question": "کدام گزینه یک سیستم‌عامل متن‌باز است؟", "options": ["ویندوز", "مک او اس", "لینوکس", "داس"], "answer": 3, "category": "فناوری"},
+    {"question": "واحد کوچک‌ترین داده در رایانه چیست؟", "options": ["بایت", "بیت", "کیلوبایت", "نیبل"], "answer": 2, "category": "فناوری"},
+    {"question": "VPN عمدتاً برای چه هدفی استفاده می‌شود؟", "options": ["افزایش سرعت پردازنده", "ایجاد ارتباط امن", "افزایش حافظه", "چاپ اسناد"], "answer": 2, "category": "فناوری"},
+    # --- ورزش ---
+    {"question": "جام جهانی فوتبال هر چند سال یک بار برگزار می‌شود؟", "options": ["دو سال", "سه سال", "چهار سال", "پنج سال"], "answer": 3, "category": "ورزش"},
+    {"question": "در والیبال هر تیم در زمین چند بازیکن دارد؟", "options": ["پنج", "شش", "هفت", "هشت"], "answer": 2, "category": "ورزش"},
+    {"question": "ورزش ملی ایران کدام است؟", "options": ["فوتبال", "کشتی", "والیبال", "وزنه‌برداری"], "answer": 2, "category": "ورزش"},
+    {"question": "بازی‌های المپیک نخستین بار در کدام کشور باستانی برگزار شد؟", "options": ["روم", "یونان", "مصر", "ایران"], "answer": 2, "category": "ورزش"},
+    {"question": "در بسکتبال پرتاب از پشت خط سه امتیازی چند امتیاز دارد؟", "options": ["دو", "سه", "چهار", "یک"], "answer": 2, "category": "ورزش"},
+    {"question": "طول یک نیمه فوتبال چند دقیقه است؟", "options": ["چهل", "چهل و پنج", "پنجاه", "شصت"], "answer": 2, "category": "ورزش"},
+    {"question": "کدام کشور بیشترین قهرمانی جام جهانی فوتبال را دارد؟", "options": ["آلمان", "برزیل", "آرژانتین", "ایتالیا"], "answer": 2, "category": "ورزش"},
+    {"question": "در شطرنج کدام مهره ارزش بیشتری دارد؟", "options": ["رخ", "اسب", "وزیر", "فیل"], "answer": 3, "category": "ورزش"},
+    {"question": "ماراتن استاندارد تقریباً چند کیلومتر است؟", "options": ["۲۱", "۳۰", "۴۲", "۵۰"], "answer": 3, "category": "ورزش"},
+    {"question": "در تنیس اصطلاح صفر امتیاز چه نامیده می‌شود؟", "options": ["لاو", "دیوس", "ست", "گیم"], "answer": 1, "category": "ورزش"},
+    # --- سینما ---
+    {"question": "کارگردان فیلم جدایی نادر از سیمین کیست؟", "options": ["مجید مجیدی", "اصغر فرهادی", "عباس کیارستمی", "داریوش مهرجویی"], "answer": 2, "category": "سینما"},
+    {"question": "جایزه اسکار توسط کدام آکادمی اهدا می‌شود؟", "options": ["کن", "آکادمی علوم و هنرهای سینمایی", "برلین", "ونیز"], "answer": 2, "category": "سینما"},
+    {"question": "فیلم بچه‌های آسمان ساخته کدام کارگردان ایرانی است؟", "options": ["مجید مجیدی", "بهرام بیضایی", "رضا میرکریمی", "ابراهیم حاتمی‌کیا"], "answer": 1, "category": "سینما"},
+    {"question": "جشنواره فیلم کن در کدام کشور برگزار می‌شود؟", "options": ["ایتالیا", "فرانسه", "اسپانیا", "آلمان"], "answer": 2, "category": "سینما"},
+    {"question": "کدام فیلم اولین انیمیشن بلند تاریخ سینما بود؟", "options": ["سیندرلا", "سفیدبرفی و هفت کوتوله", "پینوکیو", "بامبی"], "answer": 2, "category": "سینما"},
+    {"question": "شخصیت جیمز باند با چه شماره‌ای شناخته می‌شود؟", "options": ["۰۰۵", "۰۰۶", "۰۰۷", "۰۰۸"], "answer": 3, "category": "سینما"},
+    {"question": "کارگردان فیلم تایتانیک چه کسی بود؟", "options": ["استیون اسپیلبرگ", "جیمز کامرون", "کریستوفر نولان", "مارتین اسکورسیزی"], "answer": 2, "category": "سینما"},
+    {"question": "نخل طلا جایزه کدام جشنواره است؟", "options": ["برلین", "ونیز", "کن", "ساندنس"], "answer": 3, "category": "سینما"},
+    # --- حیوانات ---
+    {"question": "بزرگ‌ترین پستاندار جهان کدام است؟", "options": ["فیل آفریقایی", "نهنگ آبی", "کرگدن", "زرافه"], "answer": 2, "category": "حیوانات"},
+    {"question": "کدام حیوان بلندترین گردن را دارد؟", "options": ["شتر", "زرافه", "اسب", "شترمرغ"], "answer": 2, "category": "حیوانات"},
+    {"question": "قلب کدام جانور سه حفره دارد؟", "options": ["ماهی", "دوزیستان", "پرندگان", "پستانداران"], "answer": 2, "category": "حیوانات"},
+    {"question": "کدام پرنده قادر به پرواز نیست؟", "options": ["عقاب", "شترمرغ", "کبوتر", "طوطی"], "answer": 2, "category": "حیوانات"},
+    {"question": "زنبور عسل برای ساخت لانه از چه شکل هندسی استفاده می‌کند؟", "options": ["مربع", "مثلث", "شش‌ضلعی", "دایره"], "answer": 3, "category": "حیوانات"},
+    {"question": "کدام حیوان به تغییر رنگ پوست معروف است؟", "options": ["مارمولک", "آفتاب‌پرست", "سوسمار", "بوقلمون"], "answer": 2, "category": "حیوانات"},
+    {"question": "تعداد پاهای عنکبوت چند تاست؟", "options": ["شش", "هشت", "ده", "دوازده"], "answer": 2, "category": "حیوانات"},
+    {"question": "کدام حیوان سریع‌ترین دونده خشکی است؟", "options": ["شیر", "یوزپلنگ", "اسب", "آهو"], "answer": 2, "category": "حیوانات"},
+    {"question": "خفاش برای جهت‌یابی از چه روشی استفاده می‌کند؟", "options": ["بویایی", "پژواک صوتی", "بینایی", "لامسه"], "answer": 2, "category": "حیوانات"},
+    {"question": "کدام جانور بزرگ‌ترین چشم را در طبیعت دارد؟", "options": ["عقاب", "اختاپوس غول‌پیکر", "ماهی مرکب غول‌پیکر", "نهنگ"], "answer": 3, "category": "حیوانات"},
+    # --- قرآن ---
+    {"question": "قرآن کریم چند سوره دارد؟", "options": ["۱۰۰", "۱۱۴", "۱۲۰", "۱۳۰"], "answer": 2, "category": "قرآن"},
+    {"question": "طولانی‌ترین سوره قرآن کدام است؟", "options": ["آل عمران", "بقره", "نساء", "مائده"], "answer": 2, "category": "قرآن"},
+    {"question": "کوتاه‌ترین سوره قرآن کدام است؟", "options": ["کوثر", "اخلاص", "ناس", "فلق"], "answer": 1, "category": "قرآن"},
+    {"question": "کدام سوره قلب قرآن نامیده می‌شود؟", "options": ["یس", "الرحمن", "کهف", "مریم"], "answer": 1, "category": "قرآن"},
+    {"question": "نخستین سوره‌ای که بر پیامبر نازل شد کدام است؟", "options": ["فاتحه", "علق", "مدثر", "قلم"], "answer": 2, "category": "قرآن"},
+    {"question": "کدام سوره با بسم‌الله آغاز نمی‌شود؟", "options": ["توبه", "انفال", "نور", "حجر"], "answer": 1, "category": "قرآن"},
+    {"question": "سوره‌ای که به نام یکی از زنان نام‌گذاری شده کدام است؟", "options": ["مریم", "نساء", "ممتحنه", "مجادله"], "answer": 1, "category": "قرآن"},
+    {"question": "قرآن در چند سال بر پیامبر نازل شد؟", "options": ["ده", "سیزده", "بیست و سه", "سی"], "answer": 3, "category": "قرآن"},
+    {"question": "شب نزول قرآن چه نام دارد؟", "options": ["شب قدر", "شب برات", "شب معراج", "شب یلدا"], "answer": 1, "category": "قرآن"},
+    {"question": "کدام سوره به سوره توحید نیز معروف است؟", "options": ["اخلاص", "کافرون", "نصر", "فلق"], "answer": 1, "category": "قرآن"},
+    # --- ایران ---
+    {"question": "بزرگ‌ترین دریاچه داخلی ایران کدام است؟", "options": ["ارومیه", "نمک", "هامون", "پریشان"], "answer": 1, "category": "ایران"},
+    {"question": "کدام استان ایران پرجمعیت‌ترین است؟", "options": ["خراسان رضوی", "تهران", "اصفهان", "فارس"], "answer": 2, "category": "ایران"},
+    {"question": "آرامگاه حافظ در کدام شهر است؟", "options": ["اصفهان", "شیراز", "تبریز", "کرمان"], "answer": 2, "category": "ایران"},
+    {"question": "کدام کویر بزرگ‌ترین کویر ایران است؟", "options": ["لوت", "مرکزی", "نمک", "مصر"], "answer": 2, "category": "ایران"},
+    {"question": "بلندترین سد ایران کدام است؟", "options": ["کرخه", "کارون سه", "دز", "سفیدرود"], "answer": 2, "category": "ایران"},
+    {"question": "مجلس شورای اسلامی در کدام شهر قرار دارد؟", "options": ["قم", "تهران", "اصفهان", "مشهد"], "answer": 2, "category": "ایران"},
+    {"question": "کدام شهر ایران به شهر بادگیرها معروف است؟", "options": ["یزد", "کاشان", "کرمان", "سمنان"], "answer": 1, "category": "ایران"},
+    {"question": "خلیج فارس به کدام دریا متصل می‌شود؟", "options": ["دریای سرخ", "دریای عمان", "دریای مدیترانه", "دریای خزر"], "answer": 2, "category": "ایران"},
+    {"question": "کدام استان ایران بیشترین تولید زعفران را دارد؟", "options": ["فارس", "خراسان رضوی", "کرمان", "یزد"], "answer": 2, "category": "ایران"},
+    {"question": "نوروز در چه فصلی آغاز می‌شود؟", "options": ["زمستان", "بهار", "تابستان", "پاییز"], "answer": 2, "category": "ایران"},
+    # --- عمومی ---
+    {"question": "کدام ویتامین از نور خورشید در بدن ساخته می‌شود؟", "options": ["آ", "ب", "ث", "د"], "answer": 4, "category": "عمومی"},
+    {"question": "گروه خونی پذیرنده عمومی کدام است؟", "options": ["او منفی", "ای بی مثبت", "بی مثبت", "او مثبت"], "answer": 2, "category": "عمومی"},
+    {"question": "رنگ‌های اصلی نور کدام‌اند؟", "options": ["قرمز سبز آبی", "قرمز زرد آبی", "سبز زرد بنفش", "آبی نارنجی سبز"], "answer": 1, "category": "عمومی"},
+    {"question": "کدام سیاره حلقه‌های مشهوری دارد؟", "options": ["مریخ", "زحل", "زهره", "عطارد"], "answer": 2, "category": "عمومی"},
+    {"question": "واحد پول انگلستان چیست؟", "options": ["یورو", "پوند", "دلار", "فرانک"], "answer": 2, "category": "عمومی"},
+    {"question": "سازمان ملل متحد در چه سالی تأسیس شد؟", "options": ["۱۹۱۹", "۱۹۴۵", "۱۹۵۰", "۱۹۶۰"], "answer": 2, "category": "عمومی"},
+    {"question": "کدام فلز بهترین رسانای الکتریسیته است؟", "options": ["مس", "نقره", "طلا", "آلومینیوم"], "answer": 2, "category": "عمومی"},
+    {"question": "چند درصد سطح زمین را آب پوشانده است؟", "options": ["پنجاه", "شصت", "هفتاد", "نود"], "answer": 3, "category": "عمومی"},
+    {"question": "مخترع تلفن چه کسی بود؟", "options": ["ادیسون", "گراهام بل", "مارکونی", "تسلا"], "answer": 2, "category": "عمومی"},
+    {"question": "کدام عضو بدن انسان قابلیت بازسازی دارد؟", "options": ["قلب", "کبد", "مغز", "کلیه"], "answer": 2, "category": "عمومی"},
+    {"question": "پرچم ژاپن چه شکلی در مرکز دارد؟", "options": ["ستاره", "دایره قرمز", "هلال", "صلیب"], "answer": 2, "category": "عمومی"},
+    {"question": "کدام زبان بیشترین گویشور بومی در جهان را دارد؟", "options": ["انگلیسی", "چینی ماندارین", "اسپانیایی", "هندی"], "answer": 2, "category": "عمومی"},
 ]
 
 
 _active_questions = {}
-_remaining_question_indexes = {}
+# تاریخچهٔ سوال‌های دیده‌شده «به تفکیک کاربر».
+# پیش از این تاریخچه per-chat بود، پس سوال‌هایی که کاربر A دیده بود برای
+# کاربر B هم مصرف‌شده حساب می‌شد و کاربر تازه فقط ته‌ماندهٔ بانک را می‌گرفت.
+_SEEN_BY_USER = {}
+_remaining_question_indexes = {}     # سازگاری با کد قدیمی
 _question_tokens = count(1)
+_RANDOM = random.SystemRandom()
+
+ANSWER_SECONDS = 30
+EXHAUSTED_MESSAGE = (
+    "✅ تمام سوال‌های چهار گزینه‌ای را پاسخ داده‌اید. "
+    "به‌زودی سوال‌های جدید اضافه می‌شود."
+)
 
 
-def start_question(chat_id):
-    """یک سؤال جدید و تکرارنشونده تا پایان بانک برای همان گروه ایجاد می‌کند."""
-    remaining = _remaining_question_indexes.get(chat_id)
+def total_questions():
+    return len(QUESTIONS)
+
+
+def _user_key(user_id):
+    return str(user_id)
+
+
+def seen_count(user_id):
+    return len(_SEEN_BY_USER.get(_user_key(user_id), ()))
+
+
+def remaining_count(user_id):
+    return max(len(QUESTIONS) - seen_count(user_id), 0)
+
+
+def is_exhausted(user_id):
+    return remaining_count(user_id) == 0
+
+
+def reset_user(user_id=None):
+    if user_id is None:
+        _SEEN_BY_USER.clear()
+        return
+    _SEEN_BY_USER.pop(_user_key(user_id), None)
+
+
+def reset_all():
+    """پاک‌سازی کامل — برای تست و ری‌استارت."""
+    _active_questions.clear()
+    _SEEN_BY_USER.clear()
+    _remaining_question_indexes.clear()
+
+
+def start_question(chat_id, user_id=None):
+    """سوال تازه‌ای که این کاربر ندیده است.
+
+    ``None`` یعنی این کاربر هر ۱۶۰ سوال را دیده. تا وقتی حتی یک سوال
+    دیده‌نشده باقی باشد هیچ تکراری داده نمی‌شود و ترتیب هم تصادفی است.
+    """
+    if user_id is None:
+        user_id = chat_id
+    key = _user_key(user_id)
+    seen = _SEEN_BY_USER.setdefault(key, set())
+
+    remaining = [
+        index for index in range(len(QUESTIONS))
+        if QUESTIONS[index]["question"] not in seen
+    ]
     if not remaining:
-        remaining = list(range(len(QUESTIONS)))
-        _remaining_question_indexes[chat_id] = remaining
+        return None
 
-    question_index = random.choice(remaining)
-    remaining.remove(question_index)
-    question = QUESTIONS[question_index]
-    token = next(_question_tokens)
+    question = QUESTIONS[_RANDOM.choice(remaining)]
+    seen.add(question["question"])
 
     data = {
-        "token": token,
+        "token": next(_question_tokens),
         "answer": question["answer"],
-        "options": question["options"],
+        "options": list(question["options"]),
         "question": question["question"],
         "category": question["category"],
+        "user_id": user_id,
     }
     _active_questions[chat_id] = data
-    return data.copy()
+    return dict(data)
 
 
-def answer_question(chat_id, text):
-    """پاسخ ۱ تا ۴ را بررسی و پس از پاسخ معتبر، سؤال گروه را پاک می‌کند."""
+def answer_question(chat_id, text, user_id=None):
+    """پاسخ ۱ تا ۴ را بررسی می‌کند.
+
+    خروجی ``(is_correct, correct_option)`` یا ``None`` وقتی متن اصلاً یک
+    گزینهٔ معتبر نیست (تا پیام‌های نامرتبط بازی را نبندند).
+
+    پاسخ‌دهنده هم این سوال را «دیده» ثبت می‌شود تا هرگز دوباره نگیرد.
+    """
     data = _active_questions.get(chat_id)
-    answer_text = str(text).strip()
-    if not data or answer_text not in {"1", "2", "3", "4"}:
+    if not data:
+        return None
+    answer_text = _english_digits(str(text).strip())
+    if answer_text not in {"1", "2", "3", "4"}:
         return None
 
     selected = int(answer_text)
     correct = selected == data["answer"]
     correct_option = data["answer"]
     _active_questions.pop(chat_id, None)
+    if user_id is not None:
+        _SEEN_BY_USER.setdefault(_user_key(user_id), set()).add(data["question"])
     return correct, correct_option
 
 
 def get_active_question(chat_id):
     data = _active_questions.get(chat_id)
-    return data.copy() if data else None
+    return dict(data) if data else None
 
 
 def clear_question(chat_id, token=None):
-    """فقط در صورت تطابق توکن، سؤال فعال را پاک می‌کند."""
+    """فقط در صورت تطابق توکن، سوال فعال را پاک می‌کند."""
     data = _active_questions.get(chat_id)
     if not data or (token is not None and data["token"] != token):
         return False

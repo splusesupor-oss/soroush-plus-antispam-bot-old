@@ -213,12 +213,18 @@ def test_emoji_guess():
           len(set(seen)) == len(seen) == len(eg.PUZZLES), f"-> {len(seen)}")
     check("بعد از اتمام، بازی برای کاربر بسته است", eg.is_exhausted(1))
     check("پیام اتمام درست است",
-          "تمام ایموجی‌ها را قبلاً حدس زده‌اید" in eg.EXHAUSTED_MESSAGE)
+          eg.EXHAUSTED_MESSAGE == (
+              "✅ تمام مراحل حدس ایموجی را انجام داده‌اید. "
+              "به‌زودی مراحل جدید اضافه می‌شود."
+          ), f"-> {eg.EXHAUSTED_MESSAGE}")
 
     # کاربر تمام‌شده نمی‌تواند از دور دیگران سکه بگیرد
     eg.reset_all()
-    while eg.start(CHAT, 1) is not None:
-        eg.finish(CHAT, eg._ACTIVE[CHAT]["token"]) if CHAT in eg._ACTIVE else None
+    while True:
+        drained = eg.start(CHAT, 1)
+        if drained is None:
+            break
+        eg.finish(CHAT, drained["token"])
     p = eg.start(CHAT, 2)
     check("کاربر تمام‌شده از دور دیگری امتیاز نمی‌گیرد",
           eg.answer(CHAT, 1, "x", p["answer"]) is None)
@@ -393,10 +399,9 @@ def test_word_correction():
 def test_multiple_choice():
     print("\n### ❓ چهار گزینه‌ای")
     CHAT = -5006
-    mc._active_questions.clear()
-    mc._remaining_question_indexes.clear()
+    mc.reset_all()
 
-    quiz = mc.start_question(CHAT)
+    quiz = mc.start_question(CHAT, 1)
     check("سوال چهار گزینه دارد", len(quiz["options"]) == 4)
     check("پاسخ درست بین ۱ تا ۴ است", 1 <= quiz["answer"] <= 4)
     wrong = str(1 if quiz["answer"] != 1 else 2)
@@ -405,14 +410,14 @@ def test_multiple_choice():
     check("گزینهٔ درست اعلام می‌شود", correct == quiz["answer"])
     check("بعد از پاسخ، سوال بسته شد", mc.get_active_question(CHAT) is None)
 
-    quiz = mc.start_question(CHAT)
+    quiz = mc.start_question(CHAT, 1)
     ok, _ = mc.answer_question(CHAT, str(quiz["answer"]))
     check("گزینهٔ درست تشخیص داده می‌شود", ok is True)
     check("پاسخ دوباره اثری ندارد",
           mc.answer_question(CHAT, str(quiz["answer"])) is None)
 
     # متن غیرعددی سوال را مصرف نمی‌کند
-    quiz = mc.start_question(CHAT)
+    quiz = mc.start_question(CHAT, 1)
     check("متن غیرعددی سوال را نمی‌بندد",
           mc.answer_question(CHAT, "سلام") is None)
     check("سوال هنوز فعال است", mc.get_active_question(CHAT) is not None)
@@ -426,23 +431,59 @@ def test_multiple_choice():
     check("سوال جدید فعال ماند", mc.get_active_question(CHAT) is not None)
 
     # عدم تکرار سوال
-    mc._active_questions.clear()
-    mc._remaining_question_indexes.clear()
+    mc.reset_all()
     qs = []
     for _ in range(len(mc.QUESTIONS)):
-        qs.append(mc.start_question(CHAT)["question"])
+        qs.append(mc.start_question(CHAT, 1)["question"])
         mc._active_questions.pop(CHAT, None)
     check("هیچ سوال تکراری تا پایان بانک", len(set(qs)) == len(mc.QUESTIONS))
 
-    # دو گروه مستقل
-    mc._active_questions.clear()
-    a = mc.start_question(-1)
-    b = mc.start_question(-2)
+    # دو گروه مستقل (کاربران تازه، چون تاریخچهٔ کاربر ۱ بالا مصرف شد)
+    mc.reset_all()
+    a = mc.start_question(-1, 71)
+    b = mc.start_question(-2, 72)
     mc.answer_question(-1, str(a["answer"]))
     check("گروه دوم از پاسخ گروه اول متاثر نمی‌شود",
           mc.get_active_question(-2) is not None)
-    mc._active_questions.clear()
-    mc._remaining_question_indexes.clear()
+
+    # تاریخچه به تفکیک کاربر است، نه گروه
+    mc.reset_all()
+    first = []
+    for _ in range(60):
+        item = mc.start_question(-5, 81)
+        first.append(item["question"])
+        mc.clear_question(-5, item["token"])
+    check("کاربر اول ۶۰ سوال بدون تکرار گرفت", len(set(first)) == 60)
+    second = []
+    for _ in range(60):
+        item = mc.start_question(-5, 82)
+        second.append(item["question"])
+        mc.clear_question(-5, item["token"])
+    check("کاربر دوم در همان گروه دور تازه گرفت", len(set(second)) == 60)
+    check("تاریخچهٔ دو کاربر جداست",
+          mc.seen_count(81) == 60 and mc.seen_count(82) == 60)
+
+    # ارقام فارسی هم پذیرفته می‌شوند
+    mc.reset_all()
+    item = mc.start_question(-6, 83)
+    persian = "۰۱۲۳۴"[item["answer"]]
+    ok, _ = mc.answer_question(-6, persian, 83)
+    check("پاسخ با رقم فارسی پذیرفته می‌شود", ok is True)
+
+    # اتمام کامل بانک
+    mc.reset_all()
+    drained = 0
+    while True:
+        item = mc.start_question(-7, 84)
+        if item is None:
+            break
+        drained += 1
+        mc.clear_question(-7, item["token"])
+    check("کل بانک برای یک کاربر مصرف شد",
+          drained == len(mc.QUESTIONS), f"-> {drained}")
+    check("کاربر پس از اتمام exhausted است", mc.is_exhausted(84))
+    check("پیام اتمام تعریف شده است", bool(mc.EXHAUSTED_MESSAGE))
+    mc.reset_all()
 
 
 # ---------------------------------------------------------------------------

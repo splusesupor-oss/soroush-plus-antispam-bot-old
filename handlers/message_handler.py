@@ -24,10 +24,13 @@ from modules.riddles import (
     new_riddle,
 )
 from modules.multiple_choice import (
-    start_question,
+    ANSWER_SECONDS as QUIZ_SECONDS,
+    EXHAUSTED_MESSAGE as QUIZ_EXHAUSTED_MESSAGE,
     answer_question,
-    get_active_question,
     clear_question,
+    get_active_question,
+    is_exhausted as quiz_exhausted,
+    start_question,
 )
 from modules.user_original_storage import (
     begin_registration,
@@ -52,7 +55,9 @@ from modules.name_family import (
     submit as submit_name_family,
 )
 from modules.emoji_guess import (
+    ANSWER_SECONDS as EMOJI_GUESS_SECONDS,
     EXHAUSTED_MESSAGE as EMOJI_GUESS_EXHAUSTED_MESSAGE,
+    total_stages as _emoji_total_stages,
     answer as answer_emoji_guess,
     finish as finish_emoji_guess,
     is_active as emoji_guess_active,
@@ -280,6 +285,9 @@ def _chat_game_busy(chat_id):
 
 
 GAME_BUSY_MESSAGE = "⏳ یک بازی دیگر در این گروه در جریان است؛ لطفاً تا پایان آن صبر کنید."
+
+
+EMOJI_GUESS_TOTAL = _emoji_total_stages()
 
 
 def _track_group_timer(bot, chat_id, task):
@@ -1348,9 +1356,16 @@ async def handle_new_message(bot, event):
             if puzzle is None:
                 await event.reply(EMOJI_GUESS_EXHAUSTED_MESSAGE)
                 return
-            await event.reply(f"🎮 حدس ایموجی\n\n{puzzle['emoji']}\n\n⏳ 40 ثانیه فرصت دارید")
+            await event.reply(
+                "🎮 حدس ایموجی\n\n"
+                f"مرحله {_math_digits(puzzle['stage'])} از "
+                f"{_math_digits(EMOJI_GUESS_TOTAL)} — سطح {puzzle['tier']}\n\n"
+                f"{puzzle['emoji']}\n\n"
+                f"⏳ {_math_digits(EMOJI_GUESS_SECONDS)} ثانیه فرصت دارید"
+            )
+
             async def emoji_timer():
-                await _asyncio.sleep(40)
+                await _asyncio.sleep(EMOJI_GUESS_SECONDS)
                 answer = finish_emoji_guess(chat_id, puzzle["token"])
                 if answer:
                     await event.reply(f"⏰ زمان تمام شد!\n\n✅ پاسخ درست:\n{answer}")
@@ -1430,8 +1445,14 @@ async def handle_new_message(bot, event):
             if _chat_game_busy(chat_id):
                 await event.reply(GAME_BUSY_MESSAGE)
                 return
+            if quiz_exhausted(user_id):
+                await event.reply(QUIZ_EXHAUSTED_MESSAGE)
+                return
             try:
-                quiz = start_question(chat_id)
+                quiz = start_question(chat_id, user_id)
+                if quiz is None:
+                    await event.reply(QUIZ_EXHAUSTED_MESSAGE)
+                    return
                 options_text = "\n".join(
                     f"{index}) {option}"
                     for index, option in enumerate(quiz["options"], 1)
@@ -1460,8 +1481,7 @@ async def handle_new_message(bot, event):
                 await event.reply(quiz_text, formatting_entities=entities)
 
                 async def multiple_choice_timer():
-                    import asyncio
-                    await asyncio.sleep(30)
+                    await _asyncio.sleep(QUIZ_SECONDS)
                     active_quiz = get_active_question(chat_id)
                     if active_quiz and active_quiz["token"] == quiz["token"]:
                         clear_question(chat_id, quiz["token"])
@@ -1470,7 +1490,6 @@ async def handle_new_message(bot, event):
                             f"پاسخ درست:\nگزینه {active_quiz['answer']}"
                         )
 
-                import asyncio
                 _track_group_timer(
                     bot,
                     chat_id,
@@ -1555,7 +1574,7 @@ async def handle_new_message(bot, event):
             bot.logger.log_error(f"خطای بررسی جواب چیستان: {e}")
 
         try:
-            result = answer_question(chat_id, clean_text)
+            result = answer_question(chat_id, clean_text, user_id)
             if result is not None:
                 is_correct, correct_option = result
                 if is_correct:
