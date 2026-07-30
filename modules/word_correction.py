@@ -30,14 +30,29 @@ def start(chat_id):
     _active[chat_id] = {'wrong': wrong, 'correct': correct, 'token': token}
     return dict(_active[chat_id])
 
-def _norm(value):
-    """یکسان‌سازی برای مقایسه: نیم‌فاصله، فاصله و شکل‌های عربی حروف."""
+def _letters(value):
+    """فقط حروف: فاصله و نیم‌فاصله نادیده گرفته می‌شوند."""
     return (
         str(value or "").strip()
         .replace("\u200c", "").replace("\u200f", "").replace("\u200e", "")
         .replace("ي", "ی").replace("ك", "ک")
         .replace(" ", "")
     )
+
+
+def _spacing(value):
+    """حروف به همراه فاصله‌گذاری؛ نیم‌فاصله و فاصله هم‌ارز شمرده می‌شوند."""
+    text = (
+        str(value or "").strip()
+        .replace("\u200c", " ").replace("\u200f", "").replace("\u200e", "")
+        .replace("ي", "ی").replace("ك", "ک")
+    )
+    return " ".join(text.split())
+
+
+def _norm(value):
+    """سازگاری با کد قدیمی."""
+    return _letters(value)
 
 
 def answer(chat_id, text):
@@ -51,15 +66,28 @@ def answer(chat_id, text):
     data = _active.get(chat_id)
     if not data:
         return None
-    candidate = _norm(text)
-    if not candidate:
+    if not _letters(text):
         return None
-    if candidate == _norm(data['correct']):
+
+    correct, wrong = data['correct'], data['wrong']
+    # وقتی تفاوت غلط و درست فقط در فاصله/نیم‌فاصله است، فاصله‌گذاری بخشی از
+    # پاسخ است و نباید نادیده گرفته شود؛ در غیر این صورت آن جفت اصلاً قابل
+    # حل نمی‌بود. برای بقیه، فاصله‌گذاری سخت‌گیرانه نیست.
+    spacing_matters = _letters(correct) == _letters(wrong)
+    if spacing_matters:
+        if _spacing(text) == _spacing(correct):
+            _active.pop(chat_id, None)
+            return True
+        if _spacing(text) == _spacing(wrong):
+            return False
+        return None
+
+    if _letters(text) == _letters(correct):
         _active.pop(chat_id, None)
         return True
     # فقط وقتی «پاسخ غلط» اعلام می‌شود که کاربر واقعاً روی همین کلمه تلاش
     # کرده باشد؛ پیام‌های نامرتبط اصلاً مصرف نمی‌شوند.
-    if candidate == _norm(data['wrong']):
+    if _letters(text) == _letters(wrong):
         return False
     return None
 

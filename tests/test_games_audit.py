@@ -227,14 +227,29 @@ def test_emoji_guess():
           eg.answer(CHAT, 2, "u2", p["answer"]) == p["answer"])
 
     # پاسخ‌دهنده هم در تاریخچه ثبت می‌شود (ضد فارم)
+    # هر شروع‌کننده تاریخچهٔ مستقل دارد، پس دو نفر می‌توانند تصادفاً یک
+    # معما بگیرند. ملاک درست: هر معمای پاسخ‌داده‌شده در تاریخچهٔ پاسخ‌دهنده
+    # بنشیند تا دیگر هرگز برای او تکرار نشود.
     eg.reset_all()
     farmed = []
     for i in range(5):
         p = eg.start(CHAT, 100 + i)
         farmed.append(eg.answer(CHAT, 999, "farmer", p["answer"]))
+    check("هر پاسخ درست پذیرفته شد", all(farmed), f"-> {farmed}")
     check("پاسخ‌دهنده در تاریخچهٔ خودش ثبت می‌شود",
-          eg.seen_count(999) == 5, f"-> {eg.seen_count(999)}")
-    check("فارمر هیچ ایموجی تکراری نگرفت", len(set(farmed)) == 5)
+          eg.seen_count(999) == len(set(farmed)),
+          f"-> {eg.seen_count(999)} vs {len(set(farmed))}")
+    check("همهٔ معماهای پاسخ‌داده‌شده در تاریخچه هستند",
+          set(farmed) <= eg._SEEN_BY_USER[str(999)])
+
+    # وقتی خودِ کاربر بازی را شروع کند هرگز تکراری نمی‌گیرد.
+    eg.reset_all()
+    own = []
+    for _ in range(25):
+        p = eg.start(CHAT, 999)
+        own.append(eg.answer(CHAT, 999, "farmer", p["answer"]))
+    check("شروع‌کننده در ۲۵ اجرا هیچ معمای تکراری نگرفت",
+          len(set(own)) == 25, f"-> {len(set(own))}")
 
     # پاسخ غلط
     eg.reset_all()
@@ -294,15 +309,30 @@ def test_flag_guess():
         fg.finish(CHAT, s["token"])
     check("انتخاب پرچم تصادفی است", len(firsts) > 5, f"-> {len(firsts)}")
 
-    # پاسخ‌دهنده در تاریخچه ثبت می‌شود
+    # پاسخ‌دهنده در تاریخچه ثبت می‌شود.
+    # هر شروع‌کننده تاریخچهٔ مستقل دارد، پس دو نفر می‌توانند تصادفاً یک
+    # پرچم بگیرند؛ ملاک درست این است که هر پرچمِ پاسخ‌داده‌شده در تاریخچهٔ
+    # پاسخ‌دهنده بنشیند، نه اینکه ۵ برداشت لزوماً ۵ پرچم متمایز باشد.
     fg.reset_history()
     answered = []
     for i in range(5):
         s = fg.start(CHAT, 300 + i)
         answered.append(fg.answer(CHAT, s["answer"], 777))
+    check("هر پاسخ درست ثبت شد", all(answered), f"-> {answered}")
     check("پاسخ‌دهنده در تاریخچهٔ خودش ثبت می‌شود",
-          fg.seen_count(777) == 5, f"-> {fg.seen_count(777)}")
-    check("پاسخ‌دهنده پرچم تکراری نگرفت", len(set(answered)) == 5)
+          fg.seen_count(777) == len(set(answered)),
+          f"-> {fg.seen_count(777)} vs {len(set(answered))}")
+    check("همهٔ پرچم‌های پاسخ‌داده‌شده در تاریخچه هستند",
+          set(answered) <= fg._SEEN_HISTORY[str(777)])
+
+    # و وقتی خودِ پاسخ‌دهنده بازی را شروع کند، هرگز تکراری نمی‌گیرد.
+    fg.reset_history()
+    own = []
+    for _ in range(25):
+        s = fg.start(CHAT, 777)
+        own.append(fg.answer(CHAT, s["answer"], 777))
+    check("شروع‌کننده در ۲۵ اجرا هیچ پرچم تکراری نگرفت",
+          len(set(own)) == 25, f"-> {len(set(own))}")
 
     # کاربر تمام‌شده امتیاز نمی‌گیرد
     fg.reset_history()

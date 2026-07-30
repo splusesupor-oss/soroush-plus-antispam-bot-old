@@ -9,7 +9,11 @@ from modules.fox_games.session_core import (
     log_error,
     normalize_text,
 )
-from modules.fox_games.survival_questions import level_pool
+from modules.fox_games.survival_questions import (
+    LEVELS,
+    all_questions,
+    level_pool,
+)
 
 GAME_NAME = "survival"
 COMMAND = "بقا"
@@ -30,9 +34,9 @@ MAX_ROUNDS = 20
 _STORE = SessionStore(GAME_NAME)
 _RANDOM = random.SystemRandom()
 
-# تاریخچهٔ سوال‌های استفاده‌شده به تفکیک گروه؛ بین بازی‌های پشت‌سرهم باقی
-# می‌ماند تا سوال تکراری کمتر تکرار شود. وقتی یک سطح تمام شد، همان سطح برای
-# آن گروه از نو باز می‌شود.
+# تاریخچهٔ سوال‌های استفاده‌شده به تفکیک گروه. روی «کل بانک» نگه داشته
+# می‌شود و بین بازی‌های پشت‌سرهم باقی می‌ماند، پس هیچ سوالی تا مصرف شدن
+# کامل بانک تکرار نمی‌شود. این ساختار فقط متعلق به بازی بقاست.
 _CHAT_HISTORY = {}
 
 ALREADY_RUNNING = "🏕 بازی بقا همین حالا در جریان است."
@@ -154,41 +158,76 @@ def begin_rounds(chat_id, logger=None):
     return True
 
 
-def next_question(chat_id, logger=None):
-    """سوال مرحلهٔ بعد؛ تصادفی، سخت‌تر از مرحلهٔ قبل و بدون تکرار.
+def history_size(chat_id):
+    """تعداد سوال‌هایی که این گروه تا کنون دیده است."""
+    return len(_CHAT_HISTORY.get(str(chat_id), ()))
 
-    انتخاب سه‌مرحله‌ای است تا سوال تکراری تا حد ممکن دیده نشود:
-      ۱. سوالی که نه در همین بازی و نه در بازی‌های قبلی همین گروه آمده.
-      ۲. اگر نبود، سوالی که فقط در همین بازی نیامده.
-      ۳. اگر باز هم نبود، کل بانک آن سطح از نو باز می‌شود.
+
+def remaining_questions(chat_id):
+    """تعداد سوال‌های دیده‌نشدهٔ باقی‌مانده برای این گروه."""
+    return max(len(all_questions()) - history_size(chat_id), 0)
+
+
+def reset_history(chat_id=None):
+    """تاریخچهٔ سوال یک گروه (یا همهٔ گروه‌ها) را پاک می‌کند."""
+    if chat_id is None:
+        _CHAT_HISTORY.clear()
+        return
+    _CHAT_HISTORY.pop(str(chat_id), None)
+
+
+def next_question(chat_id, logger=None):
+    """سوال مرحلهٔ بعد: تصادفی، ترجیحاً سخت‌تر، و بدون تکرار.
+
+    تاریخچه روی «کل بانک» نگه داشته می‌شود، نه هر سطح جداگانه. تا وقتی
+    حتی یک سوال دیده‌نشده در بانک باقی باشد هیچ سوالی تکرار نمی‌شود:
+
+      ۱. سوال دیده‌نشده از سطح فعلی (حفظ منحنی سختی).
+      ۲. اگر سطح فعلی تمام شده بود، سوال دیده‌نشده از نزدیک‌ترین سطح دیگر
+         — از سطح‌های سخت‌تر شروع می‌شود تا بازی آسان‌تر نشود.
+      ۳. فقط وقتی کل بانک مصرف شد، تاریخچه ریست می‌شود و دور تازه با
+         انتخاب تصادفی آغاز می‌گردد.
     """
     session = _STORE.get(chat_id)
     if not session or session.get("phase") != "playing":
         return None
     session["level"] += 1
-    pool_all = list(level_pool(session["level"]))
     chat_seen = _CHAT_HISTORY.setdefault(str(chat_id), set())
+    bank = all_questions()
 
-    pool = [
-        item for item in pool_all
-        if item[0] not in session["used_questions"] and item[0] not in chat_seen
-    ]
+    def unseen(items):
+        return [
+            item for item in items
+            if item[0] not in session["used_questions"]
+            and item[0] not in chat_seen
+        ]
+
+    # ۱) سطح فعلی
+    pool = unseen(level_pool(session["level"]))
+
+    # ۲) سطح‌های دیگر، از سخت‌تر به آسان‌تر
     if not pool:
-        pool = [item for item in pool_all if item[0] not in session["used_questions"]]
-        if pool:
-            # سطح برای این گروه تمام شد؛ تاریخچهٔ همین سطح آزاد می‌شود.
-            chat_seen.difference_update(item[0] for item in pool_all)
+        current = min(max(session["level"], 1), len(LEVELS))
+        order = list(range(current + 1, len(LEVELS) + 1))
+        order += list(range(current - 1, 0, -1))
+        for level in order:
+            pool = unseen(level_pool(level))
+            if pool:
+                log(logger, f"FOX SURVIVAL LEVEL FALLBACK chat_id={chat_id} "
+                            f"from={current} to={level}")
+                break
+
+    # ۳) کل بانک مصرف شده: ریست کامل تاریخچه
     if not pool:
-        pool = pool_all
-        session["used_questions"].difference_update(item[0] for item in pool_all)
-        chat_seen.difference_update(item[0] for item in pool_all)
+        log(logger, f"FOX SURVIVAL HISTORY RESET chat_id={chat_id} "
+                    f"bank={len(bank)} reason=exhausted")
+        chat_seen.clear()
+        session["used_questions"].clear()
+        pool = unseen(level_pool(session["level"])) or unseen(bank) or list(bank)
 
     question, answer, aliases = _RANDOM.choice(pool)
     session["used_questions"].add(question)
     chat_seen.add(question)
-    if len(chat_seen) > 400:
-        chat_seen.clear()
-        chat_seen.add(question)
     session["question"] = {
         "text": question,
         "answer": answer,

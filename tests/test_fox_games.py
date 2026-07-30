@@ -710,22 +710,27 @@ def test_survival_question_variety():
             correct_tier = False
     check("هر مرحله از سطح سخت‌تر انتخاب می‌شود", correct_tier)
 
-    # اتمام یک سطح و بازگشایی بانک
+    # اتمام یک سطح: تاریخچه روی «کل بانک» است، نه هر سطح جداگانه. وقتی
+    # سطح یک تمام شود انتخاب به سطح‌های دیگر می‌رود و هیچ سوالی تکرار
+    # نمی‌شود — نه اینکه سطح یک از نو باز شود.
     sv.reset_all()
     sv._CHAT_HISTORY.clear()
     tier_size = len(LEVELS[0])
+    draws = tier_size + 3
     seen = []
-    for _ in range(tier_size + 3):
+    for _ in range(draws):
         sv.start(CHAT)
         for uid in (1, 2):
             sv.join(CHAT, uid, User(uid, f"P{uid}"))
         sv.begin_rounds(CHAT)
         seen.append(sv.next_question(CHAT)["text"])
         sv.finish(CHAT)
-    check("پس از اتمام بانک، بازی بدون خطا ادامه یافت",
-          len(seen) == tier_size + 3)
-    check("همهٔ سؤال‌های سطح یک استفاده شدند",
-          len(set(seen)) == tier_size, f"-> {len(set(seen))}/{tier_size}")
+    check("پس از اتمام یک سطح، بازی بدون خطا ادامه یافت",
+          len(seen) == draws)
+    check("حتی پس از اتمام سطح یک هیچ سؤالی تکرار نشد",
+          len(set(seen)) == draws, f"-> {len(set(seen))}/{draws}")
+    check("سؤال‌ها از بیش از یک سطح آمده‌اند",
+          not set(seen).issubset({q[0] for q in LEVELS[0]}))
     sv.reset_all()
     sv._CHAT_HISTORY.clear()
 
