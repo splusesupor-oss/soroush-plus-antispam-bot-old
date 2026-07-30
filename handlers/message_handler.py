@@ -27,6 +27,10 @@ from modules.jokes import get_joke
 from modules.biographies import get_biography
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
+from handlers.fox_games_router import (
+    FOX_GAME_COMMANDS,
+    handle as handle_fox_games,
+)
 from modules.name_family import (
     cancel_round as cancel_name_family_round,
     finish as finish_name_family,
@@ -753,7 +757,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه"}
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه"} | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -1206,6 +1210,12 @@ async def handle_new_message(bot, event):
                 return
 
 
+        # ---- بازی‌های Fox AI (کاملاً مستقل، فقط از این نقطه وصل می‌شوند) ----
+        if await handle_fox_games(
+            bot, event, chat_id, user_id, sender, clean_text, bot.logger
+        ):
+            return
+
         # بازی اسم فامیل
         if clean_text == "اسم فامیل":
             if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
@@ -1644,7 +1654,15 @@ async def handle_new_message(bot, event):
                 "🌍 حدس پرچم\n"
                 "پرچم کشور را در 30 ثانیه حدس بزنید.\n\n"
                 "🖌 تصحیح کلمات\n"
-                "یک کلمه با املای غلط نوشته میشود و شما باید صحیح آن را بنویسید"
+                "یک کلمه با املای غلط نوشته میشود و شما باید صحیح آن را بنویسید\n\n"
+                "😂 بخند یا بباز\n"
+                "بعد از شمارش معکوس، اولین نفری که ایموجی خنده بفرستد برنده است.\n\n"
+                "🏕 بقا\n"
+                "چهار نفر با «شرکت» وارد می‌شوند؛ پاسخ اشتباه یعنی حذف.\n\n"
+                "🎁 جعبه شانسی\n"
+                "یکی از ۹ جعبه را باز کنید؛ روزی دو بار.\n\n"
+                "🧛 خون آشام\n"
+                "خون‌آشام مخفی را از روی شماره حدس بزنید."
             )
 
             entities = []
@@ -1873,6 +1891,10 @@ async def handle_new_message(bot, event):
                   "حافظه گروه بعد از ثبت اسم ربات شمارو با اسم صدا می‌کند",
                   "برای دریافت یک دانستنی",
                   "🎮 لیست بازی ها:",
+                  "😂 بخند یا بباز",
+                  "🏕 بقا",
+                  "🎁 جعبه شانسی",
+                  "🧛 خون آشام",
                   "🧩 تحلیل نام:",
                   "👑 مدیریت ادمین‌ها:",
                   "➕ افزودن ادمین:",
