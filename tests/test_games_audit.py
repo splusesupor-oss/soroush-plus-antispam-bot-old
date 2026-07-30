@@ -616,6 +616,7 @@ def test_survival_no_restart_questions():
     for _ in range(6):
         sv.start(CHAT, logger)
         sv.join(CHAT, 1, User(1, "علی"), logger)
+        sv.join(CHAT, 2, User(2, "حسین"), logger)
         sv.begin_rounds(CHAT, logger)
         firsts.append(sv.next_question(CHAT, logger)["text"])
         sv.finish(CHAT, logger=logger)

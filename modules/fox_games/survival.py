@@ -16,7 +16,10 @@ COMMAND = "بقا"
 JOIN_WORD = "شرکت"
 
 MAX_PLAYERS = 4
-MIN_PLAYERS = 1            # با ۱ تا ۴ نفر هم بازی مرحله‌ای اجرا می‌شود
+# حداقل تعداد بازیکن برای شروع. با ۱ نفر بازی معنا ندارد: تک‌بازیکن بدون
+# رقیب برنده می‌شد و ۸ سکه می‌گرفت. قابل تنظیم بین ۲ تا ۴ با set_min_players.
+MIN_PLAYERS = 2
+MIN_PLAYERS_FLOOR = 2
 JOIN_SECONDS = 60
 ANSWER_SECONDS = 30
 CORRECT_COINS = 1          # سکهٔ هر پاسخ صحیح در هر مرحله
@@ -34,6 +37,33 @@ _CHAT_HISTORY = {}
 
 ALREADY_RUNNING = "🏕 بازی بقا همین حالا در جریان است."
 NOT_ENOUGH = "🏕 تعداد شرکت‌کننده کافی نبود؛ بازی لغو شد."
+NO_WINNER = "🏕 همه حذف شدند؛ بازی بدون برنده تمام شد."
+
+
+def set_min_players(value):
+    """حداقل تعداد بازیکن را بین ۲ تا ``MAX_PLAYERS`` تنظیم می‌کند."""
+    global MIN_PLAYERS
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return MIN_PLAYERS
+    MIN_PLAYERS = max(MIN_PLAYERS_FLOOR, min(number, MAX_PLAYERS))
+    return MIN_PLAYERS
+
+
+def waiting_message(chat_id):
+    """پیام انتظار تا وقتی حداقل تعداد تکمیل نشده است."""
+    joined = player_count(chat_id)
+    return (
+        f"⏳ در انتظار بازیکنان...\n\n"
+        f"ثبت‌نام شده: {joined} از حداقل {MIN_PLAYERS} نفر\n"
+        f"برای شرکت بنویسید: {JOIN_WORD}"
+    )
+
+
+def has_minimum(chat_id):
+    """آیا حداقل تعداد لازم برای شروع ثبت‌نام کرده‌اند."""
+    return player_count(chat_id) >= MIN_PLAYERS
 
 
 def is_active(chat_id):
@@ -105,16 +135,22 @@ def alive_players(chat_id):
 
 
 def begin_rounds(chat_id, logger=None):
-    """پایان ثبت‌نام. False اگر تعداد کافی نباشد."""
+    """پایان ثبت‌نام و آغاز مراحل.
+
+    ``False`` یعنی حداقل تعداد بازیکن تکمیل نشده و بازی نباید شروع شود.
+    پس از موفقیت، phase به ``playing`` می‌رود و ``join`` هیچ بازیکن جدیدی
+    را نمی‌پذیرد.
+    """
     session = _STORE.get(chat_id)
     if not session or session.get("phase") != "joining":
         return False
     if len(session["players"]) < MIN_PLAYERS:
-        log(logger, f"FOX SURVIVAL ABORT chat_id={chat_id} reason=no_players "
-                    f"count={len(session['players'])}")
+        log(logger, f"FOX SURVIVAL ABORT chat_id={chat_id} reason=not_enough_players "
+                    f"count={len(session['players'])} required={MIN_PLAYERS}")
         return False
     session["phase"] = "playing"
-    log(logger, f"FOX SURVIVAL BEGIN chat_id={chat_id} players={len(session['players'])}")
+    log(logger, f"FOX SURVIVAL BEGIN chat_id={chat_id} "
+                f"players={len(session['players'])} required={MIN_PLAYERS}")
     return True
 
 
@@ -226,13 +262,14 @@ def eliminate_silent(chat_id, logger=None):
                         f"level={session['level']}")
 
     if removed and not any(p["alive"] for p in session["players"].values()):
-        # همه هم‌زمان حذف شدند: نتیجه بی‌برنده می‌شد. اگر بیش از یک نفر بودند
-        # همه برمی‌گردند تا مرحلهٔ بعد تصمیم بگیرد؛ اگر یک نفر بود همان برنده است.
+        # همه هم‌زمان ساکت ماندند. اگر بیش از یک نفر بودند همه برمی‌گردند تا
+        # مرحلهٔ بعد تصمیم بگیرد. اگر فقط یک نفر مانده بود، او *زنده نمی‌شود*:
+        # کسی که هیچ پاسخی نداده نباید برندهٔ ۸ سکه شود؛ بازی بدون برنده
+        # تمام می‌شود.
         if len(before) == 1:
-            before[0]["alive"] = True
-            removed = [p for p in removed if p is not before[0]]
-            log(logger, f"FOX SURVIVAL LAST STANDING chat_id={chat_id} "
-                        f"user_id={before[0]['user_id']}")
+            log(logger, f"FOX SURVIVAL NO WINNER chat_id={chat_id} "
+                        f"reason=last_player_silent "
+                        f"user_id={before[0]['user_id']} level={session['level']}")
         else:
             for player in before:
                 player["alive"] = True
@@ -282,6 +319,8 @@ async def run_game(chat_id, session_id, callbacks, logger=None,
     finished_cleanly = False
     try:
         # --- مرحلهٔ ثبت‌نام ---
+        # تمام مهلت ثبت‌نام سپری می‌شود مگر ظرفیت پر شود. با اولین «شرکت»
+        # بازی شروع نمی‌شود؛ باید دست‌کم MIN_PLAYERS نفر جمع شوند.
         waited = 0.0
         step = 0.05 if join_wait <= 2 else 0.5
         while waited < join_wait and not is_full(chat_id):
@@ -291,6 +330,7 @@ async def run_game(chat_id, session_id, callbacks, logger=None,
         if not session or session["session_id"] != session_id:
             return
         if not begin_rounds(chat_id, logger):
+            # مهلت تمام شد و تعداد کافی نبود: همهٔ state پاک می‌شود.
             abandon(chat_id, session_id, logger)
             await callbacks["on_abort"]()
             finished_cleanly = True

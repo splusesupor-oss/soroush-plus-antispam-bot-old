@@ -730,13 +730,264 @@ def test_survival_question_variety():
     sv._CHAT_HISTORY.clear()
 
 
-def test_survival_solo_allowed():
-    print("\n### 🏕 بازی با ۱ تا ۴ نفر")
-    check("حداقل بازیکن ۱ است", sv.MIN_PLAYERS == 1, f"-> {sv.MIN_PLAYERS}")
+def test_survival_solo_does_not_start_end_to_end():
+    """باگ گزارش‌شده: با اولین «شرکت» بازی فوراً شروع می‌شد.
+
+    مسیر کامل روتر با تایمر واقعی اجرا می‌شود: یک نفر ثبت‌نام می‌کند،
+    مهلت تمام می‌شود، و بازی باید لغو شود — نه شروع.
+    """
+    print("\n### 🏕 یک نفر: بازی شروع نمی‌شود (مسیر کامل)")
+
+    async def scenario():
+        router.reset_all()
+        bot, event = Bot(), Event()
+        sv.reset_all()
+        session = sv.start(CHAT, bot.logger)
+        began, finished, aborted = [], [], []
+
+        async def on_begin(names):
+            began.append(list(names))
+
+        async def on_finish(champion):
+            finished.append(champion)
+
+        async def on_abort():
+            aborted.append(True)
+
+        sv.schedule(CHAT, session["session_id"], {
+            "on_abort": on_abort, "on_begin": on_begin, "on_question": noop,
+            "on_eliminated": noop, "on_finish": on_finish,
+        }, logger=bot.logger, join_seconds=0.3, answer_seconds=0.1)
+
+        await asyncio.sleep(0.05)
+        joined = sv.join(CHAT, 1, User(1, "تنها"), bot.logger)[0]
+        waiting = sv.waiting_message(CHAT)
+        await asyncio.sleep(1.2)
+        return bot, joined, waiting, began, finished, aborted
+
+    bot, joined, waiting, began, finished, aborted = asyncio.run(scenario())
+    check("ثبت‌نام نفر اول موفق بود", joined == "joined")
+    check("پیام انتظار نمایش داده شد", "در انتظار بازیکنان" in waiting)
+    check("بازی با یک نفر شروع نشد", began == [], f"-> {began}")
+    check("هیچ برنده‌ای اعلام نشد", finished == [], f"-> {finished}")
+    check("ثبت‌نام لغو شد", aborted == [True])
+    check("هیچ سکه‌ای پرداخت نشد", bot.paid == [], f"-> {bot.paid}")
+    check("همهٔ state پاک شد", not sv.is_active(CHAT))
+    check("لغو به دلیل کمبود بازیکن لاگ شد",
+          bot.logger.has("reason=not_enough_players"))
+    router.reset_all()
+
+
+def test_survival_two_players_start_and_pay():
+    """با ۲ نفر بازی شروع می‌شود و فقط بازماندهٔ واقعی ۸ سکه می‌گیرد."""
+    print("\n### 🏕 دو نفر: شروع، برنده و پرداخت ۸ سکه")
+
+    async def scenario():
+        router.reset_all()
+        bot, event = Bot(), Event()
+        sv.reset_all()
+        session = sv.start(CHAT, bot.logger)
+        began, finished = [], []
+
+        async def on_begin(names):
+            began.append(list(names))
+
+        async def on_finish(champion):
+            finished.append(champion)
+            if champion is not None:
+                bot.award_coins(CHAT, champion["user_id"], champion["name"],
+                                sv.WINNER_COINS)
+
+        sv.schedule(CHAT, session["session_id"], {
+            "on_abort": noop, "on_begin": on_begin, "on_question": noop,
+            "on_eliminated": noop, "on_finish": on_finish,
+        }, logger=bot.logger, join_seconds=0.2, answer_seconds=0.3)
+
+        await asyncio.sleep(0.05)
+        sv.join(CHAT, 1, User(1, "بازمانده"), bot.logger)
+        sv.join(CHAT, 2, User(2, "حذفی"), bot.logger)
+
+        # بازیکن ۱ همیشه درست پاسخ می‌دهد، بازیکن ۲ همیشه غلط.
+        for _ in range(10):
+            await asyncio.sleep(0.12)
+            state = sv._STORE.get(CHAT)
+            if not state or not state.get("question"):
+                continue
+            correct = state["question"]["answer"]
+            sv.answer(CHAT, 1, correct, bot.logger)
+            sv.answer(CHAT, 2, "پاسخ کاملا غلط", bot.logger)
+            if len(sv.alive_players(CHAT)) <= 1:
+                break
+        await asyncio.sleep(1.0)
+        return bot, began, finished
+
+    bot, began, finished = asyncio.run(scenario())
+    check("بازی با ۲ نفر شروع شد", len(began) == 1 and len(began[0]) == 2,
+          f"-> {began}")
+    check("بازی پایان یافت", len(finished) == 1, f"-> {finished}")
+    check("برنده همان بازماندهٔ واقعی است",
+          finished and finished[0] is not None
+          and finished[0]["user_id"] == 1, f"-> {finished}")
+    check("دقیقاً یک پرداخت انجام شد", len(bot.paid) == 1, f"-> {bot.paid}")
+    check("برنده ۸ سکه گرفت", bot.paid == [(1, sv.WINNER_COINS)],
+          f"-> {bot.paid}")
+    check("session بسته شد", not sv.is_active(CHAT))
+    router.reset_all()
+
+
+def test_survival_restart_blocked_and_join_once():
+    """اجرای دوبارهٔ «بقا» مسدود است و هر کاربر فقط یک بار «شرکت» دارد."""
+    print("\n### 🏕 اجرای دوباره و ثبت‌نام یکتا (مسیر روتر)")
+
+    async def scenario():
+        router.reset_all()
+        bot, event = Bot(), Event()
+        await send(bot, event, 1, "بقا")
+        started = sv.is_active(CHAT)
+
+        again = Event()
+        await send(bot, again, 2, "بقا")
+        blocked = again.said("همین حالا در جریان")
+
+        sv._STORE.cancel_task(CHAT)
+
+        first = Event()
+        await router.handle(bot, first, CHAT, 11, User(11, "الف"),
+                            "شرکت", bot.logger)
+        second = Event()
+        await router.handle(bot, second, CHAT, 11, User(11, "الف"),
+                            "شرکت", bot.logger)
+        return started, blocked, first, second
+
+    started, blocked, first, second = asyncio.run(scenario())
+    check("بازی شروع شد", started)
+    check("اجرای دوباره مسدود و پیام داده شد", blocked)
+    check("ثبت‌نام اول تأیید شد", first.said("ثبت شد"))
+    check("پیام انتظار همراه ثبت‌نام آمد", first.said("در انتظار بازیکنان"))
+    check("ثبت‌نام تکراری رد شد", second.said("قبلاً ثبت‌نام"))
+    check("فقط یک بار شمرده شد", sv.player_count(CHAT) == 1,
+          f"-> {sv.player_count(CHAT)}")
+    router.reset_all()
+
+
+def test_survival_state_isolation():
+    """state بقا کاملاً مستقل از بقیهٔ بازی‌هاست."""
+    print("\n### 🏕 جدا بودن کامل state بقا")
+    router.reset_all()
+    sv.reset_all()
+
+    stores = {"survival": id(sv._STORE), "laugh": id(ll._STORE),
+              "lucky_box": id(lb._STORE), "vampire": id(vp._STORE)}
+    check("SessionStore بقا مستقل است", len(set(stores.values())) == 4)
+    check("تاریخچهٔ سوال بقا مخصوص خودش است",
+          id(sv._CHAT_HISTORY) not in {id(ll._STORE), id(vp._STORE)})
+
+    sv.start(CHAT)
+    sv.join(CHAT, 1, User(1, "الف"))
+    sv.join(CHAT, 2, User(2, "ب"))
+    ll.start(CHAT)
+    vp.start(CHAT)
+    check("بقا و بقیه هم‌زمان زنده‌اند",
+          sv.is_active(CHAT) and ll.is_active(CHAT) and vp.is_active(CHAT))
+
+    ll.reset_all(CHAT)
+    vp.reset_all(CHAT)
+    check("بستن بازی‌های دیگر بقا را نبست", sv.is_active(CHAT))
+    check("بازیکنان بقا دست‌نخورده ماندند", sv.player_count(CHAT) == 2)
+
+    sv.reset_all(CHAT)
+    check("پاک کردن بقا کامل انجام شد", not sv.is_active(CHAT))
+    router.reset_all()
+
+
+def test_survival_minimum_players():
+    """بازی با یک نفر شروع نمی‌شود؛ حداقل ۲ نفر لازم است."""
+    print("\n### 🏕 حداقل تعداد بازیکن (۲ تا ۴ نفر)")
+    check("حداقل بازیکن ۲ است", sv.MIN_PLAYERS == 2, f"-> {sv.MIN_PLAYERS}")
     sv.reset_all()
     sv.start(CHAT)
     sv.join(CHAT, 1, User(1, "تنها"))
-    check("با یک نفر هم بازی آغاز می‌شود", sv.begin_rounds(CHAT) is True)
+    check("با یک نفر بازی آغاز نمی‌شود", sv.begin_rounds(CHAT) is False)
+    check("با یک نفر حداقل تکمیل نیست", sv.has_minimum(CHAT) is False)
+    check("پیام انتظار نمایش داده می‌شود",
+          "در انتظار بازیکنان" in sv.waiting_message(CHAT))
+    sv.join(CHAT, 2, User(2, "دومی"))
+    check("با دو نفر حداقل تکمیل است", sv.has_minimum(CHAT) is True)
+    check("با دو نفر بازی آغاز می‌شود", sv.begin_rounds(CHAT) is True)
+    sv.reset_all()
+
+    # حداقل قابل تنظیم بین ۲ تا ۴ است و از ۲ پایین‌تر نمی‌رود.
+    original = sv.MIN_PLAYERS
+    try:
+        check("تنظیم حداقل روی ۳", sv.set_min_players(3) == 3)
+        check("تنظیم حداقل روی ۴", sv.set_min_players(4) == 4)
+        check("مقدار ۱ به کف ۲ محدود می‌شود", sv.set_min_players(1) == 2)
+        check("مقدار بزرگ‌تر از ظرفیت محدود می‌شود",
+              sv.set_min_players(99) == sv.MAX_PLAYERS)
+        check("مقدار نامعتبر تغییری نمی‌دهد",
+              sv.set_min_players("abc") == sv.MAX_PLAYERS)
+
+        sv.set_min_players(3)
+        sv.reset_all()
+        sv.start(CHAT)
+        sv.join(CHAT, 1, User(1, "الف"))
+        sv.join(CHAT, 2, User(2, "ب"))
+        check("با حداقل ۳، دو نفر کافی نیست", sv.begin_rounds(CHAT) is False)
+        sv.join(CHAT, 3, User(3, "ج"))
+        check("با حداقل ۳، سه نفر کافی است", sv.begin_rounds(CHAT) is True)
+    finally:
+        sv.set_min_players(original)
+        sv.reset_all()
+
+
+def test_survival_no_new_players_after_start():
+    """پس از شروع بازی هیچ کاربر جدیدی نمی‌تواند وارد شود."""
+    print("\n### 🏕 ورود ممنوع پس از شروع")
+    sv.reset_all()
+    sv.start(CHAT)
+    sv.join(CHAT, 1, User(1, "الف"))
+    sv.join(CHAT, 2, User(2, "ب"))
+    sv.begin_rounds(CHAT)
+    state, _ = sv.join(CHAT, 3, User(3, "دیرآمده"))
+    check("ورود بعد از شروع رد می‌شود", state == "closed", f"-> {state}")
+    check("تعداد بازیکنان تغییر نکرد", sv.player_count(CHAT) == 2)
+    check("کاربر دیرآمده بازیکن نیست",
+          sv.answer(CHAT, 3, "هرچیزی")[0] == "no_question"
+          or sv.answer(CHAT, 3, "هرچیزی")[0] == "not_player")
+    sv.reset_all()
+
+
+def test_survival_all_eliminated_no_coins():
+    """اگر همه حذف شدند هیچ سکه‌ای داده نمی‌شود."""
+    print("\n### 🏕 حذف همه = بدون برنده و بدون سکه")
+    sv.reset_all()
+    logger = Logger()
+    sv.start(CHAT, logger)
+    sv.join(CHAT, 1, User(1, "الف"), logger)
+    sv.join(CHAT, 2, User(2, "ب"), logger)
+    sv.begin_rounds(CHAT, logger)
+    sv.next_question(CHAT, logger)
+
+    # هر دو پاسخ غلط می‌دهند: هیچ‌کس زنده نمی‌ماند.
+    sv.answer(CHAT, 1, "پاسخ کاملا غلط", logger)
+    sv.answer(CHAT, 2, "پاسخ کاملا غلط", logger)
+    check("هیچ بازیکن زنده‌ای نماند", len(sv.alive_players(CHAT)) == 0)
+    check("برنده‌ای وجود ندارد", sv.winner(CHAT) is None)
+    champion = sv.finish(CHAT, logger=logger)
+    check("finish هیچ برنده‌ای برنمی‌گرداند", champion is None, f"-> {champion}")
+    sv.reset_all()
+
+    # تک‌بازماندهٔ ساکت هم نباید برنده شود.
+    sv.start(CHAT, logger)
+    sv.join(CHAT, 1, User(1, "الف"), logger)
+    sv.join(CHAT, 2, User(2, "ب"), logger)
+    sv.begin_rounds(CHAT, logger)
+    sv.next_question(CHAT, logger)
+    sv.answer(CHAT, 1, "پاسخ کاملا غلط", logger)   # حذف می‌شود
+    sv.eliminate_silent(CHAT, logger)              # نفر دوم ساکت بود
+    check("بازماندهٔ ساکت زنده نمی‌ماند", len(sv.alive_players(CHAT)) == 0)
+    check("بازی ساکت برنده ندارد", sv.finish(CHAT, logger=logger) is None)
+    check("نبود برنده لاگ شد", logger.has("FOX SURVIVAL NO WINNER"))
     sv.reset_all()
 
 
@@ -915,7 +1166,13 @@ def main():
     test_sequential_sessions()
     test_survival_per_round_coins()
     test_survival_question_variety()
-    test_survival_solo_allowed()
+    test_survival_solo_does_not_start_end_to_end()
+    test_survival_two_players_start_and_pay()
+    test_survival_restart_blocked_and_join_once()
+    test_survival_state_isolation()
+    test_survival_minimum_players()
+    test_survival_no_new_players_after_start()
+    test_survival_all_eliminated_no_coins()
     test_vampire_cannot_self_guess()
     test_real_coin_payout()
     test_reward_values()

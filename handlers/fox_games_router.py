@@ -117,7 +117,8 @@ async def _start_survival(bot, event, chat_id, logger):
     await event.reply(
         "🏕 بازی بقا\n\n"
         f"برای شرکت بنویسید: {survival.JOIN_WORD}\n\n"
-        f"ظرفیت: {to_persian_digits(survival.MAX_PLAYERS)} نفر\n"
+        f"حداقل {to_persian_digits(survival.MIN_PLAYERS)} و حداکثر "
+        f"{to_persian_digits(survival.MAX_PLAYERS)} نفر\n"
         f"⏳ مهلت ثبت‌نام: {to_persian_digits(survival.JOIN_SECONDS)} ثانیه"
     )
 
@@ -142,7 +143,8 @@ async def _start_survival(bot, event, chat_id, logger):
 
     async def on_finish(champion):
         if champion is None:
-            await event.reply("🏕 بازی بدون برنده تمام شد.")
+            # همه حذف شدند: هیچ سکه‌ای پرداخت نمی‌شود.
+            await event.reply(survival.NO_WINNER)
             return
         paid = _coins(bot, chat_id, champion["user_id"], champion["name"],
                       survival.WINNER_COINS, logger)
@@ -184,10 +186,15 @@ async def _survival_message(bot, event, chat_id, user_id, sender, text, logger):
             return False
         result, players = survival.join(chat_id, user_id, sender, logger)
         if result == "joined":
-            await event.reply(
+            confirmation = (
                 f"✅ ثبت شد ({to_persian_digits(len(players))}"
                 f"/{to_persian_digits(survival.MAX_PLAYERS)})"
             )
+            # تا وقتی حداقل تعداد کامل نشده فقط پیام انتظار می‌آید؛ بازی
+            # با اولین نفر شروع نمی‌شود.
+            if not survival.has_minimum(chat_id):
+                confirmation += "\n\n" + survival.waiting_message(chat_id)
+            await event.reply(confirmation)
         elif result == "duplicate":
             await event.reply("⚠️ شما قبلاً ثبت‌نام کرده‌اید.")
         elif result == "full":
