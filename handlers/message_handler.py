@@ -39,7 +39,14 @@ from modules.name_family import (
     start as start_name_family,
     submit as submit_name_family,
 )
-from modules.emoji_guess import start as start_emoji_guess, answer as answer_emoji_guess, finish as finish_emoji_guess, is_active as emoji_guess_active
+from modules.emoji_guess import (
+    EXHAUSTED_MESSAGE as EMOJI_GUESS_EXHAUSTED_MESSAGE,
+    answer as answer_emoji_guess,
+    finish as finish_emoji_guess,
+    is_active as emoji_guess_active,
+    is_exhausted as emoji_guess_exhausted,
+    start as start_emoji_guess,
+)
 from modules.flag_guess import (
     EXHAUSTED_MESSAGE as FLAG_GUESS_EXHAUSTED_MESSAGE,
     answer as answer_flag_guess,
@@ -1298,7 +1305,15 @@ async def handle_new_message(bot, event):
         if clean_text == "حدس ایموجی":
             if name_family_active(chat_id) or emoji_guess_active(chat_id) or flag_guess_active(chat_id):
                 return
-            puzzle = start_emoji_guess(chat_id)
+            # تاریخچه به تفکیک کاربر: هیچ معمای تکراری برای همان کاربر
+            # ارسال نمی‌شود تا از گرفتن سکه با پاسخ قبلی جلوگیری شود.
+            if emoji_guess_exhausted(user_id):
+                await event.reply(EMOJI_GUESS_EXHAUSTED_MESSAGE)
+                return
+            puzzle = start_emoji_guess(chat_id, user_id)
+            if puzzle is None:
+                await event.reply(EMOJI_GUESS_EXHAUSTED_MESSAGE)
+                return
             await event.reply(f"🎮 حدس ایموجی\n\n{puzzle['emoji']}\n\n⏳ 40 ثانیه فرصت دارید")
             async def emoji_timer():
                 await _asyncio.sleep(40)

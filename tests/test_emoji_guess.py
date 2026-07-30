@@ -1,0 +1,244 @@
+"""حدس ایموجی: تاریخچهٔ هر کاربر و جلوگیری از معمای تکراری.
+
+    python tests/test_emoji_guess.py
+"""
+import sys
+from collections import Counter
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import modules.emoji_guess as eg
+
+PASSED = FAILED = 0
+CHAT = -100321
+
+
+def check(label, cond, detail=""):
+    global PASSED, FAILED
+    if cond:
+        PASSED += 1
+        print(f"  PASS  {label}")
+    else:
+        FAILED += 1
+        print(f"  FAIL  {label} {detail}")
+
+
+def play(chat_id, user_id, rounds):
+    """rounds بار بازی و برگرداندن پاسخ‌های دیده‌شده."""
+    seen = []
+    for _ in range(rounds):
+        puzzle = eg.start(chat_id, user_id)
+        if puzzle is None:
+            break
+        seen.append(puzzle["answer"])
+        eg.finish(chat_id, puzzle["token"])
+    return seen
+
+
+def test_catalogue():
+    print("\n### بانک معماها")
+    total = len(eg.PUZZLES)
+    check(f"بانک موجود است ({total} معما)", total >= 50, f"-> {total}")
+    answers = [answer for _emoji, answer in eg.PUZZLES]
+    check("هیچ پاسخ تکراری در بانک نیست",
+          len(answers) == len(set(answers)),
+          f"-> {[a for a, c in Counter(answers).items() if c > 1]}")
+    check("همهٔ ورودی‌ها ایموجی و پاسخ دارند",
+          all(e and a for e, a in eg.PUZZLES))
+    check("پیام اتمام تعریف شده است", bool(eg.EXHAUSTED_MESSAGE))
+    check("متن پیام اتمام درست است",
+          eg.EXHAUSTED_MESSAGE == (
+              "تمام ایموجی‌ها را قبلاً حدس زده‌اید، "
+              "برای جلوگیری از سوءاستفاده از بازی‌های دیگر استفاده کنید."
+          ),
+          f"-> {eg.EXHAUSTED_MESSAGE}")
+
+
+def test_no_repeat_for_one_user():
+    """هستهٔ باگ: یک کاربر هرگز نباید معمای تکراری بگیرد."""
+    print("\n### هیچ معمای تکراری برای یک کاربر")
+    eg.reset_all()
+    total = len(eg.PUZZLES)
+    seen = play(CHAT, 500, total)
+    duplicates = [a for a, c in Counter(seen).items() if c > 1]
+    check(f"{total} بازی پیاپی: هیچ تکراری", not duplicates,
+          f"-> {duplicates[:5]}")
+    check("همهٔ معماها دقیقاً یک بار آمدند",
+          len(set(seen)) == total, f"-> {len(set(seen))}/{total}")
+
+
+def test_hundreds_of_attempts():
+    """صدها اجرای پشت‌سرهم نباید هیچ تکراری تولید کند."""
+    print("\n### صدها اجرای پشت‌سرهم")
+    eg.reset_all()
+    total = len(eg.PUZZLES)
+    seen = play(CHAT, 501, 1000)          # بسیار بیشتر از اندازهٔ بانک
+    duplicates = [a for a, c in Counter(seen).items() if c > 1]
+    check("هیچ تکراری حتی با ۱۰۰۰ تلاش", not duplicates,
+          f"-> {duplicates[:5]}")
+    check(f"دقیقاً {total} بازی انجام شد و سپس متوقف",
+          len(seen) == total, f"-> {len(seen)}")
+    check("کاربر اکنون exhausted است", eg.is_exhausted(501))
+    check("start دیگر معما نمی‌دهد", eg.start(CHAT, 501) is None)
+    check("هیچ بازی فعالی ساخته نشد", not eg.is_active(CHAT))
+
+
+def test_exhaustion_counters():
+    print("\n### شمارنده‌های تاریخچه")
+    eg.reset_all()
+    total = len(eg.PUZZLES)
+    check("در ابتدا چیزی دیده نشده", eg.seen_count(600) == 0)
+    check(f"در ابتدا {total} معما باقی است",
+          eg.remaining_count(600) == total, f"-> {eg.remaining_count(600)}")
+    check("در ابتدا exhausted نیست", not eg.is_exhausted(600))
+
+    play(CHAT, 600, 5)
+    check("پس از ۵ بازی، ۵ معما دیده شده",
+          eg.seen_count(600) == 5, f"-> {eg.seen_count(600)}")
+    check("باقی‌مانده درست است",
+          eg.remaining_count(600) == total - 5, f"-> {eg.remaining_count(600)}")
+
+    play(CHAT, 600, total)
+    check("پس از اتمام، باقی‌مانده صفر است",
+          eg.remaining_count(600) == 0, f"-> {eg.remaining_count(600)}")
+    check("اکنون exhausted است", eg.is_exhausted(600))
+
+
+def test_per_user_isolation():
+    print("\n### تاریخچهٔ هر کاربر جداست")
+    eg.reset_all()
+    total = len(eg.PUZZLES)
+    play(CHAT, 700, total)
+    check("کاربر اول exhausted شد", eg.is_exhausted(700))
+    check("کاربر دوم exhausted نیست", not eg.is_exhausted(701))
+
+    puzzle = eg.start(CHAT, 701)
+    check("کاربر دوم معما می‌گیرد", puzzle is not None)
+    check("کاربر دوم تاریخچهٔ خودش را دارد",
+          eg.seen_count(701) == 1, f"-> {eg.seen_count(701)}")
+    check("تاریخچهٔ کاربر اول دست‌نخورده است",
+          eg.seen_count(700) == total, f"-> {eg.seen_count(700)}")
+    if puzzle:
+        eg.finish(CHAT, puzzle["token"])
+
+    # کاربر سوم هم مستقل است
+    third = play(CHAT, 702, 10)
+    check("کاربر سوم ۱۰ معمای یکتا گرفت",
+          len(set(third)) == 10, f"-> {len(set(third))}")
+
+
+def test_many_users_parallel():
+    print("\n### چند کاربر با تاریخچه‌های مستقل")
+    eg.reset_all()
+    users = [800 + i for i in range(6)]
+    results = {uid: play(CHAT, uid, 15) for uid in users}
+    for uid, seen in results.items():
+        duplicates = [a for a, c in Counter(seen).items() if c > 1]
+        check(f"کاربر {uid}: ۱۵ معمای یکتا",
+              len(set(seen)) == 15 and not duplicates,
+              f"-> {len(set(seen))} dup={duplicates[:3]}")
+    check("هر کاربر شمارندهٔ مستقل دارد",
+          all(eg.seen_count(uid) == 15 for uid in users),
+          f"-> {[eg.seen_count(u) for u in users]}")
+
+
+def test_reset_user():
+    print("\n### پاک‌سازی تاریخچهٔ یک کاربر")
+    eg.reset_all()
+    total = len(eg.PUZZLES)
+    play(CHAT, 900, total)
+    check("کاربر exhausted شد", eg.is_exhausted(900))
+    eg.reset_user(900)
+    check("پس از reset دوباره می‌تواند بازی کند", not eg.is_exhausted(900))
+    check("شمارنده صفر شد", eg.seen_count(900) == 0)
+    puzzle = eg.start(CHAT, 900)
+    check("معمای تازه دریافت شد", puzzle is not None)
+    if puzzle:
+        eg.finish(CHAT, puzzle["token"])
+
+
+def test_answer_and_coins():
+    print("\n### پاسخ درست و سیستم امتیاز")
+    eg.reset_all()
+    puzzle = eg.start(CHAT, 950)
+    check("بازی شروع شد", puzzle is not None)
+    check("پاسخ غلط رد می‌شود",
+          eg.answer(CHAT, 950, "U", "پاسخ کاملا غلط") is None)
+    check("بازی هنوز فعال است", eg.is_active(CHAT))
+    result = eg.answer(CHAT, 950, "U", puzzle["answer"])
+    check("پاسخ درست پذیرفته شد", result == puzzle["answer"], f"-> {result}")
+    check("بازی بسته شد", not eg.is_active(CHAT))
+
+    # نام مستعار انگلیسی همچنان کار می‌کند
+    eg.reset_all()
+    target = next(p for p in eg.PUZZLES if p[1] == "بتمن")
+    eg._ACTIVE[CHAT] = {"emoji": target[0], "answer": target[1],
+                        "token": 0, "user_id": 951}
+    check("نام مستعار انگلیسی پذیرفته می‌شود",
+          eg.answer(CHAT, 951, "U", "batman") == "بتمن")
+
+
+def test_double_start_guard():
+    print("\n### شروع دوباره در حین بازی فعال")
+    eg.reset_all()
+    first = eg.start(CHAT, 960)
+    second = eg.start(CHAT, 960)
+    check("بازی دوم شروع نمی‌شود", second is None, f"-> {second}")
+    check("بازی اول دست‌نخورده است",
+          eg.is_active(CHAT) and eg._ACTIVE[CHAT]["answer"] == first["answer"])
+    check("تاریخچه فقط یک بار افزایش یافت",
+          eg.seen_count(960) == 1, f"-> {eg.seen_count(960)}")
+    eg.finish(CHAT, first["token"])
+
+
+def test_isolation_from_other_games():
+    print("\n### استقلال از سایر بازی‌ها")
+    import modules.flag_guess as fg
+    import modules.riddles as rd
+
+    eg.reset_all()
+    fg.reset_history()
+    rd.used_riddles.clear()
+
+    puzzle = eg.start(CHAT, 970)
+    fg.start(CHAT, 970)
+    rd.new_riddle(CHAT, 970)
+
+    check("بازی ایموجی هنوز فعال است", eg.is_active(CHAT))
+    check("پاسخ ایموجی دست‌نخورده است",
+          eg._ACTIVE[CHAT]["answer"] == puzzle["answer"])
+    own = {id(eg._ACTIVE), id(eg._SEEN_BY_USER)}
+    other = {id(fg._ACTIVE), id(fg._SEEN_HISTORY),
+             id(rd.active_riddles), id(rd.used_riddles)}
+    check("هیچ ساختار داده‌ای مشترک نیست", not (own & other))
+
+    fg.finish(CHAT)
+    check("پس از پایان بازی دیگر، ایموجی سالم است", eg.is_active(CHAT))
+    eg.finish(CHAT, puzzle["token"])
+    eg.reset_all()
+    fg.reset_history()
+
+
+def main():
+    test_catalogue()
+    test_no_repeat_for_one_user()
+    test_hundreds_of_attempts()
+    test_exhaustion_counters()
+    test_per_user_isolation()
+    test_many_users_parallel()
+    test_reset_user()
+    test_answer_and_coins()
+    test_double_start_guard()
+    test_isolation_from_other_games()
+
+    print(f"\n{'=' * 52}")
+    print(f"passed={PASSED} failed={FAILED}")
+    print("=" * 52)
+    return 1 if FAILED else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
