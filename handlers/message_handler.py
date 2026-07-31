@@ -201,15 +201,42 @@ async def _reward_game_reply(event, chat_id, user_id, user, game,
     from economy import rewards as _rewards
     coin_type = _rewards.coin_for(game)
     paid = _rewards.amount_for(game) if amount is None else int(amount)
-    balance = economy.award_game(
+
+    # موجودی «قبل» را می‌خوانیم تا بتوانیم بفهمیم پرداخت واقعاً انجام
+    # شده یا دفتر تراکنش آن را تکراری دیده است.
+    before = economy.get_balance(chat_id, user_id)[coin_type]
+    economy.award_game(
         chat_id, user_id, game, reference=reference, amount=amount,
         name=_format_admin_display(user),
     )
+    # موجودی از دیتابیس دوباره خوانده می‌شود، نه از مقدار کش‌شده.
+    balance = economy.get_balance(chat_id, user_id)
+    gained = balance[coin_type] - before
+
     coin_label = _rewards.coin_name(coin_type)
     icon = "🥈" if coin_type == economy.SILVER else "🥉"
+
+    if gained <= 0:
+        # هرگز نباید «+n سکه» بگوییم وقتی چیزی اضافه نشده. اگر اینجا
+        # رسیدیم یعنی مرجع تکراری بوده و جایزهٔ این دور قبلاً پرداخت شده.
+        bot_logger = getattr(event, "_bot_logger", None)
+        if bot_logger is not None:
+            bot_logger.log_error(
+                f"REWARD NOT APPLIED game={game} chat_id={chat_id} "
+                f"user_id={user_id} reference={reference!r}"
+            )
+        await event.reply(
+            "🎉 پاسخ صحیح بود.\n\n"
+            "🪙 جایزهٔ این دور قبلاً به حساب شما اضافه شده است.\n\n"
+            f"💰 موجودی {coin_label}:\n{icon} "
+            f"{_math_digits(balance[coin_type])}\n\n"
+            f"💎 ارزش کل:\n{_math_digits(balance['total_coin_value'])}"
+        )
+        return balance
+
     await event.reply(
         "🎉 پاسخ صحیح بود.\n\n"
-        f"🪙 شما +{_math_digits(paid)} سکه {coin_label} دریافت کردید.\n\n"
+        f"🪙 شما +{_math_digits(gained)} سکه {coin_label} دریافت کردید.\n\n"
         f"💰 موجودی {coin_label}:\n{icon} {_math_digits(balance[coin_type])}\n\n"
         f"💎 ارزش کل:\n{_math_digits(balance['total_coin_value'])}"
     )
@@ -1471,12 +1498,13 @@ async def handle_new_message(bot, event):
             winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
             if winner_answer:
                 # سکه را خودِ ماژول از راه API اقتصاد پرداخت کرده است؛
-                # اینجا فقط موجودی تازه اعلام می‌شود تا دوبار پرداخت نشود.
+                # اینجا فقط موجودی تازه از دیتابیس خوانده و اعلام می‌شود
+                # تا دوبار پرداخت نشود.
                 balance = economy.get_balance(chat_id, user_id)
                 await event.reply(
                     "🎉 پاسخ صحیح بود.\n\n"
                     f"🪙 شما +{_math_digits(EMOJI_REWARD_BRONZE)} سکه برنز دریافت کردید.\n\n"
-                    f"💰 موجودی برنز:\n{_math_digits(balance[economy.BRONZE])}\n\n"
+                    f"💰 موجودی برنز:\n🥉 {_math_digits(balance[economy.BRONZE])}\n\n"
                     f"💎 ارزش کل:\n{_math_digits(balance['total_coin_value'])}"
                 )
                 return

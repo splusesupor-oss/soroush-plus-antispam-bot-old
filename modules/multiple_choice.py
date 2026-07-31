@@ -11,7 +11,6 @@ def _english_digits(text):
     return str(text or "").translate(_PERSIAN_DIGITS)
 
 
-
 QUESTIONS = [
     # تاریخی ایرانی و جهان
     {"question": "بنیان‌گذار شاهنشاهی هخامنشی چه کسی بود؟", "options": ["داریوش یکم", "کوروش بزرگ", "خشایارشا", "کمبوجیه"], "answer": 2, "category": "تاریخی"},
@@ -198,7 +197,24 @@ _active_questions = {}
 # کاربر B هم مصرف‌شده حساب می‌شد و کاربر تازه فقط ته‌ماندهٔ بانک را می‌گرفت.
 _SEEN_BY_USER = {}
 _remaining_question_indexes = {}     # سازگاری با کد قدیمی
-_question_tokens = count(1)
+_FALLBACK_TOKENS = count(1)
+
+
+def _next_token():
+    """توکن یکتا که با ری‌استارت ربات تکرار نمی‌شود.
+
+    شمارندهٔ حافظه‌ای با هر ری‌استارت از ۱ شروع می‌شد و مرجع جایزه را
+    تکراری می‌کرد، پس دفتر تراکنش پرداخت را رد می‌کرد و کاربر سکه‌ای
+    نمی‌گرفت. حالا از شمارندهٔ ماندگار اقتصاد استفاده می‌شود.
+    """
+    try:
+        from economy import rewards as _rewards
+        return _rewards.round_id()
+    except Exception:
+        # اگر اقتصاد در دسترس نبود، بازی نباید بخوابد.
+        return next(_FALLBACK_TOKENS)
+
+
 _RANDOM = random.SystemRandom()
 
 ANSWER_SECONDS = 30
@@ -264,7 +280,7 @@ def start_question(chat_id, user_id=None):
     seen.add(question["question"])
 
     data = {
-        "token": next(_question_tokens),
+        "token": _next_token(),
         "answer": question["answer"],
         "options": list(question["options"]),
         "question": question["question"],

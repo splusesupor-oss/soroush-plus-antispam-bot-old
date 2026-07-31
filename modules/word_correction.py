@@ -16,7 +16,23 @@ WORDS = [
 
 _active = {}
 _remaining = {}
-_tokens = count(1)
+_FALLBACK_TOKENS = count(1)
+
+
+def _next_token():
+    """توکن یکتا که با ری‌استارت ربات تکرار نمی‌شود.
+
+    شمارندهٔ حافظه‌ای با هر ری‌استارت از ۱ شروع می‌شد و مرجع جایزه را
+    تکراری می‌کرد، پس دفتر تراکنش پرداخت را رد می‌کرد و کاربر سکه‌ای
+    نمی‌گرفت. حالا از شمارندهٔ ماندگار اقتصاد استفاده می‌شود.
+    """
+    try:
+        from economy import rewards as _rewards
+        return _rewards.round_id()
+    except Exception:
+        # اگر اقتصاد در دسترس نبود، بازی نباید بخوابد.
+        return next(_FALLBACK_TOKENS)
+
 
 def start(chat_id):
     remaining = _remaining.get(chat_id)
@@ -26,7 +42,7 @@ def start(chat_id):
     index = random.choice(remaining)
     remaining.remove(index)
     wrong, correct = WORDS[index]
-    token = next(_tokens)
+    token = _next_token()
     _active[chat_id] = {'wrong': wrong, 'correct': correct, 'token': token}
     return dict(_active[chat_id])
 

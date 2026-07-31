@@ -151,7 +151,24 @@ _LAST_COUNTRY = {}
 # همهٔ پرچم‌ها را ندیده هیچ تکراری دریافت نمی‌کند و پس از دیدن همه، بازی برای
 # او برای همیشه بسته می‌شود تا امتیاز تکراری نگیرد.
 _SEEN_HISTORY = {}
-_TOKENS = count(1)
+_FALLBACK_TOKENS = count(1)
+
+
+def _next_token():
+    """توکن یکتا که با ری‌استارت ربات تکرار نمی‌شود.
+
+    شمارندهٔ حافظه‌ای با هر ری‌استارت از ۱ شروع می‌شد و مرجع جایزه را
+    تکراری می‌کرد، پس دفتر تراکنش پرداخت را رد می‌کرد و کاربر سکه‌ای
+    نمی‌گرفت. حالا از شمارندهٔ ماندگار اقتصاد استفاده می‌شود.
+    """
+    try:
+        from economy import rewards as _rewards
+        return _rewards.round_id()
+    except Exception:
+        # اگر اقتصاد در دسترس نبود، بازی نباید بخوابد.
+        return next(_FALLBACK_TOKENS)
+
+
 _RANDOM = random.SystemRandom()
 
 EXHAUSTED_MESSAGE = (
@@ -243,7 +260,7 @@ def start(chat_id, user_id=None):
         "flag": flag,
         "answer": answer,
         "aliases": aliases,
-        "token": next(_TOKENS),
+        "token": _next_token(),
         "user_id": user_id,
     }
     _ACTIVE[chat_id] = state

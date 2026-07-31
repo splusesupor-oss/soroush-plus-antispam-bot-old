@@ -10,7 +10,7 @@
 
 مقدار سکه‌ها همان مقدار قبلی است؛ فقط نوع سکهٔ بازی‌های سخت عوض شده.
 """
-from economy import settings
+from economy import settings, storage
 
 BRONZE = settings.BRONZE
 SILVER = settings.SILVER
@@ -38,6 +38,21 @@ _REWARDS = {
 
 # جایزهٔ رتبهٔ روزانه (برنز، مثل قبل).
 DAILY_RANK_REWARDS = (12, 8, 5)
+
+
+def round_id():
+    """شناسهٔ یکتا و *ماندگار* برای یک دور بازی.
+
+    شمارندهٔ ``itertools.count(1)`` داخل ماژول‌های بازی با هر ری‌استارت
+    از ۱ شروع می‌شود. چون ``reference`` جایزه از همان شمارنده ساخته
+    می‌شد، بعد از ری‌استارت مرجع‌ها تکرار می‌شدند و دفتر تراکنش آن‌ها را
+    «تکراری» می‌دید: پیام «+۳ سکه» می‌آمد ولی هیچ سکه‌ای اضافه نمی‌شد.
+
+    این شمارنده روی دیسک (``meta.sequence``) می‌نشیند، پس بعد از
+    ری‌استارت هم ادامه می‌دهد و هرگز مرجع تکراری نمی‌سازد.
+    """
+    with storage.transaction(defer=True) as data:
+        return storage.next_sequence(data)
 
 
 class UnknownGame(KeyError):

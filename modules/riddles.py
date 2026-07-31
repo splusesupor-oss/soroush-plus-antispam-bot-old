@@ -133,7 +133,24 @@ active_riddles = {}
 # می‌گرفت. حالا هر کاربر دور کامل و مستقل خودش را دارد.
 used_riddles = set()          # سازگاری با کد قدیمی؛ دیگر مبنای انتخاب نیست
 _SEEN_BY_USER = {}
-_TOKENS = count(1)
+_FALLBACK_TOKENS = count(1)
+
+
+def _next_token():
+    """توکن یکتا که با ری‌استارت ربات تکرار نمی‌شود.
+
+    شمارندهٔ حافظه‌ای با هر ری‌استارت از ۱ شروع می‌شد و مرجع جایزه را
+    تکراری می‌کرد، پس دفتر تراکنش پرداخت را رد می‌کرد و کاربر سکه‌ای
+    نمی‌گرفت. حالا از شمارندهٔ ماندگار اقتصاد استفاده می‌شود.
+    """
+    try:
+        from economy import rewards as _rewards
+        return _rewards.round_id()
+    except Exception:
+        # اگر اقتصاد در دسترس نبود، بازی نباید بخوابد.
+        return next(_FALLBACK_TOKENS)
+
+
 _RANDOM = random.SystemRandom()
 RIDDLE_TIMEOUT = 50
 
@@ -192,7 +209,7 @@ def new_riddle(chat_id, user_id):
     active_riddles[(chat_id, user_id)] = {
         "question": question,
         "answer": answer,
-        "token": next(_TOKENS),
+        "token": _next_token(),
         "time": time.time(),
     }
     return question
