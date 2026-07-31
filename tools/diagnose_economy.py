@@ -32,6 +32,56 @@ def line(title):
     print("=" * 60)
 
 
+
+# ---------------------------------------------------------------------------
+# ۰) آیا کدی که اجرا می‌شود همان کد جدید است؟
+# ---------------------------------------------------------------------------
+def check_running_version():
+    line("۰) آیا فایل‌های روی این دستگاه به‌روز هستند؟")
+    handler = ROOT / "handlers" / "message_handler.py"
+    core = ROOT / "core" / "bot_working_split_ok.py"
+
+    src = handler.read_text(encoding="utf-8")
+    has_import = "from handlers.economy_handler import" in src
+    has_call = "await handle_economy(" in src
+    print(f"{OK if has_import else NO} message_handler اقتصاد را import می‌کند: {has_import}")
+    print(f"{OK if has_call else NO} message_handler اقتصاد را صدا می‌زند : {has_call}")
+
+    eco = ROOT / "handlers" / "economy_handler.py"
+    print(f"{OK if eco.exists() else NO} فایل economy_handler.py موجود است  : {eco.exists()}")
+    print(f"{OK if (ROOT / 'economy').is_dir() else NO} پوشهٔ economy/ موجود است           : {(ROOT / 'economy').is_dir()}")
+
+    # نشانهٔ قطعی کد قدیمی: سیستم سکهٔ حذف‌شده
+    legacy = ROOT / "modules" / "coins.py"
+    if legacy.exists():
+        print(f"{NO} modules/coins.py هنوز هست → کد قدیمی است!")
+    else:
+        print(f"{OK} modules/coins.py حذف شده (کد جدید)")
+
+    # فایل‌های .pyc کهنه می‌توانند کد قدیمی را زنده نگه دارند
+    stale = []
+    for cache in ROOT.rglob("__pycache__"):
+        for pyc in cache.glob("*.pyc"):
+            source = cache.parent / (pyc.name.split(".")[0] + ".py")
+            if source.exists() and pyc.stat().st_mtime < source.stat().st_mtime:
+                stale.append(pyc)
+    if stale:
+        print(f"{NO} {len(stale)} فایل .pyc کهنه پیدا شد")
+        print("   پاک کنید: find . -name __pycache__ -type d -exec rm -rf {} +")
+    else:
+        print(f"{OK} هیچ .pyc کهنه‌ای نیست")
+
+    if not (has_import and has_call):
+        print("\n" + "!" * 58)
+        print("کد این دستگاه قدیمی است. اجرا کنید:")
+        print("   git pull")
+        print("   pkill -f 'python3 main.py'")
+        print("   find . -name __pycache__ -type d -exec rm -rf {} +")
+        print("   python3 main.py")
+        print("!" * 58)
+    return has_import and has_call
+
+
 # ---------------------------------------------------------------------------
 # ۱) وجود داشتن کد
 # ---------------------------------------------------------------------------
@@ -318,6 +368,7 @@ def check_live_run():
 def main():
     print("🩺 عیب‌یابی دستورهای «موجودی» و «فروشگاه»")
     print(f"ریشهٔ پروژه: {ROOT}")
+    check_running_version()
     check_code_exists()
     check_router_registration()
     check_database()
