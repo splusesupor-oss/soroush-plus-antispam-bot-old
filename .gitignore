@@ -1,6 +1,12 @@
 # Python runtime artifacts
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 *.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
 
 # Runtime logs and client sessions
 logs/
