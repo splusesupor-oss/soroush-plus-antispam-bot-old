@@ -62,6 +62,7 @@ from modules.name_family import (
 )
 from modules.emoji_guess import (
     ANSWER_SECONDS as EMOJI_GUESS_SECONDS,
+    REWARD_BRONZE as EMOJI_REWARD_BRONZE,
     EXHAUSTED_MESSAGE as EMOJI_GUESS_EXHAUSTED_MESSAGE,
     total_stages as _emoji_total_stages,
     answer as answer_emoji_guess,
@@ -85,13 +86,15 @@ from modules.did_you_know import get_fact
 from modules.user_activity import record as record_activity, get as get_activity
 from modules.reminders import begin as begin_reminder, waiting as waiting_reminder, capture as capture_reminder
 from modules.translation import begin as begin_translation, waiting as waiting_translation, clear as clear_translation, translate_to_persian
-from modules.coins import (
-    award as award_coins,
-    record_message as record_coin_message,
+# 💰 اقتصاد: تنها از راه API عمومی. هیچ دسترسی مستقیمی به دیتابیس نیست.
+import economy
+from economy import (
     get_profile as get_coin_profile,
+    get_rank as coin_rank,
     leaderboard as coin_leaderboard,
-    rank as coin_rank,
+    record_message as record_coin_message,
 )
+from handlers.economy_handler import handle as handle_economy
 from modules.gif_spam_detector import (
     handle_gif as handle_gif_message,
     is_gif_message,
@@ -188,12 +191,18 @@ def _format_admin_display(user):
     return display_name or "Unknown User"
 
 
-async def _reward_coin_reply(event, chat_id, user_id, user, amount):
-    balance = award_coins(chat_id, user_id, _format_admin_display(user), amount)
+async def _reward_coin_reply(event, chat_id, user_id, user, amount,
+                             reference=None):
+    """جایزه را از راه API اقتصاد پرداخت و موجودی تازه را اعلام می‌کند."""
+    balance = economy.award(
+        user_id, amount, reference=reference,
+        name=_format_admin_display(user), note="جایزه بازی",
+    )
     await event.reply(
         "🎉 پاسخ صحیح بود.\n\n"
-        f"🪙 شما +{_math_digits(amount)} سکه دریافت کردید.\n\n"
-        f"💰 موجودی فعلی:\n{_math_digits(balance)} سکه"
+        f"🪙 شما +{_math_digits(amount)} سکه برنز دریافت کردید.\n\n"
+        f"💰 موجودی برنز:\n{_math_digits(balance[economy.BRONZE])}\n\n"
+        f"💎 ارزش کل:\n{_math_digits(balance['total_coin_value'])}"
     )
 
 
@@ -294,6 +303,13 @@ GAME_BUSY_MESSAGE = "⏳ یک بازی دیگر در این گروه در جری
 
 
 EMOJI_GUESS_TOTAL = _emoji_total_stages()
+
+
+def puzzle_token_for(chat_id):
+    """توکن معمای فعال حدس ایموجی (برای لاگ و مرجع)."""
+    import modules.emoji_guess as _eg
+    state = _eg._ACTIVE.get(chat_id)
+    return state["token"] if state else 0
 
 
 def _track_group_timer(bot, chat_id, task):
@@ -764,6 +780,16 @@ async def handle_new_message(bot, event):
             if group_expiry_blocks(chat_id, sender):
                 return
 
+        # ------------------------------------------------------------------
+        # 💰 اقتصاد — دو بخش مستقل «موجودی» و «فروشگاه».
+        # پیش از بازی‌ها بررسی می‌شود تا گفتگوی باز منو با پاسخ بازی‌ها
+        # تداخل نکند.
+        # ------------------------------------------------------------------
+        if await handle_economy(
+            bot, event, chat_id, user_id, sender, clean_text, bot.logger
+        ):
+            return
+
         name_family_trace = (
             clean_text == "اسم فامیل" or name_family_active(chat_id)
         )
@@ -827,7 +853,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه"} | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه"} | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -1310,9 +1336,12 @@ async def handle_new_message(bot, event):
                     reward = ""
                     if player["points"] >= 70:
                         try:
-                            award_coins(
-                                chat_id, player.get("user_id", "unknown"),
-                                player["name"], 6,
+                            economy.award(
+                                player.get("user_id", "unknown"), 6,
+                                reference=f"namefamily:{chat_id}:"
+                                          f"{game['round_id']}:"
+                                          f"{player.get('user_id')}",
+                                name=player["name"], note="اسم فامیل",
                             )
                             reward = " — 🪙 +6 سکه"
                         except Exception as error:
@@ -1396,9 +1425,18 @@ async def handle_new_message(bot, event):
             return
 
         if emoji_guess_active(chat_id):
+            emoji_token = puzzle_token_for(chat_id)
             winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
             if winner_answer:
-                await _reward_coin_reply(event, chat_id, user_id, sender, 4)
+                # سکه را خودِ ماژول از راه API اقتصاد پرداخت کرده است؛
+                # اینجا فقط موجودی تازه اعلام می‌شود تا دوبار پرداخت نشود.
+                balance = economy.get_balance(user_id)
+                await event.reply(
+                    "🎉 پاسخ صحیح بود.\n\n"
+                    f"🪙 شما +{_math_digits(EMOJI_REWARD_BRONZE)} سکه برنز دریافت کردید.\n\n"
+                    f"💰 موجودی برنز:\n{_math_digits(balance[economy.BRONZE])}\n\n"
+                    f"💎 ارزش کل:\n{_math_digits(balance['total_coin_value'])}"
+                )
                 return
 
         # بازی حدس پرچم؛ پرچم Unicode برای نمایش پایدار در Soroush Plus استفاده می‌شود.
@@ -1435,7 +1473,11 @@ async def handle_new_message(bot, event):
             country = answer_flag_guess(chat_id, clean_text, user_id)
             if country:
                 await event.reply("✅ پاسخ درست بود!\n+3 🪙 سکه")
-                award_coins(chat_id, user_id, _format_group_member(sender), 3)
+                economy.award(
+                    user_id, 3,
+                    reference=f"flag:{chat_id}:{flag_game['token']}",
+                    name=_format_group_member(sender), note="حدس پرچم",
+                )
                 return
 
         # بازی تصحیح کلمات
@@ -1454,10 +1496,15 @@ async def handle_new_message(bot, event):
             _track_group_timer(bot, chat_id, _asyncio.create_task(correction_timer()))
             return
 
+        correction_state = get_correction(chat_id)
         result_correction = answer_correction(chat_id, clean_text)
         if result_correction is not None:
             if result_correction:
-                await _reward_coin_reply(event, chat_id, user_id, sender, 1)
+                await _reward_coin_reply(
+                    event, chat_id, user_id, sender, 1,
+                    reference=f"correction:{chat_id}:"
+                              f"{correction_state['token'] if correction_state else 0}",
+                )
             return
 
         # بازی چهار گزینه‌ای
@@ -1590,18 +1637,27 @@ async def handle_new_message(bot, event):
             bot.logger.log_error(f"خطای جای خالی: {e}")
 
         try:
+            riddle_answer_token = get_riddle_token(chat_id, user_id)
             if check_answer(chat_id, user_id, clean_text):
-                await _reward_coin_reply(event, chat_id, user_id, sender, 3)
+                await _reward_coin_reply(
+                    event, chat_id, user_id, sender, 3,
+                    reference=f"riddle:{chat_id}:{user_id}:{riddle_answer_token}",
+                )
                 return
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی جواب چیستان: {e}")
 
         try:
+            quiz_state = get_active_question(chat_id)
             result = answer_question(chat_id, clean_text, user_id)
             if result is not None:
                 is_correct, correct_option = result
                 if is_correct:
-                    await _reward_coin_reply(event, chat_id, user_id, sender, 3)
+                    await _reward_coin_reply(
+                        event, chat_id, user_id, sender, 3,
+                        reference=f"quiz:{chat_id}:"
+                                  f"{quiz_state['token'] if quiz_state else 0}",
+                    )
                 else:
                     await event.reply(
                         f"❌ غلط بود. گزینه {correct_option} درست بود."
@@ -1623,9 +1679,7 @@ async def handle_new_message(bot, event):
                     getattr(sender, "username", "") or "",
                 )
                 record_coin_message(
-                    chat_id,
-                    user_id,
-                    _format_admin_display(sender),
+                    chat_id, user_id, _format_admin_display(sender),
                 )
 
         except Exception as e:
@@ -2330,7 +2384,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "امتیاز من":
-            profile = get_coin_profile(chat_id, user_id)
+            profile = get_coin_profile(user_id)
             activity = get_activity(chat_id, user_id)
             first = activity.get("first", 0)
             membership_days = 0
@@ -2340,14 +2394,17 @@ async def handle_new_message(bot, event):
             profile_text = (
                 "🏅 پروفایل امتیاز\n\n"
                 f"ᯓ نام کاربری: {_format_admin_display(sender)}\n\n"
-                f"⛁ سکه: ← {_math_digits(profile.get('coins', 0))}\n\n"
-                f"🏆 رتبه گروه: ← {_math_digits(coin_rank(chat_id, user_id)) if coin_rank(chat_id, user_id) else 'ندارد'}\n\n"
+                f"🥉 برنز: ← {_math_digits(profile.get(economy.BRONZE, 0))}\n\n"
+                f"🥈 نقره: ← {_math_digits(profile.get(economy.SILVER, 0))}\n\n"
+                f"🥇 طلا: ← {_math_digits(profile.get(economy.GOLD, 0))}\n\n"
+                f"💎 ارزش کل: ← {_math_digits(profile.get('total_coin_value', 0))}\n\n"
+                f"🏆 رتبه: ← {_math_digits(coin_rank(user_id)) if coin_rank(user_id) else 'ندارد'}\n\n"
                 f"🎮 برد در بازی‌ها: ← {_math_digits(profile.get('wins', 0))}\n\n"
                 f"📅 مدت عضویت: 「 {_math_digits(membership_days)} 」"
             )
             def profile_u16(value):
                 return len(value.encode("utf-16-le")) // 2
-            labels = ("🏅 پروفایل امتیاز", "ᯓ نام کاربری:", "⛁ سکه:", "🏆 رتبه گروه:", "🎮 برد در بازی‌ها:", "📅 مدت عضویت:")
+            labels = ("🏅 پروفایل امتیاز", "ᯓ نام کاربری:", "🥉 برنز:", "🥈 نقره:", "🥇 طلا:", "💎 ارزش کل:", "🏆 رتبه:", "🎮 برد در بازی‌ها:", "📅 مدت عضویت:")
             entities = []
             for label in labels:
                 pos = profile_text.index(label)
@@ -2359,13 +2416,20 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "رتبه ها":
-            ranking = coin_leaderboard(chat_id, 5)
+            # رتبه‌بندی فقط بر پایهٔ ارزش کل؛ در تساوی، هرکس زودتر رسیده بالاتر.
+            ranking = coin_leaderboard(5)
             medals = ("🥇", "🥈", "🥉")
-            ranking_text = "🏆 برترین کاربران گروه"
+            ranking_text = "🏆 برترین کاربران"
             entries = []
-            for index, (_, profile) in enumerate(ranking, 1):
+            for index, row in enumerate(ranking, 1):
                 medal = medals[index - 1] if index <= 3 else f"{_math_digits(index)}."
-                entry = f"{medal} {_format_admin_display(type('CoinUser', (), {'username': None, 'first_name': profile.get('name'), 'last_name': None})())} — {_math_digits(profile.get('coins', 0))} سکه"
+                display = row.get("name") or f"کاربر {row['user_id']}"
+                entry = (
+                    f"{medal} {display} — 💎 {_math_digits(row['total_coin_value'])}"
+                    f"\n🥉 {_math_digits(row['bronze'])} | "
+                    f"🥈 {_math_digits(row['silver'])} | "
+                    f"🥇 {_math_digits(row['gold'])}"
+                )
                 entries.append(entry)
             if entries:
                 ranking_text += "\n\n" + "\n\n".join(entries)
@@ -2373,8 +2437,8 @@ async def handle_new_message(bot, event):
                 ranking_text += "\n\nندارد"
             def ranking_u16(value):
                 return len(value.encode("utf-16-le")) // 2
-            entities = [MessageEntityBold(offset=0, length=ranking_u16("🏆 برترین کاربران گروه"))]
-            cursor = len("🏆 برترین کاربران گروه\n\n")
+            entities = [MessageEntityBold(offset=0, length=ranking_u16("🏆 برترین کاربران"))]
+            cursor = len("🏆 برترین کاربران\n\n")
             for entry in entries:
                 entities.append(MessageEntityBlockquote(offset=ranking_u16(ranking_text[:cursor]), length=ranking_u16(entry)))
                 cursor += len(entry) + 2

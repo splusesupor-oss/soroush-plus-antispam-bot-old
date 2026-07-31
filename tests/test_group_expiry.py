@@ -600,10 +600,11 @@ def test_full_independence():
           or "group_expiry" in str(ge.FILE))
 
     # هیچ ماژول دیگری در این فایل نمی‌نویسد
+    import economy.storage as economy_storage
     import modules.group_storage as gs
-    import modules.coins as coins
     check("group_storage فایل دیگری دارد", gs.FILE.name == "groups.json")
-    check("coins فایل دیگری دارد", coins.FILE.name == "coins.json")
+    check("اقتصاد فایل دیگری دارد",
+          economy_storage.DATA_FILE.name == "economy.json")
 
     # اجرای بازی‌ها نباید رکورد انقضا را تغییر دهد
     use_temp_file()

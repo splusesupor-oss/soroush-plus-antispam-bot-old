@@ -8,7 +8,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, unquote, urlparse
 from urllib.request import Request, urlopen
 
-from modules.game_points import add
+# امتیاز دور در همین ماژول نگه داشته می‌شود؛ سکه فقط از راه API اقتصاد
+# و توسط هندلر پرداخت می‌گردد.
+from economy import award as _economy_award
 from modules.name_family_learning import learned_words, record as record_learning
 
 LETTERS = (
@@ -559,7 +561,8 @@ def submit(
         "points": points,
         "round_id": state["round_id"],
     }
-    add(chat_id, user_id, name, points)
+    # امتیاز اسم فامیل «امتیاز دور» است، نه سکه. سکه جداگانه و فقط برای
+    # نمرهٔ ۷۰ به بالا، توسط هندلر از راه API اقتصاد پرداخت می‌شود.
     return points
 
 

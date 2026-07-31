@@ -37,6 +37,8 @@ def _blank_user():
         "total_coin_value": 0,
         "transactions": [],
         "references": [],
+        "wins": 0,
+        "name": None,
         "created_at": _now(),
         # مهر ترتیبی لحظه‌ای که کاربر به ارزش فعلی رسیده است. برای
         # تساوی در رتبه‌بندی استفاده می‌شود: هرکس زودتر رسیده، بالاتر.
@@ -57,6 +59,7 @@ def _user(data, key):
     user.setdefault("transactions", [])
     user.setdefault("references", [])
     user.setdefault("value_reached_seq", 0)
+    user.setdefault("wins", 0)
     return user
 
 
@@ -104,11 +107,13 @@ def _snapshot_balance(user):
 # افزودن و کسر
 # ---------------------------------------------------------------------------
 def add(user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
-        reference=None, note=None):
+        reference=None, note=None, name=None, win=False):
     """افزودن سکه. خروجی: موجودی جدید.
 
     اگر ``reference`` تکراری باشد هیچ تغییری اعمال نمی‌شود و موجودی فعلی
     برگردانده می‌شود — این همان محافظ «جلوگیری از ثبت دوبارهٔ تراکنش» است.
+
+    ``win=True`` شمارندهٔ بردها را یکی زیاد می‌کند (برای پروفایل بازیکن).
     """
     _validate_coin(coin_type)
     _validate_amount(amount)
@@ -119,6 +124,10 @@ def add(user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
             return _snapshot_balance(_user(data, key))
         user = _user(data, key)
         user[coin_type] = int(user.get(coin_type, 0)) + int(amount)
+        if name:
+            user["name"] = str(name)
+        if win:
+            user["wins"] = int(user.get("wins", 0)) + 1
         total = _refresh_total(data, user)
         ledger.record(
             data, key, kind, {coin_type: amount},
@@ -320,6 +329,31 @@ def recalculate_all():
         for key in list(data.get("users", {})):
             _refresh_total(data, _user(data, key))
         return len(data.get("users", {}))
+
+
+def set_name(user_id, name):
+    """نام نمایشی کاربر را نگه می‌دارد (برای جدول رتبه‌بندی)."""
+    if not name:
+        return None
+    key = user_key(user_id)
+    with storage.transaction() as data:
+        user = _user(data, key)
+        user["name"] = str(name)
+        return user["name"]
+
+
+def get_profile(user_id):
+    """پروفایل کامل: موجودی، ارزش کل، بردها و نام."""
+    data = storage.snapshot()
+    user = data.get("users", {}).get(user_key(user_id))
+    if not user:
+        return {BRONZE: 0, SILVER: 0, GOLD: 0, "total_coin_value": 0,
+                "wins": 0, "name": None}
+    profile = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
+    profile["total_coin_value"] = compute_total_value(user)
+    profile["wins"] = int(user.get("wins", 0))
+    profile["name"] = user.get("name")
+    return profile
 
 
 def all_users():

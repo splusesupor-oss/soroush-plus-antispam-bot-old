@@ -16,7 +16,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import modules.coins as coins
+import economy as coins
+import economy.storage as _economy_storage
 import modules.emoji_guess as eg
 import modules.fill_blank as fb
 import modules.flag_guess as fg
@@ -958,27 +959,29 @@ def test_no_shared_state():
 
 def test_coin_isolation():
     print("\n### 🪙 ذخیرهٔ سکه‌ها")
-    original = coins.FILE
-    coins.FILE = pathlib.Path(tempfile.mkdtemp()) / "coins.json"
-    coins._CACHE = None
-    coins._CACHE_MTIME = None
+    original = _economy_storage.DATA_FILE
+    _economy_storage.use_file(pathlib.Path(tempfile.mkdtemp()) / "economy.json")
 
     try:
-        coins.award(-1, 1, "علی", 4)
-        check("سکه ثبت شد", coins.get_profile(-1, 1)["coins"] == 4)
-        coins.award(-1, 1, "علی", 3)
-        check("سکه‌ها جمع می‌شوند", coins.get_profile(-1, 1)["coins"] == 7)
-        check("کاربر دیگر متاثر نمی‌شود", coins.get_profile(-1, 2)["coins"] == 0)
-        coins.award(-2, 1, "علی", 5)
-        check("سکهٔ گروه‌ها جدا نگه داشته می‌شود",
-              coins.get_profile(-1, 1)["coins"] == 7
-              and coins.get_profile(-2, 1)["coins"] == 5)
+        # در اقتصاد جدید کیف پول «به تفکیک کاربر» است، نه گروه.
+        coins.award(1, 4, name="علی")
+        check("سکه ثبت شد", coins.get_balance(1)[coins.BRONZE] == 4)
+        coins.award(1, 3, name="علی")
+        check("سکه‌ها جمع می‌شوند", coins.get_balance(1)[coins.BRONZE] == 7)
+        check("کاربر دیگر متاثر نمی‌شود",
+              coins.get_balance(2)[coins.BRONZE] == 0)
+        check("ارزش کل بازمحاسبه شد",
+              coins.get_balance(1)["total_coin_value"] == 7)
         check("موجودی روی دیسک ماندگار است",
-              coins.FILE.exists() and "coins" in coins.FILE.read_text(encoding="utf-8"))
+              _economy_storage.DATA_FILE.exists())
+
+        # جایزه با مرجع تکراری دو بار پرداخت نمی‌شود.
+        coins.award(3, 5, reference="dup:1")
+        coins.award(3, 5, reference="dup:1")
+        check("مرجع تکراری فقط یک بار پرداخت می‌شود",
+              coins.get_balance(3)[coins.BRONZE] == 5)
     finally:
-        coins.FILE = original
-        coins._CACHE = None
-        coins._CACHE_MTIME = None
+        _economy_storage.use_file(original)
 
 
 def test_repeat_runs():

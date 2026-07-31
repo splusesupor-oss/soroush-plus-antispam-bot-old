@@ -251,12 +251,16 @@ def test_emoji_timer_and_token():
 
 def test_emoji_coin_award():
     print("\n### 😀 افزودن سکه فقط یک بار")
-    import modules.game_points as gp
     eg.reset_all()
 
     calls = []
-    original = eg.add
-    eg.add = lambda c, u, n, p: calls.append((c, u, p))
+    original = eg._economy_award
+
+    def spy(user_id, amount, **kwargs):
+        calls.append((user_id, amount, kwargs.get("reference")))
+        return {"bronze": amount, "total_coin_value": amount}
+
+    eg._economy_award = spy
     try:
         puzzle = eg.start(CHAT, 4012)
         eg.answer(CHAT, 4012, "U", "غلط")
@@ -266,7 +270,7 @@ def test_emoji_coin_award():
         eg.answer(CHAT, 4012, "U", puzzle["answer"])
         check("پاسخ تکراری امتیاز دوباره نمی‌دهد", len(calls) == 1)
     finally:
-        eg.add = original
+        eg._economy_award = original
     eg.reset_all()
 
 

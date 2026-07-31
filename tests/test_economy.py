@@ -702,17 +702,20 @@ def test_independence():
           f"-> {sorted(leaked)}")
     check("فقط کتابخانهٔ استاندارد و خودِ economy",
           imported <= {"economy", "json", "os", "tempfile", "threading",
-                       "copy", "datetime", "pathlib"},
+                       "copy", "datetime", "pathlib", "time", "zoneinfo"},
           f"-> {sorted(imported)}")
 
     check("فایل دادهٔ اقتصاد جداست",
           "economy" in storage.DATA_FILE.name)
 
-    import modules.coins as legacy
-    check("سیستم سکهٔ قدیمی دست‌نخورده است",
-          legacy.FILE.name == "coins.json")
-    check("دو سیستم فایل مشترک ندارند",
-          legacy.FILE.name != storage.DATA_FILE.name)
+    # سیستم سکهٔ قدیمی کاملاً حذف شده است.
+    import importlib
+    for legacy_name in ("modules.coins", "modules.game_points"):
+        try:
+            importlib.import_module(legacy_name)
+            check(f"ماژول قدیمی {legacy_name} حذف شده", False)
+        except ModuleNotFoundError:
+            check(f"ماژول قدیمی {legacy_name} حذف شده", True)
 
 
 def test_public_api_surface():

@@ -19,6 +19,12 @@
 from economy import ranking as _ranking
 from economy import settings, shop, storage
 from economy.coins import accounts as _accounts
+from economy import activity
+from economy.activity import (
+    daily_ranking,
+    record_message,
+    settle_previous_days,
+)
 from economy.coins.accounts import (
     BRONZE,
     COIN_TYPES,
@@ -33,7 +39,9 @@ from economy.coins.accounts import (
     convert_bronze,
     convert_silver,
     get_balance,
+    get_profile,
     recalculate,
+    set_name,
     recalculate_all,
     remove,
     remove_bronze,
@@ -54,7 +62,10 @@ __all__ = [
     # تبدیل و انتقال
     "convert_bronze", "convert_silver", "transfer",
     # ارزش و موجودی
-    "get_balance", "calculate_total_value", "recalculate", "recalculate_all",
+    "get_balance", "get_profile", "set_name",
+    "calculate_total_value", "recalculate", "recalculate_all",
+    # فعالیت روزانه
+    "record_message", "settle_previous_days", "daily_ranking", "activity",
     # رتبه‌بندی
     "get_rank", "leaderboard", "ranked_users",
     # جایزهٔ روزانه
@@ -69,7 +80,8 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # API مخصوص بازی‌ها
 # ---------------------------------------------------------------------------
-def award(user_id, amount, coin_type=BRONZE, *, reference=None, note=None):
+def award(user_id, amount, coin_type=BRONZE, *, reference=None, note=None,
+          name=None, win=True):
     """تنها راه پرداخت جایزه از سمت بازی‌ها.
 
     ``reference`` یکتا بدهید (مثل ``"vampire:chat:session"``) تا یک جایزه
@@ -77,7 +89,7 @@ def award(user_id, amount, coin_type=BRONZE, *, reference=None, note=None):
     """
     return _accounts.add(
         user_id, coin_type, amount,
-        kind="reward", reference=reference, note=note,
+        kind="reward", reference=reference, note=note, name=name, win=win,
     )
 
 

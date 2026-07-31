@@ -28,7 +28,8 @@ from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
-from modules.coins import settle_previous_days, flush as flush_coin_cache
+# 💰 تسویهٔ روزانه از راه API اقتصاد جدید.
+from economy import settle_previous_days
 from modules.group_stats import flush as flush_group_stats
 from modules.user_activity import flush as flush_user_activity
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
@@ -227,7 +228,8 @@ class SoroushAntiSpamBot:
                     awards = settle_previous_days()
                     for chat_id, user_id, amount in awards:
                         self.logger.log_info(
-                            f"DAILY COIN AWARD chat_id={chat_id} user_id={user_id} amount={amount}"
+                            f"DAILY COIN AWARD chat_id={chat_id} "
+                            f"user_id={user_id} bronze={amount}"
                         )
                 except Exception as error:
                     self.logger.log_error(f"خطا در تسویه سکه روزانه: {error}")
@@ -250,7 +252,6 @@ class SoroushAntiSpamBot:
                         self.logger.log_error(
                             f"خطا در ارسال یادآوری {reminder.get('id')}: {error}"
                         )
-                flush_coin_cache()
                 flush_group_stats()
                 flush_user_activity()
                 await asyncio.sleep(15)

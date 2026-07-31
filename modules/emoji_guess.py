@@ -16,7 +16,9 @@
 import random
 from itertools import count
 
-from modules.game_points import add
+# جایزه فقط از راه API اقتصاد پرداخت می‌شود؛ این ماژول هرگز مستقیماً
+# به دیتابیس اقتصاد دست نمی‌زند.
+from economy import award as _economy_award
 
 # ---------------------------------------------------------------------------
 # سطح ۱ — آسان (۴۰ مرحله): اشیاء، حیوانات و مفاهیم روزمره
@@ -171,6 +173,8 @@ EXHAUSTED_MESSAGE = (
 )
 
 ANSWER_SECONDS = 40
+# جایزهٔ برنز هر مرحله (پرداخت از راه API اقتصاد).
+REWARD_BRONZE = 4
 
 
 def total_stages():
@@ -299,7 +303,12 @@ def answer(chat_id, user_id, name, text):
         return None
     _ACTIVE.pop(chat_id, None)
     _SEEN_BY_USER.setdefault(_user_key(user_id), set()).add(state["answer"])
-    add(chat_id, user_id, name, 20)
+    # reference یکتا: همین معما برای همین کاربر فقط یک بار سکه می‌دهد.
+    _economy_award(
+        user_id, REWARD_BRONZE,
+        reference=f"emoji:{chat_id}:{state['token']}",
+        note="حدس ایموجی", name=name,
+    )
     return state["answer"]
 
 

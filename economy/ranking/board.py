@@ -20,6 +20,8 @@ def _rows():
             "bronze": int(user.get(accounts.BRONZE, 0)),
             "silver": int(user.get(accounts.SILVER, 0)),
             "gold": int(user.get(accounts.GOLD, 0)),
+            "name": user.get("name"),
+            "wins": int(user.get("wins", 0)),
             "reached_seq": int(user.get("value_reached_seq", 0)),
             "reached_at": user.get("value_reached_at"),
         })

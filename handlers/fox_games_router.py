@@ -6,7 +6,7 @@
 ``handle`` مقدار True برمی‌گرداند یعنی پیام مصرف شد و هندلر اصلی نباید
 ادامه دهد.
 """
-from modules.coins import award as coins_award
+from economy import award as economy_award
 from modules.fox_games import laugh_or_lose, lucky_box, survival, vampire
 from modules.fox_games.session_core import (
     log,
@@ -35,16 +35,24 @@ def any_active(chat_id):
     )
 
 
-def _coins(bot, chat_id, user_id, name, amount, logger=None):
-    """سکه را مستقیماً به موجودی کاربر اضافه می‌کند.
+def _coins(bot, chat_id, user_id, name, amount, logger=None,
+           reference=None):
+    """جایزه را از راه API اقتصاد پرداخت می‌کند.
 
-    از خودِ ماژول coins استفاده می‌شود، نه یک attribute روی bot: شیء ربات
-    متد ``award_coins`` ندارد و اتکا به آن باعث می‌شد هیچ جایزه‌ای پرداخت
-    نشود. اگر تست یا کد دیگری متد را روی bot گذاشته باشد، همان ترجیح دارد.
+    هیچ دسترسی مستقیمی به دیتابیس اقتصاد وجود ندارد؛ فقط ``economy.award``.
+    اگر تست متد ``award_coins`` را روی bot گذاشته باشد، همان ترجیح دارد.
+
+    ``reference`` یکتا تضمین می‌کند یک جایزه دو بار پرداخت نشود.
     """
-    award = getattr(bot, "award_coins", None) or coins_award
+    override = getattr(bot, "award_coins", None)
     try:
-        balance = award(chat_id, user_id, name, amount)
+        if override is not None:
+            balance = override(chat_id, user_id, name, amount)
+        else:
+            balance = economy_award(
+                user_id, amount, reference=reference, name=name,
+                note="جایزه بازی",
+            )
         log(logger, f"FOX REWARD PAID chat_id={chat_id} user_id={user_id} "
                     f"amount={amount} balance={balance}")
         return True
@@ -96,7 +104,8 @@ async def _laugh_message(bot, event, chat_id, user_id, sender, text, logger):
     win = laugh_or_lose.claim_win(chat_id, user_id, sender, logger)
     if win is None:
         return False
-    paid = _coins(bot, chat_id, user_id, win["name"], win["coins"], logger)
+    paid = _coins(bot, chat_id, user_id, win["name"], win["coins"], logger,
+                  reference=f"laugh:{chat_id}:{win['session_id']}")
     reward = f"\n\n🪙 +{to_persian_digits(win['coins'])} سکه" if paid else ""
     await event.reply(f"🏆 برنده: {win['name']}{reward}")
     return True
@@ -113,6 +122,7 @@ async def _start_survival(bot, event, chat_id, logger):
     if session is None:
         await event.reply(survival.ALREADY_RUNNING)
         return True
+    survival_session = session["session_id"]
 
     await event.reply(
         "🏕 بازی بقا\n\n"
@@ -147,7 +157,8 @@ async def _start_survival(bot, event, chat_id, logger):
             await event.reply(survival.NO_WINNER)
             return
         paid = _coins(bot, chat_id, champion["user_id"], champion["name"],
-                      survival.WINNER_COINS, logger)
+                      survival.WINNER_COINS, logger,
+                      reference=f"survival_win:{chat_id}:{survival_session}")
         rounds = champion.get("round_coins", 0)
         lines = [f"🏆 برندهٔ بقا: {champion['name']}"]
         if paid:
@@ -202,6 +213,11 @@ async def _survival_message(bot, event, chat_id, user_id, sender, text, logger):
         return True
 
     if state == "playing":
+        # شناسهٔ session و شمارهٔ مرحله پیش از پردازش پاسخ برداشته می‌شوند
+        # تا reference جایزه یکتا و پایدار بماند.
+        active = survival._STORE.get(chat_id)
+        state_id = active["session_id"] if active else 0
+        level = active["level"] if active else 0
         result, player = survival.answer(chat_id, user_id, text, logger)
         if result in {"no_question", "not_player"}:
             return False
@@ -211,7 +227,9 @@ async def _survival_message(bot, event, chat_id, user_id, sender, text, logger):
             # سکهٔ مرحله بلافاصله پرداخت می‌شود؛ حذف شدن در مراحل بعد آن را
             # پس نمی‌گیرد.
             paid = _coins(bot, chat_id, user_id, player["name"],
-                          survival.CORRECT_COINS, logger)
+                          survival.CORRECT_COINS, logger,
+                          reference=f"survival_round:{chat_id}:"
+                                    f"{state_id}:{level}:{user_id}")
             reward = (f" 🪙 +{to_persian_digits(survival.CORRECT_COINS)} سکه"
                       if paid else "")
             await event.reply(f"✅ درست بود!{reward}")
@@ -260,7 +278,8 @@ async def _lucky_box_message(bot, event, chat_id, user_id, sender, text, logger)
         return False
 
     if result["prize"] > 0:
-        paid = _coins(bot, chat_id, user_id, "", result["prize"], logger)
+        paid = _coins(bot, chat_id, user_id, "", result["prize"], logger,
+                      reference=f"luckybox:{chat_id}:{result['session_id']}")
         reward = f"\n🪙 +{to_persian_digits(result['prize'])} سکه" if paid else ""
         await event.reply(
             f"🎁 جعبه {to_persian_digits(result['box'])} باز شد!\n\n"
@@ -346,6 +365,8 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
         return True
 
     if state == "guessing":
+        active = vampire._STORE.get(chat_id)
+        vampire_session = active["session_id"] if active else 0
         result, info = vampire.guess(chat_id, user_id, text, logger)
         if result in {"closed", "not_player", "bad_number"}:
             return False
@@ -359,7 +380,8 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
             return True
         if result == "correct":
             paid = _coins(bot, chat_id, user_id, info["guesser"]["name"],
-                          info["coins"], logger)
+                          info["coins"], logger,
+                          reference=f"vampire:{chat_id}:{vampire_session}")
             reward = (f"\n🪙 +{to_persian_digits(info['coins'])} سکه"
                       if paid else "")
             v_name = info["vampire"]["name"]
