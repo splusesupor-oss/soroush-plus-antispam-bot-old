@@ -119,9 +119,10 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
         reference = (f"transfer:{chat_id}:{user_id}:{target_id}:"
                      f"{coin_type}:{amount}:{event.message.id}")
         ok, message = balance_menu.do_transfer(
-            user_id, target_id, coin_type, amount, reference=reference)
+            chat_id, user_id, target_id, coin_type, amount,
+            reference=reference)
         if ok and target_name:
-            economy.set_name(target_id, target_name)
+            economy.set_name(chat_id, target_id, target_name)
         balance_menu.close_session(chat_id, user_id)
         await _send(event, message, logger)
         _log(logger, f"ECONOMY TRANSFER chat_id={chat_id} from={user_id} "
@@ -136,14 +137,14 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
         return True
 
     if choice == balance_menu.MENU_BRONZE_TO_SILVER:
-        ok, message = balance_menu.do_convert_bronze(user_id)
+        ok, message = balance_menu.do_convert_bronze(chat_id, user_id)
         await _send(event, message, logger)
         _log(logger, f"ECONOMY CONVERT bronze->silver user_id={user_id} "
                      f"ok={ok}")
         return True
 
     if choice == balance_menu.MENU_SILVER_TO_GOLD:
-        ok, message = balance_menu.do_convert_silver(user_id)
+        ok, message = balance_menu.do_convert_silver(chat_id, user_id)
         await _send(event, message, logger)
         _log(logger, f"ECONOMY CONVERT silver->gold user_id={user_id} ok={ok}")
         return True
@@ -152,16 +153,16 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
     if coin_type is not None:
         balance_menu.open_session(chat_id, user_id, step="transfer",
                                   coin=coin_type)
-        await _send(event, balance_menu.transfer_prompt(coin_type, user_id),
+        await _send(event, balance_menu.transfer_prompt(chat_id, coin_type, user_id),
                     logger)
         return True
 
     if choice == balance_menu.MENU_HISTORY:
-        await _send(event, balance_menu.render_history(user_id), logger)
+        await _send(event, balance_menu.render_history(chat_id, user_id), logger)
         return True
 
     if choice == balance_menu.MENU_DAILY:
-        ok, message = balance_menu.do_daily(user_id)
+        ok, message = balance_menu.do_daily(chat_id, user_id)
         await _send(event, message, logger)
         _log(logger, f"ECONOMY DAILY user_id={user_id} granted={ok}")
         return True
@@ -187,7 +188,7 @@ async def _handle_shop_step(bot, event, chat_id, user_id, sender, text,
             await _send(event, "لغو شد.", logger)
             return True
         reference = f"shop:{chat_id}:{user_id}:{choice}:{event.message.id}"
-        ok, message = shop_menu.do_buy(user_id, choice, reference=reference)
+        ok, message = shop_menu.do_buy(chat_id, user_id, choice, reference=reference)
         if ok:
             shop_menu.close_session(chat_id, user_id)
         await _send(event, message, logger)
@@ -241,11 +242,11 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
             balance_menu.open_session(chat_id, user_id)
             display = _display_name(sender)
             if display:
-                economy.set_name(user_id, display)
+                economy.set_name(chat_id, user_id, display)
 
             # مقدار خوانده‌شده از دیتابیس پیش از ارسال لاگ می‌شود تا اگر
             # پیام نرسید، بدانیم مشکل از خواندن است یا از ارسال.
-            balance = economy.get_balance(user_id)
+            balance = economy.get_balance(chat_id, user_id)
             _log(logger,
                  "ECONOMY BALANCE READ "
                  f"chat_id={chat_id} user_id={user_id} "
@@ -255,7 +256,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                  f"total_coin_value={balance['total_coin_value']} "
                  f"db_file={economy.storage.DATA_FILE}")
 
-            payload = balance_menu.render_menu(user_id)
+            payload = balance_menu.render_menu(chat_id, user_id)
             _log(logger,
                  "ECONOMY BALANCE RENDERED "
                  f"chat_id={chat_id} user_id={user_id} "
@@ -284,14 +285,14 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         try:
             balance_menu.close_session(chat_id, user_id)
             shop_menu.open_session(chat_id, user_id)
-            balance = economy.get_balance(user_id)
+            balance = economy.get_balance(chat_id, user_id)
             _log(logger,
                  "ECONOMY SHOP READ "
                  f"chat_id={chat_id} user_id={user_id} "
                  f"bronze={balance[economy.BRONZE]} "
                  f"total_coin_value={balance['total_coin_value']} "
                  f"items={len(economy.shop.list_items())}")
-            await _send(event, shop_menu.render_menu(user_id), logger)
+            await _send(event, shop_menu.render_menu(chat_id, user_id), logger)
             _log(logger, f"ECONOMY SHOP MENU SENT chat_id={chat_id} "
                          f"user_id={user_id}")
         except Exception as error:

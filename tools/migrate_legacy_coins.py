@@ -42,17 +42,19 @@ def read_legacy():
     except (OSError, ValueError) as error:
         raise SystemExit(f"خواندن {LEGACY_FILE} ناموفق بود: {error}")
 
+    # کلید خروجی «گروه:کاربر» است تا هر گروه کیف پول خودش را بگیرد.
     coins, wins, names = {}, {}, {}
-    for _group, members in (raw.get("users") or {}).items():
+    for group, members in (raw.get("users") or {}).items():
         if not isinstance(members, dict):
             continue
         for user_id, record in members.items():
             if not isinstance(record, dict):
                 continue
-            coins[user_id] = coins.get(user_id, 0) + int(record.get("coins", 0) or 0)
-            wins[user_id] = wins.get(user_id, 0) + int(record.get("wins", 0) or 0)
+            key = accounts.user_key(group, user_id)
+            coins[key] = coins.get(key, 0) + int(record.get("coins", 0) or 0)
+            wins[key] = wins.get(key, 0) + int(record.get("wins", 0) or 0)
             if record.get("name"):
-                names[user_id] = str(record["name"])
+                names[key] = str(record["name"])
     return coins, wins, names
 
 
@@ -69,16 +71,17 @@ def migrate(dry_run=False):
 
     if dry_run:
         print("\n--- حالت آزمایشی، چیزی نوشته نمی‌شود ---")
-        for user_id, amount in sorted(coins.items(), key=lambda x: -x[1])[:10]:
-            current = economy.get_balance(user_id)[economy.BRONZE]
-            print(f"  user {user_id:12} برنز فعلی {current:6} → +{amount}")
+        for key, amount in sorted(coins.items(), key=lambda x: -x[1])[:10]:
+            chat, user = accounts.split_key(key)
+            current = economy.get_balance(chat, user)[economy.BRONZE]
+            print(f"  {key:22} برنز فعلی {current:6} → +{amount}")
         return 0
 
     moved = skipped = 0
     # همه در یک تراکنش: یا کل انتقال ثبت می‌شود یا هیچ.
     with storage.transaction() as data:
-        for user_id, amount in coins.items():
-            key = accounts.user_key(user_id)
+        for key, amount in coins.items():
+            user_id = key
             reference = f"{REFERENCE}:{key}"
             if ledger.is_duplicate(data, key, reference):
                 skipped += 1

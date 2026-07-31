@@ -256,7 +256,7 @@ def test_emoji_coin_award():
     calls = []
     original = eg._economy_award
 
-    def spy(user_id, amount, **kwargs):
+    def spy(chat_id, user_id, amount, **kwargs):
         calls.append((user_id, amount, kwargs.get("reference")))
         return {"bronze": amount, "total_coin_value": amount}
 

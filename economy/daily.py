@@ -24,11 +24,11 @@ def _parse(value):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def daily_status(user_id, now=None):
+def daily_status(chat_id, user_id, now=None):
     """``(available, seconds_left)`` برای جایزهٔ روزانه."""
     moment = now or _now()
     data = storage.snapshot()
-    user = data.get("users", {}).get(accounts.user_key(user_id), {})
+    user = data.get("users", {}).get(accounts.user_key(chat_id, user_id), {})
     last = _parse(user.get("daily_claimed_at"))
     cooldown = int(settings.get("DailyRewardCooldownSeconds"))
     if last is None:
@@ -39,14 +39,14 @@ def daily_status(user_id, now=None):
     return False, int(cooldown - elapsed)
 
 
-def claim_daily(user_id, *, now=None, reference=None):
+def claim_daily(chat_id, user_id, *, now=None, reference=None):
     """جایزهٔ روزانه را پرداخت می‌کند.
 
     خروجی ``(granted, balance, seconds_left)``. اگر هنوز نوبت نرسیده
     باشد ``granted=False`` است و موجودی تغییر نمی‌کند.
     """
     moment = now or _now()
-    key = accounts.user_key(user_id)
+    key = accounts.user_key(chat_id, user_id)
     config = settings.load()
     cooldown = int(config["DailyRewardCooldownSeconds"])
     payout = {

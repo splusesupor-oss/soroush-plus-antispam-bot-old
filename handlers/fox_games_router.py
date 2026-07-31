@@ -50,7 +50,7 @@ def _coins(bot, chat_id, user_id, name, amount, logger=None,
             balance = override(chat_id, user_id, name, amount)
         else:
             balance = economy_award(
-                user_id, amount, reference=reference, name=name,
+                chat_id, user_id, amount, reference=reference, name=name,
                 note="جایزه بازی",
             )
         log(logger, f"FOX REWARD PAID chat_id={chat_id} user_id={user_id} "

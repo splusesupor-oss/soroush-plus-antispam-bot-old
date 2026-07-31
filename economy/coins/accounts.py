@@ -21,8 +21,31 @@ class EconomyError(Exception):
     """خطای قابل‌انتظار اقتصاد (موجودی کم، ورودی نامعتبر و…)."""
 
 
-def user_key(user_id):
-    return str(user_id)
+_CHANNEL_ID_OFFSET = 1_000_000_000_000
+
+
+def chat_key(chat_id):
+    """کلید پایدار گروه: ‎-100123 و 123 به یک کلید نگاشت می‌شوند."""
+    try:
+        value = int(chat_id)
+    except (TypeError, ValueError):
+        return str(chat_id)
+    if value <= -_CHANNEL_ID_OFFSET:
+        value = abs(value) - _CHANNEL_ID_OFFSET
+    elif value < 0:
+        value = abs(value)
+    return str(value)
+
+
+def user_key(chat_id, user_id):
+    """کلید کیف پول: هر کاربر در هر گروه حساب جداگانه دارد."""
+    return f"{chat_key(chat_id)}:{user_id}"
+
+
+def split_key(key):
+    """``"123:456"`` → ``("123", "456")``."""
+    chat, _, user = str(key).partition(":")
+    return chat, user
 
 
 def _now():
@@ -106,7 +129,7 @@ def _snapshot_balance(user):
 # ---------------------------------------------------------------------------
 # افزودن و کسر
 # ---------------------------------------------------------------------------
-def add(user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
+def add(chat_id, user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
         reference=None, note=None, name=None, win=False):
     """افزودن سکه. خروجی: موجودی جدید.
 
@@ -117,7 +140,7 @@ def add(user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
     """
     _validate_coin(coin_type)
     _validate_amount(amount)
-    key = user_key(user_id)
+    key = user_key(chat_id, user_id)
 
     with storage.transaction() as data:
         if ledger.is_duplicate(data, key, reference):
@@ -137,12 +160,12 @@ def add(user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
         return _snapshot_balance(user)
 
 
-def remove(user_id, coin_type, amount, *, kind=ledger.KIND_SPEND,
+def remove(chat_id, user_id, coin_type, amount, *, kind=ledger.KIND_SPEND,
            reference=None, note=None):
     """کسر سکه. اگر موجودی کافی نباشد ``EconomyError`` می‌دهد."""
     _validate_coin(coin_type)
     _validate_amount(amount)
-    key = user_key(user_id)
+    key = user_key(chat_id, user_id)
 
     with storage.transaction() as data:
         if ledger.is_duplicate(data, key, reference):
@@ -165,39 +188,39 @@ def remove(user_id, coin_type, amount, *, kind=ledger.KIND_SPEND,
 
 
 # --- میان‌برهای نوع‌دار ------------------------------------------------------
-def add_bronze(user_id, amount, **kwargs):
-    return add(user_id, BRONZE, amount, **kwargs)
+def add_bronze(chat_id, user_id, amount, **kwargs):
+    return add(chat_id, user_id, BRONZE, amount, **kwargs)
 
 
-def add_silver(user_id, amount, **kwargs):
-    return add(user_id, SILVER, amount, **kwargs)
+def add_silver(chat_id, user_id, amount, **kwargs):
+    return add(chat_id, user_id, SILVER, amount, **kwargs)
 
 
-def add_gold(user_id, amount, **kwargs):
-    return add(user_id, GOLD, amount, **kwargs)
+def add_gold(chat_id, user_id, amount, **kwargs):
+    return add(chat_id, user_id, GOLD, amount, **kwargs)
 
 
-def remove_bronze(user_id, amount, **kwargs):
-    return remove(user_id, BRONZE, amount, **kwargs)
+def remove_bronze(chat_id, user_id, amount, **kwargs):
+    return remove(chat_id, user_id, BRONZE, amount, **kwargs)
 
 
-def remove_silver(user_id, amount, **kwargs):
-    return remove(user_id, SILVER, amount, **kwargs)
+def remove_silver(chat_id, user_id, amount, **kwargs):
+    return remove(chat_id, user_id, SILVER, amount, **kwargs)
 
 
-def remove_gold(user_id, amount, **kwargs):
-    return remove(user_id, GOLD, amount, **kwargs)
+def remove_gold(chat_id, user_id, amount, **kwargs):
+    return remove(chat_id, user_id, GOLD, amount, **kwargs)
 
 
 # ---------------------------------------------------------------------------
 # تبدیل
 # ---------------------------------------------------------------------------
-def _convert(user_id, source, target, cost, gain, times, reference, note):
+def _convert(chat_id, user_id, source, target, cost, gain, times, reference, note):
     if isinstance(times, bool) or not isinstance(times, int) or times <= 0:
         raise EconomyError("تعداد تبدیل باید عدد صحیح مثبت باشد.")
     total_cost = cost * times
     total_gain = gain * times
-    key = user_key(user_id)
+    key = user_key(chat_id, user_id)
 
     with storage.transaction() as data:
         if ledger.is_duplicate(data, key, reference):
@@ -221,21 +244,21 @@ def _convert(user_id, source, target, cost, gain, times, reference, note):
         return _snapshot_balance(user)
 
 
-def convert_bronze(user_id, times=1, *, reference=None, note=None):
+def convert_bronze(chat_id, user_id, times=1, *, reference=None, note=None):
     """۱۰۰ برنز ➜ ۱۰ نقره (به ازای هر بار)."""
     config = settings.load()
     return _convert(
-        user_id, BRONZE, SILVER,
+        chat_id, user_id, BRONZE, SILVER,
         int(config["BronzeToSilverCost"]), int(config["BronzeToSilverGain"]),
         times, reference, note,
     )
 
 
-def convert_silver(user_id, times=1, *, reference=None, note=None):
+def convert_silver(chat_id, user_id, times=1, *, reference=None, note=None):
     """۷۰ نقره ➜ ۱۰ طلا (به ازای هر بار)."""
     config = settings.load()
     return _convert(
-        user_id, SILVER, GOLD,
+        chat_id, user_id, SILVER, GOLD,
         int(config["SilverToGoldCost"]), int(config["SilverToGoldGain"]),
         times, reference, note,
     )
@@ -244,7 +267,7 @@ def convert_silver(user_id, times=1, *, reference=None, note=None):
 # ---------------------------------------------------------------------------
 # انتقال
 # ---------------------------------------------------------------------------
-def transfer(sender_id, receiver_id, coin_type, amount, *,
+def transfer(chat_id, sender_id, receiver_id, coin_type, amount, *,
              reference=None, note=None):
     """انتقال سکه بین دو کاربر — کاملاً اتمیک.
 
@@ -252,8 +275,8 @@ def transfer(sender_id, receiver_id, coin_type, amount, *,
     """
     _validate_coin(coin_type)
     _validate_amount(amount)
-    sender = user_key(sender_id)
-    receiver = user_key(receiver_id)
+    sender = user_key(chat_id, sender_id)
+    receiver = user_key(chat_id, receiver_id)
     if sender == receiver:
         raise EconomyError("انتقال به خودتان ممکن نیست.")
 
@@ -297,10 +320,10 @@ def transfer(sender_id, receiver_id, coin_type, amount, *,
 # ---------------------------------------------------------------------------
 # خواندن
 # ---------------------------------------------------------------------------
-def get_balance(user_id):
+def get_balance(chat_id, user_id):
     """موجودی هر سه سکه به‌همراه ارزش کل."""
     data = storage.snapshot()
-    user = data.get("users", {}).get(user_key(user_id))
+    user = data.get("users", {}).get(user_key(chat_id, user_id))
     if not user:
         return {BRONZE: 0, SILVER: 0, GOLD: 0, "total_coin_value": 0}
     balance = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
@@ -310,14 +333,14 @@ def get_balance(user_id):
     return balance
 
 
-def calculate_total_value(user_id):
+def calculate_total_value(chat_id, user_id):
     """ارزش کل کاربر؛ همیشه از موجودی فعلی بازمحاسبه می‌شود."""
-    return get_balance(user_id)["total_coin_value"]
+    return get_balance(chat_id, user_id)["total_coin_value"]
 
 
-def recalculate(user_id):
+def recalculate(chat_id, user_id):
     """ارزش کل را بازمحاسبه و ذخیره می‌کند (پس از تغییر تنظیمات)."""
-    key = user_key(user_id)
+    key = user_key(chat_id, user_id)
     with storage.transaction() as data:
         user = _user(data, key)
         return _refresh_total(data, user)
@@ -331,21 +354,21 @@ def recalculate_all():
         return len(data.get("users", {}))
 
 
-def set_name(user_id, name):
+def set_name(chat_id, user_id, name):
     """نام نمایشی کاربر را نگه می‌دارد (برای جدول رتبه‌بندی)."""
     if not name:
         return None
-    key = user_key(user_id)
+    key = user_key(chat_id, user_id)
     with storage.transaction() as data:
         user = _user(data, key)
         user["name"] = str(name)
         return user["name"]
 
 
-def get_profile(user_id):
+def get_profile(chat_id, user_id):
     """پروفایل کامل: موجودی، ارزش کل، بردها و نام."""
     data = storage.snapshot()
-    user = data.get("users", {}).get(user_key(user_id))
+    user = data.get("users", {}).get(user_key(chat_id, user_id))
     if not user:
         return {BRONZE: 0, SILVER: 0, GOLD: 0, "total_coin_value": 0,
                 "wins": 0, "name": None}

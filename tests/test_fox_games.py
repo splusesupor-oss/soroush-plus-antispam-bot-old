@@ -637,7 +637,7 @@ def test_survival_per_round_coins():
             await router.handle(bot, event, CHAT, 3, User(3, names[3]),
                                 "پاسخ کاملا غلط", bot.logger)
             sv.eliminate_silent(CHAT, bot.logger)
-            round1 = {uid: coins.get_balance(uid)[coins.BRONZE] for uid in names}
+            round1 = {uid: coins.get_balance(CHAT, uid)[coins.BRONZE] for uid in names}
 
             # مرحله دوم: علی درست، حسین غلط
             sv.next_question(CHAT, bot.logger)
@@ -664,11 +664,11 @@ def test_survival_per_round_coins():
         check("سکهٔ مراحل برنده = ۲", champion["round_coins"] == 2,
               f"-> {champion['round_coins']}")
         check("مجموع علی = ۱۰ سکه",
-              coins.get_balance(1)[coins.BRONZE] == 10,
-              f"-> {coins.get_balance(1)[coins.BRONZE]}")
+              coins.get_balance(CHAT, 1)[coins.BRONZE] == 10,
+              f"-> {coins.get_balance(CHAT, 1)[coins.BRONZE]}")
         check("حسین سکهٔ مرحله‌اش را پس از حذف نگه داشت",
-              coins.get_balance(2)[coins.BRONZE] == 1,
-              f"-> {coins.get_balance(2)[coins.BRONZE]}")
+              coins.get_balance(CHAT, 2)[coins.BRONZE] == 1,
+              f"-> {coins.get_balance(CHAT, 2)[coins.BRONZE]}")
         check("مقدار سکهٔ هر مرحله = ۱", sv.CORRECT_COINS == 1)
     finally:
         _st.use_file(original)
@@ -1090,11 +1090,11 @@ def test_real_coin_payout():
 
         bot, guesser = asyncio.run(scenario())
         check("برندهٔ بخند یا بباز ۱ سکه گرفت",
-              coins.get_balance(10)[coins.BRONZE] == 1,
-              f"-> {coins.get_balance(10)[coins.BRONZE]}")
+              coins.get_balance(CHAT, 10)[coins.BRONZE] == 1,
+              f"-> {coins.get_balance(CHAT, 10)[coins.BRONZE]}")
         check("برندهٔ خون‌آشام ۷ سکه گرفت",
-              coins.get_balance(guesser)[coins.BRONZE] == 7,
-              f"-> {coins.get_balance(guesser)[coins.BRONZE]}")
+              coins.get_balance(CHAT, guesser)[coins.BRONZE] == 7,
+              f"-> {coins.get_balance(CHAT, guesser)[coins.BRONZE]}")
         check("پرداخت لاگ شد", bot.logger.has("FOX REWARD PAID"))
 
         # بقا
@@ -1113,8 +1113,8 @@ def test_real_coin_payout():
         router._coins(RealBot(), CHAT, champion["user_id"],
                       champion["name"], sv.WINNER_COINS, logger)
         check("برندهٔ بقا ۸ سکه گرفت",
-              coins.get_balance(champion["user_id"])[coins.BRONZE] == 8,
-              f"-> {coins.get_balance(champion['user_id'])[coins.BRONZE]}")
+              coins.get_balance(CHAT, champion["user_id"])[coins.BRONZE] == 8,
+              f"-> {coins.get_balance(CHAT, champion['user_id'])[coins.BRONZE]}")
     finally:
         _st.use_file(original_file)
         router.reset_all()

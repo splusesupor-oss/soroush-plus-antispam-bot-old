@@ -209,9 +209,9 @@ def test_emoji_reward_lands_in_economy():
     eg.reset_all()
 
     puzzle = eg.start(CHAT, 11)
-    before = economy.get_balance(11)[economy.BRONZE]
+    before = economy.get_balance(CHAT, 11)[economy.BRONZE]
     eg.answer(CHAT, 11, "علی", puzzle["answer"])
-    after = economy.get_balance(11)
+    after = economy.get_balance(CHAT, 11)
 
     check("جایزه در اقتصاد ثبت شد",
           after[economy.BRONZE] == before + eg.REWARD_BRONZE,
@@ -219,9 +219,9 @@ def test_emoji_reward_lands_in_economy():
     check("ارزش کل بازمحاسبه شد",
           after["total_coin_value"] == after[economy.BRONZE])
     check("تراکنش به عنوان جایزه ثبت شد",
-          economy.transaction_history(11)[0]["kind"] == "reward")
+          economy.transaction_history(CHAT, 11)[0]["kind"] == "reward")
     check("نام کاربر ذخیره شد",
-          economy.get_profile(11)["name"] == "علی")
+          economy.get_profile(CHAT, 11)["name"] == "علی")
     eg.reset_all()
 
 
@@ -240,13 +240,13 @@ def test_fox_game_rewards():
         return bot, event
 
     bot, event = asyncio.run(scenario())
-    balance = economy.get_balance(21)
+    balance = economy.get_balance(CHAT, 21)
     check("برندهٔ بخند یا بباز سکه گرفت",
           balance[economy.BRONZE] == lol.WINNER_COINS,
           f"-> {balance[economy.BRONZE]}")
     check("پرداخت لاگ شد", bot.logger.has("FOX REWARD PAID"))
     check("در تاریخچه ثبت شد",
-          economy.transaction_history(21)[0]["kind"] == "reward")
+          economy.transaction_history(CHAT, 21)[0]["kind"] == "reward")
     router.reset_all()
 
 
@@ -275,8 +275,8 @@ def test_vampire_reward():
 
     bot = asyncio.run(scenario())
     check("برندهٔ خون‌آشام ۷ سکه گرفت",
-          economy.get_balance(winner)[economy.BRONZE] == vp.WINNER_COINS,
-          f"-> {economy.get_balance(winner)[economy.BRONZE]}")
+          economy.get_balance(CHAT, winner)[economy.BRONZE] == vp.WINNER_COINS,
+          f"-> {economy.get_balance(CHAT, winner)[economy.BRONZE]}")
     router.reset_all()
 
 
@@ -284,11 +284,11 @@ def test_reward_is_idempotent_across_games():
     print("\n### 🛡️ جایزه دو بار پرداخت نمی‌شود")
     fresh()
     for _ in range(5):
-        economy.award(41, 3, reference="riddle:-100:41:7")
+        economy.award(CHAT, 41, 3, reference="riddle:-100:41:7")
     check("پنج تلاش با مرجع یکسان یک بار پرداخت شد",
-          economy.get_balance(41)[economy.BRONZE] == 3)
+          economy.get_balance(CHAT, 41)[economy.BRONZE] == 3)
     check("فقط یک ردیف تاریخچه",
-          len(economy.transaction_history(41)) == 1)
+          len(economy.transaction_history(CHAT, 41)) == 1)
 
 
 # ===========================================================================
@@ -297,9 +297,9 @@ def test_reward_is_idempotent_across_games():
 def test_balance_menu_opens():
     print("\n### 💰 بخش موجودی")
     fresh()
-    economy.add_bronze(1, 152)
-    economy.add_silver(1, 34)
-    economy.add_gold(1, 8)
+    economy.add_bronze(CHAT, 1, 152)
+    economy.add_silver(CHAT, 1, 34)
+    economy.add_gold(CHAT, 1, 8)
 
     async def scenario():
         bot, event = Bot(), Event()
@@ -324,7 +324,7 @@ def test_balance_menu_opens():
 def test_menu_conversion():
     print("\n### 💰 تبدیل از داخل منو")
     fresh()
-    economy.add_bronze(1, 250)
+    economy.add_bronze(CHAT, 1, 250)
 
     async def scenario():
         bot = Bot()
@@ -335,12 +335,12 @@ def test_menu_conversion():
 
     event = asyncio.run(scenario())
     check("تبدیل برنز انجام شد", event.said("تبدیل شد"))
-    balance = economy.get_balance(1)
+    balance = economy.get_balance(CHAT, 1)
     check("۱۰۰ برنز کسر شد", balance[economy.BRONZE] == 150)
     check("۱۰ نقره اضافه شد", balance[economy.SILVER] == 10)
 
     fresh()
-    economy.add_silver(1, 100)
+    economy.add_silver(CHAT, 1, 100)
 
     async def scenario2():
         bot = Bot()
@@ -351,8 +351,8 @@ def test_menu_conversion():
 
     event = asyncio.run(scenario2())
     check("رقم فارسی پذیرفته شد", event.said("تبدیل شد"))
-    check("۷۰ نقره کسر شد", economy.get_balance(1)[economy.SILVER] == 30)
-    check("۱۰ طلا اضافه شد", economy.get_balance(1)[economy.GOLD] == 10)
+    check("۷۰ نقره کسر شد", economy.get_balance(CHAT, 1)[economy.SILVER] == 30)
+    check("۱۰ طلا اضافه شد", economy.get_balance(CHAT, 1)[economy.GOLD] == 10)
 
     # موجودی ناکافی
     async def scenario3():
@@ -370,7 +370,7 @@ def test_menu_conversion():
 def test_menu_transfer():
     print("\n### 💰 انتقال از داخل منو")
     fresh()
-    economy.add_bronze(1, 100)
+    economy.add_bronze(CHAT, 1, 100)
     target = User(2, "حسین")
 
     async def scenario():
@@ -386,9 +386,9 @@ def test_menu_transfer():
     prompt, amount = asyncio.run(scenario())
     check("راهنمای انتقال نمایش داده شد", prompt.said("انتقال برنز"))
     check("انتقال انجام شد", amount.said("منتقل شد"))
-    check("از فرستنده کسر شد", economy.get_balance(1)[economy.BRONZE] == 60)
-    check("به گیرنده رسید", economy.get_balance(2)[economy.BRONZE] == 40)
-    check("نام گیرنده ذخیره شد", economy.get_profile(2)["name"] == "حسین")
+    check("از فرستنده کسر شد", economy.get_balance(CHAT, 1)[economy.BRONZE] == 60)
+    check("به گیرنده رسید", economy.get_balance(CHAT, 2)[economy.BRONZE] == 40)
+    check("نام گیرنده ذخیره شد", economy.get_profile(CHAT, 2)["name"] == "حسین")
     check("session بسته شد", not balance_menu.is_open(CHAT, 1))
 
     # بدون ریپلای
@@ -416,14 +416,14 @@ def test_menu_transfer():
     event = asyncio.run(scenario3())
     check("انتقال بیش از موجودی رد می‌شود", event.said("کافی نیست"))
     check("موجودی دست‌نخورده ماند",
-          economy.get_balance(1)[economy.BRONZE] == 60)
+          economy.get_balance(CHAT, 1)[economy.BRONZE] == 60)
     eco_handler.reset_all()
 
 
 def test_menu_history_and_daily():
     print("\n### 💰 تاریخچه و جایزه روزانه از منو")
     fresh()
-    economy.add_bronze(1, 10)
+    economy.add_bronze(CHAT, 1, 10)
 
     async def scenario():
         bot = Bot()
@@ -441,7 +441,7 @@ def test_menu_history_and_daily():
     check("جایزه روزانه پرداخت شد", daily.said("جایزه روزانه دریافت شد"))
     check("دریافت دوباره رد شد", again.said("قبلاً دریافت"))
     check("موجودی افزایش یافت",
-          economy.get_balance(1)[economy.BRONZE] == 35)
+          economy.get_balance(CHAT, 1)[economy.BRONZE] == 35)
     eco_handler.reset_all()
 
 
@@ -496,7 +496,7 @@ def test_shop_buy_flow():
     print("\n### 🛒 خرید از فروشگاه")
     fresh()
     economy.shop.add_item("badge", "نشان طلایی", 50, "bronze", stock=1)
-    economy.add_bronze(1, 120)
+    economy.add_bronze(CHAT, 1, 120)
 
     async def scenario():
         bot = Bot()
@@ -513,9 +513,9 @@ def test_shop_buy_flow():
     check("آیتم در فهرست دیده می‌شود", listing.said("نشان طلایی"))
     check("راهنمای خرید نمایش داده شد", prompt.said("شناسهٔ آیتم"))
     check("خرید انجام شد", buy.said("خریداری شد"))
-    check("سکه کسر شد", economy.get_balance(1)[economy.BRONZE] == 70)
+    check("سکه کسر شد", economy.get_balance(CHAT, 1)[economy.BRONZE] == 70)
     check("خرید در تاریخچه ثبت شد",
-          economy.transaction_history(1)[0]["kind"] == "purchase")
+          economy.transaction_history(CHAT, 1)[0]["kind"] == "purchase")
     check("انبار کم شد", economy.shop.get_item("badge")["stock"] == 0)
     eco_handler.reset_all()
 
@@ -543,22 +543,22 @@ def test_shop_is_extensible():
 def test_ranking_uses_total_value():
     print("\n### 🏆 رتبه‌بندی فقط بر پایهٔ ارزش کل")
     fresh()
-    economy.add_bronze(1, 1000)      # ارزش ۱۰۰۰، سکهٔ زیاد
-    economy.add_gold(2, 20)          # ارزش ۲۰۰۰، سکهٔ کم
+    economy.add_bronze(CHAT, 1, 1000)      # ارزش ۱۰۰۰، سکهٔ زیاد
+    economy.add_gold(CHAT, 2, 20)          # ارزش ۲۰۰۰، سکهٔ کم
 
-    ranking = economy.leaderboard(5)
+    ranking = economy.leaderboard(CHAT, 5)
     check("کاربر با ارزش بیشتر اول است", ranking[0]["user_id"] == "2")
     check("تعداد سکه ملاک نیست", ranking[1]["user_id"] == "1")
     check("get_rank هم‌خوان است",
-          economy.get_rank(2) == 1 and economy.get_rank(1) == 2)
+          economy.get_rank(CHAT, 2) == 1 and economy.get_rank(CHAT, 1) == 2)
 
 
 def test_ranking_tie_break_integration():
     print("\n### 🏆 تساوی: زودتر رسیده بالاتر")
     fresh()
-    economy.add_bronze(1, 100)
-    economy.add_bronze(2, 100)
-    ranking = economy.leaderboard(5)
+    economy.add_bronze(CHAT, 1, 100)
+    economy.add_bronze(CHAT, 2, 100)
+    ranking = economy.leaderboard(CHAT, 5)
     check("ارزش‌ها برابرند",
           ranking[0]["total_coin_value"] == ranking[1]["total_coin_value"])
     check("نفر اول زودتر رسیده", ranking[0]["user_id"] == "1")
@@ -608,8 +608,8 @@ def test_menu_does_not_swallow_game_messages():
 def test_two_users_independent_sessions():
     print("\n### 🔒 گفتگوی هر کاربر جداست")
     fresh()
-    economy.add_bronze(1, 200)
-    economy.add_bronze(2, 200)
+    economy.add_bronze(CHAT, 1, 200)
+    economy.add_bronze(CHAT, 2, 200)
 
     async def scenario():
         bot = Bot()
@@ -622,9 +622,9 @@ def test_two_users_independent_sessions():
     first = asyncio.run(scenario())
     check("کاربر اول تبدیل کرد", first.said("تبدیل شد"))
     check("موجودی کاربر اول تغییر کرد",
-          economy.get_balance(1)[economy.BRONZE] == 100)
+          economy.get_balance(CHAT, 1)[economy.BRONZE] == 100)
     check("موجودی کاربر دوم دست‌نخورده است",
-          economy.get_balance(2)[economy.BRONZE] == 200)
+          economy.get_balance(CHAT, 2)[economy.BRONZE] == 200)
     check("session کاربر دوم هنوز باز است", balance_menu.is_open(CHAT, 2))
     eco_handler.reset_all()
 
@@ -632,16 +632,16 @@ def test_two_users_independent_sessions():
 def test_persistence_after_restart():
     print("\n### 💾 ماندگاری پس از ری‌استارت")
     fresh()
-    economy.award(1, 50, name="علی")
-    expected = economy.get_balance(1)
+    economy.award(CHAT, 1, 50, name="علی")
+    expected = economy.get_balance(CHAT, 1)
 
     storage._cache = None
     storage._cache_mtime = None
     check("موجودی پس از ری‌استارت باقی است",
-          economy.get_balance(1) == expected)
-    check("تاریخچه باقی است", len(economy.transaction_history(1)) == 1)
+          economy.get_balance(CHAT, 1) == expected)
+    check("تاریخچه باقی است", len(economy.transaction_history(CHAT, 1)) == 1)
     check("رتبه‌بندی پس از ری‌استارت کار می‌کند",
-          economy.get_rank(1) == 1)
+          economy.get_rank(CHAT, 1) == 1)
 
 
 def main():

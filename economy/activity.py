@@ -40,7 +40,7 @@ def record_message(chat_id, user_id, name=None, *, now=None):
     می‌کرد. بدون این، هر پیام یک deepcopy و یک نوشتن کامل دیتابیس
     داشت که با بزرگ شدن دیتابیس به ده‌ها میلی‌ثانیه می‌رسید.
     """
-    key = accounts.user_key(user_id)
+    key = str(user_id)
     day = _today(now)
     with storage.transaction(defer=True) as data:
         daily = data.setdefault("daily_messages", {})
@@ -58,7 +58,7 @@ def message_count(chat_id, user_id, *, now=None):
         data.get("daily_messages", {})
         .get(_today(now), {})
         .get(str(chat_id), {})
-        .get(accounts.user_key(user_id), {})
+        .get(str(user_id), {})
         .get("messages", 0)
     )
 
@@ -101,15 +101,16 @@ def settle_previous_days(*, now=None):
                 for index, (key, entry) in enumerate(ranking):
                     amount = DAILY_RANK_REWARDS[index]
                     reference = f"daily_rank:{day}:{chat_id}:{key}"
-                    if ledger.is_duplicate(data, key, reference):
+                    wallet = accounts.user_key(chat_id, key)
+                    if ledger.is_duplicate(data, wallet, reference):
                         continue
-                    user = accounts._user(data, key)
+                    user = accounts._user(data, accounts.user_key(chat_id, key))
                     user[accounts.BRONZE] = (
                         int(user.get(accounts.BRONZE, 0)) + amount
                     )
                     total = accounts._refresh_total(data, user)
                     ledger.record(
-                        data, key, ledger.KIND_REWARD,
+                        data, wallet, ledger.KIND_REWARD,
                         {accounts.BRONZE: amount},
                         reference=reference,
                         note=f"رتبه {index + 1} پیام‌های روز {day}",

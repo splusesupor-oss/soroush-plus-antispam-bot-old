@@ -74,8 +74,8 @@ def reset_all():
 # ---------------------------------------------------------------------------
 # متن‌ها
 # ---------------------------------------------------------------------------
-def render_menu(user_id):
-    balance = economy.get_balance(user_id)
+def render_menu(chat_id, user_id):
+    balance = economy.get_balance(chat_id, user_id)
     header = "🛒 فروشگاه"
     count = len(economy.shop.list_items())
     text = (
@@ -140,9 +140,9 @@ def buy_prompt():
     )
 
 
-def do_buy(user_id, item_id, *, reference=None):
+def do_buy(chat_id, user_id, item_id, *, reference=None):
     try:
-        item, balance = economy.shop.buy(user_id, item_id,
+        item, balance = economy.shop.buy(chat_id, user_id, item_id,
                                          reference=reference)
     except economy.shop.ShopError as error:
         return False, f"❌ {error}"

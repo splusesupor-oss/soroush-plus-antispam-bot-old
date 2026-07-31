@@ -9,13 +9,18 @@ from economy import storage
 from economy.coins import accounts
 
 
-def _rows():
+def _rows(chat_id):
+    """فقط کیف پول‌های همین گروه."""
+    wanted = accounts.chat_key(chat_id)
     data = storage.snapshot()
     rows = []
     for key, user in data.get("users", {}).items():
+        group, user_id = accounts.split_key(key)
+        if group != wanted:
+            continue
         value = accounts.compute_total_value(user)
         rows.append({
-            "user_id": key,
+            "user_id": user_id,
             "total_coin_value": value,
             "bronze": int(user.get(accounts.BRONZE, 0)),
             "silver": int(user.get(accounts.SILVER, 0)),
@@ -28,12 +33,12 @@ def _rows():
     return rows
 
 
-def ranked_users(limit=None, include_zero=False):
-    """همهٔ کاربران، مرتب‌شده از ارزشمندترین.
+def ranked_users(chat_id, limit=None, include_zero=False):
+    """کاربران «همین گروه»، مرتب‌شده از ارزشمندترین.
 
     ``include_zero=False`` کاربران با ارزش صفر را کنار می‌گذارد.
     """
-    rows = _rows()
+    rows = _rows(chat_id)
     if not include_zero:
         rows = [row for row in rows if row["total_coin_value"] > 0]
     # ارزش بیشتر بالاتر؛ در تساوی، مهر زمانی کوچک‌تر (زودتر) بالاتر.
@@ -43,14 +48,14 @@ def ranked_users(limit=None, include_zero=False):
     return rows[:limit] if limit else rows
 
 
-def leaderboard(limit=10, include_zero=False):
-    return ranked_users(limit=limit, include_zero=include_zero)
+def leaderboard(chat_id, limit=10, include_zero=False):
+    return ranked_users(chat_id, limit=limit, include_zero=include_zero)
 
 
-def get_rank(user_id, include_zero=False):
-    """رتبهٔ یک کاربر، یا ``None`` اگر در جدول نباشد."""
-    key = accounts.user_key(user_id)
-    for row in ranked_users(include_zero=include_zero):
-        if row["user_id"] == key:
+def get_rank(chat_id, user_id, include_zero=False):
+    """رتبهٔ یک کاربر در همین گروه، یا ``None``."""
+    target = str(user_id)
+    for row in ranked_users(chat_id, include_zero=include_zero):
+        if row["user_id"] == target:
             return row["rank"]
     return None

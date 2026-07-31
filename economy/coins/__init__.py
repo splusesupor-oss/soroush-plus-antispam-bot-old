@@ -11,6 +11,8 @@ from economy.coins.accounts import (
     add_silver,
     all_users,
     calculate_total_value,
+    chat_key,
+    split_key,
     convert_bronze,
     convert_silver,
     get_balance,
@@ -30,5 +32,5 @@ __all__ = [
     "remove", "remove_bronze", "remove_silver", "remove_gold",
     "convert_bronze", "convert_silver", "transfer",
     "get_balance", "calculate_total_value", "recalculate",
-    "recalculate_all", "all_users", "user_key",
+    "recalculate_all", "all_users", "user_key", "chat_key", "split_key",
 ]

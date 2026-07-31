@@ -305,7 +305,7 @@ def answer(chat_id, user_id, name, text):
     _SEEN_BY_USER.setdefault(_user_key(user_id), set()).add(state["answer"])
     # reference یکتا: همین معما برای همین کاربر فقط یک بار سکه می‌دهد.
     _economy_award(
-        user_id, REWARD_BRONZE,
+        chat_id, user_id, REWARD_BRONZE,
         reference=f"emoji:{chat_id}:{state['token']}",
         note="حدس ایموجی", name=name,
     )

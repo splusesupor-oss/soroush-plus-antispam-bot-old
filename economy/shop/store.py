@@ -136,15 +136,15 @@ def list_items():
 # ---------------------------------------------------------------------------
 # خرید
 # ---------------------------------------------------------------------------
-def can_afford(user_id, item_id):
+def can_afford(chat_id, user_id, item_id):
     item = get_item(item_id)
     if not item:
         return False
-    balance = accounts.get_balance(user_id)
+    balance = accounts.get_balance(chat_id, user_id)
     return balance.get(item["coin_type"], 0) >= item["price"]
 
 
-def buy(user_id, item_id, *, reference=None):
+def buy(chat_id, user_id, item_id, *, reference=None):
     """خرید یک آیتم — اتمیک.
 
     خروجی ``(item, balance)``. اگر موجودی کافی نباشد یا آیتم تمام شده
@@ -158,7 +158,7 @@ def buy(user_id, item_id, *, reference=None):
     if stock is not None and stock <= 0:
         raise ShopError("موجودی این آیتم تمام شده است.")
 
-    key = accounts.user_key(user_id)
+    key = accounts.user_key(chat_id, user_id)
     coin_type = item["coin_type"]
     price = int(item["price"])
 
@@ -204,8 +204,8 @@ def buy(user_id, item_id, *, reference=None):
     return dict(item), balance
 
 
-def purchases(user_id):
+def purchases(chat_id, user_id):
     """فهرست خریدهای یک کاربر."""
     data = storage.snapshot()
-    user = data.get("users", {}).get(accounts.user_key(user_id), {})
+    user = data.get("users", {}).get(accounts.user_key(chat_id, user_id), {})
     return [dict(entry) for entry in user.get("purchases", [])]

@@ -101,10 +101,10 @@ def reset_all():
 # ---------------------------------------------------------------------------
 # متن‌ها
 # ---------------------------------------------------------------------------
-def render_menu(user_id):
+def render_menu(chat_id, user_id):
     """منوی اصلی به‌همراه موجودی زنده."""
-    balance = economy.get_balance(user_id)
-    rank = economy.get_rank(user_id)
+    balance = economy.get_balance(chat_id, user_id)
+    rank = economy.get_rank(chat_id, user_id)
     config = settings.load()
 
     header = "💰 کیف پول شما"
@@ -135,8 +135,8 @@ def render_menu(user_id):
     return text, spans
 
 
-def render_balance_only(user_id):
-    balance = economy.get_balance(user_id)
+def render_balance_only(chat_id, user_id):
+    balance = economy.get_balance(chat_id, user_id)
     text = (
         "💰 موجودی\n\n"
         f"🥉 برنز: {fa(balance[economy.BRONZE])}\n"
@@ -147,8 +147,8 @@ def render_balance_only(user_id):
     return text, spans_for(text, ["💰 موجودی", "💎 ارزش کل:"])
 
 
-def render_history(user_id, limit=10):
-    entries = economy.transaction_history(user_id, limit=limit)
+def render_history(chat_id, user_id, limit=10):
+    entries = economy.transaction_history(chat_id, user_id, limit=limit)
     header = "🧾 تاریخچه تراکنش‌ها"
     if not entries:
         text = f"{header}\n\nهنوز تراکنشی ثبت نشده است."
@@ -182,9 +182,9 @@ def render_history(user_id, limit=10):
 # ---------------------------------------------------------------------------
 # اقدام‌ها
 # ---------------------------------------------------------------------------
-def do_convert_bronze(user_id):
+def do_convert_bronze(chat_id, user_id):
     try:
-        balance = economy.convert_bronze(user_id)
+        balance = economy.convert_bronze(chat_id, user_id)
     except economy.EconomyError as error:
         return False, f"❌ {error}"
     config = settings.load()
@@ -197,9 +197,9 @@ def do_convert_bronze(user_id):
     )
 
 
-def do_convert_silver(user_id):
+def do_convert_silver(chat_id, user_id):
     try:
-        balance = economy.convert_silver(user_id)
+        balance = economy.convert_silver(chat_id, user_id)
     except economy.EconomyError as error:
         return False, f"❌ {error}"
     config = settings.load()
@@ -212,8 +212,8 @@ def do_convert_silver(user_id):
     )
 
 
-def do_daily(user_id):
-    granted, balance, wait = economy.claim_daily(user_id)
+def do_daily(chat_id, user_id):
+    granted, balance, wait = economy.claim_daily(chat_id, user_id)
     if not granted:
         return False, (
             "⏳ جایزه روزانه را قبلاً دریافت کرده‌اید.\n\n"
@@ -243,10 +243,11 @@ def parse_transfer_amount(text):
     return value if value > 0 else None
 
 
-def do_transfer(sender_id, receiver_id, coin_type, amount, *, reference=None):
+def do_transfer(chat_id, sender_id, receiver_id, coin_type, amount, *, reference=None):
     try:
         result = economy.transfer(
-            sender_id, receiver_id, coin_type, amount, reference=reference)
+            chat_id, sender_id, receiver_id, coin_type, amount,
+            reference=reference)
     except economy.EconomyError as error:
         return False, f"❌ {error}"
     sender = result["sender"]
@@ -260,8 +261,8 @@ def do_transfer(sender_id, receiver_id, coin_type, amount, *, reference=None):
     )
 
 
-def transfer_prompt(coin_type, user_id):
-    balance = economy.get_balance(user_id)
+def transfer_prompt(chat_id, coin_type, user_id):
+    balance = economy.get_balance(chat_id, user_id)
     return (
         f"📤 انتقال {_COIN_NAMES[coin_type]}\n\n"
         f"موجودی شما: {fa(balance[coin_type])}\n\n"

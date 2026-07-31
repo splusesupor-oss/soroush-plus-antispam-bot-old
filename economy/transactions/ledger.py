@@ -81,12 +81,12 @@ def record(data, user_key, kind, changes, *, reference=None, note=None,
     return entry
 
 
-def history(user_id, limit=20, kind=None):
-    """تاریخچهٔ یک کاربر، تازه‌ترین اول."""
+def history(chat_id, user_id, limit=20, kind=None):
+    """تاریخچهٔ یک کاربر در همین گروه، تازه‌ترین اول."""
     from economy.coins.accounts import user_key
 
     data = storage.snapshot()
-    entries = data.get("users", {}).get(user_key(user_id), {}).get(
+    entries = data.get("users", {}).get(user_key(chat_id, user_id), {}).get(
         "transactions", [])
     if kind is not None:
         entries = [e for e in entries if e.get("kind") == kind]

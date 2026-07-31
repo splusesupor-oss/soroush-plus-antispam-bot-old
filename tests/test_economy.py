@@ -24,6 +24,7 @@ from economy.coins import accounts
 from economy.ranking import board
 
 PASSED = FAILED = 0
+CHAT = -100500
 
 
 def check(label, cond, detail=""):
@@ -57,30 +58,30 @@ def test_coin_types():
     check("سه نوع سکه تعریف شده", set(economy.COIN_TYPES) ==
           {"bronze", "silver", "gold"})
     check("کاربر تازه موجودی صفر دارد",
-          economy.get_balance(1) ==
+          economy.get_balance(CHAT, 1) ==
           {"bronze": 0, "silver": 0, "gold": 0, "total_coin_value": 0})
 
-    economy.add_bronze(1, 152)
-    economy.add_silver(1, 34)
-    economy.add_gold(1, 8)
-    balance = economy.get_balance(1)
+    economy.add_bronze(CHAT, 1, 152)
+    economy.add_silver(CHAT, 1, 34)
+    economy.add_gold(CHAT, 1, 8)
+    balance = economy.get_balance(CHAT, 1)
     check("برنز جدا ذخیره شد", balance["bronze"] == 152)
     check("نقره جدا ذخیره شد", balance["silver"] == 34)
     check("طلا جدا ذخیره شد", balance["gold"] == 8)
     check("موجودی کاربران از هم جداست",
-          economy.get_balance(2)["bronze"] == 0)
+          economy.get_balance(CHAT, 2)["bronze"] == 0)
 
 
 def test_add_remove():
     print("\n### 🪙 افزودن و کسر")
     fresh()
-    economy.add_bronze(1, 100)
-    economy.add_silver(1, 50)
-    economy.add_gold(1, 20)
+    economy.add_bronze(CHAT, 1, 100)
+    economy.add_silver(CHAT, 1, 50)
+    economy.add_gold(CHAT, 1, 20)
 
-    check("کسر برنز", economy.remove_bronze(1, 30)["bronze"] == 70)
-    check("کسر نقره", economy.remove_silver(1, 10)["silver"] == 40)
-    check("کسر طلا", economy.remove_gold(1, 5)["gold"] == 15)
+    check("کسر برنز", economy.remove_bronze(CHAT, 1, 30)["bronze"] == 70)
+    check("کسر نقره", economy.remove_silver(CHAT, 1, 10)["silver"] == 40)
+    check("کسر طلا", economy.remove_gold(CHAT, 1, 5)["gold"] == 15)
 
     for label, fn in (("add", economy.add_bronze),
                       ("remove", economy.remove_bronze)):
@@ -94,7 +95,7 @@ def test_add_remove():
                 check(f"{label} با ورودی {bad!r} رد می‌شود", True)
 
     try:
-        economy.add(1, "platinum", 5)
+        economy.add(CHAT, 1, "platinum", 5)
         check("نوع سکهٔ نامعتبر رد می‌شود", False)
     except economy.EconomyError:
         check("نوع سکهٔ نامعتبر رد می‌شود", True)
@@ -103,26 +104,26 @@ def test_add_remove():
 def test_no_negative_balance():
     print("\n### 🛡️ جلوگیری از منفی شدن موجودی")
     fresh()
-    economy.add_bronze(1, 10)
+    economy.add_bronze(CHAT, 1, 10)
 
     try:
-        economy.remove_bronze(1, 11)
+        economy.remove_bronze(CHAT, 1, 11)
         check("کسر بیش از موجودی رد می‌شود", False)
     except economy.EconomyError as error:
         check("کسر بیش از موجودی رد می‌شود", "کافی نیست" in str(error))
     check("موجودی پس از رد شدن تغییر نکرد",
-          economy.get_balance(1)["bronze"] == 10)
+          economy.get_balance(CHAT, 1)["bronze"] == 10)
 
     try:
-        economy.remove_silver(1, 1)
+        economy.remove_silver(CHAT, 1, 1)
         check("کسر از سکهٔ خالی رد می‌شود", False)
     except economy.EconomyError:
         check("کسر از سکهٔ خالی رد می‌شود", True)
 
     check("کسر دقیقاً برابر موجودی مجاز است",
-          economy.remove_bronze(1, 10)["bronze"] == 0)
+          economy.remove_bronze(CHAT, 1, 10)["bronze"] == 0)
     check("موجودی صفر شد و منفی نیست",
-          economy.get_balance(1)["bronze"] == 0)
+          economy.get_balance(CHAT, 1)["bronze"] == 0)
 
 
 # ===========================================================================
@@ -131,46 +132,46 @@ def test_no_negative_balance():
 def test_conversion():
     print("\n### 🔄 تبدیل سکه")
     fresh()
-    economy.add_bronze(1, 250)
+    economy.add_bronze(CHAT, 1, 250)
 
-    result = economy.convert_bronze(1)
+    result = economy.convert_bronze(CHAT, 1)
     check("۱۰۰ برنز کسر شد", result["bronze"] == 150)
     check("۱۰ نقره اضافه شد", result["silver"] == 10)
 
-    result = economy.convert_bronze(1, times=1)
+    result = economy.convert_bronze(CHAT, 1, times=1)
     check("تبدیل دوم درست بود",
           result["bronze"] == 50 and result["silver"] == 20)
 
     try:
-        economy.convert_bronze(1)
+        economy.convert_bronze(CHAT, 1)
         check("تبدیل با موجودی ناکافی رد می‌شود", False)
     except economy.EconomyError:
         check("تبدیل با موجودی ناکافی رد می‌شود", True)
     check("موجودی پس از رد شدن دست‌نخورده است",
-          economy.get_balance(1)["bronze"] == 50)
+          economy.get_balance(CHAT, 1)["bronze"] == 50)
 
     fresh()
-    economy.add_silver(1, 150)
-    result = economy.convert_silver(1)
+    economy.add_silver(CHAT, 1, 150)
+    result = economy.convert_silver(CHAT, 1)
     check("۷۰ نقره کسر شد", result["silver"] == 80)
     check("۱۰ طلا اضافه شد", result["gold"] == 10)
 
     try:
-        economy.convert_silver(1, times=2)
+        economy.convert_silver(CHAT, 1, times=2)
         check("تبدیل چندتایی بدون موجودی رد می‌شود", False)
     except economy.EconomyError:
         check("تبدیل چندتایی بدون موجودی رد می‌شود", True)
-    check("موجودی نقره تغییر نکرد", economy.get_balance(1)["silver"] == 80)
+    check("موجودی نقره تغییر نکرد", economy.get_balance(CHAT, 1)["silver"] == 80)
 
     fresh()
-    economy.add_bronze(1, 500)
-    result = economy.convert_bronze(1, times=3)
+    economy.add_bronze(CHAT, 1, 500)
+    result = economy.convert_bronze(CHAT, 1, times=3)
     check("تبدیل سه‌تایی یک‌جا",
           result["bronze"] == 200 and result["silver"] == 30)
 
     for bad in (0, -1, 2.5):
         try:
-            economy.convert_bronze(1, times=bad)
+            economy.convert_bronze(CHAT, 1, times=bad)
             check(f"تعداد تبدیل {bad!r} رد می‌شود", False)
         except economy.EconomyError:
             check(f"تعداد تبدیل {bad!r} رد می‌شود", True)
@@ -179,18 +180,18 @@ def test_conversion():
 def test_conversion_preserves_value():
     print("\n### 🔄 تبدیل ارزش را حفظ می‌کند")
     fresh()
-    economy.add_bronze(1, 100)
-    before = economy.calculate_total_value(1)
-    economy.convert_bronze(1)
+    economy.add_bronze(CHAT, 1, 100)
+    before = economy.calculate_total_value(CHAT, 1)
+    economy.convert_bronze(CHAT, 1)
     check("۱۰۰ برنز و ۱۰ نقره ارزش برابر دارند",
-          economy.calculate_total_value(1) == before,
-          f"-> {before} vs {economy.calculate_total_value(1)}")
+          economy.calculate_total_value(CHAT, 1) == before,
+          f"-> {before} vs {economy.calculate_total_value(CHAT, 1)}")
 
     fresh()
-    economy.add_silver(1, 70)
-    before = economy.calculate_total_value(1)
-    economy.convert_silver(1)
-    after = economy.calculate_total_value(1)
+    economy.add_silver(CHAT, 1, 70)
+    before = economy.calculate_total_value(CHAT, 1)
+    economy.convert_silver(CHAT, 1)
+    after = economy.calculate_total_value(CHAT, 1)
     check("۷۰ نقره ➜ ۱۰ طلا ارزش را بالا می‌برد", after > before,
           f"-> {before} -> {after}")
 
@@ -201,31 +202,31 @@ def test_conversion_preserves_value():
 def test_total_value():
     print("\n### 💎 محاسبهٔ ارزش کل")
     fresh()
-    economy.add_bronze(1, 152)
-    economy.add_silver(1, 34)
-    economy.add_gold(1, 8)
+    economy.add_bronze(CHAT, 1, 152)
+    economy.add_silver(CHAT, 1, 34)
+    economy.add_gold(CHAT, 1, 8)
 
     expected = 152 * 1 + 34 * 10 + 8 * 100
     check("ارزش کل درست محاسبه شد",
-          economy.calculate_total_value(1) == expected,
-          f"-> {economy.calculate_total_value(1)} vs {expected}")
+          economy.calculate_total_value(CHAT, 1) == expected,
+          f"-> {economy.calculate_total_value(CHAT, 1)} vs {expected}")
     check("ارزش در موجودی هم هست",
-          economy.get_balance(1)["total_coin_value"] == expected)
+          economy.get_balance(CHAT, 1)["total_coin_value"] == expected)
 
-    economy.add_gold(1, 2)
+    economy.add_gold(CHAT, 1, 2)
     check("پس از دریافت جایزه بازمحاسبه شد",
-          economy.calculate_total_value(1) == expected + 200)
-    economy.remove_bronze(1, 52)
+          economy.calculate_total_value(CHAT, 1) == expected + 200)
+    economy.remove_bronze(CHAT, 1, 52)
     check("پس از خرج کردن بازمحاسبه شد",
-          economy.calculate_total_value(1) == expected + 200 - 52)
-    economy.convert_bronze(1)
+          economy.calculate_total_value(CHAT, 1) == expected + 200 - 52)
+    economy.convert_bronze(CHAT, 1)
     check("پس از تبدیل بازمحاسبه شد",
-          economy.calculate_total_value(1) == expected + 200 - 52)
-    economy.transfer(1, 2, "gold", 1)
+          economy.calculate_total_value(CHAT, 1) == expected + 200 - 52)
+    economy.transfer(CHAT, 1, 2, "gold", 1)
     check("پس از انتقال، فرستنده بازمحاسبه شد",
-          economy.calculate_total_value(1) == expected + 100 - 52)
+          economy.calculate_total_value(CHAT, 1) == expected + 100 - 52)
     check("پس از انتقال، گیرنده بازمحاسبه شد",
-          economy.calculate_total_value(2) == 100)
+          economy.calculate_total_value(CHAT, 2) == 100)
 
 
 def test_settings_drive_value():
@@ -235,13 +236,13 @@ def test_settings_drive_value():
     check("ارزش پیش‌فرض نقره", settings.coin_value("silver") == 10)
     check("ارزش پیش‌فرض طلا", settings.coin_value("gold") == 100)
 
-    economy.add_gold(1, 5)
-    check("ارزش با تنظیمات پیش‌فرض", economy.calculate_total_value(1) == 500)
+    economy.add_gold(CHAT, 1, 5)
+    check("ارزش با تنظیمات پیش‌فرض", economy.calculate_total_value(CHAT, 1) == 500)
 
     settings.save({"GoldValue": 250})
     check("تنظیمات ذخیره شد", settings.coin_value("gold") == 250)
     check("ارزش با تنظیمات جدید بازمحاسبه شد",
-          economy.calculate_total_value(1) == 1250)
+          economy.calculate_total_value(CHAT, 1) == 1250)
 
     settings.reset_cache()
     check("تنظیمات پس از ری‌استارت باقی است",
@@ -249,7 +250,7 @@ def test_settings_drive_value():
 
     economy.recalculate_all()
     check("recalculate_all ارزش ذخیره‌شده را تازه کرد",
-          economy.get_balance(1)["total_coin_value"] == 1250)
+          economy.get_balance(CHAT, 1)["total_coin_value"] == 1250)
 
 
 # ===========================================================================
@@ -258,40 +259,40 @@ def test_settings_drive_value():
 def test_transfer():
     print("\n### 🔁 انتقال سکه")
     fresh()
-    economy.add_bronze(1, 100)
-    economy.add_silver(1, 50)
-    economy.add_gold(1, 10)
+    economy.add_bronze(CHAT, 1, 100)
+    economy.add_silver(CHAT, 1, 50)
+    economy.add_gold(CHAT, 1, 10)
 
-    result = economy.transfer(1, 2, "bronze", 30)
+    result = economy.transfer(CHAT, 1, 2, "bronze", 30)
     check("برنز از فرستنده کسر شد", result["sender"]["bronze"] == 70)
     check("برنز به گیرنده رسید", result["receiver"]["bronze"] == 30)
 
-    economy.transfer(1, 2, "silver", 20)
-    economy.transfer(1, 2, "gold", 5)
+    economy.transfer(CHAT, 1, 2, "silver", 20)
+    economy.transfer(CHAT, 1, 2, "gold", 5)
     check("هر سه نوع سکه قابل انتقال است",
-          economy.get_balance(2) ==
+          economy.get_balance(CHAT, 2) ==
           {"bronze": 30, "silver": 20, "gold": 5,
            "total_coin_value": 30 + 200 + 500})
 
     try:
-        economy.transfer(1, 2, "gold", 999)
+        economy.transfer(CHAT, 1, 2, "gold", 999)
         check("انتقال بیش از موجودی رد می‌شود", False)
     except economy.EconomyError:
         check("انتقال بیش از موجودی رد می‌شود", True)
     check("موجودی فرستنده پس از رد شدن تغییر نکرد",
-          economy.get_balance(1)["gold"] == 5)
+          economy.get_balance(CHAT, 1)["gold"] == 5)
     check("موجودی گیرنده پس از رد شدن تغییر نکرد",
-          economy.get_balance(2)["gold"] == 5)
+          economy.get_balance(CHAT, 2)["gold"] == 5)
 
     try:
-        economy.transfer(1, 1, "bronze", 1)
+        economy.transfer(CHAT, 1, 1, "bronze", 1)
         check("انتقال به خود رد می‌شود", False)
     except economy.EconomyError:
         check("انتقال به خود رد می‌شود", True)
 
     for bad in (0, -5, 2.5):
         try:
-            economy.transfer(1, 2, "bronze", bad)
+            economy.transfer(CHAT, 1, 2, "bronze", bad)
             check(f"انتقال مقدار {bad!r} رد می‌شود", False)
         except economy.EconomyError:
             check(f"انتقال مقدار {bad!r} رد می‌شود", True)
@@ -300,12 +301,12 @@ def test_transfer():
 def test_transfer_conserves_total():
     print("\n### 🔁 انتقال مجموع را حفظ می‌کند")
     fresh()
-    economy.add_gold(1, 100)
-    before = (economy.calculate_total_value(1)
-              + economy.calculate_total_value(2))
-    economy.transfer(1, 2, "gold", 40)
-    after = (economy.calculate_total_value(1)
-             + economy.calculate_total_value(2))
+    economy.add_gold(CHAT, 1, 100)
+    before = (economy.calculate_total_value(CHAT, 1)
+              + economy.calculate_total_value(CHAT, 2))
+    economy.transfer(CHAT, 1, 2, "gold", 40)
+    after = (economy.calculate_total_value(CHAT, 1)
+             + economy.calculate_total_value(CHAT, 2))
     check("مجموع ارزش دو طرف ثابت ماند", before == after,
           f"-> {before} vs {after}")
 
@@ -317,27 +318,27 @@ def test_ranking_by_value():
     print("\n### 🏆 رتبه‌بندی بر پایهٔ ارزش، نه تعداد")
     fresh()
     # کاربر ۱: ۱۰۰۰ برنز = ارزش ۱۰۰۰ (تعداد سکه بیشتر)
-    economy.add_bronze(1, 1000)
+    economy.add_bronze(CHAT, 1, 1000)
     # کاربر ۲: ۲۰ طلا = ارزش ۲۰۰۰ (تعداد سکه کمتر، ارزش بیشتر)
-    economy.add_gold(2, 20)
+    economy.add_gold(CHAT, 2, 20)
 
-    ranking = economy.leaderboard()
+    ranking = economy.leaderboard(CHAT, )
     check("رتبه بر اساس ارزش است نه تعداد سکه",
           ranking[0]["user_id"] == "2", f"-> {ranking[0]}")
     check("کاربر با سکهٔ بیشتر ولی ارزش کمتر، دوم است",
           ranking[1]["user_id"] == "1")
     check("get_rank درست است",
-          economy.get_rank(2) == 1 and economy.get_rank(1) == 2)
-    check("کاربر بدون سکه رتبه ندارد", economy.get_rank(999) is None)
+          economy.get_rank(CHAT, 2) == 1 and economy.get_rank(CHAT, 1) == 2)
+    check("کاربر بدون سکه رتبه ندارد", economy.get_rank(CHAT, 999) is None)
 
 
 def test_ranking_tie_break():
     print("\n### 🏆 تساوی: هرکس زودتر رسیده بالاتر")
     fresh()
-    economy.add_bronze(1, 100)   # اول به ۱۰۰ رسید
-    economy.add_bronze(2, 100)   # بعداً به همان ۱۰۰ رسید
+    economy.add_bronze(CHAT, 1, 100)   # اول به ۱۰۰ رسید
+    economy.add_bronze(CHAT, 2, 100)   # بعداً به همان ۱۰۰ رسید
 
-    ranking = economy.leaderboard()
+    ranking = economy.leaderboard(CHAT, )
     check("هر دو ارزش برابر دارند",
           ranking[0]["total_coin_value"] == ranking[1]["total_coin_value"])
     check("کسی که زودتر رسیده رتبهٔ بالاتر دارد",
@@ -346,13 +347,13 @@ def test_ranking_tie_break():
           ranking[0]["reached_seq"] < ranking[1]["reached_seq"])
 
     # اگر نفر دوم جلو بزند باید اول شود
-    economy.add_bronze(2, 1)
+    economy.add_bronze(CHAT, 2, 1)
     check("با پیشی گرفتن، رتبه عوض می‌شود",
-          economy.leaderboard()[0]["user_id"] == "2")
+          economy.leaderboard(CHAT, )[0]["user_id"] == "2")
 
     # و با برگشت به تساوی، دوباره نفر قدیمی‌تر جلو می‌افتد
-    economy.remove_bronze(2, 1)
-    top = economy.leaderboard()[0]
+    economy.remove_bronze(CHAT, 2, 1)
+    top = economy.leaderboard(CHAT, )[0]
     check("پس از بازگشت به تساوی، ترتیب بر پایهٔ زمان است",
           top["user_id"] == "1", f"-> {top['user_id']}")
 
@@ -361,17 +362,17 @@ def test_ranking_limit():
     print("\n### 🏆 محدودیت و فیلتر جدول")
     fresh()
     for uid in range(1, 8):
-        economy.add_bronze(uid, uid * 10)
-    check("محدودیت رعایت می‌شود", len(economy.leaderboard(3)) == 3)
+        economy.add_bronze(CHAT, uid, uid * 10)
+    check("محدودیت رعایت می‌شود", len(economy.leaderboard(CHAT, 3)) == 3)
     check("ترتیب نزولی است",
-          [r["user_id"] for r in economy.leaderboard(3)] == ["7", "6", "5"])
+          [r["user_id"] for r in economy.leaderboard(CHAT, 3)] == ["7", "6", "5"])
 
-    economy.add_bronze(99, 1)
-    economy.remove_bronze(99, 1)
-    ids = [r["user_id"] for r in economy.leaderboard(limit=None)]
+    economy.add_bronze(CHAT, 99, 1)
+    economy.remove_bronze(CHAT, 99, 1)
+    ids = [r["user_id"] for r in economy.leaderboard(CHAT, limit=None)]
     check("کاربر با ارزش صفر در جدول نیست", "99" not in ids)
     ids_all = [r["user_id"]
-               for r in economy.ranked_users(include_zero=True)]
+               for r in economy.ranked_users(CHAT, include_zero=True)]
     check("با include_zero همه می‌آیند", "99" in ids_all)
 
 
@@ -381,20 +382,20 @@ def test_ranking_limit():
 def test_transaction_history():
     print("\n### 🧾 تاریخچهٔ تراکنش")
     fresh()
-    economy.add_bronze(1, 200, note="جایزه")
-    economy.remove_bronze(1, 20)
-    economy.convert_bronze(1)
-    economy.transfer(1, 2, "silver", 5)
-    economy.claim_daily(1)
+    economy.add_bronze(CHAT, 1, 200, note="جایزه")
+    economy.remove_bronze(CHAT, 1, 20)
+    economy.convert_bronze(CHAT, 1)
+    economy.transfer(CHAT, 1, 2, "silver", 5)
+    economy.claim_daily(CHAT, 1)
 
-    entries = economy.transaction_history(1, limit=None)
+    entries = economy.transaction_history(CHAT, 1, limit=None)
     kinds = [e["kind"] for e in entries]
     for kind in ("receive", "spend", "convert", "transfer_out", "daily"):
         check(f"تراکنش «{kind}» ثبت شد", kind in kinds, f"-> {kinds}")
 
     check("گیرنده تراکنش ورودی دارد",
           any(e["kind"] == "transfer_in"
-              for e in economy.transaction_history(2)))
+              for e in economy.transaction_history(CHAT, 2)))
     check("هر تراکنش زمان دقیق دارد",
           all(e.get("at") for e in entries))
     check("هر تراکنش موجودی پس از خود را دارد",
@@ -404,7 +405,7 @@ def test_transaction_history():
     check("تازه‌ترین تراکنش اول است",
           entries[0]["id"] > entries[-1]["id"])
 
-    filtered = economy.transaction_history(1, kind="convert")
+    filtered = economy.transaction_history(CHAT, 1, kind="convert")
     check("فیلتر بر اساس نوع کار می‌کند",
           len(filtered) == 1 and filtered[0]["kind"] == "convert")
 
@@ -413,29 +414,29 @@ def test_no_duplicate_transactions():
     print("\n### 🛡️ جلوگیری از ثبت دوبارهٔ تراکنش")
     fresh()
     for _ in range(5):
-        economy.award(1, 10, reference="game:riddle:42")
+        economy.award(CHAT, 1, 10, reference="game:riddle:42")
     check("جایزه با مرجع تکراری فقط یک بار پرداخت شد",
-          economy.get_balance(1)["bronze"] == 10,
-          f"-> {economy.get_balance(1)['bronze']}")
+          economy.get_balance(CHAT, 1)["bronze"] == 10,
+          f"-> {economy.get_balance(CHAT, 1)['bronze']}")
     check("فقط یک ردیف تاریخچه ثبت شد",
-          len(economy.transaction_history(1)) == 1)
+          len(economy.transaction_history(CHAT, 1)) == 1)
 
-    economy.award(1, 10, reference="game:riddle:43")
+    economy.award(CHAT, 1, 10, reference="game:riddle:43")
     check("مرجع متفاوت پرداخت می‌شود",
-          economy.get_balance(1)["bronze"] == 20)
+          economy.get_balance(CHAT, 1)["bronze"] == 20)
 
-    economy.add_bronze(1, 5)
-    economy.add_bronze(1, 5)
+    economy.add_bronze(CHAT, 1, 5)
+    economy.add_bronze(CHAT, 1, 5)
     check("بدون مرجع، هر بار پرداخت می‌شود",
-          economy.get_balance(1)["bronze"] == 30)
+          economy.get_balance(CHAT, 1)["bronze"] == 30)
 
     fresh()
-    economy.add_bronze(1, 100)
+    economy.add_bronze(CHAT, 1, 100)
     for _ in range(3):
-        economy.transfer(1, 2, "bronze", 10, reference="tx:1")
+        economy.transfer(CHAT, 1, 2, "bronze", 10, reference="tx:1")
     check("انتقال با مرجع تکراری یک بار انجام می‌شود",
-          economy.get_balance(2)["bronze"] == 10,
-          f"-> {economy.get_balance(2)['bronze']}")
+          economy.get_balance(CHAT, 2)["bronze"] == 10,
+          f"-> {economy.get_balance(CHAT, 2)['bronze']}")
 
 
 # ===========================================================================
@@ -453,38 +454,38 @@ def test_shop():
     check("آیتم قابل خواندن است",
           economy.shop.get_item("badge")["title"] == "نشان طلایی")
 
-    economy.add_bronze(1, 120)
-    check("توان خرید بررسی می‌شود", economy.shop.can_afford(1, "badge"))
+    economy.add_bronze(CHAT, 1, 120)
+    check("توان خرید بررسی می‌شود", economy.shop.can_afford(CHAT, 1, "badge"))
     check("آیتم گران‌تر قابل خرید نیست",
-          not economy.shop.can_afford(1, "vip"))
+          not economy.shop.can_afford(CHAT, 1, "vip"))
 
-    item, balance = economy.shop.buy(1, "badge")
+    item, balance = economy.shop.buy(CHAT, 1, "badge")
     check("خرید انجام شد", item["id"] == "badge")
     check("سکه کسر شد", balance["bronze"] == 70)
     check("ارزش کل پس از خرید بازمحاسبه شد",
           balance["total_coin_value"] == 70)
     check("خرید در تاریخچه ثبت شد",
           any(e["kind"] == "purchase"
-              for e in economy.transaction_history(1)))
+              for e in economy.transaction_history(CHAT, 1)))
     check("خرید در فهرست خریدها آمد",
-          len(economy.shop.purchases(1)) == 1)
+          len(economy.shop.purchases(CHAT, 1)) == 1)
 
-    economy.shop.buy(1, "badge")
+    economy.shop.buy(CHAT, 1, "badge")
     check("انبار تمام شد", economy.shop.get_item("badge")["stock"] == 0)
     try:
-        economy.shop.buy(1, "badge")
+        economy.shop.buy(CHAT, 1, "badge")
         check("خرید بدون موجودی انبار رد می‌شود", False)
     except economy.shop.ShopError:
         check("خرید بدون موجودی انبار رد می‌شود", True)
 
     try:
-        economy.shop.buy(1, "vip")
+        economy.shop.buy(CHAT, 1, "vip")
         check("خرید بدون سکهٔ کافی رد می‌شود", False)
     except economy.shop.ShopError as error:
         check("خرید بدون سکهٔ کافی رد می‌شود", "کافی نیست" in str(error))
 
     try:
-        economy.shop.buy(1, "ghost")
+        economy.shop.buy(CHAT, 1, "ghost")
         check("خرید آیتم ناموجود رد می‌شود", False)
     except economy.shop.ShopError:
         check("خرید آیتم ناموجود رد می‌شود", True)
@@ -505,12 +506,12 @@ def test_shop_purchase_is_atomic():
     print("\n### 🛒 خرید تکراری با مرجع یکسان")
     fresh()
     economy.shop.add_item("item", "آیتم", 10, "bronze")
-    economy.add_bronze(1, 100)
+    economy.add_bronze(CHAT, 1, 100)
     for _ in range(4):
-        economy.shop.buy(1, "item", reference="buy:1")
+        economy.shop.buy(CHAT, 1, "item", reference="buy:1")
     check("خرید با مرجع تکراری یک بار حساب شد",
-          economy.get_balance(1)["bronze"] == 90,
-          f"-> {economy.get_balance(1)['bronze']}")
+          economy.get_balance(CHAT, 1)["bronze"] == 90,
+          f"-> {economy.get_balance(CHAT, 1)['bronze']}")
 
 
 # ===========================================================================
@@ -519,26 +520,26 @@ def test_shop_purchase_is_atomic():
 def test_daily_reward():
     print("\n### 🎁 جایزهٔ روزانه")
     fresh()
-    granted, balance, _ = economy.claim_daily(1)
+    granted, balance, _ = economy.claim_daily(CHAT, 1)
     check("جایزه پرداخت شد", granted is True)
     check("مقدار پیش‌فرض برنز اضافه شد", balance["bronze"] == 25)
     check("ارزش کل بازمحاسبه شد", balance["total_coin_value"] == 25)
 
-    granted, balance, wait = economy.claim_daily(1)
+    granted, balance, wait = economy.claim_daily(CHAT, 1)
     check("دریافت دوباره رد می‌شود", granted is False)
     check("موجودی تغییر نکرد", balance["bronze"] == 25)
     check("زمان انتظار برگردانده شد", wait > 0)
 
-    available, left = economy.daily_status(1)
+    available, left = economy.daily_status(CHAT, 1)
     check("وضعیت نشان می‌دهد هنوز نوبت نیست",
           available is False and left > 0)
 
     future = datetime.now(timezone.utc) + timedelta(days=1, seconds=1)
-    granted, balance, _ = economy.claim_daily(1, now=future)
+    granted, balance, _ = economy.claim_daily(CHAT, 1, now=future)
     check("پس از پایان انتظار دوباره پرداخت می‌شود", granted is True)
     check("موجودی دو برابر شد", balance["bronze"] == 50)
     check("جایزه در تاریخچه ثبت شد",
-          len(economy.transaction_history(1, kind="daily")) == 2)
+          len(economy.transaction_history(CHAT, 1, kind="daily")) == 2)
 
 
 # ===========================================================================
@@ -552,7 +553,7 @@ def test_concurrent_adds():
     def worker():
         for _ in range(50):
             try:
-                economy.add_bronze(1, 1)
+                economy.add_bronze(CHAT, 1, 1)
             except Exception as error:      # pragma: no cover
                 errors.append(error)
 
@@ -562,7 +563,7 @@ def test_concurrent_adds():
     for thread in threads:
         thread.join()
 
-    balance = economy.get_balance(1)
+    balance = economy.get_balance(CHAT, 1)
     check("هیچ به‌روزرسانی‌ای گم نشد", balance["bronze"] == 1000,
           f"-> {balance['bronze']}")
     check("هیچ خطایی رخ نداد", not errors, f"-> {errors[:2]}")
@@ -573,13 +574,13 @@ def test_concurrent_adds():
 def test_concurrent_spend_never_negative():
     print("\n### ⚡ همزمانی: خرج کردن هرگز منفی نمی‌شود")
     fresh()
-    economy.add_bronze(1, 100)
+    economy.add_bronze(CHAT, 1, 100)
     rejected = []
 
     def worker():
         for _ in range(50):
             try:
-                economy.remove_bronze(1, 1)
+                economy.remove_bronze(CHAT, 1, 1)
             except economy.EconomyError:
                 rejected.append(1)
 
@@ -589,7 +590,7 @@ def test_concurrent_spend_never_negative():
     for thread in threads:
         thread.join()
 
-    balance = economy.get_balance(1)
+    balance = economy.get_balance(CHAT, 1)
     check("موجودی منفی نشد", balance["bronze"] >= 0,
           f"-> {balance['bronze']}")
     check("دقیقاً تا صفر خرج شد", balance["bronze"] == 0)
@@ -600,12 +601,12 @@ def test_concurrent_spend_never_negative():
 def test_concurrent_transfers():
     print("\n### ⚡ همزمانی: انتقال")
     fresh()
-    economy.add_gold(1, 500)
+    economy.add_gold(CHAT, 1, 500)
 
     def worker():
         for _ in range(50):
             try:
-                economy.transfer(1, 2, "gold", 1)
+                economy.transfer(CHAT, 1, 2, "gold", 1)
             except economy.EconomyError:
                 pass
 
@@ -615,8 +616,8 @@ def test_concurrent_transfers():
     for thread in threads:
         thread.join()
 
-    first = economy.get_balance(1)["gold"]
-    second = economy.get_balance(2)["gold"]
+    first = economy.get_balance(CHAT, 1)["gold"]
+    second = economy.get_balance(CHAT, 2)["gold"]
     check("مجموع طلا حفظ شد", first + second == 500,
           f"-> {first} + {second}")
     check("فرستنده منفی نشد", first >= 0)
@@ -628,7 +629,7 @@ def test_concurrent_duplicate_reference():
 
     def worker():
         for _ in range(20):
-            economy.award(1, 10, reference="same")
+            economy.award(CHAT, 1, 10, reference="same")
 
     threads = [threading.Thread(target=worker) for _ in range(10)]
     for thread in threads:
@@ -637,25 +638,25 @@ def test_concurrent_duplicate_reference():
         thread.join()
 
     check("۲۰۰ تلاش هم‌زمان فقط یک بار پرداخت شد",
-          economy.get_balance(1)["bronze"] == 10,
-          f"-> {economy.get_balance(1)['bronze']}")
+          economy.get_balance(CHAT, 1)["bronze"] == 10,
+          f"-> {economy.get_balance(CHAT, 1)['bronze']}")
     check("فقط یک ردیف تاریخچه ثبت شد",
-          len(economy.transaction_history(1)) == 1)
+          len(economy.transaction_history(CHAT, 1)) == 1)
 
 
 def test_rollback_on_error():
     print("\n### ⚡ بازگشت تغییرات هنگام خطا")
     fresh()
-    economy.add_bronze(1, 50)
+    economy.add_bronze(CHAT, 1, 50)
     try:
         with storage.transaction() as data:
-            accounts._user(data, "1")["bronze"] = 9999
+            accounts._user(data, economy.user_key(CHAT, 1))["bronze"] = 9999
             raise RuntimeError("boom")
     except RuntimeError:
         pass
     check("تغییرات ناموفق ذخیره نشدند",
-          economy.get_balance(1)["bronze"] == 50,
-          f"-> {economy.get_balance(1)['bronze']}")
+          economy.get_balance(CHAT, 1)["bronze"] == 50,
+          f"-> {economy.get_balance(CHAT, 1)['bronze']}")
 
 
 # ===========================================================================
@@ -664,24 +665,24 @@ def test_rollback_on_error():
 def test_persistence():
     print("\n### 💾 ماندگاری پس از ری‌استارت")
     temp = fresh()
-    economy.add_bronze(1, 100)
-    economy.add_gold(1, 3)
-    expected = economy.get_balance(1)
+    economy.add_bronze(CHAT, 1, 100)
+    economy.add_gold(CHAT, 1, 3)
+    expected = economy.get_balance(CHAT, 1)
 
     check("فایل روی دیسک ساخته شد", storage.DATA_FILE.exists())
 
     storage._cache = None
     storage._cache_mtime = None
     check("موجودی پس از ری‌استارت باقی است",
-          economy.get_balance(1) == expected)
+          economy.get_balance(CHAT, 1) == expected)
     check("تاریخچه پس از ری‌استارت باقی است",
-          len(economy.transaction_history(1)) == 2)
+          len(economy.transaction_history(CHAT, 1)) == 2)
 
     storage.DATA_FILE.write_text("{ broken", encoding="utf-8")
     storage._cache = None
     storage._cache_mtime = None
     check("فایل خراب باعث کرش نمی‌شود",
-          economy.get_balance(1)["bronze"] == 0)
+          economy.get_balance(CHAT, 1)["bronze"] == 0)
 
 
 def test_independence():
@@ -740,18 +741,18 @@ def test_games_use_api_only():
     print("\n### 📡 بازی‌ها فقط از API استفاده می‌کنند")
     fresh()
     # شبیه‌سازی یک بازی که جایزه می‌دهد
-    balance = economy.award(5, 7, reference="vampire:chat1:session9")
+    balance = economy.award(CHAT, 5, 7, reference="vampire:chat1:session9")
     check("award موجودی را بالا برد", balance["bronze"] == 7)
     check("award به عنوان جایزه ثبت شد",
-          economy.transaction_history(5)[0]["kind"] == "reward")
+          economy.transaction_history(CHAT, 5)[0]["kind"] == "reward")
 
-    balance = economy.spend(5, 3, reference="shop:x")
+    balance = economy.spend(CHAT, 5, 3, reference="shop:x")
     check("spend موجودی را کم کرد", balance["bronze"] == 4)
     check("spend به عنوان خرج ثبت شد",
-          economy.transaction_history(5)[0]["kind"] == "spend")
+          economy.transaction_history(CHAT, 5)[0]["kind"] == "spend")
 
     try:
-        economy.spend(5, 100)
+        economy.spend(CHAT, 5, 100)
         check("spend بیش از موجودی رد می‌شود", False)
     except economy.EconomyError:
         check("spend بیش از موجودی رد می‌شود", True)
@@ -771,7 +772,7 @@ def test_record_message_is_hot_path_cheap():
         with storage.transaction() as data:
             bucket = data.setdefault("users", {})
             for index in range(users):
-                bucket[str(index)] = {
+                bucket[economy.user_key(CHAT, index)] = {
                     "bronze": index, "silver": 0, "gold": 0,
                     "total_coin_value": index, "transactions": [],
                     "references": [], "value_reached_seq": index, "wins": 0,
@@ -810,14 +811,14 @@ def test_award_still_writes_immediately():
     """جایزه و موجودی باید فوراً ذخیره شوند، نه معوق."""
     print("\n### 💾 عملیات مالی فوراً روی دیسک می‌نشیند")
     fresh()
-    economy.award(1, 10, name="علی")
+    economy.award(CHAT, 1, 10, name="علی")
     check("جایزه بلافاصله نوشته شد", storage.DATA_FILE.exists())
     saved = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
-    check("مقدار درست ذخیره شد", saved["users"]["1"]["bronze"] == 10)
+    check("مقدار درست ذخیره شد", saved["users"][economy.user_key(CHAT, 1)]["bronze"] == 10)
 
-    economy.add_bronze(2, 5)
+    economy.add_bronze(CHAT, 2, 5)
     saved = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
-    check("افزودن سکه هم فوری است", saved["users"]["2"]["bronze"] == 5)
+    check("افزودن سکه هم فوری است", saved["users"][economy.user_key(CHAT, 2)]["bronze"] == 5)
 
 
 def main():

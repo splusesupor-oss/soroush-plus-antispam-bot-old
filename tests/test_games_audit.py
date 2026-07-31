@@ -31,6 +31,7 @@ from modules.fox_games import survival as sv
 from modules.fox_games import vampire as vp
 
 PASSED = FAILED = 0
+CHAT = -100500
 
 
 def check(label, cond, detail=""):
@@ -964,22 +965,22 @@ def test_coin_isolation():
 
     try:
         # در اقتصاد جدید کیف پول «به تفکیک کاربر» است، نه گروه.
-        coins.award(1, 4, name="علی")
-        check("سکه ثبت شد", coins.get_balance(1)[coins.BRONZE] == 4)
-        coins.award(1, 3, name="علی")
-        check("سکه‌ها جمع می‌شوند", coins.get_balance(1)[coins.BRONZE] == 7)
+        coins.award(CHAT, 1, 4, name="علی")
+        check("سکه ثبت شد", coins.get_balance(CHAT, 1)[coins.BRONZE] == 4)
+        coins.award(CHAT, 1, 3, name="علی")
+        check("سکه‌ها جمع می‌شوند", coins.get_balance(CHAT, 1)[coins.BRONZE] == 7)
         check("کاربر دیگر متاثر نمی‌شود",
-              coins.get_balance(2)[coins.BRONZE] == 0)
+              coins.get_balance(CHAT, 2)[coins.BRONZE] == 0)
         check("ارزش کل بازمحاسبه شد",
-              coins.get_balance(1)["total_coin_value"] == 7)
+              coins.get_balance(CHAT, 1)["total_coin_value"] == 7)
         check("موجودی روی دیسک ماندگار است",
               _economy_storage.DATA_FILE.exists())
 
         # جایزه با مرجع تکراری دو بار پرداخت نمی‌شود.
-        coins.award(3, 5, reference="dup:1")
-        coins.award(3, 5, reference="dup:1")
+        coins.award(CHAT, 3, 5, reference="dup:1")
+        coins.award(CHAT, 3, 5, reference="dup:1")
         check("مرجع تکراری فقط یک بار پرداخت می‌شود",
-              coins.get_balance(3)[coins.BRONZE] == 5)
+              coins.get_balance(CHAT, 3)[coins.BRONZE] == 5)
     finally:
         _economy_storage.use_file(original)
 

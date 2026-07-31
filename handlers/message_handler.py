@@ -195,7 +195,7 @@ async def _reward_coin_reply(event, chat_id, user_id, user, amount,
                              reference=None):
     """جایزه را از راه API اقتصاد پرداخت و موجودی تازه را اعلام می‌کند."""
     balance = economy.award(
-        user_id, amount, reference=reference,
+        chat_id, user_id, amount, reference=reference,
         name=_format_admin_display(user), note="جایزه بازی",
     )
     await event.reply(
@@ -1342,7 +1342,7 @@ async def handle_new_message(bot, event):
                     if player["points"] >= 70:
                         try:
                             economy.award(
-                                player.get("user_id", "unknown"), 6,
+                                chat_id, player.get("user_id", "unknown"), 6,
                                 reference=f"namefamily:{chat_id}:"
                                           f"{game['round_id']}:"
                                           f"{player.get('user_id')}",
@@ -1439,7 +1439,7 @@ async def handle_new_message(bot, event):
             if winner_answer:
                 # سکه را خودِ ماژول از راه API اقتصاد پرداخت کرده است؛
                 # اینجا فقط موجودی تازه اعلام می‌شود تا دوبار پرداخت نشود.
-                balance = economy.get_balance(user_id)
+                balance = economy.get_balance(chat_id, user_id)
                 await event.reply(
                     "🎉 پاسخ صحیح بود.\n\n"
                     f"🪙 شما +{_math_digits(EMOJI_REWARD_BRONZE)} سکه برنز دریافت کردید.\n\n"
@@ -1483,7 +1483,7 @@ async def handle_new_message(bot, event):
             if country:
                 await event.reply("✅ پاسخ درست بود!\n+3 🪙 سکه")
                 economy.award(
-                    user_id, 3,
+                    chat_id, user_id, 3,
                     reference=f"flag:{chat_id}:{flag_game['token']}",
                     name=_format_group_member(sender), note="حدس پرچم",
                 )
@@ -2393,7 +2393,7 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "امتیاز من":
-            profile = get_coin_profile(user_id)
+            profile = get_coin_profile(chat_id, user_id)
             activity = get_activity(chat_id, user_id)
             first = activity.get("first", 0)
             membership_days = 0
@@ -2407,7 +2407,7 @@ async def handle_new_message(bot, event):
                 f"🥈 نقره: ← {_math_digits(profile.get(economy.SILVER, 0))}\n\n"
                 f"🥇 طلا: ← {_math_digits(profile.get(economy.GOLD, 0))}\n\n"
                 f"💎 ارزش کل: ← {_math_digits(profile.get('total_coin_value', 0))}\n\n"
-                f"🏆 رتبه: ← {_math_digits(coin_rank(user_id)) if coin_rank(user_id) else 'ندارد'}\n\n"
+                f"🏆 رتبه: ← {_math_digits(coin_rank(chat_id, user_id)) if coin_rank(chat_id, user_id) else 'ندارد'}\n\n"
                 f"🎮 برد در بازی‌ها: ← {_math_digits(profile.get('wins', 0))}\n\n"
                 f"📅 مدت عضویت: 「 {_math_digits(membership_days)} 」"
             )
@@ -2426,7 +2426,7 @@ async def handle_new_message(bot, event):
 
         if clean_text == "رتبه ها":
             # رتبه‌بندی فقط بر پایهٔ ارزش کل؛ در تساوی، هرکس زودتر رسیده بالاتر.
-            ranking = coin_leaderboard(5)
+            ranking = coin_leaderboard(chat_id, 5)
             # شمارهٔ رتبه با ایموجی عددی نمایش داده می‌شود؛ مدال‌های
             # 🥇🥈🥉 فقط برای «نوع سکه» در خط دوم می‌مانند.
             rank_digits = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",

@@ -292,9 +292,9 @@ def test_shop_command_routed():
 def test_conversion_writes_to_database():
     print("\n### 💾 تبدیل واقعاً روی دیتابیس می‌نشیند")
     fresh()
-    economy.add_bronze(777, 250)
-    economy.add_silver(777, 100)
-    before = economy.get_balance(777)
+    economy.add_bronze(CHAT, 777, 250)
+    economy.add_silver(CHAT, 777, 100)
+    before = economy.get_balance(CHAT, 777)
 
     async def scenario():
         bot, handler = await build_handler()
@@ -309,7 +309,7 @@ def test_conversion_writes_to_database():
     check("تبدیل برنز پاسخ داد", first.said("تبدیل شد"))
     check("تبدیل نقره پاسخ داد", second.said("تبدیل شد"))
 
-    after = economy.get_balance(777)
+    after = economy.get_balance(CHAT, 777)
     check("برنز واقعاً کم شد",
           after[economy.BRONZE] == before[economy.BRONZE] - 100,
           f"-> {after[economy.BRONZE]}")
@@ -318,7 +318,7 @@ def test_conversion_writes_to_database():
 
     # اثبات نوشته شدن روی دیسک، نه فقط حافظه
     raw = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
-    stored = raw["users"]["777"]
+    stored = raw["users"][economy.user_key(CHAT, 777)]
     check("مقدار روی دیسک ذخیره شد",
           stored["gold"] == 10 and stored["bronze"] == 150,
           f"-> {stored['gold']}/{stored['bronze']}")
@@ -346,20 +346,20 @@ def test_daily_and_history_from_menu():
     daily, again, history = asyncio.run(scenario())
     check("جایزه روزانه پرداخت شد", daily.said("جایزه روزانه دریافت شد"))
     check("موجودی واقعاً بالا رفت",
-          economy.get_balance(777)[economy.BRONZE] == 25,
-          f"-> {economy.get_balance(777)[economy.BRONZE]}")
+          economy.get_balance(CHAT, 777)[economy.BRONZE] == 25,
+          f"-> {economy.get_balance(CHAT, 777)[economy.BRONZE]}")
     check("دریافت دوباره رد شد", again.said("قبلاً دریافت"))
     check("موجودی دوباره اضافه نشد",
-          economy.get_balance(777)[economy.BRONZE] == 25)
+          economy.get_balance(CHAT, 777)[economy.BRONZE] == 25)
     check("تاریخچه نمایش داده شد", history.said("تاریخچه تراکنش"))
     check("تراکنش در دیتابیس هست",
-          len(economy.transaction_history(777)) == 1)
+          len(economy.transaction_history(CHAT, 777)) == 1)
 
 
 def test_transfer_from_menu_writes_db():
     print("\n### 💾 انتقال از داخل منو روی دیتابیس")
     fresh()
-    economy.add_bronze(777, 100)
+    economy.add_bronze(CHAT, 777, 100)
     target = User(888, "حسین")
 
     async def scenario():
@@ -375,23 +375,23 @@ def test_transfer_from_menu_writes_db():
     check("راهنمای انتقال آمد", prompt.said("انتقال برنز"))
     check("انتقال انجام شد", amount.said("منتقل شد"))
     check("از فرستنده واقعاً کم شد",
-          economy.get_balance(777)[economy.BRONZE] == 60,
-          f"-> {economy.get_balance(777)[economy.BRONZE]}")
+          economy.get_balance(CHAT, 777)[economy.BRONZE] == 60,
+          f"-> {economy.get_balance(CHAT, 777)[economy.BRONZE]}")
     check("به گیرنده واقعاً رسید",
-          economy.get_balance(888)[economy.BRONZE] == 40,
-          f"-> {economy.get_balance(888)[economy.BRONZE]}")
+          economy.get_balance(CHAT, 888)[economy.BRONZE] == 40,
+          f"-> {economy.get_balance(CHAT, 888)[economy.BRONZE]}")
 
     raw = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
     check("هر دو طرف روی دیسک ذخیره شدند",
-          raw["users"]["777"]["bronze"] == 60
-          and raw["users"]["888"]["bronze"] == 40)
+          raw["users"][economy.user_key(CHAT, 777)]["bronze"] == 60
+          and raw["users"][economy.user_key(CHAT, 888)]["bronze"] == 40)
 
 
 def test_shop_buy_from_menu_writes_db():
     print("\n### 💾 خرید از فروشگاه روی دیتابیس")
     fresh()
     economy.shop.add_item("badge", "نشان طلایی", 50, "bronze", stock=1)
-    economy.add_bronze(777, 120)
+    economy.add_bronze(CHAT, 777, 120)
 
     async def scenario():
         bot, handler = await build_handler()
@@ -409,14 +409,14 @@ def test_shop_buy_from_menu_writes_db():
     check("راهنمای خرید آمد", prompt.said("شناسهٔ آیتم"))
     check("خرید انجام شد", buy.said("خریداری شد"))
     check("سکه واقعاً کسر شد",
-          economy.get_balance(777)[economy.BRONZE] == 70,
-          f"-> {economy.get_balance(777)[economy.BRONZE]}")
+          economy.get_balance(CHAT, 777)[economy.BRONZE] == 70,
+          f"-> {economy.get_balance(CHAT, 777)[economy.BRONZE]}")
 
     raw = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
     check("خرید روی دیسک ثبت شد",
-          len(raw["users"]["777"].get("purchases", [])) == 1)
+          len(raw["users"][economy.user_key(CHAT, 777)].get("purchases", [])) == 1)
     check("تراکنش خرید ثبت شد",
-          economy.transaction_history(777)[0]["kind"] == "purchase")
+          economy.transaction_history(CHAT, 777)[0]["kind"] == "purchase")
 
 
 def test_game_reward_reaches_economy_via_real_route():
@@ -439,13 +439,13 @@ def test_game_reward_reaches_economy_via_real_route():
     check("بازی از مسیر واقعی شروع شد", answer is not None)
     if answer is not None:
         check("پاسخ درست پذیرفته شد", answer.said("پاسخ صحیح"))
-        balance = economy.get_balance(777)
+        balance = economy.get_balance(CHAT, 777)
         check("جایزه در اقتصاد ثبت شد",
               balance[economy.BRONZE] == eg.REWARD_BRONZE,
               f"-> {balance[economy.BRONZE]}")
         raw = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
         check("جایزه روی دیسک ذخیره شد",
-              raw["users"]["777"]["bronze"] == eg.REWARD_BRONZE)
+              raw["users"][economy.user_key(CHAT, 777)]["bronze"] == eg.REWARD_BRONZE)
     eg.reset_all()
 
 
@@ -510,9 +510,9 @@ def test_diagnostic_logging():
     """مسیر کامل باید قابل ردیابی باشد: ورود، خواندن، رندر، ارسال."""
     print("\n### 🩺 لاگ تشخیصی کامل")
     fresh()
-    economy.add_bronze(777, 152)
-    economy.add_silver(777, 34)
-    economy.add_gold(777, 8)
+    economy.add_bronze(CHAT, 777, 152)
+    economy.add_silver(CHAT, 777, 34)
+    economy.add_gold(CHAT, 777, 8)
 
     async def scenario():
         bot, handler = await build_handler()
@@ -553,7 +553,7 @@ def test_entity_rejection_falls_back_to_plain():
     """اگر سرور entity را نپذیرد، متن ساده فرستاده می‌شود، نه هیچ."""
     print("\n### 🛡️ پاسخ حتی وقتی سرور entity را رد کند")
     fresh()
-    economy.add_bronze(777, 152)
+    economy.add_bronze(CHAT, 777, 152)
 
     class RejectingEvent(Event):
         async def reply(self, text, **kwargs):
@@ -661,7 +661,7 @@ def test_private_is_blocked():
     """دستورهای اقتصاد فقط مخصوص گروه‌اند و در پیوی نباید کار کنند."""
     print("\n### 🚫 اقتصاد در پیوی کار نمی‌کند")
     fresh()
-    economy.add_bronze(777, 152)
+    economy.add_bronze(CHAT, 777, 152)
 
     async def scenario(text):
         bot, handler = await build_handler()
@@ -683,7 +683,7 @@ def test_group_still_works():
     """همان دستورها در گروه باید کار کنند."""
     print("\n### ✅ اقتصاد فقط در گروه کار می‌کند")
     fresh()
-    economy.add_bronze(777, 152)
+    economy.add_bronze(CHAT, 777, 152)
 
     async def scenario(text):
         bot, handler = await build_handler()
@@ -701,9 +701,9 @@ def test_ranking_display_format():
     """«رتبه ها» باید شمارهٔ رتبه را با ایموجی عددی نشان دهد، نه مدال."""
     print("\n### 🏆 قالب نمایش برترین کاربران")
     fresh()
-    economy.award(101, 700, name="@user_a")
-    economy.award(102, 200, name="@user_b")
-    economy.award(103, 50, name="@user_c")
+    economy.award(CHAT, 101, 700, name="@user_a")
+    economy.award(CHAT, 102, 200, name="@user_b")
+    economy.award(CHAT, 103, 50, name="@user_c")
 
     async def scenario():
         bot, handler = await build_handler()
@@ -747,14 +747,14 @@ def test_legacy_coin_migration():
     original = mig.LEGACY_FILE
     temp = Path(tempfile.mkdtemp()) / "coins.json"
     temp.write_text(json.dumps({"users": {
-        "g1": {"501": {"coins": 700, "wins": 3, "name": "@a"}},
-        "g2": {"501": {"coins": 100, "wins": 1, "name": "@a"},
-               "502": {"coins": 28, "wins": 0, "name": "@b"}},
+        str(economy.chat_key(CHAT)): {
+            "501": {"coins": 800, "wins": 4, "name": "@a"},
+            "502": {"coins": 28, "wins": 0, "name": "@b"}},
     }}, ensure_ascii=False), encoding="utf-8")
     mig.LEGACY_FILE = temp
     try:
         mig.migrate()
-        first = economy.get_balance(501)
+        first = economy.get_balance(CHAT, 501)
         check("سکهٔ چند گروه جمع شد", first[economy.BRONZE] == 800,
               f"-> {first[economy.BRONZE]}")
         check("ارزش کل برابر برنز است",
@@ -762,13 +762,13 @@ def test_legacy_coin_migration():
         check("نقره و طلا دست‌نخورده صفرند",
               first[economy.SILVER] == 0 and first[economy.GOLD] == 0)
         check("کاربر ۲۸ سکه‌ای درست منتقل شد",
-              economy.get_balance(502)[economy.BRONZE] == 28)
-        check("بردها منتقل شدند", economy.get_profile(501)["wins"] == 4)
+              economy.get_balance(CHAT, 502)[economy.BRONZE] == 28)
+        check("بردها منتقل شدند", economy.get_profile(CHAT, 501)["wins"] == 4)
 
         mig.migrate()
         check("اجرای دوباره سکه را دو برابر نمی‌کند",
-              economy.get_balance(501)[economy.BRONZE] == 800,
-              f"-> {economy.get_balance(501)[economy.BRONZE]}")
+              economy.get_balance(CHAT, 501)[economy.BRONZE] == 800,
+              f"-> {economy.get_balance(CHAT, 501)[economy.BRONZE]}")
         check("فایل قدیمی حذف نشد", temp.exists())
     finally:
         mig.LEGACY_FILE = original
@@ -803,29 +803,29 @@ def test_migration_merges_into_existing_wallets():
     import tools.migrate_legacy_coins as mig
 
     # کیف پول‌هایی که از قبل روی دستگاه هستند
-    economy.add_bronze(501, 5000)
-    economy.add_silver(501, 40)
-    economy.add_gold(501, 7)
-    economy.award(777, 250, name="@untouched")
+    economy.add_bronze(CHAT, 501, 5000)
+    economy.add_silver(CHAT, 501, 40)
+    economy.add_gold(CHAT, 501, 7)
+    economy.award(CHAT, 777, 250, name="@untouched")
 
     original = mig.LEGACY_FILE
     temp = Path(tempfile.mkdtemp()) / "coins.json"
-    temp.write_text(json.dumps({"users": {"g1": {
+    temp.write_text(json.dumps({"users": {str(economy.chat_key(CHAT)): {
         "501": {"coins": 700, "wins": 2, "name": "@a"},
         "888": {"coins": 28, "wins": 0, "name": "@b"},
     }}}, ensure_ascii=False), encoding="utf-8")
     mig.LEGACY_FILE = temp
     try:
         mig.migrate()
-        merged = economy.get_balance(501)
+        merged = economy.get_balance(CHAT, 501)
         check("برنز قبلی حفظ و جمع شد",
               merged[economy.BRONZE] == 5700, f"-> {merged[economy.BRONZE]}")
         check("نقرهٔ موجود دست‌نخورد", merged[economy.SILVER] == 40)
         check("طلای موجود دست‌نخورد", merged[economy.GOLD] == 7)
         check("کاربر بی‌ارتباط دست‌نخورد",
-              economy.get_balance(777)[economy.BRONZE] == 250)
+              economy.get_balance(CHAT, 777)[economy.BRONZE] == 250)
         check("کاربر جدید اضافه شد",
-              economy.get_balance(888)[economy.BRONZE] == 28)
+              economy.get_balance(CHAT, 888)[economy.BRONZE] == 28)
     finally:
         mig.LEGACY_FILE = original
 
@@ -862,6 +862,65 @@ def test_handler_never_drops_message_silently():
     check("ربات بعد از خطا همچنان پاسخ می‌دهد", bool(ok.replies))
 
 
+def test_per_group_isolation():
+    """گروه A و گروه B باید کیف پول و رتبه‌بندی کاملاً جدا داشته باشند."""
+    print("\n### 🔒 جدا بودن اقتصاد هر گروه")
+    fresh()
+    GROUP_A = -1001111111111
+    GROUP_B = -1002222222222
+    group_storage.activate_group(GROUP_A, "A")
+    group_storage.activate_group(GROUP_B, "B")
+
+    economy.award(GROUP_A, 1001, 100, name="user1")
+    economy.award(GROUP_B, 1002, 50, name="user2")
+
+    check("user1 در گروه A صد سکه دارد",
+          economy.get_balance(GROUP_A, 1001)[economy.BRONZE] == 100)
+    check("user1 در گروه B صفر است",
+          economy.get_balance(GROUP_B, 1001)[economy.BRONZE] == 0)
+    check("user2 در گروه B پنجاه سکه دارد",
+          economy.get_balance(GROUP_B, 1002)[economy.BRONZE] == 50)
+    check("user2 در گروه A صفر است",
+          economy.get_balance(GROUP_A, 1002)[economy.BRONZE] == 0)
+
+    a_ids = [r["user_id"] for r in economy.leaderboard(GROUP_A, 5)]
+    b_ids = [r["user_id"] for r in economy.leaderboard(GROUP_B, 5)]
+    check("رتبهٔ گروه A فقط user1", a_ids == ["1001"], f"-> {a_ids}")
+    check("رتبهٔ گروه B فقط user2", b_ids == ["1002"], f"-> {b_ids}")
+
+    check("رتبهٔ user1 در گروه A یک است",
+          economy.get_rank(GROUP_A, 1001) == 1)
+    check("user1 در گروه B رتبه ندارد",
+          economy.get_rank(GROUP_B, 1001) is None)
+
+    async def scenario(group):
+        bot, handler = await build_handler()
+        event = Event("رتبه ها", 1001, chat_id=group)
+        await handler(event)
+        return event
+
+    a_out = asyncio.run(scenario(GROUP_A))
+    b_out = asyncio.run(scenario(GROUP_B))
+    check("خروجی «رتبه ها» گروه A فقط user1",
+          a_out.said("user1") and not a_out.said("user2"))
+    check("خروجی «رتبه ها» گروه B فقط user2",
+          b_out.said("user2") and not b_out.said("user1"))
+
+    # جایزه، تبدیل و انتقال هم باید per-group باشند
+    economy.add_bronze(GROUP_A, 1001, 100)
+    economy.convert_bronze(GROUP_A, 1001)
+    check("تبدیل فقط روی گروه A اثر گذاشت",
+          economy.get_balance(GROUP_A, 1001)[economy.SILVER] == 10
+          and economy.get_balance(GROUP_B, 1001)[economy.SILVER] == 0)
+
+    economy.award(GROUP_A, 1003, 30, name="user3")
+    economy.transfer(GROUP_A, 1003, 1001, economy.BRONZE, 10)
+    check("انتقال داخل گروه A انجام شد",
+          economy.get_balance(GROUP_A, 1003)[economy.BRONZE] == 20)
+    check("گروه B از انتقال متاثر نشد",
+          economy.get_balance(GROUP_B, 1003)[economy.BRONZE] == 0)
+
+
 def main():
     test_handler_is_registered()
     test_balance_command_routed()
@@ -887,6 +946,7 @@ def main():
     test_runtime_data_is_not_tracked_by_git()
     test_migration_merges_into_existing_wallets()
     test_handler_never_drops_message_silently()
+    test_per_group_isolation()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")

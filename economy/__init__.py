@@ -38,8 +38,11 @@ from economy.coins.accounts import (
     calculate_total_value,
     convert_bronze,
     convert_silver,
+    chat_key,
     get_balance,
     get_profile,
+    split_key,
+    user_key,
     recalculate,
     set_name,
     recalculate_all,
@@ -62,7 +65,7 @@ __all__ = [
     # تبدیل و انتقال
     "convert_bronze", "convert_silver", "transfer",
     # ارزش و موجودی
-    "get_balance", "get_profile", "set_name",
+    "get_balance", "get_profile", "set_name", "chat_key", "split_key", "user_key",
     "calculate_total_value", "recalculate", "recalculate_all",
     # فعالیت روزانه
     "record_message", "settle_previous_days", "daily_ranking", "activity",
@@ -85,23 +88,24 @@ def flush():
     return storage.flush()
 
 
-def award(user_id, amount, coin_type=BRONZE, *, reference=None, note=None,
-          name=None, win=True):
+def award(chat_id, user_id, amount, coin_type=BRONZE, *, reference=None,
+          note=None, name=None, win=True):
     """تنها راه پرداخت جایزه از سمت بازی‌ها.
 
     ``reference`` یکتا بدهید (مثل ``"vampire:chat:session"``) تا یک جایزه
     هرگز دو بار پرداخت نشود.
     """
     return _accounts.add(
-        user_id, coin_type, amount,
+        chat_id, user_id, coin_type, amount,
         kind="reward", reference=reference, note=note, name=name, win=win,
     )
 
 
-def spend(user_id, amount, coin_type=BRONZE, *, reference=None, note=None):
+def spend(chat_id, user_id, amount, coin_type=BRONZE, *, reference=None,
+          note=None):
     """کسر سکه برای بازی‌ها؛ در صورت کمبود موجودی خطا می‌دهد."""
     return _accounts.remove(
-        user_id, coin_type, amount,
+        chat_id, user_id, coin_type, amount,
         kind="spend", reference=reference, note=note,
     )
 
