@@ -774,6 +774,62 @@ def test_legacy_coin_migration():
         mig.LEGACY_FILE = original
 
 
+def test_runtime_data_is_not_tracked_by_git():
+    """گارد: فایل‌های دادهٔ کاربران نباید در گیت باشند.
+
+    اگر config/economy.json ردیابی شود، هر pull موجودی واقعی کاربران روی
+    گوشی را با نسخهٔ مخزن بازنویسی یا merge را متوقف می‌کند.
+    """
+    print("\n### 🔒 دادهٔ کاربران در گیت ردیابی نمی‌شود")
+    import subprocess
+
+    for name in ("config/economy.json", "config/economy_shop.json",
+                 "config/economy_settings.json"):
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", name],
+            cwd=ROOT, capture_output=True, text=True).returncode == 0
+        check(f"{name} ردیابی نمی‌شود", not tracked)
+
+        ignored = subprocess.run(
+            ["git", "check-ignore", name],
+            cwd=ROOT, capture_output=True, text=True).returncode == 0
+        check(f"{name} در gitignore هست", ignored)
+
+
+def test_migration_merges_into_existing_wallets():
+    """انتقال باید به موجودی فعلی «اضافه» کند، نه جایگزین."""
+    print("\n### 🪙 انتقال، دادهٔ موجود گوشی را حفظ می‌کند")
+    fresh()
+    import tools.migrate_legacy_coins as mig
+
+    # کیف پول‌هایی که از قبل روی دستگاه هستند
+    economy.add_bronze(501, 5000)
+    economy.add_silver(501, 40)
+    economy.add_gold(501, 7)
+    economy.award(777, 250, name="@untouched")
+
+    original = mig.LEGACY_FILE
+    temp = Path(tempfile.mkdtemp()) / "coins.json"
+    temp.write_text(json.dumps({"users": {"g1": {
+        "501": {"coins": 700, "wins": 2, "name": "@a"},
+        "888": {"coins": 28, "wins": 0, "name": "@b"},
+    }}}, ensure_ascii=False), encoding="utf-8")
+    mig.LEGACY_FILE = temp
+    try:
+        mig.migrate()
+        merged = economy.get_balance(501)
+        check("برنز قبلی حفظ و جمع شد",
+              merged[economy.BRONZE] == 5700, f"-> {merged[economy.BRONZE]}")
+        check("نقرهٔ موجود دست‌نخورد", merged[economy.SILVER] == 40)
+        check("طلای موجود دست‌نخورد", merged[economy.GOLD] == 7)
+        check("کاربر بی‌ارتباط دست‌نخورد",
+              economy.get_balance(777)[economy.BRONZE] == 250)
+        check("کاربر جدید اضافه شد",
+              economy.get_balance(888)[economy.BRONZE] == 28)
+    finally:
+        mig.LEGACY_FILE = original
+
+
 def main():
     test_handler_is_registered()
     test_balance_command_routed()
@@ -796,6 +852,8 @@ def main():
     test_group_still_works()
     test_ranking_display_format()
     test_legacy_coin_migration()
+    test_runtime_data_is_not_tracked_by_git()
+    test_migration_merges_into_existing_wallets()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")
