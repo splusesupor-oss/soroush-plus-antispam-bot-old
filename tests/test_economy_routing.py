@@ -26,6 +26,7 @@ import economy
 import economy.shop.store as store
 import economy.storage as storage
 import handlers.economy_handler as eco_handler
+from economy.ui import balance_menu, shop_menu
 import modules.group_storage as group_storage
 
 PASSED = FAILED = 0
@@ -642,7 +643,7 @@ def test_owner_outgoing_message_works():
 
 
 # ===========================================================================
-# پیوی — مسیری که قبلاً کاملاً دور ریخته می‌شد
+# پیوی — این دستورها فقط در گروه کار می‌کنند
 # ===========================================================================
 class PrivateEvent(Event):
     """پیام خصوصی: is_private=True و peer یک کاربر است، نه گروه."""
@@ -656,117 +657,44 @@ class PrivateEvent(Event):
         return User(self._chat_id)
 
 
-def test_private_balance_command():
-    """گارد رگرسیون: شاخهٔ پیوی با یک return بی‌قیدوشرط تمام می‌شد."""
-    print("\n### 📩 «موجودی» در پیوی")
+def test_private_is_blocked():
+    """دستورهای اقتصاد فقط مخصوص گروه‌اند و در پیوی نباید کار کنند."""
+    print("\n### 🚫 اقتصاد در پیوی کار نمی‌کند")
     fresh()
     economy.add_bronze(777, 152)
-    economy.add_silver(777, 34)
-    economy.add_gold(777, 8)
 
-    async def scenario():
+    async def scenario(text):
         bot, handler = await build_handler()
-        event = PrivateEvent("موجودی", 777)
-        await handler(event)
-        return bot, event
-
-    bot, event = asyncio.run(scenario())
-    check("در پیوی پاسخ داده می‌شود", bool(event.replies),
-          "*** هیچ خروجی نیامد ***")
-    check("منوی کیف پول باز شد", event.said("کیف پول شما"))
-    check("موجودی واقعی نمایش داده شد", event.said("۱۵۲"))
-    check("route پیوی لاگ شد", bot.logger.has("ECONOMY BALANCE READ"))
-
-
-def test_private_shop_command():
-    print("\n### 📩 «فروشگاه» در پیوی")
-    fresh()
-
-    async def scenario():
-        bot, handler = await build_handler()
-        event = PrivateEvent("فروشگاه", 777)
+        event = PrivateEvent(text, 777)
         await handler(event)
         return event
 
-    event = asyncio.run(scenario())
-    check("در پیوی پاسخ داده می‌شود", bool(event.replies),
-          "*** هیچ خروجی نیامد ***")
-    check("منوی فروشگاه باز شد", event.said("🛒 فروشگاه"))
-    check("گزینه‌ها نمایش داده شدند",
-          event.said("لیست آیتم‌ها") and event.said("خرید"))
+    for text in ("موجودی", "فروشگاه"):
+        event = asyncio.run(scenario(text))
+        check(f"«{text}» در پیوی پاسخی نمی‌دهد", not event.replies,
+              f"-> {event.replies}")
+
+    check("هیچ session ای در پیوی باز نشد",
+          not balance_menu.is_open(777, 777)
+          and not shop_menu.is_open(777, 777))
 
 
-def test_private_menu_options_work():
-    print("\n### 📩 گزینه‌های منو در پیوی روی دیتابیس")
+def test_group_still_works():
+    """همان دستورها در گروه باید کار کنند."""
+    print("\n### ✅ اقتصاد فقط در گروه کار می‌کند")
     fresh()
-    economy.add_bronze(777, 250)
-    economy.add_silver(777, 100)
+    economy.add_bronze(777, 152)
 
-    async def scenario():
+    async def scenario(text):
         bot, handler = await build_handler()
-        await handler(PrivateEvent("موجودی", 777))
-        first = PrivateEvent("1", 777)
-        await handler(first)
-        second = PrivateEvent("2", 777)
-        await handler(second)
-        daily = PrivateEvent("7", 777)
-        await handler(daily)
-        return first, second, daily
-
-    first, second, daily = asyncio.run(scenario())
-    check("تبدیل برنز در پیوی کار کرد", first.said("تبدیل شد"))
-    check("تبدیل نقره در پیوی کار کرد", second.said("تبدیل شد"))
-    check("جایزه روزانه در پیوی کار کرد",
-          daily.said("جایزه روزانه دریافت شد"))
-
-    balance = economy.get_balance(777)
-    check("برنز واقعاً تغییر کرد", balance[economy.BRONZE] == 175,
-          f"-> {balance[economy.BRONZE]}")
-    check("طلا واقعاً ساخته شد", balance[economy.GOLD] == 10,
-          f"-> {balance[economy.GOLD]}")
-
-    raw = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
-    check("همه چیز روی دیسک ذخیره شد",
-          raw["users"]["777"]["gold"] == 10
-          and len(raw["users"]["777"]["transactions"]) >= 3)
-
-
-def test_private_shop_buy():
-    print("\n### 📩 خرید از فروشگاه در پیوی")
-    fresh()
-    economy.shop.add_item("badge", "نشان", 50, "bronze")
-    economy.add_bronze(777, 100)
-
-    async def scenario():
-        bot, handler = await build_handler()
-        await handler(PrivateEvent("فروشگاه", 777))
-        prompt = PrivateEvent("2", 777)
-        await handler(prompt)
-        buy = PrivateEvent("badge", 777)
-        await handler(buy)
-        return prompt, buy
-
-    prompt, buy = asyncio.run(scenario())
-    check("راهنمای خرید آمد", prompt.said("شناسهٔ آیتم"))
-    check("خرید انجام شد", buy.said("خریداری شد"))
-    check("سکه واقعاً کسر شد",
-          economy.get_balance(777)[economy.BRONZE] == 50,
-          f"-> {economy.get_balance(777)[economy.BRONZE]}")
-
-
-def test_private_unrelated_text_ignored():
-    print("\n### 📩 متن نامرتبط در پیوی")
-    fresh()
-
-    async def scenario():
-        bot, handler = await build_handler()
-        event = PrivateEvent("سلام", 777)
+        event = Event(text, 777)
         await handler(event)
         return event
 
-    event = asyncio.run(scenario())
-    check("متن نامرتبط پاسخ اقتصادی نمی‌گیرد",
-          not event.said("کیف پول"), f"-> {event.replies}")
+    balance = asyncio.run(scenario("موجودی"))
+    check("«موجودی» در گروه کار می‌کند", balance.said("کیف پول شما"))
+    shop = asyncio.run(scenario("فروشگاه"))
+    check("«فروشگاه» در گروه کار می‌کند", shop.said("🛒 فروشگاه"))
 
 
 def main():
@@ -787,11 +715,8 @@ def main():
     test_unexpected_error_is_reported()
     test_repeated_command_not_swallowed()
     test_owner_outgoing_message_works()
-    test_private_balance_command()
-    test_private_shop_command()
-    test_private_menu_options_work()
-    test_private_shop_buy()
-    test_private_unrelated_text_ignored()
+    test_private_is_blocked()
+    test_group_still_works()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")
