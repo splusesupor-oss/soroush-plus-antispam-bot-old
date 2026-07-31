@@ -641,6 +641,134 @@ def test_owner_outgoing_message_works():
     check("منو باز شد", event.said("کیف پول شما"))
 
 
+# ===========================================================================
+# پیوی — مسیری که قبلاً کاملاً دور ریخته می‌شد
+# ===========================================================================
+class PrivateEvent(Event):
+    """پیام خصوصی: is_private=True و peer یک کاربر است، نه گروه."""
+
+    def __init__(self, text, user_id, reply_target=None):
+        super().__init__(text, user_id, chat_id=user_id,
+                         reply_target=reply_target)
+        self.is_private = True
+
+    async def get_chat(self):
+        return User(self._chat_id)
+
+
+def test_private_balance_command():
+    """گارد رگرسیون: شاخهٔ پیوی با یک return بی‌قیدوشرط تمام می‌شد."""
+    print("\n### 📩 «موجودی» در پیوی")
+    fresh()
+    economy.add_bronze(777, 152)
+    economy.add_silver(777, 34)
+    economy.add_gold(777, 8)
+
+    async def scenario():
+        bot, handler = await build_handler()
+        event = PrivateEvent("موجودی", 777)
+        await handler(event)
+        return bot, event
+
+    bot, event = asyncio.run(scenario())
+    check("در پیوی پاسخ داده می‌شود", bool(event.replies),
+          "*** هیچ خروجی نیامد ***")
+    check("منوی کیف پول باز شد", event.said("کیف پول شما"))
+    check("موجودی واقعی نمایش داده شد", event.said("۱۵۲"))
+    check("route پیوی لاگ شد", bot.logger.has("ECONOMY BALANCE READ"))
+
+
+def test_private_shop_command():
+    print("\n### 📩 «فروشگاه» در پیوی")
+    fresh()
+
+    async def scenario():
+        bot, handler = await build_handler()
+        event = PrivateEvent("فروشگاه", 777)
+        await handler(event)
+        return event
+
+    event = asyncio.run(scenario())
+    check("در پیوی پاسخ داده می‌شود", bool(event.replies),
+          "*** هیچ خروجی نیامد ***")
+    check("منوی فروشگاه باز شد", event.said("🛒 فروشگاه"))
+    check("گزینه‌ها نمایش داده شدند",
+          event.said("لیست آیتم‌ها") and event.said("خرید"))
+
+
+def test_private_menu_options_work():
+    print("\n### 📩 گزینه‌های منو در پیوی روی دیتابیس")
+    fresh()
+    economy.add_bronze(777, 250)
+    economy.add_silver(777, 100)
+
+    async def scenario():
+        bot, handler = await build_handler()
+        await handler(PrivateEvent("موجودی", 777))
+        first = PrivateEvent("1", 777)
+        await handler(first)
+        second = PrivateEvent("2", 777)
+        await handler(second)
+        daily = PrivateEvent("7", 777)
+        await handler(daily)
+        return first, second, daily
+
+    first, second, daily = asyncio.run(scenario())
+    check("تبدیل برنز در پیوی کار کرد", first.said("تبدیل شد"))
+    check("تبدیل نقره در پیوی کار کرد", second.said("تبدیل شد"))
+    check("جایزه روزانه در پیوی کار کرد",
+          daily.said("جایزه روزانه دریافت شد"))
+
+    balance = economy.get_balance(777)
+    check("برنز واقعاً تغییر کرد", balance[economy.BRONZE] == 175,
+          f"-> {balance[economy.BRONZE]}")
+    check("طلا واقعاً ساخته شد", balance[economy.GOLD] == 10,
+          f"-> {balance[economy.GOLD]}")
+
+    raw = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
+    check("همه چیز روی دیسک ذخیره شد",
+          raw["users"]["777"]["gold"] == 10
+          and len(raw["users"]["777"]["transactions"]) >= 3)
+
+
+def test_private_shop_buy():
+    print("\n### 📩 خرید از فروشگاه در پیوی")
+    fresh()
+    economy.shop.add_item("badge", "نشان", 50, "bronze")
+    economy.add_bronze(777, 100)
+
+    async def scenario():
+        bot, handler = await build_handler()
+        await handler(PrivateEvent("فروشگاه", 777))
+        prompt = PrivateEvent("2", 777)
+        await handler(prompt)
+        buy = PrivateEvent("badge", 777)
+        await handler(buy)
+        return prompt, buy
+
+    prompt, buy = asyncio.run(scenario())
+    check("راهنمای خرید آمد", prompt.said("شناسهٔ آیتم"))
+    check("خرید انجام شد", buy.said("خریداری شد"))
+    check("سکه واقعاً کسر شد",
+          economy.get_balance(777)[economy.BRONZE] == 50,
+          f"-> {economy.get_balance(777)[economy.BRONZE]}")
+
+
+def test_private_unrelated_text_ignored():
+    print("\n### 📩 متن نامرتبط در پیوی")
+    fresh()
+
+    async def scenario():
+        bot, handler = await build_handler()
+        event = PrivateEvent("سلام", 777)
+        await handler(event)
+        return event
+
+    event = asyncio.run(scenario())
+    check("متن نامرتبط پاسخ اقتصادی نمی‌گیرد",
+          not event.said("کیف پول"), f"-> {event.replies}")
+
+
 def main():
     test_handler_is_registered()
     test_balance_command_routed()
@@ -659,6 +787,11 @@ def main():
     test_unexpected_error_is_reported()
     test_repeated_command_not_swallowed()
     test_owner_outgoing_message_works()
+    test_private_balance_command()
+    test_private_shop_command()
+    test_private_menu_options_work()
+    test_private_shop_buy()
+    test_private_unrelated_text_ignored()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")

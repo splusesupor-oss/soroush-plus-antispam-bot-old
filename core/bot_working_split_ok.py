@@ -11,6 +11,7 @@ from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
 from modules.group_expiry import match_command as expiry_command
+from handlers.economy_handler import handle as handle_economy
 from handlers.group_expiry_handler import (
     run_expiry_watcher as run_group_expiry_watcher,
 )
@@ -880,6 +881,26 @@ class SoroushAntiSpamBot:
                             f"خطای صفر کردن از پیوی: {e}"
                         )
                     return
+
+                # 💰 اقتصاد در پیوی هم باید کار کند.
+                #
+                # این شاخه با یک return بی‌قیدوشرط تمام می‌شود، پس هر پیام
+                # خصوصی پیش از رسیدن به handler دور ریخته می‌شد و «موجودی»
+                # و «فروشگاه» در پیوی هیچ واکنشی نداشتند. مسیر اقتصاد
+                # صراحتاً پیش از آن return فراخوانی می‌شود.
+                try:
+                    private_sender = await event.get_sender()
+                    private_user_id = getattr(private_sender, "id", None)
+                    if private_user_id is not None and await handle_economy(
+                        self, event, private_user_id, private_user_id,
+                        private_sender, text, self.logger,
+                    ):
+                        return
+                except Exception as error:
+                    self.logger.log_error(
+                        "ECONOMY PRIVATE ROUTE FAILED "
+                        f"text={text!r} error={error!r}"
+                    )
 
                 # پیام خصوصی پس از route اختصاصی هرگز وارد handler گروهی نمی‌شود.
                 return
