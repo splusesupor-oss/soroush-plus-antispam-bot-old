@@ -929,7 +929,8 @@ def test_independence():
     check("هیچ وابستگی ممنوعی ندارد", not leaked, f"-> {sorted(leaked)}")
     check("فقط economy و کتابخانهٔ استاندارد",
           imported <= {"economy", "datetime", "time", "json", "os",
-                       "pathlib", "tempfile"},
+                       "pathlib", "tempfile", "re", "unicodedata",
+                       "importlib"},
           f"-> {sorted(imported)}")
 
 

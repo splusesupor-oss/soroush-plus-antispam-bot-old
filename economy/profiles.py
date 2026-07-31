@@ -12,7 +12,7 @@
 """
 from datetime import datetime, timezone
 
-from economy import catalog, settings, storage
+from economy import catalog, name_filter, settings, storage
 from economy.coins import accounts
 from economy.transactions import ledger
 
@@ -81,12 +81,24 @@ def _record(data, key):
 # ---------------------------------------------------------------------------
 # اعتبارسنجی ورودی‌های ثبت‌نام
 # ---------------------------------------------------------------------------
+def _reject_bad_words(value):
+    """نام/لقب نامناسب را رد می‌کند.
+
+    فیلتر داخل خودِ بستهٔ economy است تا استقلال بسته حفظ شود؛ این بسته
+    عمداً هیچ چیزی از ``modules/`` import نمی‌کند.
+    """
+    ok, message = name_filter.check(value)
+    if not ok:
+        raise ProfileError(message)
+
+
 def validate_name(text):
     value = _clean(text)
     if not value:
         raise ProfileError("اسم نمی‌تواند خالی باشد.")
     if len(value) > MAX_NAME:
         raise ProfileError(f"اسم نباید بیشتر از {MAX_NAME} نویسه باشد.")
+    _reject_bad_words(value)
     return value
 
 
@@ -123,6 +135,7 @@ def validate_nickname(text, *, owned_titles=()):
         return None
     if len(value) > MAX_NICKNAME:
         raise ProfileError(f"لقب نباید بیشتر از {MAX_NICKNAME} نویسه باشد.")
+    _reject_bad_words(value)
 
     locked = catalog.title_item_for(value)
     if locked is not None and locked["id"] not in set(owned_titles):

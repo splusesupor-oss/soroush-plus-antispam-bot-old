@@ -704,7 +704,9 @@ def test_independence():
           f"-> {sorted(leaked)}")
     check("فقط کتابخانهٔ استاندارد و خودِ economy",
           imported <= {"economy", "json", "os", "tempfile", "threading",
-                       "copy", "datetime", "pathlib", "time", "zoneinfo"},
+                       "copy", "datetime", "pathlib", "time", "zoneinfo",
+                       # فیلتر نام: فقط کتابخانهٔ استاندارد.
+                       "re", "unicodedata", "importlib"},
           f"-> {sorted(imported)}")
 
     check("فایل دادهٔ اقتصاد جداست",

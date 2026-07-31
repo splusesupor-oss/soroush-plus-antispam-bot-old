@@ -117,8 +117,18 @@ def extract_name(text):
         return None, "empty"
     if len(value) > 80:
         return None, "too_long"
+    # فیلتر مشترک نام و لقب پیش از لیست قدیمی اجرا می‌شود تا پیام
+    # دقیقِ خودش نمایش داده شود، نه پیام عمومی «نام معتبر نیست».
+    # عمداً بدون try: اگر این import بشکند، فیلتر بی‌صدا خاموش می‌شود و
+    # هر فحشی از آن رد می‌شود. بهتر است خطا دیده شود.
+    from economy import name_filter
+    kind = name_filter.classify(value)
+    if kind == "restricted":
+        return None, "restricted"
+    if kind == "banned":
+        return None, "banned"
     if _has_banned_term(value):
-        return None, "invalid"
+        return None, "banned"
     words = [word.strip(".,!؟?!") for word in value.split()]
     words = [word for word in words if word and _normal(word) not in SENTENCE_WORDS]
     if not words:
