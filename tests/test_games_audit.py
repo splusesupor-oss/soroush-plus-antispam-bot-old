@@ -374,12 +374,31 @@ def test_word_correction():
     check("پاسخ درست پذیرفته می‌شود", wc.answer(CHAT, game["correct"]) is True)
     check("بعد از برد بازی بسته شد", wc.get(CHAT) is None)
 
-    # نیم‌فاصله نباید مانع پذیرش شود
+    # نیم‌فاصله فقط وقتی نادیده گرفته می‌شود که تفاوت غلط و درست در آن
+    # نباشد. برای جفت‌هایی مثل «هم اکنون» → «هم‌اکنون» خودِ فاصله‌گذاری
+    # همان چیزی است که باید تصحیح شود، پس تایپ با فاصله «درست» نیست.
     wc._active.clear()
-    game = wc.start(CHAT)
-    variant = game["correct"].replace("\u200c", " ")
-    check("نیم‌فاصله/فاصله مانع پذیرش نیست",
-          wc.answer(CHAT, variant) is True, f"-> {game['correct']!r}")
+    wc._remaining.clear()
+    spacing_pair = next(
+        (w, c) for w, c in wc.WORDS if wc._letters(w) == wc._letters(c)
+    )
+    other_pair = next(
+        (w, c) for w, c in wc.WORDS if wc._letters(w) != wc._letters(c)
+    )
+
+    wc._active[CHAT] = {"wrong": spacing_pair[0], "correct": spacing_pair[1],
+                        "token": 1}
+    check("در جفت فاصله‌ای، شکل غلط پذیرفته نمی‌شود",
+          wc.answer(CHAT, spacing_pair[0]) is False,
+          f"-> {spacing_pair}")
+    check("در جفت فاصله‌ای، فقط شکل درست پذیرفته می‌شود",
+          wc.answer(CHAT, spacing_pair[1]) is True, f"-> {spacing_pair}")
+
+    wc._active[CHAT] = {"wrong": other_pair[0], "correct": other_pair[1],
+                        "token": 2}
+    loose = other_pair[1].replace("\u200c", " ")
+    check("در بقیهٔ جفت‌ها نیم‌فاصله مانع پذیرش نیست",
+          wc.answer(CHAT, loose) is True, f"-> {other_pair}")
 
     # کلمات تکراری تا پایان بانک
     wc._active.clear()

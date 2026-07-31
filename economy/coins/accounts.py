@@ -1,0 +1,327 @@
+"""🪙 حساب‌های سکه — هستهٔ عملیات اتمیک.
+
+هر عملیات داخل ``storage.transaction()`` انجام می‌شود، پس:
+  • دو عملیات هم‌زمان موجودی را خراب نمی‌کنند.
+  • موجودی هرگز منفی نمی‌شود (پیش از کسر بررسی می‌گردد).
+  • ``total_coin_value`` بعد از هر تغییر دوباره محاسبه و ذخیره می‌شود.
+  • ثبت تاریخچه در همان تراکنش انجام می‌گیرد.
+"""
+from datetime import datetime, timezone
+
+from economy import settings, storage
+from economy.transactions import ledger
+
+BRONZE = settings.BRONZE
+SILVER = settings.SILVER
+GOLD = settings.GOLD
+COIN_TYPES = settings.COIN_TYPES
+
+
+class EconomyError(Exception):
+    """خطای قابل‌انتظار اقتصاد (موجودی کم، ورودی نامعتبر و…)."""
+
+
+def user_key(user_id):
+    return str(user_id)
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _blank_user():
+    return {
+        BRONZE: 0,
+        SILVER: 0,
+        GOLD: 0,
+        "total_coin_value": 0,
+        "transactions": [],
+        "references": [],
+        "created_at": _now(),
+        # مهر ترتیبی لحظه‌ای که کاربر به ارزش فعلی رسیده است. برای
+        # تساوی در رتبه‌بندی استفاده می‌شود: هرکس زودتر رسیده، بالاتر.
+        "value_reached_seq": 0,
+        "value_reached_at": None,
+    }
+
+
+def _user(data, key):
+    users = data.setdefault("users", {})
+    user = users.get(key)
+    if user is None:
+        user = _blank_user()
+        users[key] = user
+    for coin in COIN_TYPES:
+        user.setdefault(coin, 0)
+    user.setdefault("total_coin_value", 0)
+    user.setdefault("transactions", [])
+    user.setdefault("references", [])
+    user.setdefault("value_reached_seq", 0)
+    return user
+
+
+def _validate_amount(amount):
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise EconomyError("مقدار سکه باید عدد صحیح باشد.")
+    if amount <= 0:
+        raise EconomyError("مقدار سکه باید بزرگ‌تر از صفر باشد.")
+    return amount
+
+
+def _validate_coin(coin_type):
+    if coin_type not in COIN_TYPES:
+        raise EconomyError(f"نوع سکه نامعتبر است: {coin_type!r}")
+    return coin_type
+
+
+def compute_total_value(user):
+    """ارزش کل از روی موجودی و ارزش‌های تنظیمات."""
+    values = settings.coin_values()
+    return sum(int(user.get(coin, 0)) * int(values[coin])
+               for coin in COIN_TYPES)
+
+
+def _refresh_total(data, user):
+    """``total_coin_value`` را دوباره می‌سازد و زمان رسیدن را ثبت می‌کند."""
+    previous = int(user.get("total_coin_value", 0))
+    current = compute_total_value(user)
+    user["total_coin_value"] = current
+    if current != previous:
+        # فقط وقتی ارزش عوض شود مهر زمانی تازه می‌شود، پس کسی که زودتر به
+        # این مقدار رسیده، مهر کوچک‌تر و در نتیجه رتبهٔ بالاتری دارد.
+        user["value_reached_seq"] = storage.next_sequence(data)
+        user["value_reached_at"] = _now()
+    return current
+
+
+def _snapshot_balance(user):
+    balance = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
+    balance["total_coin_value"] = int(user.get("total_coin_value", 0))
+    return balance
+
+
+# ---------------------------------------------------------------------------
+# افزودن و کسر
+# ---------------------------------------------------------------------------
+def add(user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
+        reference=None, note=None):
+    """افزودن سکه. خروجی: موجودی جدید.
+
+    اگر ``reference`` تکراری باشد هیچ تغییری اعمال نمی‌شود و موجودی فعلی
+    برگردانده می‌شود — این همان محافظ «جلوگیری از ثبت دوبارهٔ تراکنش» است.
+    """
+    _validate_coin(coin_type)
+    _validate_amount(amount)
+    key = user_key(user_id)
+
+    with storage.transaction() as data:
+        if ledger.is_duplicate(data, key, reference):
+            return _snapshot_balance(_user(data, key))
+        user = _user(data, key)
+        user[coin_type] = int(user.get(coin_type, 0)) + int(amount)
+        total = _refresh_total(data, user)
+        ledger.record(
+            data, key, kind, {coin_type: amount},
+            reference=reference, note=note,
+            balance_after=_snapshot_balance(user), total_value=total,
+        )
+        return _snapshot_balance(user)
+
+
+def remove(user_id, coin_type, amount, *, kind=ledger.KIND_SPEND,
+           reference=None, note=None):
+    """کسر سکه. اگر موجودی کافی نباشد ``EconomyError`` می‌دهد."""
+    _validate_coin(coin_type)
+    _validate_amount(amount)
+    key = user_key(user_id)
+
+    with storage.transaction() as data:
+        if ledger.is_duplicate(data, key, reference):
+            return _snapshot_balance(_user(data, key))
+        user = _user(data, key)
+        current = int(user.get(coin_type, 0))
+        if current < amount:
+            raise EconomyError(
+                f"موجودی {settings.COIN_LABELS[coin_type]} کافی نیست: "
+                f"{current} < {amount}"
+            )
+        user[coin_type] = current - int(amount)
+        total = _refresh_total(data, user)
+        ledger.record(
+            data, key, kind, {coin_type: -amount},
+            reference=reference, note=note,
+            balance_after=_snapshot_balance(user), total_value=total,
+        )
+        return _snapshot_balance(user)
+
+
+# --- میان‌برهای نوع‌دار ------------------------------------------------------
+def add_bronze(user_id, amount, **kwargs):
+    return add(user_id, BRONZE, amount, **kwargs)
+
+
+def add_silver(user_id, amount, **kwargs):
+    return add(user_id, SILVER, amount, **kwargs)
+
+
+def add_gold(user_id, amount, **kwargs):
+    return add(user_id, GOLD, amount, **kwargs)
+
+
+def remove_bronze(user_id, amount, **kwargs):
+    return remove(user_id, BRONZE, amount, **kwargs)
+
+
+def remove_silver(user_id, amount, **kwargs):
+    return remove(user_id, SILVER, amount, **kwargs)
+
+
+def remove_gold(user_id, amount, **kwargs):
+    return remove(user_id, GOLD, amount, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# تبدیل
+# ---------------------------------------------------------------------------
+def _convert(user_id, source, target, cost, gain, times, reference, note):
+    if isinstance(times, bool) or not isinstance(times, int) or times <= 0:
+        raise EconomyError("تعداد تبدیل باید عدد صحیح مثبت باشد.")
+    total_cost = cost * times
+    total_gain = gain * times
+    key = user_key(user_id)
+
+    with storage.transaction() as data:
+        if ledger.is_duplicate(data, key, reference):
+            return _snapshot_balance(_user(data, key))
+        user = _user(data, key)
+        current = int(user.get(source, 0))
+        if current < total_cost:
+            raise EconomyError(
+                f"موجودی {settings.COIN_LABELS[source]} کافی نیست: "
+                f"{current} < {total_cost}"
+            )
+        user[source] = current - total_cost
+        user[target] = int(user.get(target, 0)) + total_gain
+        total = _refresh_total(data, user)
+        ledger.record(
+            data, key, ledger.KIND_CONVERT,
+            {source: -total_cost, target: total_gain},
+            reference=reference, note=note,
+            balance_after=_snapshot_balance(user), total_value=total,
+        )
+        return _snapshot_balance(user)
+
+
+def convert_bronze(user_id, times=1, *, reference=None, note=None):
+    """۱۰۰ برنز ➜ ۱۰ نقره (به ازای هر بار)."""
+    config = settings.load()
+    return _convert(
+        user_id, BRONZE, SILVER,
+        int(config["BronzeToSilverCost"]), int(config["BronzeToSilverGain"]),
+        times, reference, note,
+    )
+
+
+def convert_silver(user_id, times=1, *, reference=None, note=None):
+    """۷۰ نقره ➜ ۱۰ طلا (به ازای هر بار)."""
+    config = settings.load()
+    return _convert(
+        user_id, SILVER, GOLD,
+        int(config["SilverToGoldCost"]), int(config["SilverToGoldGain"]),
+        times, reference, note,
+    )
+
+
+# ---------------------------------------------------------------------------
+# انتقال
+# ---------------------------------------------------------------------------
+def transfer(sender_id, receiver_id, coin_type, amount, *,
+             reference=None, note=None):
+    """انتقال سکه بین دو کاربر — کاملاً اتمیک.
+
+    یا هر دو طرف تغییر می‌کنند یا هیچ‌کدام.
+    """
+    _validate_coin(coin_type)
+    _validate_amount(amount)
+    sender = user_key(sender_id)
+    receiver = user_key(receiver_id)
+    if sender == receiver:
+        raise EconomyError("انتقال به خودتان ممکن نیست.")
+
+    with storage.transaction() as data:
+        if ledger.is_duplicate(data, sender, reference):
+            return {
+                "sender": _snapshot_balance(_user(data, sender)),
+                "receiver": _snapshot_balance(_user(data, receiver)),
+            }
+        from_user = _user(data, sender)
+        to_user = _user(data, receiver)
+        current = int(from_user.get(coin_type, 0))
+        if current < amount:
+            raise EconomyError(
+                f"موجودی {settings.COIN_LABELS[coin_type]} کافی نیست: "
+                f"{current} < {amount}"
+            )
+
+        from_user[coin_type] = current - int(amount)
+        to_user[coin_type] = int(to_user.get(coin_type, 0)) + int(amount)
+        from_total = _refresh_total(data, from_user)
+        to_total = _refresh_total(data, to_user)
+
+        ledger.record(
+            data, sender, ledger.KIND_TRANSFER_OUT, {coin_type: -amount},
+            reference=reference, note=note, counterparty=receiver,
+            balance_after=_snapshot_balance(from_user), total_value=from_total,
+        )
+        ledger.record(
+            data, receiver, ledger.KIND_TRANSFER_IN, {coin_type: amount},
+            reference=f"{reference}:in" if reference else None,
+            note=note, counterparty=sender,
+            balance_after=_snapshot_balance(to_user), total_value=to_total,
+        )
+        return {
+            "sender": _snapshot_balance(from_user),
+            "receiver": _snapshot_balance(to_user),
+        }
+
+
+# ---------------------------------------------------------------------------
+# خواندن
+# ---------------------------------------------------------------------------
+def get_balance(user_id):
+    """موجودی هر سه سکه به‌همراه ارزش کل."""
+    data = storage.snapshot()
+    user = data.get("users", {}).get(user_key(user_id))
+    if not user:
+        return {BRONZE: 0, SILVER: 0, GOLD: 0, "total_coin_value": 0}
+    balance = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
+    # ارزش همیشه از روی تنظیمات فعلی محاسبه می‌شود تا تغییر تنظیمات
+    # بلافاصله بازتاب پیدا کند.
+    balance["total_coin_value"] = compute_total_value(user)
+    return balance
+
+
+def calculate_total_value(user_id):
+    """ارزش کل کاربر؛ همیشه از موجودی فعلی بازمحاسبه می‌شود."""
+    return get_balance(user_id)["total_coin_value"]
+
+
+def recalculate(user_id):
+    """ارزش کل را بازمحاسبه و ذخیره می‌کند (پس از تغییر تنظیمات)."""
+    key = user_key(user_id)
+    with storage.transaction() as data:
+        user = _user(data, key)
+        return _refresh_total(data, user)
+
+
+def recalculate_all():
+    """ارزش همهٔ کاربران را بازمحاسبه می‌کند."""
+    with storage.transaction() as data:
+        for key in list(data.get("users", {})):
+            _refresh_total(data, _user(data, key))
+        return len(data.get("users", {}))
+
+
+def all_users():
+    """کپی فقط-خواندنی از همهٔ حساب‌ها."""
+    return storage.snapshot().get("users", {})
