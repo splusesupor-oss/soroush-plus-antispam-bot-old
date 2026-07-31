@@ -1,8 +1,9 @@
 """💰 هندلر اقتصاد — تنها نقطهٔ اتصال اقتصاد به ربات.
 
-دو بخش مستقل:
+سه بخش مستقل:
     «موجودی»  → منوی واحد شامل همهٔ قابلیت‌های اقتصاد
     «فروشگاه» → بخش جدا برای لیست و خرید
+    «پروفایل» → ثبت اطلاعات، کارت پروفایل و خرید نشان/سطح/لقب
 
 هیچ قابلیتی دستور جداگانه ندارد. این فایل هیچ بازی‌ای را import نمی‌کند
 و هرگز مستقیماً به دیتابیس اقتصاد دست نمی‌زند؛ همه چیز از راه API.
@@ -10,7 +11,8 @@
 from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 
 import economy
-from economy.ui import balance_menu, shop_menu
+from economy import profiles
+from economy.ui import balance_menu, profile_menu, shop_menu
 
 CANCEL = "0"
 
@@ -217,6 +219,142 @@ async def _handle_shop_step(bot, event, chat_id, user_id, sender, text,
 
 
 # ---------------------------------------------------------------------------
+# بخش پروفایل
+# ---------------------------------------------------------------------------
+async def _handle_profile_step(bot, event, chat_id, user_id, sender, text,
+                               logger):
+    state = profile_menu.session(chat_id, user_id)
+    if state is None:
+        return False
+    step = state["step"]
+    numeric = profile_menu._english(text)
+    draft = state.setdefault("draft", {})
+
+    # --- ثبت اطلاعات اولیه (اسم ← شهر ← سن ← لقب) ----------------------
+    if step == profile_menu.STEP_NAME:
+        try:
+            draft["name"] = profiles.validate_name(text)
+        except profiles.ProfileError as error:
+            await _send(event, f"❌ {error}", logger)
+            return True
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_CITY)
+        await _send(event, profile_menu.PROMPT_CITY, logger)
+        return True
+
+    if step == profile_menu.STEP_CITY:
+        try:
+            draft["city"] = profiles.validate_city(text)
+        except profiles.ProfileError as error:
+            await _send(event, f"❌ {error}", logger)
+            return True
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_AGE)
+        await _send(event, profile_menu.PROMPT_AGE, logger)
+        return True
+
+    if step == profile_menu.STEP_AGE:
+        try:
+            draft["age"] = profiles.validate_age(text)
+        except profiles.ProfileError as error:
+            await _send(event, f"❌ {error}", logger)
+            return True
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_NICKNAME)
+        await _send(event, profile_menu.PROMPT_NICKNAME, logger)
+        return True
+
+    if step == profile_menu.STEP_NICKNAME:
+        try:
+            draft["nickname"] = profiles.validate_nickname(text)
+        except profiles.ProfileError as error:
+            await _send(event, f"❌ {error}", logger)
+            return True
+        try:
+            profiles.register(chat_id, user_id, **draft)
+        except profiles.ProfileError as error:
+            profile_menu.close_session(chat_id, user_id)
+            await _send(event, f"❌ {error}", logger)
+            return True
+        _log(logger, f"PROFILE REGISTERED chat_id={chat_id} "
+                     f"user_id={user_id}")
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
+        await _send(event, "✅ پروفایل شما ثبت شد.", logger)
+        await _send(event,
+                    profile_menu.render_menu(chat_id, user_id, sender), logger)
+        return True
+
+    # --- خرید آیتم ------------------------------------------------------
+    if step == profile_menu.STEP_BUY:
+        if numeric == CANCEL:
+            profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
+            await _send(event, "لغو شد.", logger)
+            return True
+        reference = (f"profile:{chat_id}:{user_id}:"
+                     f"{profile_menu.normalize(text)}:{event.message.id}")
+        ok, message = profile_menu.do_buy(chat_id, user_id, text,
+                                          reference=reference)
+        if ok:
+            profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
+        await _send(event, message, logger)
+        _log(logger, f"PROFILE BUY chat_id={chat_id} user_id={user_id} "
+                     f"item={profile_menu.normalize(text)!r} ok={ok}")
+        return True
+
+    # --- ویرایش ---------------------------------------------------------
+    if step == profile_menu.STEP_EDIT:
+        if numeric == CANCEL:
+            profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
+            await _send(event,
+                        profile_menu.render_menu(chat_id, user_id, sender),
+                        logger)
+            return True
+        field = profile_menu._EDIT_FIELDS.get(numeric)
+        if field is None:
+            return False
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_EDIT_VALUE,
+                           field=field[0])
+        await _send(event, profile_menu.edit_prompt(field[1]), logger)
+        return True
+
+    if step == profile_menu.STEP_EDIT_VALUE:
+        field = state.get("field")
+        if not field:
+            profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
+            return False
+        try:
+            profiles.update(chat_id, user_id, **{field: text})
+        except profiles.ProfileError as error:
+            await _send(event, f"❌ {error}", logger)
+            return True
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
+        await _send(event, "✅ ذخیره شد.", logger)
+        await _send(event,
+                    profile_menu.render_menu(chat_id, user_id, sender), logger)
+        return True
+
+    # --- منوی اصلی ------------------------------------------------------
+    if numeric == CANCEL:
+        profile_menu.close_session(chat_id, user_id)
+        await _send(event, "بسته شد.", logger)
+        return True
+
+    if numeric == profile_menu.MENU_ITEMS:
+        await _send(event, profile_menu.render_items(chat_id, user_id), logger)
+        return True
+
+    if numeric == profile_menu.MENU_BUY:
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_BUY)
+        await _send(event, profile_menu.buy_prompt(chat_id, user_id), logger)
+        return True
+
+    if numeric == profile_menu.MENU_EDIT:
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_EDIT)
+        await _send(event, profile_menu.PROMPT_EDIT, logger)
+        return True
+
+    # هر متن دیگری: منو باز می‌ماند و پیام مصرف نمی‌شود.
+    return False
+
+
+# ---------------------------------------------------------------------------
 # ورودی اصلی
 # ---------------------------------------------------------------------------
 async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
@@ -226,19 +364,61 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     # نکند. با این لاگ می‌توان فهمید پیام اصلاً به هندلر رسیده یا نه، و
     # اگر رسیده چرا تطبیق نکرده است.
     normalized = balance_menu.normalize(text)
-    if normalized in {"موجودی", "فروشگاه"} or balance_menu.is_open(
-            chat_id, user_id) or shop_menu.is_open(chat_id, user_id):
+    if normalized in {"موجودی", "فروشگاه", "پروفایل"} or balance_menu.is_open(
+            chat_id, user_id) or shop_menu.is_open(chat_id, user_id) \
+            or profile_menu.is_open(chat_id, user_id):
         _log(logger,
              "ECONOMY HANDLER ENTER "
              f"chat_id={chat_id} user_id={user_id} "
              f"raw_text={text!r} normalized={normalized!r} "
              f"balance_open={balance_menu.is_open(chat_id, user_id)} "
-             f"shop_open={shop_menu.is_open(chat_id, user_id)}")
+             f"shop_open={shop_menu.is_open(chat_id, user_id)} "
+             f"profile_open={profile_menu.is_open(chat_id, user_id)}")
 
     # ۱) باز کردن بخش‌ها
+    if profile_menu.is_command(text):
+        try:
+            balance_menu.close_session(chat_id, user_id)
+            shop_menu.close_session(chat_id, user_id)
+            display = _display_name(sender)
+            if display:
+                economy.set_name(chat_id, user_id, display)
+
+            if profiles.is_registered(chat_id, user_id):
+                profile_menu.open_session(chat_id, user_id,
+                                          profile_menu.STEP_MENU)
+                payload = profile_menu.render_menu(chat_id, user_id, sender)
+                _log(logger,
+                     "PROFILE CARD RENDERED "
+                     f"chat_id={chat_id} user_id={user_id} "
+                     f"text_len={len(payload[0])} entities={len(payload[1])}")
+                await _send(event, payload, logger)
+            else:
+                profile_menu.open_session(chat_id, user_id,
+                                          profile_menu.STEP_NAME)
+                _log(logger, "PROFILE REGISTRATION START "
+                             f"chat_id={chat_id} user_id={user_id}")
+                await _send(event, profile_menu.PROMPT_NAME, logger)
+            _log(logger, f"PROFILE MENU SENT chat_id={chat_id} "
+                         f"user_id={user_id}")
+        except Exception as error:
+            import traceback
+            _log_error(logger,
+                       "PROFILE MENU FAILED "
+                       f"chat_id={chat_id} user_id={user_id} "
+                       f"error={error!r}\n{traceback.format_exc()}")
+            try:
+                await event.reply(f"❌ خطا در نمایش پروفایل: {error}")
+            except Exception as reply_error:
+                _log_error(logger,
+                           "PROFILE FALLBACK REPLY FAILED "
+                           f"chat_id={chat_id} error={reply_error!r}")
+        return True
+
     if balance_menu.is_command(text):
         try:
             shop_menu.close_session(chat_id, user_id)
+            profile_menu.close_session(chat_id, user_id)
             balance_menu.open_session(chat_id, user_id)
             display = _display_name(sender)
             if display:
@@ -284,6 +464,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     if shop_menu.is_command(text):
         try:
             balance_menu.close_session(chat_id, user_id)
+            profile_menu.close_session(chat_id, user_id)
             shop_menu.open_session(chat_id, user_id)
             balance = economy.get_balance(chat_id, user_id)
             _log(logger,
@@ -311,6 +492,10 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
 
     # ۲) ادامهٔ گفتگوی باز
     try:
+        if profile_menu.is_open(chat_id, user_id):
+            if await _handle_profile_step(bot, event, chat_id, user_id,
+                                          sender, text, logger):
+                return True
         if balance_menu.is_open(chat_id, user_id):
             if await _handle_balance_step(bot, event, chat_id, user_id,
                                           sender, text, logger):
@@ -320,10 +505,13 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                                        sender, text, logger):
                 return True
     except Exception as error:
+        import traceback
         _log_error(logger, f"ECONOMY HANDLER FAILED chat_id={chat_id} "
-                           f"user_id={user_id} error={error!r}")
+                           f"user_id={user_id} error={error!r}\n"
+                           f"{traceback.format_exc()}")
         balance_menu.close_session(chat_id, user_id)
         shop_menu.close_session(chat_id, user_id)
+        profile_menu.close_session(chat_id, user_id)
         await _send(event, "❌ خطایی رخ داد؛ دوباره تلاش کنید.", logger)
         return True
     return False
@@ -347,3 +535,4 @@ def _display_name(user):
 def reset_all():
     balance_menu.reset_all()
     shop_menu.reset_all()
+    profile_menu.reset_all()

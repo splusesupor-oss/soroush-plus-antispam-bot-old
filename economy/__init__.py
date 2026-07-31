@@ -18,6 +18,8 @@
 """
 from economy import ranking as _ranking
 from economy import settings, shop, storage
+from economy import catalog
+from economy import profiles
 from economy.coins import accounts as _accounts
 from economy import activity
 from economy.activity import (
@@ -75,6 +77,8 @@ __all__ = [
     "claim_daily", "daily_status",
     # تاریخچه و فروشگاه
     "transaction_history", "shop",
+    # پروفایل و فهرست آیتم‌ها
+    "profiles", "catalog",
     # زیرساخت
     "settings", "storage", "flush",
 ]

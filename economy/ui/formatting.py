@@ -13,6 +13,15 @@ def fa(value):
         else str(value).translate(_DIGITS)
 
 
+def fa_plain(value):
+    """عدد را با ارقام فارسی و *بدون* جداکنندهٔ هزارگان نمایش می‌دهد.
+
+    پروفایل باید دقیقاً «۱۴۲۰» را نشان دهد نه «۱٬۴۲۰»، پس اینجا از
+    قالب‌بندی سه‌رقمی خبری نیست.
+    """
+    return str(value).translate(_DIGITS)
+
+
 def u16(value):
     """طول رشته بر حسب واحد UTF-16 (همان چیزی که entity می‌خواهد)."""
     return len(value.encode("utf-16-le")) // 2
