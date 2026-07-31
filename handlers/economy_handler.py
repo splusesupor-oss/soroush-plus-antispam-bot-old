@@ -42,13 +42,25 @@ def _log_error(logger, message):
             pass
 
 
-async def _send(event, payload):
-    """``payload`` یا رشته است یا ``(text, spans)``."""
-    if isinstance(payload, tuple):
-        text, spans = payload
-        await event.reply(text, formatting_entities=_entities(spans))
-    else:
+async def _send(event, payload, logger=None):
+    """``payload`` یا رشته است یا ``(text, spans)``.
+
+    اگر سرور entityها را نپذیرد (که روی برخی نسخه‌های Soroush Plus رخ
+    می‌دهد)، همان متن بدون قالب‌بندی فرستاده می‌شود. قالب‌بندی یک تزئین
+    است و نباید باعث شود کاربر «هیچ خروجی» ببیند.
+    """
+    if not isinstance(payload, tuple):
         await event.reply(payload)
+        return
+
+    text, spans = payload
+    try:
+        await event.reply(text, formatting_entities=_entities(spans))
+    except Exception as error:
+        _log_error(logger,
+                   "ECONOMY SEND WITH ENTITIES FAILED -> retrying plain "
+                   f"error={error!r}")
+        await event.reply(text)
 
 
 async def _reply_to_user_id(event):
@@ -89,7 +101,7 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
     if state["step"] == "transfer":
         if choice == CANCEL:
             balance_menu.close_session(chat_id, user_id)
-            await _send(event, "لغو شد.")
+            await _send(event, "لغو شد.", logger)
             return True
         amount = balance_menu.parse_transfer_amount(text)
         if amount is None:
@@ -97,10 +109,10 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
 
         target_id, target_name = await _reply_to_user_id(event)
         if target_id is None:
-            await _send(event, "❌ باید روی پیام کاربر مقصد ریپلای کنید.")
+            await _send(event, "❌ باید روی پیام کاربر مقصد ریپلای کنید.", logger)
             return True
         if str(target_id) == str(user_id):
-            await _send(event, "❌ انتقال به خودتان ممکن نیست.")
+            await _send(event, "❌ انتقال به خودتان ممکن نیست.", logger)
             return True
 
         coin_type = state["coin"]
@@ -111,7 +123,7 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
         if ok and target_name:
             economy.set_name(target_id, target_name)
         balance_menu.close_session(chat_id, user_id)
-        await _send(event, message)
+        await _send(event, message, logger)
         _log(logger, f"ECONOMY TRANSFER chat_id={chat_id} from={user_id} "
                      f"to={target_id} coin={coin_type} amount={amount} "
                      f"ok={ok}")
@@ -120,19 +132,19 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
     # --- منوی اصلی ---
     if choice == CANCEL:
         balance_menu.close_session(chat_id, user_id)
-        await _send(event, "بسته شد.")
+        await _send(event, "بسته شد.", logger)
         return True
 
     if choice == balance_menu.MENU_BRONZE_TO_SILVER:
         ok, message = balance_menu.do_convert_bronze(user_id)
-        await _send(event, message)
+        await _send(event, message, logger)
         _log(logger, f"ECONOMY CONVERT bronze->silver user_id={user_id} "
                      f"ok={ok}")
         return True
 
     if choice == balance_menu.MENU_SILVER_TO_GOLD:
         ok, message = balance_menu.do_convert_silver(user_id)
-        await _send(event, message)
+        await _send(event, message, logger)
         _log(logger, f"ECONOMY CONVERT silver->gold user_id={user_id} ok={ok}")
         return True
 
@@ -140,16 +152,17 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
     if coin_type is not None:
         balance_menu.open_session(chat_id, user_id, step="transfer",
                                   coin=coin_type)
-        await _send(event, balance_menu.transfer_prompt(coin_type, user_id))
+        await _send(event, balance_menu.transfer_prompt(coin_type, user_id),
+                    logger)
         return True
 
     if choice == balance_menu.MENU_HISTORY:
-        await _send(event, balance_menu.render_history(user_id))
+        await _send(event, balance_menu.render_history(user_id), logger)
         return True
 
     if choice == balance_menu.MENU_DAILY:
         ok, message = balance_menu.do_daily(user_id)
-        await _send(event, message)
+        await _send(event, message, logger)
         _log(logger, f"ECONOMY DAILY user_id={user_id} granted={ok}")
         return True
 
@@ -171,32 +184,32 @@ async def _handle_shop_step(bot, event, chat_id, user_id, sender, text,
     if state["step"] == "buy":
         if numeric == CANCEL:
             shop_menu.close_session(chat_id, user_id)
-            await _send(event, "لغو شد.")
+            await _send(event, "لغو شد.", logger)
             return True
         reference = f"shop:{chat_id}:{user_id}:{choice}:{event.message.id}"
         ok, message = shop_menu.do_buy(user_id, choice, reference=reference)
         if ok:
             shop_menu.close_session(chat_id, user_id)
-        await _send(event, message)
+        await _send(event, message, logger)
         _log(logger, f"ECONOMY SHOP BUY chat_id={chat_id} user_id={user_id} "
                      f"item={choice!r} ok={ok}")
         return True
 
     if numeric == CANCEL:
         shop_menu.close_session(chat_id, user_id)
-        await _send(event, "بسته شد.")
+        await _send(event, "بسته شد.", logger)
         return True
 
     if numeric == shop_menu.MENU_LIST:
-        await _send(event, shop_menu.render_items())
+        await _send(event, shop_menu.render_items(), logger)
         return True
 
     if numeric == shop_menu.MENU_BUY:
         if not economy.shop.list_items():
-            await _send(event, shop_menu.buy_prompt())
+            await _send(event, shop_menu.buy_prompt(), logger)
             return True
         shop_menu.open_session(chat_id, user_id, step="buy")
-        await _send(event, shop_menu.buy_prompt())
+        await _send(event, shop_menu.buy_prompt(), logger)
         return True
 
     return False
@@ -207,23 +220,92 @@ async def _handle_shop_step(bot, event, chat_id, user_id, sender, text,
 # ---------------------------------------------------------------------------
 async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     """``True`` یعنی پیام مصرف شد و هندلر اصلی نباید ادامه دهد."""
+    # --- ردیابی ورود ---------------------------------------------------
+    # هر پیامی که «شبیه» دستور اقتصاد است اینجا لاگ می‌شود، حتی اگر تطبیق
+    # نکند. با این لاگ می‌توان فهمید پیام اصلاً به هندلر رسیده یا نه، و
+    # اگر رسیده چرا تطبیق نکرده است.
+    normalized = balance_menu.normalize(text)
+    if normalized in {"موجودی", "فروشگاه"} or balance_menu.is_open(
+            chat_id, user_id) or shop_menu.is_open(chat_id, user_id):
+        _log(logger,
+             "ECONOMY HANDLER ENTER "
+             f"chat_id={chat_id} user_id={user_id} "
+             f"raw_text={text!r} normalized={normalized!r} "
+             f"balance_open={balance_menu.is_open(chat_id, user_id)} "
+             f"shop_open={shop_menu.is_open(chat_id, user_id)}")
+
     # ۱) باز کردن بخش‌ها
     if balance_menu.is_command(text):
-        shop_menu.close_session(chat_id, user_id)
-        balance_menu.open_session(chat_id, user_id)
-        display = _display_name(sender)
-        if display:
-            economy.set_name(user_id, display)
-        await _send(event, balance_menu.render_menu(user_id))
-        _log(logger, f"ECONOMY BALANCE MENU chat_id={chat_id} "
-                     f"user_id={user_id}")
+        try:
+            shop_menu.close_session(chat_id, user_id)
+            balance_menu.open_session(chat_id, user_id)
+            display = _display_name(sender)
+            if display:
+                economy.set_name(user_id, display)
+
+            # مقدار خوانده‌شده از دیتابیس پیش از ارسال لاگ می‌شود تا اگر
+            # پیام نرسید، بدانیم مشکل از خواندن است یا از ارسال.
+            balance = economy.get_balance(user_id)
+            _log(logger,
+                 "ECONOMY BALANCE READ "
+                 f"chat_id={chat_id} user_id={user_id} "
+                 f"bronze={balance[economy.BRONZE]} "
+                 f"silver={balance[economy.SILVER]} "
+                 f"gold={balance[economy.GOLD]} "
+                 f"total_coin_value={balance['total_coin_value']} "
+                 f"db_file={economy.storage.DATA_FILE}")
+
+            payload = balance_menu.render_menu(user_id)
+            _log(logger,
+                 "ECONOMY BALANCE RENDERED "
+                 f"chat_id={chat_id} user_id={user_id} "
+                 f"text_len={len(payload[0])} entities={len(payload[1])}")
+
+            await _send(event, payload, logger)
+            _log(logger, f"ECONOMY BALANCE MENU SENT chat_id={chat_id} "
+                         f"user_id={user_id}")
+        except Exception as error:
+            # هیچ خطایی بی‌صدا نمی‌ماند: بدون این، شکست ارسال یا رندر
+            # باعث می‌شد کاربر «هیچ خروجی» ببیند و لاگی هم نباشد.
+            import traceback
+            _log_error(logger,
+                       "ECONOMY BALANCE MENU FAILED "
+                       f"chat_id={chat_id} user_id={user_id} "
+                       f"error={error!r}\n{traceback.format_exc()}")
+            try:
+                await event.reply(f"❌ خطا در نمایش موجودی: {error}")
+            except Exception as reply_error:
+                _log_error(logger,
+                           "ECONOMY BALANCE FALLBACK REPLY FAILED "
+                           f"chat_id={chat_id} error={reply_error!r}")
         return True
 
     if shop_menu.is_command(text):
-        balance_menu.close_session(chat_id, user_id)
-        shop_menu.open_session(chat_id, user_id)
-        await _send(event, shop_menu.render_menu(user_id))
-        _log(logger, f"ECONOMY SHOP MENU chat_id={chat_id} user_id={user_id}")
+        try:
+            balance_menu.close_session(chat_id, user_id)
+            shop_menu.open_session(chat_id, user_id)
+            balance = economy.get_balance(user_id)
+            _log(logger,
+                 "ECONOMY SHOP READ "
+                 f"chat_id={chat_id} user_id={user_id} "
+                 f"bronze={balance[economy.BRONZE]} "
+                 f"total_coin_value={balance['total_coin_value']} "
+                 f"items={len(economy.shop.list_items())}")
+            await _send(event, shop_menu.render_menu(user_id), logger)
+            _log(logger, f"ECONOMY SHOP MENU SENT chat_id={chat_id} "
+                         f"user_id={user_id}")
+        except Exception as error:
+            import traceback
+            _log_error(logger,
+                       "ECONOMY SHOP MENU FAILED "
+                       f"chat_id={chat_id} user_id={user_id} "
+                       f"error={error!r}\n{traceback.format_exc()}")
+            try:
+                await event.reply(f"❌ خطا در نمایش فروشگاه: {error}")
+            except Exception as reply_error:
+                _log_error(logger,
+                           "ECONOMY SHOP FALLBACK REPLY FAILED "
+                           f"chat_id={chat_id} error={reply_error!r}")
         return True
 
     # ۲) ادامهٔ گفتگوی باز
@@ -241,7 +323,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                            f"user_id={user_id} error={error!r}")
         balance_menu.close_session(chat_id, user_id)
         shop_menu.close_session(chat_id, user_id)
-        await _send(event, "❌ خطایی رخ داد؛ دوباره تلاش کنید.")
+        await _send(event, "❌ خطایی رخ داد؛ دوباره تلاش کنید.", logger)
         return True
     return False
 

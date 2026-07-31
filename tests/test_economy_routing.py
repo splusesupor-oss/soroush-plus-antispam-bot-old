@@ -502,6 +502,145 @@ def test_unrelated_text_passes_through():
     check("منو هنوز کار می‌کند", menu.said("کیف پول شما"))
 
 
+# ===========================================================================
+# لاگ تشخیصی و مقاومت در برابر خطا
+# ===========================================================================
+def test_diagnostic_logging():
+    """مسیر کامل باید قابل ردیابی باشد: ورود، خواندن، رندر، ارسال."""
+    print("\n### 🩺 لاگ تشخیصی کامل")
+    fresh()
+    economy.add_bronze(777, 152)
+    economy.add_silver(777, 34)
+    economy.add_gold(777, 8)
+
+    async def scenario():
+        bot, handler = await build_handler()
+        await handler(Event("موجودی", 777))
+        return bot
+
+    bot = asyncio.run(scenario())
+    for stage in ("ECONOMY HANDLER ENTER", "ECONOMY BALANCE READ",
+                  "ECONOMY BALANCE RENDERED", "ECONOMY BALANCE MENU SENT"):
+        check(f"لاگ «{stage}» ثبت شد", bot.logger.has(stage))
+
+    read = [m for m in bot.logger.info if "ECONOMY BALANCE READ" in m]
+    check("مقدار واقعی موجودی لاگ شد",
+          read and "bronze=152" in read[0] and "gold=8" in read[0],
+          f"-> {read[:1]}")
+    check("ارزش کل لاگ شد",
+          read and "total_coin_value=1292" in read[0])
+    check("مسیر فایل دیتابیس لاگ شد",
+          read and "db_file=" in read[0])
+
+
+def test_shop_diagnostic_logging():
+    print("\n### 🩺 لاگ تشخیصی فروشگاه")
+    fresh()
+
+    async def scenario():
+        bot, handler = await build_handler()
+        await handler(Event("فروشگاه", 777))
+        return bot
+
+    bot = asyncio.run(scenario())
+    check("لاگ ورود ثبت شد", bot.logger.has("ECONOMY HANDLER ENTER"))
+    check("لاگ خواندن فروشگاه ثبت شد", bot.logger.has("ECONOMY SHOP READ"))
+    check("لاگ ارسال ثبت شد", bot.logger.has("ECONOMY SHOP MENU SENT"))
+
+
+def test_entity_rejection_falls_back_to_plain():
+    """اگر سرور entity را نپذیرد، متن ساده فرستاده می‌شود، نه هیچ."""
+    print("\n### 🛡️ پاسخ حتی وقتی سرور entity را رد کند")
+    fresh()
+    economy.add_bronze(777, 152)
+
+    class RejectingEvent(Event):
+        async def reply(self, text, **kwargs):
+            if kwargs.get("formatting_entities"):
+                raise ValueError("ENTITY_BOUNDS_INVALID")
+            self.replies.append(text)
+
+    async def scenario():
+        bot, handler = await build_handler()
+        event = RejectingEvent("موجودی", 777)
+        await handler(event)
+        return bot, event
+
+    bot, event = asyncio.run(scenario())
+    check("کاربر همچنان پاسخ می‌گیرد", bool(event.replies),
+          "*** هیچ خروجی نیامد ***")
+    check("متن کامل منو ارسال شد",
+          event.said("کیف پول شما") and event.said("۱۵۲"))
+    check("بازگشت به متن ساده لاگ شد",
+          bot.logger.has("retrying plain"))
+
+
+def test_unexpected_error_is_reported():
+    """هر خطای غیرمنتظره باید هم لاگ شود هم به کاربر گفته شود."""
+    print("\n### 🛡️ خطای غیرمنتظره بی‌صدا نمی‌ماند")
+    fresh()
+    import economy.ui.balance_menu as bm
+    original = bm.render_menu
+
+    def boom(user_id):
+        raise RuntimeError("db unavailable")
+
+    bm.render_menu = boom
+    try:
+        async def scenario():
+            bot, handler = await build_handler()
+            event = Event("موجودی", 777)
+            await handler(event)
+            return bot, event
+
+        bot, event = asyncio.run(scenario())
+        check("خطا در لاگ ثبت شد",
+              bot.logger.has("ECONOMY BALANCE MENU FAILED"))
+        check("traceback ثبت شد", bot.logger.has("Traceback"))
+        check("به کاربر اطلاع داده شد", event.said("خطا در نمایش موجودی"))
+    finally:
+        bm.render_menu = original
+
+
+def test_repeated_command_not_swallowed():
+    """ارسال پیاپی «موجودی» نباید توسط ضداسپم بلعیده شود."""
+    print("\n### 🔁 ارسال پیاپی دستور")
+    fresh()
+
+    async def scenario():
+        bot, handler = await build_handler()
+        results = []
+        for _ in range(5):
+            event = Event("موجودی", 777)
+            await handler(event)
+            results.append(bool(event.replies))
+        return results
+
+    results = asyncio.run(scenario())
+    check("هر ۵ بار پاسخ داده شد", all(results), f"-> {results}")
+
+
+def test_owner_outgoing_message_works():
+    """در userbot، پیام خود مالک event.out=True دارد."""
+    print("\n### 👤 پیام خروجی مالک در حالت userbot")
+    fresh()
+    import modules.owner_check as oc
+    owner_id = oc.get_owner()["user_id"]
+
+    async def scenario():
+        bot, handler = await build_handler()
+        event = Event("موجودی", owner_id)
+        event.out = True
+        event._user = User(owner_id, "osine1", username="osine1")
+        await handler(event)
+        return event
+
+    event = asyncio.run(scenario())
+    check("پیام خروجی مالک هم پاسخ می‌گیرد", bool(event.replies),
+          "*** هیچ خروجی نیامد ***")
+    check("منو باز شد", event.said("کیف پول شما"))
+
+
 def main():
     test_handler_is_registered()
     test_balance_command_routed()
@@ -514,6 +653,12 @@ def main():
     test_inactive_group_blocks()
     test_unregistered_group_blocks()
     test_unrelated_text_passes_through()
+    test_diagnostic_logging()
+    test_shop_diagnostic_logging()
+    test_entity_rejection_falls_back_to_plain()
+    test_unexpected_error_is_reported()
+    test_repeated_command_not_swallowed()
+    test_owner_outgoing_message_works()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")
