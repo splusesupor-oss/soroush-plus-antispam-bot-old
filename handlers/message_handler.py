@@ -2418,14 +2418,18 @@ async def handle_new_message(bot, event):
         if clean_text == "رتبه ها":
             # رتبه‌بندی فقط بر پایهٔ ارزش کل؛ در تساوی، هرکس زودتر رسیده بالاتر.
             ranking = coin_leaderboard(5)
-            medals = ("🥇", "🥈", "🥉")
+            # شمارهٔ رتبه با ایموجی عددی نمایش داده می‌شود؛ مدال‌های
+            # 🥇🥈🥉 فقط برای «نوع سکه» در خط دوم می‌مانند.
+            rank_digits = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
+                           "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟")
             ranking_text = "🏆 برترین کاربران"
             entries = []
             for index, row in enumerate(ranking, 1):
-                medal = medals[index - 1] if index <= 3 else f"{_math_digits(index)}."
+                number = (rank_digits[index - 1] if index <= len(rank_digits)
+                          else f"{_math_digits(index)}.")
                 display = row.get("name") or f"کاربر {row['user_id']}"
                 entry = (
-                    f"{medal} {display} — 💎 {_math_digits(row['total_coin_value'])}"
+                    f"{number} {display} — 💎 {_math_digits(row['total_coin_value'])}"
                     f"\n🥉 {_math_digits(row['bronze'])} | "
                     f"🥈 {_math_digits(row['silver'])} | "
                     f"🥇 {_math_digits(row['gold'])}"

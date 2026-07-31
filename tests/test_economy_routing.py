@@ -697,6 +697,83 @@ def test_group_still_works():
     check("«فروشگاه» در گروه کار می‌کند", shop.said("🛒 فروشگاه"))
 
 
+def test_ranking_display_format():
+    """«رتبه ها» باید شمارهٔ رتبه را با ایموجی عددی نشان دهد، نه مدال."""
+    print("\n### 🏆 قالب نمایش برترین کاربران")
+    fresh()
+    economy.award(101, 700, name="@user_a")
+    economy.award(102, 200, name="@user_b")
+    economy.award(103, 50, name="@user_c")
+
+    async def scenario():
+        bot, handler = await build_handler()
+        event = Event("رتبه ها", 424242, chat_id=CHAT)
+        await handler(event)
+        return event
+
+    event = asyncio.run(scenario())
+    check("پاسخ داده شد", bool(event.replies))
+    text = event.replies[0] if event.replies else ""
+
+    check("شمارهٔ رتبه با ایموجی عددی است",
+          "1️⃣" in text and "2️⃣" in text and "3️⃣" in text, f"-> {text[:60]}")
+
+    # مدال نباید به عنوان «شمارهٔ رتبه» در ابتدای خط بیاید
+    rank_lines = [l for l in text.splitlines() if "—" in l]
+    check("هیچ خط رتبه‌ای با مدال شروع نمی‌شود",
+          not any(l.strip().startswith(("🥇", "🥈", "🥉")) for l in rank_lines),
+          f"-> {rank_lines[:1]}")
+    check("خط رتبه با ایموجی عددی شروع می‌شود",
+          rank_lines and rank_lines[0].strip().startswith("1️⃣"))
+
+    # مدال‌ها فقط برای نوع سکه در خط دوم می‌مانند
+    check("مدال‌ها فقط کنار مقدار سکه‌ها هستند",
+          "🥉" in text and "🥈" in text and "🥇" in text)
+
+    # سکه‌های قدیمی باید برنز باشند و 💎 برابر برنز
+    digits = str.maketrans("𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵", "0123456789")
+    plain = text.translate(digits)
+    check("کاربر ۷۰۰ سکه‌ای، ۷۰۰ برنز دارد", "🥉 700" in plain, f"-> {plain[:120]}")
+    check("ارزش کل برابر برنز است", "💎 700" in plain)
+    check("نقره و طلا صفرند", "🥈 0" in plain and "🥇 0" in plain)
+
+
+def test_legacy_coin_migration():
+    """سکه‌های سیستم قدیمی باید به برنز تبدیل شوند و دوباره اضافه نشوند."""
+    print("\n### 🪙 انتقال سکه‌های قدیمی به برنز")
+    fresh()
+    import tools.migrate_legacy_coins as mig
+
+    original = mig.LEGACY_FILE
+    temp = Path(tempfile.mkdtemp()) / "coins.json"
+    temp.write_text(json.dumps({"users": {
+        "g1": {"501": {"coins": 700, "wins": 3, "name": "@a"}},
+        "g2": {"501": {"coins": 100, "wins": 1, "name": "@a"},
+               "502": {"coins": 28, "wins": 0, "name": "@b"}},
+    }}, ensure_ascii=False), encoding="utf-8")
+    mig.LEGACY_FILE = temp
+    try:
+        mig.migrate()
+        first = economy.get_balance(501)
+        check("سکهٔ چند گروه جمع شد", first[economy.BRONZE] == 800,
+              f"-> {first[economy.BRONZE]}")
+        check("ارزش کل برابر برنز است",
+              first["total_coin_value"] == 800)
+        check("نقره و طلا دست‌نخورده صفرند",
+              first[economy.SILVER] == 0 and first[economy.GOLD] == 0)
+        check("کاربر ۲۸ سکه‌ای درست منتقل شد",
+              economy.get_balance(502)[economy.BRONZE] == 28)
+        check("بردها منتقل شدند", economy.get_profile(501)["wins"] == 4)
+
+        mig.migrate()
+        check("اجرای دوباره سکه را دو برابر نمی‌کند",
+              economy.get_balance(501)[economy.BRONZE] == 800,
+              f"-> {economy.get_balance(501)[economy.BRONZE]}")
+        check("فایل قدیمی حذف نشد", temp.exists())
+    finally:
+        mig.LEGACY_FILE = original
+
+
 def main():
     test_handler_is_registered()
     test_balance_command_routed()
@@ -717,6 +794,8 @@ def main():
     test_owner_outgoing_message_works()
     test_private_is_blocked()
     test_group_still_works()
+    test_ranking_display_format()
+    test_legacy_coin_migration()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")
