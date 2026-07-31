@@ -956,6 +956,134 @@ def test_card_without_registration():
     check("خط لقب وقتی لقب نیست حذف می‌شود", "🏷 لقب:" not in text)
 
 
+
+# ===========================================================================
+# 🔌 اتصال واقعی به ربات — این‌ها باگ‌هایی را می‌گیرند که unit test نمی‌گرفت
+# ===========================================================================
+def test_shop_section_shows_the_items():
+    """باگ واقعی: «فروشگاه» همیشه «هنوز آیتمی اضافه نشده» می‌داد.
+
+    economy.shop هیچ‌وقت پر نمی‌شد و لیست فقط از آن می‌خواند، پس ۳۲
+    آیتم ثابت هرگز دیده نمی‌شدند.
+    """
+    print("\n### 🔌 «فروشگاه» فهرست آیتم‌ها را نشان می‌دهد")
+    fresh()
+    text, spans = shop_menu.render_items()
+    check("پیام «هنوز آیتمی» دیگر نمی‌آید",
+          "هنوز آیتمی به فروشگاه اضافه نشده است" not in text)
+    check("نشان‌ها در فروشگاه دیده می‌شوند", "نشان روباه" in text)
+    check("سطح‌ها در فروشگاه دیده می‌شوند", "سه ستاره" in text)
+    check("لقب‌ها در فروشگاه دیده می‌شوند", "𝙁𝙤𝙭 𝙆𝙞𝙣𝙜" in text)
+    check("همان فهرست پروفایل است",
+          text == profile_menu.render_items()[0])
+    check("کل فهرست فروشگاه هم Bold است", len(spans) == 1)
+
+
+def test_shop_menu_counts_items():
+    print("\n### 🔌 شمارش آیتم‌های فروشگاه")
+    fresh()
+    text, _ = shop_menu.render_menu(CHAT, 1)
+    check("شمارش صفر نیست", "آیتم‌های موجود: ۰" not in text)
+    check("۳۲ آیتم شمرده می‌شود", "آیتم‌های موجود: ۳۲" in text)
+
+
+def test_shop_buy_session_opens():
+    """باگ واقعی: گزینهٔ «خرید» به economy.shop نگاه می‌کرد و چون خالی
+    بود، هرگز گفتگوی خرید را باز نمی‌کرد."""
+    print("\n### 🔌 گزینهٔ «خرید» فروشگاه واقعاً باز می‌شود")
+    fresh()
+    fund(90, silver=500)
+
+    async def scenario():
+        bot = Bot()
+        await send(bot, Event(), 90, "فروشگاه")
+        buy = Event()
+        await send(bot, buy, 90, "2")
+        opened = shop_menu.is_open(CHAT, 90)
+        state = shop_menu.session(CHAT, 90)
+        done = Event()
+        await send(bot, done, 90, "1")
+        return buy, opened, state, done
+
+    buy, opened, state, done = asyncio.run(scenario())
+    check("گفتگوی خرید باز شد", opened and state["step"] == "buy")
+    check("فهرست آیتم‌ها در راهنمای خرید هست", buy.said("نشان روباه"))
+    check("خرید از فروشگاه انجام شد", done.said("خریداری شد"))
+    check("سکه واقعاً کسر شد",
+          economy.get_balance(CHAT, 90)[economy.SILVER] == 400)
+    check("نشان روی پروفایل نشست",
+          "badge_fox" in profiles.get(CHAT, 90)["badges"])
+    eco_handler.reset_all()
+
+
+def test_shop_and_profile_share_one_catalog():
+    print("\n### 🔌 فروشگاه و پروفایل یک منبع حقیقت دارند")
+    fresh()
+    fund(91, silver=3000, bronze=3000)
+    profiles.register(CHAT, 91, name="سهیل", city="رشت", age=25)
+
+    async def scenario():
+        bot = Bot()
+        await send(bot, Event(), 91, "فروشگاه")
+        await send(bot, Event(), 91, "2")
+        await send(bot, Event(), 91, "18")     # لقب Fox King
+        card = Event()
+        await send(bot, card, 91, "پروفایل")
+        return card
+
+    card = asyncio.run(scenario())
+    check("لقب خریداری‌شده از فروشگاه در پروفایل دیده می‌شود",
+          card.said("𝙁𝙤𝙭 𝙆𝙞𝙣𝙜"))
+    check("برنز لقب کسر شد",
+          economy.get_balance(CHAT, 91)[economy.BRONZE] == 2800)
+    eco_handler.reset_all()
+
+
+def test_three_commands_reach_the_real_router():
+    """هر سه دستور باید از new_message_handler واقعی عبور کنند."""
+    print("\n### 🔌 هر سه دستور از Router اصلی عبور می‌کنند")
+    fresh()
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_economy_routing import build_handler, Event as RouteEvent
+    import modules.group_storage as group_storage
+
+    async def scenario():
+        group_storage.activate_group(CHAT, "گروه تست")
+        bot, handler = await build_handler()
+        out = {}
+        for command in ("پروفایل", "موجودی", "فروشگاه"):
+            event = RouteEvent(command, 92)
+            await handler(event)
+            out[command] = event.replies
+        return bot, out
+
+    bot, out = asyncio.run(scenario())
+    check("«پروفایل» از router جواب می‌گیرد", bool(out["پروفایل"]),
+          "*** هیچ پاسخی نیامد ***")
+    check("«پروفایل» ثبت‌نام را شروع می‌کند",
+          any("اسم خود را" in r for r in out["پروفایل"]))
+    check("«موجودی» از router جواب می‌گیرد", bool(out["موجودی"]))
+    check("«موجودی» کیف پول را نشان می‌دهد",
+          any("کیف پول شما" in r for r in out["موجودی"]))
+    check("«فروشگاه» از router جواب می‌گیرد", bool(out["فروشگاه"]))
+    check("«فروشگاه» منو را نشان می‌دهد",
+          any("🛒 فروشگاه" in r for r in out["فروشگاه"]))
+    check("هیچ خطایی در لاگ نیست", not bot.logger.errors,
+          f"-> {bot.logger.errors[:2]}")
+
+
+def test_deployment_checker_knows_profile():
+    """اگر فایل‌های پروفایل روی دستگاه نباشند، ابزار باید بفهمد."""
+    print("\n### 🔌 ابزار بررسی نصب، پروفایل را می‌شناسد")
+    source = (ROOT / "tools" / "verify_deployment.py").read_text(
+        encoding="utf-8")
+    for needle in ("economy/catalog.py", "economy/profiles.py",
+                   "economy/ui/profile_menu.py"):
+        check(f"{needle} در فهرست بررسی هست", needle in source)
+    check("دستور پروفایل بررسی می‌شود", 'COMMAND = "پروفایل"' in source)
+    check("تعداد آیتم‌ها بررسی می‌شود", "n==32" in source)
+
+
 # ===========================================================================
 def main():
     test_registration_flow()
@@ -994,6 +1122,12 @@ def main():
     test_independence()
     test_corrupt_profile_is_survivable()
     test_card_without_registration()
+    test_shop_section_shows_the_items()
+    test_shop_menu_counts_items()
+    test_shop_buy_session_opens()
+    test_shop_and_profile_share_one_catalog()
+    test_three_commands_reach_the_real_router()
+    test_deployment_checker_knows_profile()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 

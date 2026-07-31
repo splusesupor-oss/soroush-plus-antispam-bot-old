@@ -190,7 +190,8 @@ async def _handle_shop_step(bot, event, chat_id, user_id, sender, text,
             await _send(event, "لغو شد.", logger)
             return True
         reference = f"shop:{chat_id}:{user_id}:{choice}:{event.message.id}"
-        ok, message = shop_menu.do_buy(chat_id, user_id, choice, reference=reference)
+        ok, message = shop_menu.do_buy(chat_id, user_id, choice,
+                                       reference=reference)
         if ok:
             shop_menu.close_session(chat_id, user_id)
         await _send(event, message, logger)
@@ -204,15 +205,15 @@ async def _handle_shop_step(bot, event, chat_id, user_id, sender, text,
         return True
 
     if numeric == shop_menu.MENU_LIST:
-        await _send(event, shop_menu.render_items(), logger)
+        await _send(event, shop_menu.render_items(chat_id, user_id), logger)
         return True
 
     if numeric == shop_menu.MENU_BUY:
-        if not economy.shop.list_items():
-            await _send(event, shop_menu.buy_prompt(), logger)
-            return True
+        # فهرست ثابت نشان/سطح/لقب همیشه پر است، پس گفتگوی خرید همیشه باز
+        # می‌شود. شرط قبلی به economy.shop نگاه می‌کرد که هیچ‌وقت پر
+        # نمی‌شد و خرید را برای همیشه می‌بست.
         shop_menu.open_session(chat_id, user_id, step="buy")
-        await _send(event, shop_menu.buy_prompt(), logger)
+        await _send(event, shop_menu.buy_prompt(chat_id, user_id), logger)
         return True
 
     return False

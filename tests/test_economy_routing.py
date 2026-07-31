@@ -406,7 +406,7 @@ def test_shop_buy_from_menu_writes_db():
 
     listing, prompt, buy = asyncio.run(scenario())
     check("آیتم در فهرست دیده شد", listing.said("نشان طلایی"))
-    check("راهنمای خرید آمد", prompt.said("شناسهٔ آیتم"))
+    check("راهنمای خرید آمد", prompt.said("برای لغو"))
     check("خرید انجام شد", buy.said("خریداری شد"))
     check("سکه واقعاً کسر شد",
           economy.get_balance(CHAT, 777)[economy.BRONZE] == 70,

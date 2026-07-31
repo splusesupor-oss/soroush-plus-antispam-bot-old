@@ -486,7 +486,9 @@ def test_shop_section():
     check("منوی فروشگاه باز شد", menu.said("🛒 فروشگاه"))
     check("گزینهٔ لیست موجود است", menu.said("لیست آیتم‌ها"))
     check("گزینهٔ خرید موجود است", menu.said("خرید"))
-    check("فهرست خالی پیام مناسب می‌دهد", items.said("هنوز آیتمی"))
+    # فهرست دیگر هرگز خالی نیست: ۳۲ آیتم ثابت نشان/سطح/لقب همیشه هستند.
+    check("فهرست ثابت آیتم‌ها نمایش داده می‌شود", items.said("نشان روباه"))
+    check("پیام «هنوز آیتمی» دیگر نمی‌آید", not items.said("هنوز آیتمی"))
     check("موجودی و ارزش کل در فروشگاه دیده می‌شود",
           menu.said("ارزش کل"))
     eco_handler.reset_all()
@@ -511,7 +513,7 @@ def test_shop_buy_flow():
 
     listing, prompt, buy = asyncio.run(scenario())
     check("آیتم در فهرست دیده می‌شود", listing.said("نشان طلایی"))
-    check("راهنمای خرید نمایش داده شد", prompt.said("شناسهٔ آیتم"))
+    check("راهنمای خرید نمایش داده شد", prompt.said("برای لغو"))
     check("خرید انجام شد", buy.said("خریداری شد"))
     check("سکه کسر شد", economy.get_balance(CHAT, 1)[economy.BRONZE] == 70)
     check("خرید در تاریخچه ثبت شد",

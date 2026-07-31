@@ -7,7 +7,9 @@
 import time
 
 import economy
-from economy.ui.formatting import fa, spans_for
+from economy import catalog, profiles
+from economy.ui import profile_menu
+from economy.ui.formatting import fa, spans_for, u16
 
 COMMAND = "فروشگاه"
 SESSION_TIMEOUT = 180
@@ -77,7 +79,9 @@ def reset_all():
 def render_menu(chat_id, user_id):
     balance = economy.get_balance(chat_id, user_id)
     header = "🛒 فروشگاه"
-    count = len(economy.shop.list_items())
+    # شمارش باید فهرست ثابت نشان/سطح/لقب را هم در بر بگیرد، وگرنه
+    # کاربر «۰ آیتم» می‌بیند در حالی که ۳۲ آیتم خریدنی هست.
+    count = len(catalog.all_items()) + len(economy.shop.list_items())
     text = (
         f"{header}\n\n"
         f"موجودی شما:\n"
@@ -94,17 +98,21 @@ def render_menu(chat_id, user_id):
     return text, spans_for(text, [header, "💎 ارزش کل:"])
 
 
-def render_items():
-    items = economy.shop.list_items()
-    header = "📦 لیست آیتم‌ها"
-    if not items:
-        text = (
-            f"{header}\n\n"
-            "هنوز آیتمی به فروشگاه اضافه نشده است.\n"
-            "به‌زودی آیتم‌های جدید اضافه می‌شوند."
-        )
-        return text, spans_for(text, [header])
+def render_items(chat_id=None, user_id=None):
+    """فهرست آیتم‌ها.
 
+    نشان‌ها، سطح‌ها و لقب‌ها *همان* فهرست بخش پروفایل‌اند؛ یک منبع
+    حقیقت واحد. پیش‌تر این تابع فقط ``economy.shop`` را می‌خواند که
+    هیچ‌وقت پر نمی‌شد، پس کاربر همیشه «هنوز آیتمی اضافه نشده» می‌دید.
+    """
+    text, spans = profile_menu.render_items(chat_id, user_id)
+
+    items = economy.shop.list_items()
+    if not items:
+        return text, spans
+
+    # آیتم‌های پویا (اگر کسی با add_item ثبت کرده باشد) پس از فهرست ثابت.
+    header = "🛒 آیتم‌های ویژه"
     lines = [header, ""]
     for item in items:
         stock = item.get("stock")
@@ -120,11 +128,19 @@ def render_items():
             f"💵 {fa(item['price'])} {_COIN_NAMES.get(item['coin_type'], '')}"
             f"{description}{stock_text}"
         )
-    text = "\n\n".join(lines)
-    return text, spans_for(text, [header])
+    extra = "\n\n".join(lines)
+    combined = f"{text}\n\n{extra}"
+    # کل متن Bold می‌ماند، دقیقاً مثل بخش پروفایل.
+    return combined, [("bold", 0, u16(combined))]
 
 
-def buy_prompt():
+def buy_prompt(chat_id=None, user_id=None):
+    text, spans = render_items(chat_id, user_id)
+    text = f"{text}\nبرای لغو، ۰ بفرستید."
+    return text, [("bold", 0, u16(text))]
+
+
+def _legacy_buy_prompt():
     items = economy.shop.list_items()
     if not items:
         return (
@@ -141,6 +157,11 @@ def buy_prompt():
 
 
 def do_buy(chat_id, user_id, item_id, *, reference=None):
+    # آیتم‌های ثابت (نشان/سطح/لقب) از مسیر پروفایل خریداری می‌شوند تا
+    # اثرشان فوراً روی کارت بنشیند.
+    if catalog.resolve(item_id) is not None:
+        return profile_menu.do_buy(chat_id, user_id, item_id,
+                                   reference=reference)
     try:
         item, balance = economy.shop.buy(chat_id, user_id, item_id,
                                          reference=reference)

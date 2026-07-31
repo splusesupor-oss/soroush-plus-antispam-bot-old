@@ -25,6 +25,10 @@ REQUIRED = [
     "economy/ui/balance_menu.py",
     "economy/ui/shop_menu.py",
     "economy/shop/store.py",
+    # بخش پروفایل
+    "economy/catalog.py",
+    "economy/profiles.py",
+    "economy/ui/profile_menu.py",
 ]
 
 # نشانه‌هایی که حتماً باید داخل سورس باشند.
@@ -39,6 +43,7 @@ MARKERS = {
     ],
     "economy/ui/balance_menu.py": ['COMMAND = "موجودی"'],
     "economy/ui/shop_menu.py": ['COMMAND = "فروشگاه"'],
+    "economy/ui/profile_menu.py": ['COMMAND = "پروفایل"'],
 }
 
 # فایل‌هایی که باید حذف شده باشند (سیستم سکهٔ قدیمی).
@@ -183,10 +188,17 @@ def check_import():
         "import sys; sys.path.insert(0, %r);"
         "import handlers.message_handler as m;"
         "import handlers.economy_handler as e;"
-        "from economy.ui import balance_menu, shop_menu;"
+        "import economy;"
+        "from economy.ui import balance_menu, shop_menu, profile_menu;"
+        "n=len(economy.catalog.all_items());"
+        "t,_=shop_menu.render_items();"
+        "assert n==32, 'catalog has %%d items, expected 32' %% n;"
+        "assert 'نشان روباه' in t, 'shop list is missing the fixed items';"
         "print('IMPORT_OK', "
         "balance_menu.is_command('موجودی'), "
-        "shop_menu.is_command('فروشگاه'))" % str(ROOT)
+        "shop_menu.is_command('فروشگاه'), "
+        "profile_menu.is_command('پروفایل'), "
+        "'items=%%d' %% n)" % str(ROOT)
     )
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
                             capture_output=True, text=True, timeout=90)
