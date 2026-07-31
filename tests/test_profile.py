@@ -28,6 +28,7 @@ import economy.storage as storage
 import handlers.economy_handler as eco_handler
 from economy import catalog, profiles
 from economy.ui import balance_menu, profile_menu, shop_menu
+from economy.ui.formatting import u16
 
 PASSED = FAILED = 0
 CHAT = -1009999888877
@@ -1109,7 +1110,7 @@ def test_shop_menu_structure():
     text, _ = shop_menu.render_menu(CHAT, 1)
     check("گزینهٔ «لیست آیتم‌ها» حذف شده", "۱) لیست آیتم‌ها" not in text)
     check("گزینهٔ «۲) خرید» حذف شده", "۲) خرید" not in text)
-    check("گزینهٔ جدید هست", "۱) لیست آیتم ها و خرید" in text)
+    check("گزینهٔ جدید هست", "۱) 🛍 لیست آیتم ها و خرید" in text)
     check("گزینهٔ بستن هست", "۰) بستن" in text)
     check("متن راهنما مطابق خواسته", "برای انتخاب، شماره گزینه را بفرستید:"
           in text)
@@ -1435,6 +1436,204 @@ def test_locked_title_blocked_during_registration():
     eco_handler.reset_all()
 
 
+
+# ===========================================================================
+# 🪟 نقل قول شیشه‌ای و Bold داخلی سروش پلاس
+# ===========================================================================
+def _decode(text, offset, length):
+    """متن یک span را از روی offset/length واحد UTF-16 برمی‌گرداند."""
+    raw = text.encode("utf-16-le")
+    return raw[offset * 2:(offset + length) * 2].decode("utf-16-le")
+
+
+def _has_span(text, spans, kind, piece):
+    return any(k == kind and _decode(text, o, l) == piece
+               for k, o, l in spans)
+
+
+def test_no_markdown_anywhere():
+    """هیچ متنی نباید ** یا __ داشته باشد؛ Bold فقط با entity."""
+    print("\n### 🪟 هیچ Markdown ای تولید نمی‌شود")
+    fresh()
+    fund(200, bronze=500, silver=500)
+    profiles.register(CHAT, 200, name="امید", city="بم", age=28)
+
+    texts = [
+        profile_menu.render_card(CHAT, 200, User(200))[0],
+        profile_menu.render_menu(CHAT, 200, User(200))[0],
+        profile_menu.render_items(CHAT, 200)[0],
+        profile_menu.buy_prompt(CHAT, 200)[0],
+        profile_menu.confirm_prompt(catalog.get("badge_fox"))[0],
+        shop_menu.render_menu(CHAT, 200)[0],
+        shop_menu.render_entry(CHAT, 200)[0],
+        shop_menu.render_items(CHAT, 200)[0],
+        shop_menu.buy_prompt(CHAT, 200)[0],
+    ]
+    for marker in ("**", "__", "```"):
+        offenders = [t[:30] for t in texts if marker in t]
+        check(f"هیچ متنی «{marker}» ندارد", not offenders, f"-> {offenders}")
+    check("هیچ ستاره‌ای برای Bold استفاده نشده",
+          not any("*" in t for t in texts))
+
+
+def test_shop_menu_is_quoted():
+    print("\n### 🪟 راهنمای فروشگاه داخل نقل قول شیشه‌ای")
+    fresh()
+    text, spans = shop_menu.render_menu(CHAT, 201)
+    block = shop_menu.MENU_BLOCK
+    check("بلوک راهنما در متن هست", block in text)
+    check("بلوک راهنما Bold است", _has_span(text, spans, "bold", block))
+    check("بلوک راهنما داخل نقل قول است",
+          _has_span(text, spans, "blockquote", block))
+    check("عنوان فروشگاه Bold است",
+          _has_span(text, spans, "bold", "🛒 فروشگاه"))
+    check("موجودی داخل نقل قول نیست",
+          not any(k == "blockquote" and "موجودی شما" in _decode(text, o, l)
+                  for k, o, l in spans))
+
+
+def test_shop_entry_keeps_quote():
+    print("\n### 🪟 نقل قول در ورود به فروشگاه هم درست است")
+    fresh()
+    text, spans = shop_menu.render_entry(CHAT, 202)
+    block = shop_menu.MENU_BLOCK
+    check("راهنما Bold است", _has_span(text, spans, "bold", block))
+    check("راهنما داخل نقل قول است",
+          _has_span(text, spans, "blockquote", block))
+    check("فهرست آیتم‌ها هم هست", "📦 لیست آیتم‌ها" in text)
+    for kind, offset, length in spans:
+        check("offset معتبر است", offset >= 0 and
+              offset + length <= u16(text))
+
+
+def test_profile_level_is_quoted():
+    print("\n### 🪟 بخش «⭐ سطح» داخل نقل قول شیشه‌ای")
+    fresh()
+    fund(203, silver=3000)
+    profiles.register(CHAT, 203, name="ژاله", city="سمنان", age=32)
+    profiles.buy(CHAT, 203, "star_3")
+
+    text, spans = profile_menu.render_card(CHAT, 203, User(203))
+    star_line = "⭐ سطح: ★★★☆☆☆☆"
+    check("خط سطح در متن هست", star_line in text)
+    check("خط سطح Bold است", _has_span(text, spans, "bold", star_line))
+    check("خط سطح داخل نقل قول است",
+          _has_span(text, spans, "blockquote", star_line))
+    check("ستاره‌ها هم داخل همان ناحیه‌اند", "★★★" in star_line)
+
+
+def test_profile_menu_is_quoted():
+    print("\n### 🪟 راهنمای پروفایل داخل نقل قول شیشه‌ای")
+    fresh()
+    profiles.register(CHAT, 204, name="فرزاد", city="زاهدان", age=35)
+    text, spans = profile_menu.render_menu(CHAT, 204, User(204))
+    block = profile_menu.MENU_BLOCK
+    check("بلوک راهنما در متن هست", block in text)
+    check("بلوک راهنما Bold است", _has_span(text, spans, "bold", block))
+    check("بلوک راهنما داخل نقل قول است",
+          _has_span(text, spans, "blockquote", block))
+    check("هر سه گزینه داخل همان بلوک‌اند",
+          "۱) 🛍 لیست آیتم ها و خرید" in block
+          and "۲) ✏️ ویرایش اطلاعات" in block and "۰) بستن" in block)
+
+
+def test_profile_data_not_quoted():
+    print("\n### 🪟 بقیهٔ اطلاعات داخل نقل قول نیستند")
+    fresh()
+    fund(205, bronze=300)
+    profiles.register(CHAT, 205, name="سوگند", city="اردبیل", age=27)
+    text, spans = profile_menu.render_card(CHAT, 205, User(205))
+    quoted = [_decode(text, o, l) for k, o, l in spans if k == "blockquote"]
+    check("فقط یک ناحیهٔ نقل قول در کارت", len(quoted) == 1, f"-> {quoted}")
+    check("و آن ناحیه همان «سطح» است", quoted[0].startswith("⭐ سطح:"))
+    for field in ("👤 نام:", "🥉 برنز:", "🏅 رتبه:", "📍 شهر:"):
+        check(f"{field} داخل نقل قول نیست",
+              not any(field in q for q in quoted))
+
+
+def test_spans_decode_to_expected_text():
+    """اثبات اینکه offsetها با ایموجی و نویسهٔ فارسی هم درست‌اند."""
+    print("\n### 🪟 صحت offset با ایموجی و فارسی")
+    fresh()
+    fund(206, silver=3000)
+    profiles.register(CHAT, 206, name="کیمیا", city="گرگان", age=23,
+                      nickname="کیمی")
+    profiles.buy(CHAT, 206, "badge_galaxy")
+    profiles.buy(CHAT, 206, "star_5")
+
+    text, spans = profile_menu.render_menu(CHAT, 206, User(206))
+    for kind, offset, length in spans:
+        fragment = _decode(text, offset, length)
+        check(f"span {kind} به متن واقعی اشاره می‌کند",
+              fragment and fragment in text,
+              f"-> {fragment!r}")
+    check("عنوان با نشان کهکشانی ساخته شده", "🌌 کیمی 🌌" in text)
+    check("سطح پنج ستاره درست است", "⭐ سطح: ★★★★★☆☆" in text)
+
+
+def test_persian_names_unchanged():
+    print("\n### 🏷 نام فارسی آیتم‌ها دقیقاً مطابق داده‌ها")
+    text, _ = profile_menu.render_items()
+    for item in catalog.badges():
+        expected = (f"{item['emoji']} {item['name']} — "
+                    f"{_fa(item['price'])} "
+                    f"{'برنز' if item['coin_type'] == 'bronze' else 'نقره'}")
+        check(f"«{item['name']}» بدون تغییر", expected in text,
+              f"-> {expected!r}")
+    for item in catalog.stars():
+        check(f"«{item['name']}» بدون تغییر",
+              f"{item['emoji']} {item['name']} — {_fa(item['price'])} نقره"
+              in text)
+    for item in catalog.titles():
+        check(f"لقب «{item['title']}» بدون تغییر",
+              f"{item['emoji']} {item['title']}" in text)
+    check("عنوان دسته‌ها بدون تغییر",
+          "🛡 نشان‌ها" in text and "⭐ خرید سطح" in text
+          and "🏷 خرید لقب اختصاصی" in text)
+
+
+def _fa(value):
+    return str(value).translate(
+        {ord(str(i)): p for i, p in enumerate("۰۱۲۳۴۵۶۷۸۹")})
+
+
+def test_handler_sends_both_entity_kinds():
+    """هندلر باید span را به entity واقعی سروش پلاس تبدیل کند."""
+    print("\n### 🪟 تبدیل span به entity واقعی")
+    from handlers.economy_handler import _entities
+    built = _entities([("bold", 3, 7), ("blockquote", 3, 7)])
+    names = [type(entity).__name__ for entity in built]
+    check("MessageEntityBold ساخته می‌شود",
+          "MessageEntityBold" in names)
+    check("MessageEntityBlockquote ساخته می‌شود",
+          "MessageEntityBlockquote" in names)
+    check("offset و length حفظ می‌شوند",
+          all(e.offset == 3 and e.length == 7 for e in built))
+
+
+def test_menu_reaches_user_with_entities():
+    print("\n### 🪟 منو با entity به کاربر می‌رسد")
+    fresh()
+    profiles.register(CHAT, 207, name="بیتا", city="شیراز", age=26)
+
+    async def scenario():
+        bot = Bot()
+        card = Event()
+        await send(bot, card, 207, "پرفایلم")
+        shop = Event()
+        await send(bot, shop, 207, "فروشگاه")
+        return card, shop
+
+    card, shop = asyncio.run(scenario())
+    check("کارت entity دارد", card.entity_counts[-1] > 0)
+    check("فروشگاه entity دارد", shop.entity_counts[-1] > 0)
+    check("کارت راهنما را نشان می‌دهد",
+          card.said("برای انتخاب، شماره گزینه را بفرستید:"))
+    check("فروشگاه راهنما را نشان می‌دهد",
+          shop.said("برای انتخاب، شماره گزینه را بفرستید:"))
+    eco_handler.reset_all()
+
+
 # ===========================================================================
 def main():
     test_registration_flow()
@@ -1496,6 +1695,16 @@ def main():
     test_free_nickname_still_allowed()
     test_locked_title_unlocks_after_purchase()
     test_locked_title_blocked_during_registration()
+    test_no_markdown_anywhere()
+    test_shop_menu_is_quoted()
+    test_shop_entry_keeps_quote()
+    test_profile_level_is_quoted()
+    test_profile_menu_is_quoted()
+    test_profile_data_not_quoted()
+    test_spans_decode_to_expected_text()
+    test_persian_names_unchanged()
+    test_handler_sends_both_entity_kinds()
+    test_menu_reaches_user_with_entities()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 

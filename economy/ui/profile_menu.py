@@ -15,7 +15,8 @@ import time
 
 import economy
 from economy import catalog, profiles
-from economy.ui.formatting import fa_plain, spans_for, u16
+from economy.ui.formatting import (fa_plain, quote_spans,
+                                    spans_for, u16)
 
 # سه دستور مستقل پروفایل. املای «پرفایل» خواستهٔ صریح کاربر است؛
 # «پروفایل» هم به‌عنوان مترادف پذیرفته می‌شود تا کسی سرگردان نشود.
@@ -233,6 +234,7 @@ def render_card(chat_id, user_id, sender=None):
     age = profile.get("age")
     age_line = f"{fa_plain(age)} سال" if age else "—"
 
+    star_line = f"⭐ سطح: {build_stars(profile.get('stars', 0))}"
     lines = [
         BOX_TOP,
         title,
@@ -247,7 +249,7 @@ def render_card(chat_id, user_id, sender=None):
         "🛡 نشان‌ها:",
         badge_line,
         "",
-        f"⭐ سطح: {build_stars(profile.get('stars', 0))}",
+        star_line,
         "",
         f"🥉 برنز: {fa_plain(balance[economy.BRONZE])}",
         f"🥈 نقره: {fa_plain(balance[economy.SILVER])}",
@@ -261,19 +263,24 @@ def render_card(chat_id, user_id, sender=None):
     ]
     text = "\n".join(lines)
     spans = spans_for(text, [title])
-    spans += spans_for(text, ["👤 نام:", "🏷 لقب:", "🛡 نشان‌ها:", "⭐ سطح:",
+    spans += spans_for(text, ["👤 نام:", "🏷 لقب:", "🛡 نشان‌ها:",
                               "🥉 برنز:", "🥈 نقره:", "🥇 طلا:", "📍 شهر:",
                               "🎂 سن:", "🎮 برد:", "🏅 رتبه:"])
+    # «⭐ سطح» کامل (با ستاره‌ها) Bold و داخل نقل قول شیشه‌ای می‌رود.
+    spans += quote_spans(text, star_line)
     return text, spans
 
 
+MENU_BLOCK = (
+    "برای انتخاب، شماره گزینه را بفرستید:\n\n"
+    "۱) 🛍 لیست آیتم ها و خرید\n"
+    "۲) ✏️ ویرایش اطلاعات\n"
+    "۰) بستن"
+)
+
+
 def menu_block():
-    return (
-        "برای انتخاب، شماره گزینه را بفرستید:\n"
-        "۱) 🛍 لیست آیتم ها و خرید\n"
-        "۲) ✏️ ویرایش اطلاعات\n"
-        "۰) بستن"
-    )
+    return MENU_BLOCK
 
 
 def render_menu(chat_id, user_id, sender=None):
@@ -281,7 +288,9 @@ def render_menu(chat_id, user_id, sender=None):
     card, spans = render_card(chat_id, user_id, sender)
     # کارت پیشوند متن نهایی است، پس offsetهای محاسبه‌شده دست‌نخورده
     # معتبر می‌مانند و نیازی به بازمحاسبه نیست.
-    return f"{card}\n\n{menu_block()}", spans
+    text = f"{card}\n\n{MENU_BLOCK}"
+    spans = list(spans) + quote_spans(text, MENU_BLOCK)
+    return text, spans
 
 
 # ---------------------------------------------------------------------------

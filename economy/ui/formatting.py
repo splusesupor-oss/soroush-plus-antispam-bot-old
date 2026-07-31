@@ -42,6 +42,19 @@ def spans_for(text, pieces, kind="bold"):
     return spans
 
 
+def quote_spans(text, piece):
+    """ناحیه را هم Bold می‌کند هم داخل «نقل قول شیشه‌ای» می‌گذارد.
+
+    هیچ نشانه‌گذاری Markdown تولید نمی‌شود؛ فقط span خنثی که لایهٔ
+    هندلر آن را به entity واقعی سروش پلاس تبدیل می‌کند.
+    """
+    index = text.find(piece)
+    if index < 0:
+        return []
+    offset, length = u16(text[:index]), u16(piece)
+    return [("bold", offset, length), ("blockquote", offset, length)]
+
+
 def format_duration(seconds):
     """ثانیه را به «۳ ساعت و ۱۲ دقیقه» تبدیل می‌کند."""
     seconds = max(0, int(seconds))

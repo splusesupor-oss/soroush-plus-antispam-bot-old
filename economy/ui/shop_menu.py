@@ -9,7 +9,7 @@ import time
 import economy
 from economy import catalog, profiles
 from economy.ui import profile_menu
-from economy.ui.formatting import fa, spans_for, u16
+from economy.ui.formatting import fa, quote_spans, spans_for, u16
 
 COMMAND = "فروشگاه"
 SESSION_TIMEOUT = 180
@@ -17,6 +17,14 @@ SESSION_TIMEOUT = 180
 # «لیست آیتم‌ها» گزینهٔ جدا ندارد؛ فهرست هنگام ورود نمایش داده می‌شود.
 MENU_BUY = "1"
 MENU_CLOSE = "0"
+
+# راهنما و گزینه‌ها یک بلوک واحدند تا هر دو با هم Bold و داخل نقل قول
+# شیشه‌ای بروند. نام گزینه دقیقاً همان چیزی است که کاربر خواسته.
+MENU_BLOCK = (
+    "برای انتخاب، شماره گزینه را بفرستید:\n\n"
+    "۱) 🛍 لیست آیتم ها و خرید\n"
+    "۰) بستن"
+)
 
 STEP_MENU = "menu"
 STEP_BUY = "buy"
@@ -97,11 +105,12 @@ def render_menu(chat_id, user_id):
         f"🥇 {fa(balance[economy.GOLD])}\n"
         f"💎 ارزش کل: {fa(balance['total_coin_value'])}\n\n"
         f"آیتم‌های موجود: {fa(count)}\n\n"
-        "برای انتخاب، شماره گزینه را بفرستید:\n\n"
-        "۱) لیست آیتم ها و خرید\n"
-        "۰) بستن"
+        f"{MENU_BLOCK}"
     )
-    return text, spans_for(text, [header, "💎 ارزش کل:"])
+    spans = spans_for(text, [header, "💎 ارزش کل:"])
+    # راهنما و گزینه‌ها: Bold داخل نقل قول شیشه‌ای.
+    spans += quote_spans(text, MENU_BLOCK)
+    return text, spans
 
 
 def render_entry(chat_id, user_id):
@@ -109,13 +118,14 @@ def render_entry(chat_id, user_id):
 
     کاربر دیگر لازم نیست اول «لیست آیتم‌ها» را انتخاب کند.
     """
-    menu, _ = render_menu(chat_id, user_id)
+    menu, menu_spans = render_menu(chat_id, user_id)
     items, _ = render_items(chat_id, user_id)
     combined = f"{menu}\n\n{items}"
-    header_len = u16(f"{menu}\n\n")
-    spans = spans_for(combined, ["🛒 فروشگاه", "💎 ارزش کل:"])
+    # منو پیشوند متن نهایی است، پس offsetهای آن (شامل نقل قول شیشه‌ای)
+    # بدون تغییر معتبر می‌مانند. بازساختن آن‌ها باعث می‌شد نقل قول گم شود.
+    spans = list(menu_spans)
     # بخش فهرست کاملاً Bold می‌ماند.
-    spans.append(("bold", header_len, u16(items)))
+    spans.append(("bold", u16(f"{menu}\n\n"), u16(items)))
     return combined, spans
 
 
