@@ -136,7 +136,7 @@ def test_registration_flow():
     async def scenario():
         bot = Bot()
         steps = []
-        for text in ("پروفایل", "علی", "شیراز", "20", "Fox King"):
+        for text in ("ثبت پرفایل", "علی", "شیراز", "20", "داداش"):
             event = Event()
             await send(bot, event, 1, text)
             steps.append(event)
@@ -155,7 +155,7 @@ def test_registration_flow():
     check("اسم ذخیره شد", saved["name"] == "علی")
     check("شهر ذخیره شد", saved["city"] == "شیراز")
     check("سن ذخیره شد", saved["age"] == 20)
-    check("لقب ذخیره شد", saved["nickname"] == "Fox King")
+    check("لقب ذخیره شد", saved["nickname"] == "داداش")
     check("پرچم ثبت‌شده روشن شد", saved["registered"] is True)
     check("ورود ثبت‌نام لاگ شد", bot.logger.has("PROFILE REGISTRATION START"))
     check("پایان ثبت‌نام لاگ شد", bot.logger.has("PROFILE REGISTERED"))
@@ -168,7 +168,7 @@ def test_registration_optional_nickname():
 
     async def scenario():
         bot = Bot()
-        for text in ("پروفایل", "رضا", "تهران", "۳۱", "۰"):
+        for text in ("ثبت پرفایل", "رضا", "تهران", "۳۱", "۰"):
             await send(bot, Event(), 2, text)
         return bot
 
@@ -186,7 +186,7 @@ def test_registration_validation():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 3, "پروفایل")
+        await send(bot, Event(), 3, "ثبت پرفایل")
         await send(bot, Event(), 3, "سارا")
         await send(bot, Event(), 3, "اصفهان")
         bad = Event()
@@ -221,7 +221,7 @@ def test_second_time_shows_card_directly():
     async def scenario():
         bot = Bot()
         event = Event()
-        await send(bot, event, 4, "پروفایل")
+        await send(bot, event, 4, "پرفایلم")
         return event
 
     event = asyncio.run(scenario())
@@ -327,12 +327,12 @@ def test_title_rules():
 
     # ۱) لقب + اولین نشان
     profiles.register(CHAT, 10, name="علی", city="شیراز", age=20,
-                      nickname="Fox King")
+                      nickname="داداش")
     profiles.buy(CHAT, 10, "badge_fox")
     profiles.buy(CHAT, 10, "badge_king")
     title = profile_menu.build_title(profiles.get(CHAT, 10),
                                      User(10, "علی", username="aliii"))
-    check("لقب مقدم بر یوزرنیم است", title == "🦊 Fox King 🦊", f"-> {title!r}")
+    check("لقب مقدم بر یوزرنیم است", title == "🦊 داداش 🦊", f"-> {title!r}")
 
     # ۲) بدون لقب ولی با یوزرنیم
     profiles.register(CHAT, 11, name="رضا", city="تهران", age=25)
@@ -354,10 +354,10 @@ def test_title_without_any_badge():
     print("\n### 🏷 بدون نشان، هیچ ایموجی کنار عنوان نیست")
     fresh()
     profiles.register(CHAT, 13, name="سمیرا", city="تبریز", age=27,
-                      nickname="Royal")
+                      nickname="گلی")
     title = profile_menu.build_title(profiles.get(CHAT, 13),
                                      User(13, "سمیرا", username="sami"))
-    check("فقط لقب، بدون ایموجی", title == "Royal", f"-> {title!r}")
+    check("فقط لقب، بدون ایموجی", title == "گلی", f"-> {title!r}")
 
     profiles.register(CHAT, 14, name="بهرام", city="مشهد", age=33)
     title = profile_menu.build_title(profiles.get(CHAT, 14),
@@ -375,12 +375,12 @@ def test_title_uses_first_bought_badge():
     fresh()
     fund(16, silver=5000)
     profiles.register(CHAT, 16, name="آرش", city="کرمان", age=21,
-                      nickname="Dark")
+                      nickname="آرشی")
     profiles.buy(CHAT, 16, "badge_dragon")     # اول
     profiles.buy(CHAT, 16, "badge_fox")        # دوم
     title = profile_menu.build_title(profiles.get(CHAT, 16), User(16))
     check("اولین نشان انتخاب می‌شود، نه ارزان‌ترین",
-          title == "🐉 Dark 🐉", f"-> {title!r}")
+          title == "🐉 آرشی 🐉", f"-> {title!r}")
     check("first_badge هم همان را می‌دهد",
           profiles.first_badge(CHAT, 16)["id"] == "badge_dragon")
 
@@ -463,9 +463,10 @@ def test_items_list_is_fully_bold():
           f"-> {length} != {u16(text)}")
 
     prompt, prompt_spans = profile_menu.buy_prompt()
-    check("راهنمای خرید هم کاملاً Bold است",
-          len(prompt_spans) == 1 and prompt_spans[0][1] == 0
-          and prompt_spans[0][2] == u16(prompt))
+    check("راهنمای خرید شمارهٔ آیتم را می‌خواهد",
+          "شمارهٔ آیتم" in prompt and "۳۲" in prompt)
+    check("عنوان راهنمای خرید Bold است",
+          any(kind == "bold" for kind, _, _ in prompt_spans))
 
 
 def test_no_separate_section_for_items():
@@ -476,16 +477,16 @@ def test_no_separate_section_for_items():
     async def scenario():
         bot = Bot()
         menu = Event()
-        await send(bot, menu, 20, "پروفایل")
+        await send(bot, menu, 20, "پرفایلم")
         return menu
 
     menu = asyncio.run(scenario())
-    check("منو فقط سه گزینه + بستن دارد",
-          menu.said("۱) 📦 لیست آیتم‌ها") and menu.said("۲) 🛍 خرید آیتم")
-          and menu.said("۳) ✏️ ویرایش اطلاعات") and menu.said("۰) بستن"))
-    check("منو گزینهٔ جداگانهٔ «نشان‌ها» ندارد",
-          "۴)" not in menu.last)
-    check("منو گزینهٔ جداگانهٔ «لقب» ندارد", "۵)" not in menu.last)
+    check("منو دو گزینه + بستن دارد",
+          menu.said("۱) 🛍 لیست آیتم ها و خرید")
+          and menu.said("۲) ✏️ ویرایش اطلاعات") and menu.said("۰) بستن"))
+    check("گزینهٔ جدا برای «لیست آیتم‌ها» حذف شده",
+          "۱) 📦 لیست آیتم‌ها" not in menu.last)
+    check("منو گزینهٔ سوم ندارد", "۳)" not in menu.last)
 
     # هیچ دستور مستقلی برای این سه دسته وجود ندارد.
     for command in ("نشان", "نشان‌ها", "لقب", "ستاره", "سطح"):
@@ -655,21 +656,22 @@ def test_buy_through_handler_shows_immediately():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 40, "پروفایل")
+        await send(bot, Event(), 40, "پرفایلم")
         listing = Event()
-        await send(bot, listing, 40, "1")
-        prompt = Event()
-        await send(bot, prompt, 40, "2")
+        await send(bot, listing, 40, "1")        # لیست + راهنما
+        select = Event()
+        await send(bot, select, 40, "1")         # نشان روباه
         buy = Event()
-        await send(bot, buy, 40, "1")            # نشان روباه
+        await send(bot, buy, 40, "تایید")
         card = Event()
-        await send(bot, card, 40, "پروفایل")
-        return bot, listing, prompt, buy, card
+        await send(bot, card, 40, "پرفایلم")
+        return bot, listing, select, buy, card
 
-    bot, listing, prompt, buy, card = asyncio.run(scenario())
+    bot, listing, select, buy, card = asyncio.run(scenario())
     check("لیست آیتم‌ها نمایش داده شد", listing.said("📦 لیست آیتم‌ها"))
-    check("لیست کاملاً Bold ارسال شد", listing.entity_counts[-1] == 1)
-    check("راهنمای خرید آمد", prompt.said("برای خرید، شمارهٔ آیتم"))
+    check("لیست کاملاً Bold ارسال شد", listing.entity_counts[0] == 1)
+    check("راهنمای انتخاب آمد", listing.said("شمارهٔ آیتم"))
+    check("تایید خواسته شد", select.said("مطمئن هستید"))
     check("خرید موفق بود", buy.said("خریداری شد"))
     check("اثر آیتم اعلام شد", buy.said("به پروفایل شما اضافه شد"))
     check("نشان فوراً در کارت دیده می‌شود", card.said("🦊"))
@@ -687,15 +689,16 @@ def test_buy_star_and_title_through_handler():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 41, "پروفایل")
-        await send(bot, Event(), 41, "2")
+        await send(bot, Event(), 41, "پرفایلم")
+        await send(bot, Event(), 41, "1")
+        await send(bot, Event(), 41, "13")       # سه ستاره
         star = Event()
-        await send(bot, star, 41, "13")          # سه ستاره
-        await send(bot, Event(), 41, "2")
+        await send(bot, star, 41, "تایید")
+        await send(bot, Event(), 41, "18")       # Fox King
         title = Event()
-        await send(bot, title, 41, "18")         # Fox King
+        await send(bot, title, 41, "تایید")
         card = Event()
-        await send(bot, card, 41, "پروفایل")
+        await send(bot, card, 41, "پرفایلم")
         return star, title, card
 
     star, title, card = asyncio.run(scenario())
@@ -720,8 +723,8 @@ def test_buy_failure_message_through_handler():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 42, "پروفایل")
-        await send(bot, Event(), 42, "2")
+        await send(bot, Event(), 42, "پرفایلم")
+        await send(bot, Event(), 42, "1")
         poor = Event()
         await send(bot, poor, 42, "1")
         unknown = Event()
@@ -732,6 +735,7 @@ def test_buy_failure_message_through_handler():
 
     poor, unknown, cancel = asyncio.run(scenario())
     check("کمبود موجودی اعلام می‌شود", poor.said("کافی نیست"))
+    check("مقدار کمبود اعلام می‌شود", poor.said("دیگر نیاز دارید"))
     check("آیتم ناشناخته اعلام می‌شود", unknown.said("در فهرست نیست"))
     check("لغو کار می‌کند", cancel.said("لغو شد"))
     check("پول دست‌نخورده ماند",
@@ -749,9 +753,9 @@ def test_edit_flow():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 50, "پروفایل")
+        await send(bot, Event(), 50, "پرفایلم")
         menu = Event()
-        await send(bot, menu, 50, "3")
+        await send(bot, menu, 50, "2")
         prompt = Event()
         await send(bot, prompt, 50, "2")
         done = Event()
@@ -842,7 +846,7 @@ def test_sections_do_not_collide():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 71, "پروفایل")
+        await send(bot, Event(), 71, "پرفایلم")
         opened_profile = profile_menu.is_open(CHAT, 71)
         await send(bot, Event(), 71, "موجودی")
         after_balance = (profile_menu.is_open(CHAT, 71),
@@ -850,7 +854,7 @@ def test_sections_do_not_collide():
         await send(bot, Event(), 71, "فروشگاه")
         after_shop = (balance_menu.is_open(CHAT, 71),
                       shop_menu.is_open(CHAT, 71))
-        await send(bot, Event(), 71, "پروفایل")
+        await send(bot, Event(), 71, "پرفایلم")
         after_profile = (shop_menu.is_open(CHAT, 71),
                          profile_menu.is_open(CHAT, 71))
         return opened_profile, after_balance, after_shop, after_profile
@@ -871,7 +875,7 @@ def test_unrelated_text_is_not_consumed():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 72, "پروفایل")
+        await send(bot, Event(), 72, "پرفایلم")
         chat = Event()
         consumed = await send(bot, chat, 72, "سلام بچه‌ها")
         return consumed, chat
@@ -890,7 +894,7 @@ def test_close_menu():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 73, "پروفایل")
+        await send(bot, Event(), 73, "پرفایلم")
         close = Event()
         await send(bot, close, 73, "0")
         return close, profile_menu.is_open(CHAT, 73)
@@ -996,18 +1000,24 @@ def test_shop_buy_session_opens():
 
     async def scenario():
         bot = Bot()
-        await send(bot, Event(), 90, "فروشگاه")
+        entry = Event()
+        await send(bot, entry, 90, "فروشگاه")
         buy = Event()
-        await send(bot, buy, 90, "2")
+        await send(bot, buy, 90, "1")
         opened = shop_menu.is_open(CHAT, 90)
         state = shop_menu.session(CHAT, 90)
+        select = Event()
+        await send(bot, select, 90, "1")
         done = Event()
-        await send(bot, done, 90, "1")
-        return buy, opened, state, done
+        await send(bot, done, 90, "تایید")
+        return entry, buy, opened, state, select, done
 
-    buy, opened, state, done = asyncio.run(scenario())
-    check("گفتگوی خرید باز شد", opened and state["step"] == "buy")
-    check("فهرست آیتم‌ها در راهنمای خرید هست", buy.said("نشان روباه"))
+    entry, buy, opened, state, select, done = asyncio.run(scenario())
+    check("گفتگوی خرید باز شد",
+          opened and state["step"] == shop_menu.STEP_BUY)
+    check("فهرست آیتم‌ها هنگام ورود دیده می‌شود", entry.said("نشان روباه"))
+    check("راهنمای انتخاب آمد", buy.said("شمارهٔ آیتم"))
+    check("تایید خواسته شد", select.said("مطمئن هستید"))
     check("خرید از فروشگاه انجام شد", done.said("خریداری شد"))
     check("سکه واقعاً کسر شد",
           economy.get_balance(CHAT, 90)[economy.SILVER] == 400)
@@ -1025,10 +1035,11 @@ def test_shop_and_profile_share_one_catalog():
     async def scenario():
         bot = Bot()
         await send(bot, Event(), 91, "فروشگاه")
-        await send(bot, Event(), 91, "2")
+        await send(bot, Event(), 91, "1")
         await send(bot, Event(), 91, "18")     # لقب Fox King
+        await send(bot, Event(), 91, "تایید")
         card = Event()
-        await send(bot, card, 91, "پروفایل")
+        await send(bot, card, 91, "پرفایلم")
         return card
 
     card = asyncio.run(scenario())
@@ -1051,17 +1062,20 @@ def test_three_commands_reach_the_real_router():
         group_storage.activate_group(CHAT, "گروه تست")
         bot, handler = await build_handler()
         out = {}
-        for command in ("پروفایل", "موجودی", "فروشگاه"):
+        for command in ("پرفایلم", "ثبت پرفایل", "موجودی",
+                        "فروشگاه"):
             event = RouteEvent(command, 92)
             await handler(event)
             out[command] = event.replies
         return bot, out
 
     bot, out = asyncio.run(scenario())
-    check("«پروفایل» از router جواب می‌گیرد", bool(out["پروفایل"]),
+    check("«پرفایلم» از router جواب می‌گیرد", bool(out["پرفایلم"]),
           "*** هیچ پاسخی نیامد ***")
-    check("«پروفایل» ثبت‌نام را شروع می‌کند",
-          any("اسم خود را" in r for r in out["پروفایل"]))
+    check("«ثبت پرفایل» از router جواب می‌گیرد", bool(out["ثبت پرفایل"]),
+          "*** هیچ پاسخی نیامد ***")
+    check("«ثبت پرفایل» ثبت‌نام را شروع می‌کند",
+          any("اسم خود را" in r for r in out["ثبت پرفایل"]))
     check("«موجودی» از router جواب می‌گیرد", bool(out["موجودی"]))
     check("«موجودی» کیف پول را نشان می‌دهد",
           any("کیف پول شما" in r for r in out["موجودی"]))
@@ -1080,8 +1094,345 @@ def test_deployment_checker_knows_profile():
     for needle in ("economy/catalog.py", "economy/profiles.py",
                    "economy/ui/profile_menu.py"):
         check(f"{needle} در فهرست بررسی هست", needle in source)
-    check("دستور پروفایل بررسی می‌شود", 'COMMAND = "پروفایل"' in source)
+    check("دستور پروفایل بررسی می‌شود",
+          'COMMAND_SHOW = "پرفایلم"' in source)
     check("تعداد آیتم‌ها بررسی می‌شود", "n==32" in source)
+
+
+
+# ===========================================================================
+# 🛒 ساختار جدید منوی فروشگاه
+# ===========================================================================
+def test_shop_menu_structure():
+    print("\n### 🛒 ساختار منوی فروشگاه")
+    fresh()
+    text, _ = shop_menu.render_menu(CHAT, 1)
+    check("گزینهٔ «لیست آیتم‌ها» حذف شده", "۱) لیست آیتم‌ها" not in text)
+    check("گزینهٔ «۲) خرید» حذف شده", "۲) خرید" not in text)
+    check("گزینهٔ جدید هست", "۱) لیست آیتم ها و خرید" in text)
+    check("گزینهٔ بستن هست", "۰) بستن" in text)
+    check("متن راهنما مطابق خواسته", "برای انتخاب، شماره گزینه را بفرستید:"
+          in text)
+    check("موجودی نمایش داده می‌شود", "موجودی شما:" in text)
+    check("ارزش کل نمایش داده می‌شود", "💎 ارزش کل:" in text)
+    check("تعداد آیتم‌ها نمایش داده می‌شود", "آیتم‌های موجود: ۳۲" in text)
+
+
+def test_shop_shows_items_on_entry():
+    print("\n### 🛒 فهرست هنگام ورود نمایش داده می‌شود")
+    fresh()
+
+    async def scenario():
+        bot = Bot()
+        entry = Event()
+        await send(bot, entry, 100, "فروشگاه")
+        return entry
+
+    entry = asyncio.run(scenario())
+    check("منو در همان پیام هست", entry.said("🛒 فروشگاه"))
+    check("فهرست بدون انتخاب گزینه می‌آید", entry.said("📦 لیست آیتم‌ها"))
+    check("نشان‌ها دیده می‌شوند", entry.said("نشان روباه"))
+    check("سطح‌ها دیده می‌شوند", entry.said("سه ستاره"))
+    check("لقب‌ها دیده می‌شوند", entry.said("𝙁𝙤𝙭 𝙆𝙞𝙣𝙜"))
+    eco_handler.reset_all()
+
+
+def test_numbers_only_act_inside_buy_step():
+    """عدد در حالت عادی نباید دستور فروشگاه/خرید تلقی شود."""
+    print("\n### 🛒 عدد فقط داخل مرحلهٔ خرید معنا دارد")
+    fresh()
+    fund(101, silver=500)
+
+    async def scenario():
+        bot = Bot()
+        stray = Event()
+        consumed_before = await send(bot, stray, 101, "1")
+        await send(bot, Event(), 101, "فروشگاه")
+        await send(bot, Event(), 101, "1")          # ورود به خرید
+        picked = Event()
+        consumed_inside = await send(bot, picked, 101, "1")
+        return consumed_before, stray, consumed_inside, picked
+
+    before, stray, inside, picked = asyncio.run(scenario())
+    check("عدد بدون باز بودن فروشگاه مصرف نمی‌شود", before is False)
+    check("ربات به عدد بی‌ربط جواب نمی‌دهد", not stray.replies)
+    check("عدد داخل مرحلهٔ خرید مصرف می‌شود", inside is True)
+    check("عدد داخل مرحلهٔ خرید تایید می‌خواهد", picked.said("مطمئن هستید"))
+    eco_handler.reset_all()
+
+
+# ===========================================================================
+# ✅ تایید و لغو خرید
+# ===========================================================================
+def test_purchase_needs_confirmation():
+    print("\n### ✅ خرید تایید می‌خواهد")
+    fresh()
+    fund(110, silver=500)
+
+    async def scenario():
+        bot = Bot()
+        await send(bot, Event(), 110, "فروشگاه")
+        await send(bot, Event(), 110, "1")
+        ask = Event()
+        await send(bot, ask, 110, "1")
+        mid = economy.get_balance(CHAT, 110)[economy.SILVER]
+        done = Event()
+        await send(bot, done, 110, "تایید")
+        return ask, mid, done
+
+    ask, mid, done = asyncio.run(scenario())
+    check("پیام تایید نمایش داده می‌شود", ask.said("مطمئن هستید"))
+    check("گزینهٔ تایید هست", ask.said("✅ تایید"))
+    check("گزینهٔ لغو هست", ask.said("❌ لغو"))
+    check("قیمت در پیام تایید هست", ask.said("۱۰۰"))
+    check("پیش از تایید هیچ سکه‌ای کسر نمی‌شود", mid == 500)
+    check("بعد از تایید خرید انجام شد", done.said("خریداری شد"))
+    check("بعد از تایید سکه کسر شد",
+          economy.get_balance(CHAT, 110)[economy.SILVER] == 400)
+    check("آیتم به پروفایل اضافه شد",
+          "badge_fox" in profiles.get(CHAT, 110)["badges"])
+    eco_handler.reset_all()
+
+
+def test_purchase_cancel_changes_nothing():
+    print("\n### ❌ لغو خرید هیچ تغییری نمی‌دهد")
+    fresh()
+    fund(111, silver=500)
+
+    async def scenario():
+        bot = Bot()
+        await send(bot, Event(), 111, "فروشگاه")
+        await send(bot, Event(), 111, "1")
+        await send(bot, Event(), 111, "1")
+        cancel = Event()
+        await send(bot, cancel, 111, "لغو")
+        return cancel
+
+    cancel = asyncio.run(scenario())
+    check("لغو اعلام می‌شود", cancel.said("لغو شد"))
+    check("تصریح می‌کند سکه‌ای کسر نشد", cancel.said("هیچ سکه‌ای کسر نشد"))
+    check("سکه دست‌نخورده ماند",
+          economy.get_balance(CHAT, 111)[economy.SILVER] == 500)
+    check("آیتمی اضافه نشد", profiles.get(CHAT, 111)["badges"] == [])
+    eco_handler.reset_all()
+
+
+def test_confirm_accepts_several_forms():
+    print("\n### ✅ شکل‌های مختلف تایید و لغو")
+    for word in ("تایید", "تأیید", "بله", "1", "۱", "✅"):
+        check(f"«{word}» تایید است", profile_menu.is_confirm(word))
+    for word in ("لغو", "نه", "0", "۰", "❌"):
+        check(f"«{word}» لغو است", profile_menu.is_decline(word))
+    check("متن نامربوط نه تایید است نه لغو",
+          not profile_menu.is_confirm("شاید")
+          and not profile_menu.is_decline("شاید"))
+
+
+def test_insufficient_balance_message():
+    print("\n### 💸 پیام کمبود موجودی")
+    fresh()
+    fund(112, silver=30)
+    item, message = profile_menu.select_item(CHAT, 112, "1")
+    check("آیتم انتخاب نمی‌شود", item is None)
+    check("پیام دقیقاً مطابق خواسته شروع می‌شود",
+          message.startswith("موجودی سکه کافی نیست."))
+    check("مقدار کمبود اعلام می‌شود", "۷۰" in message)
+    check("جملهٔ نیاز آمده", "دیگر نیاز دارید" in message)
+    check("هیچ سکه‌ای کسر نشد",
+          economy.get_balance(CHAT, 112)[economy.SILVER] == 30)
+
+
+def test_shortfall_is_exact():
+    print("\n### 💸 محاسبهٔ دقیق کمبود")
+    from economy import catalog as cat
+    item = cat.get("badge_fox")
+    check("کمبود کامل", cat.shortfall(item, {"silver": 0}) == 100)
+    check("کمبود جزئی", cat.shortfall(item, {"silver": 60}) == 40)
+    check("بدون کمبود", cat.shortfall(item, {"silver": 100}) == 0)
+    check("موجودی بیشتر هم کمبود ندارد",
+          cat.shortfall(item, {"silver": 900}) == 0)
+
+
+# ===========================================================================
+# 👤 سه دستور پروفایل
+# ===========================================================================
+def test_profile_command_names():
+    print("\n### 👤 نام دستورهای پروفایل")
+    check("«ثبت پرفایل» شناخته می‌شود",
+          profile_menu.is_register_command("ثبت پرفایل"))
+    check("«پرفایلم» شناخته می‌شود",
+          profile_menu.is_show_command("پرفایلم"))
+    check("«حذف پرفایل» شناخته می‌شود",
+          profile_menu.is_delete_command("حذف پرفایل"))
+    check("«پروفایل» تنها دیگر دستور نیست",
+          not profile_menu.is_command("پروفایل"))
+    check("متن بی‌ربط دستور نیست", not profile_menu.is_command("سلام"))
+    check("هر سه زیر چتر is_command هستند",
+          all(profile_menu.is_command(c) for c in
+              ("ثبت پرفایل", "پرفایلم", "حذف پرفایل")))
+
+
+def test_delete_profile():
+    print("\n### 🗑 حذف پرفایل")
+    fresh()
+    fund(120, silver=500, bronze=500)
+    profiles.register(CHAT, 120, name="نیلوفر", city="شیراز", age=22)
+    profiles.buy(CHAT, 120, "badge_fox")
+    coins_before = economy.get_balance(CHAT, 120)[economy.SILVER]
+
+    async def scenario():
+        bot = Bot()
+        done = Event()
+        await send(bot, done, 120, "حذف پرفایل")
+        after = Event()
+        await send(bot, after, 120, "پرفایلم")
+        return bot, done, after
+
+    bot, done, after = asyncio.run(scenario())
+    check("حذف تایید می‌شود", done.said("حذف شد"))
+    check("پروفایل دیگر ثبت‌شده نیست",
+          profiles.get(CHAT, 120)["registered"] is False)
+    check("اطلاعات شخصی پاک شد", profiles.get(CHAT, 120)["name"] is None)
+    check("آیتم خریداری‌شده حفظ می‌شود",
+          "badge_fox" in profiles.get(CHAT, 120)["badges"])
+    check("سکه‌ها حفظ می‌شوند",
+          economy.get_balance(CHAT, 120)[economy.SILVER] == coins_before)
+    check("بعد از حذف «پرفایلم» راهنما می‌دهد",
+          after.said("هنوز پروفایلی ثبت نکرده‌اید"))
+    check("حذف لاگ شد", bot.logger.has("PROFILE DELETED"))
+    eco_handler.reset_all()
+
+
+def test_delete_when_not_registered():
+    print("\n### 🗑 حذف وقتی پروفایلی نیست")
+    fresh()
+
+    async def scenario():
+        bot = Bot()
+        event = Event()
+        await send(bot, event, 121, "حذف پرفایل")
+        return event
+
+    event = asyncio.run(scenario())
+    check("پیام مناسب می‌دهد", event.said("هنوز پروفایلی ثبت نکرده‌اید"))
+    check("راه ثبت را نشان می‌دهد", event.said("ثبت پرفایل"))
+    eco_handler.reset_all()
+
+
+def test_register_twice_is_guarded():
+    print("\n### 👤 ثبت دوباره هشدار می‌دهد")
+    fresh()
+    profiles.register(CHAT, 122, name="کیوان", city="قم", age=30)
+
+    async def scenario():
+        bot = Bot()
+        event = Event()
+        await send(bot, event, 122, "ثبت پرفایل")
+        return event
+
+    event = asyncio.run(scenario())
+    check("اعلام می‌کند قبلاً ثبت شده", event.said("قبلاً ثبت شده"))
+    check("نام دستورهای درست را می‌گوید",
+          event.said("پرفایلم") and event.said("حذف پرفایل"))
+    check("اطلاعات پاک نشد", profiles.get(CHAT, 122)["name"] == "کیوان")
+    eco_handler.reset_all()
+
+
+def test_show_before_register():
+    print("\n### 👤 «پرفایلم» پیش از ثبت")
+    fresh()
+
+    async def scenario():
+        bot = Bot()
+        event = Event()
+        await send(bot, event, 123, "پرفایلم")
+        return event
+
+    event = asyncio.run(scenario())
+    check("راهنمای ثبت می‌دهد", event.said("هنوز پروفایلی ثبت نکرده‌اید"))
+    check("ثبت‌نام خودکار شروع نمی‌شود",
+          not event.said("اسم خود را بفرستید"))
+    eco_handler.reset_all()
+
+
+# ===========================================================================
+# 🔒 قفل لقب‌های فروشگاه
+# ===========================================================================
+def test_shop_titles_are_locked():
+    print("\n### 🔒 لقب فروشگاهی بدون خرید ثبت نمی‌شود")
+    fresh()
+    fund(130, bronze=1000)
+    profiles.register(CHAT, 130, name="سحر", city="یزد", age=26)
+
+    for attempt in ("𝙁𝙤𝙭 𝙆𝙞𝙣𝙜", "fox king", "FoxKing", "𝙍𝙤𝙮𝙖𝙡"):
+        try:
+            profiles.update(CHAT, 130, nickname=attempt)
+            check(f"«{attempt}» باید رد شود", False)
+        except profiles.ProfileError as error:
+            check(f"«{attempt}» رد شد", "فروشگاه" in str(error))
+
+    check("لقب تغییر نکرد", profiles.get(CHAT, 130)["nickname"] is None)
+
+
+def test_free_nickname_still_allowed():
+    print("\n### 🔒 لقب آزاد همچنان مجاز است")
+    fresh()
+    profiles.register(CHAT, 131, name="پیمان", city="رشت", age=29)
+    profiles.update(CHAT, 131, nickname="داداش")
+    check("لقب دلخواه ثبت می‌شود",
+          profiles.get(CHAT, 131)["nickname"] == "داداش")
+
+
+def test_locked_title_unlocks_after_purchase():
+    print("\n### 🔒 پس از خرید، لقب آزاد می‌شود")
+    fresh()
+    fund(132, bronze=1000)
+    profiles.register(CHAT, 132, name="آیدا", city="کرج", age=24)
+    try:
+        profiles.update(CHAT, 132, nickname="𝙍𝙤𝙮𝙖𝙡")
+        check("پیش از خرید قفل است", False)
+    except profiles.ProfileError:
+        check("پیش از خرید قفل است", True)
+
+    profiles.buy(CHAT, 132, "title_royal")
+    check("خرید خودش لقب را می‌گذارد",
+          profiles.get(CHAT, 132)["nickname"] == "𝙍𝙤𝙮𝙖𝙡")
+    profiles.update(CHAT, 132, nickname="داداش")
+    profiles.update(CHAT, 132, nickname="𝙍𝙤𝙮𝙖𝙡")
+    check("بعد از خرید می‌توان دوباره انتخابش کرد",
+          profiles.get(CHAT, 132)["nickname"] == "𝙍𝙤𝙮𝙖𝙡")
+    check("لقب فروشگاهیِ نخریده هنوز قفل است",
+          _raises_profile_error(CHAT, 132, "𝘿𝙧𝙖𝙜𝙤𝙣"))
+
+
+def _raises_profile_error(chat_id, user_id, nickname):
+    try:
+        profiles.update(chat_id, user_id, nickname=nickname)
+        return False
+    except profiles.ProfileError:
+        return True
+
+
+def test_locked_title_blocked_during_registration():
+    print("\n### 🔒 قفل لقب در مرحلهٔ ثبت‌نام هم هست")
+    fresh()
+
+    async def scenario():
+        bot = Bot()
+        for text in ("ثبت پرفایل", "بهار", "تهران", "۲۳"):
+            await send(bot, Event(), 133, text)
+        blocked = Event()
+        await send(bot, blocked, 133, "𝘿𝙖𝙧𝙠 𝙇𝙤𝙧𝙙")
+        ok = Event()
+        await send(bot, ok, 133, "بهاری")
+        return blocked, ok
+
+    blocked, ok = asyncio.run(scenario())
+    check("لقب فروشگاهی رد می‌شود", blocked.said("فروشگاه"))
+    check("قیمت را اعلام می‌کند", blocked.said("۲۰۰"))
+    check("ثبت‌نام ادامه پیدا می‌کند", ok.said("ثبت شد"))
+    check("لقب آزاد نشست", profiles.get(CHAT, 133)["nickname"] == "بهاری")
+    eco_handler.reset_all()
 
 
 # ===========================================================================
@@ -1128,6 +1479,23 @@ def main():
     test_shop_and_profile_share_one_catalog()
     test_three_commands_reach_the_real_router()
     test_deployment_checker_knows_profile()
+    test_shop_menu_structure()
+    test_shop_shows_items_on_entry()
+    test_numbers_only_act_inside_buy_step()
+    test_purchase_needs_confirmation()
+    test_purchase_cancel_changes_nothing()
+    test_confirm_accepts_several_forms()
+    test_insufficient_balance_message()
+    test_shortfall_is_exact()
+    test_profile_command_names()
+    test_delete_profile()
+    test_delete_when_not_registered()
+    test_register_twice_is_guarded()
+    test_show_before_register()
+    test_shop_titles_are_locked()
+    test_free_nickname_still_allowed()
+    test_locked_title_unlocks_after_purchase()
+    test_locked_title_blocked_during_registration()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 

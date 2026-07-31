@@ -395,12 +395,12 @@ def test_shop_buy_from_menu_writes_db():
 
     async def scenario():
         bot, handler = await build_handler()
-        await handler(Event("فروشگاه", 777))
-        listing = Event("1", 777)
+        listing = Event("فروشگاه", 777)
         await handler(listing)
-        prompt = Event("2", 777)
+        prompt = Event("1", 777)
         await handler(prompt)
-        buy = Event("badge", 777)
+        await handler(Event("badge", 777))
+        buy = Event("تایید", 777)
         await handler(buy)
         return listing, prompt, buy
 

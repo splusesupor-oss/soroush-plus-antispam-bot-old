@@ -17,7 +17,19 @@ import economy
 from economy import catalog, profiles
 from economy.ui.formatting import fa_plain, spans_for, u16
 
-COMMAND = "پروفایل"
+# سه دستور مستقل پروفایل. املای «پرفایل» خواستهٔ صریح کاربر است؛
+# «پروفایل» هم به‌عنوان مترادف پذیرفته می‌شود تا کسی سرگردان نشود.
+COMMAND_REGISTER = "ثبت پرفایل"
+COMMAND_SHOW = "پرفایلم"
+COMMAND_DELETE = "حذف پرفایل"
+
+# نام‌هایی که در منوها و راهنما نمایش داده می‌شوند.
+COMMAND = COMMAND_SHOW
+
+_REGISTER_ALIASES = {COMMAND_REGISTER, "ثبت پروفایل"}
+_SHOW_ALIASES = {COMMAND_SHOW, "پروفایلم"}
+_DELETE_ALIASES = {COMMAND_DELETE, "حذف پروفایل"}
+
 SESSION_TIMEOUT = 300
 
 STEP_MENU = "menu"
@@ -26,12 +38,12 @@ STEP_CITY = "city"
 STEP_AGE = "age"
 STEP_NICKNAME = "nickname"
 STEP_BUY = "buy"
+STEP_CONFIRM = "confirm"
 STEP_EDIT = "edit"
 STEP_EDIT_VALUE = "edit_value"
 
-MENU_ITEMS = "1"
-MENU_BUY = "2"
-MENU_EDIT = "3"
+MENU_BUY = "1"
+MENU_EDIT = "2"
 MENU_CLOSE = "0"
 
 EDIT_NAME = "1"
@@ -76,8 +88,23 @@ def normalize(text):
     return " ".join(value.split())
 
 
+def is_register_command(text):
+    return normalize(text) in _REGISTER_ALIASES
+
+
+def is_show_command(text):
+    return normalize(text) in _SHOW_ALIASES
+
+
+def is_delete_command(text):
+    return normalize(text) in _DELETE_ALIASES
+
+
 def is_command(text):
-    return normalize(text) == COMMAND
+    """آیا این متن یکی از سه دستور پروفایل است."""
+    value = normalize(text)
+    return (value in _REGISTER_ALIASES or value in _SHOW_ALIASES
+            or value in _DELETE_ALIASES)
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +269,9 @@ def render_card(chat_id, user_id, sender=None):
 
 def menu_block():
     return (
-        "برای انتخاب، شمارهٔ گزینه را بفرستید:\n"
-        "۱) 📦 لیست آیتم‌ها\n"
-        "۲) 🛍 خرید آیتم\n"
-        "۳) ✏️ ویرایش اطلاعات\n"
+        "برای انتخاب، شماره گزینه را بفرستید:\n"
+        "۱) 🛍 لیست آیتم ها و خرید\n"
+        "۲) ✏️ ویرایش اطلاعات\n"
         "۰) بستن"
     )
 
@@ -313,9 +339,80 @@ def render_items(chat_id=None, user_id=None):
 
 
 def buy_prompt(chat_id=None, user_id=None):
-    text, spans = render_items(chat_id, user_id)
-    text = f"{text}\nبرای لغو، ۰ بفرستید."
-    return text, [("bold", 0, u16(text))]
+    """راهنمای انتخاب آیتم؛ فهرست جداگانه فرستاده می‌شود."""
+    text = (
+        "🛍 خرید آیتم\n\n"
+        "شمارهٔ آیتم موردنظر را بفرستید (۱ تا "
+        f"{fa_plain(len(catalog.all_items()))}).\n"
+        "برای لغو، ۰ بفرستید."
+    )
+    return text, spans_for(text, ["🛍 خرید آیتم"])
+
+
+CONFIRM_YES = "1"
+CONFIRM_NO = "0"
+
+_YES_WORDS = {"تایید", "تأیید", "بله", "اره", "آره", "ok", "yes", "✅"}
+_NO_WORDS = {"لغو", "نه", "خیر", "cancel", "no", "❌"}
+
+
+def is_confirm(text):
+    value = _english(text).strip()
+    if value == CONFIRM_YES:
+        return True
+    return normalize(text).lower() in _YES_WORDS
+
+
+def is_decline(text):
+    value = _english(text).strip()
+    if value == CONFIRM_NO:
+        return True
+    return normalize(text).lower() in _NO_WORDS
+
+
+def select_item(chat_id, user_id, text):
+    """مرحلهٔ انتخاب آیتم.
+
+    خروجی ``(item, message)``. اگر ``item`` تهی باشد، ``message`` را به
+    کاربر نشان بدهید و در همان مرحله بمانید.
+    """
+    item = catalog.resolve(text)
+    if item is None:
+        return None, "❌ چنین آیتمی در فهرست نیست. شمارهٔ آیتم را بفرستید."
+
+    if item["kind"] == catalog.KIND_BADGE and \
+            item["id"] in profiles.get(chat_id, user_id)["badges"]:
+        return None, "❌ این نشان را قبلاً خریده‌اید."
+    if item["kind"] == catalog.KIND_TITLE and \
+            item["id"] in profiles.get(chat_id, user_id)["titles"]:
+        return None, "❌ این لقب را قبلاً خریده‌اید."
+    if item["kind"] == catalog.KIND_STAR and \
+            profiles.stars(chat_id, user_id) >= int(item["level"]):
+        return None, "❌ این سطح را قبلاً دارید."
+
+    balance = economy.get_balance(chat_id, user_id)
+    missing = catalog.shortfall(item, balance)
+    if missing:
+        coin = _COIN_NAMES[item["coin_type"]]
+        return None, (
+            "موجودی سکه کافی نیست.\n"
+            f"برای خرید این آیتم به {fa_plain(missing)} سکه {coin} دیگر "
+            "نیاز دارید."
+        )
+    return item, confirm_prompt(item)
+
+
+def confirm_prompt(item):
+    coin = _COIN_NAMES[item["coin_type"]]
+    text = (
+        f"🛍 {item['label']}\n"
+        f"💵 قیمت: {fa_plain(item['price'])} {coin}\n\n"
+        "آیا از خرید این آیتم مطمئن هستید؟\n\n"
+        "✅ تایید\n"
+        "❌ لغو"
+    )
+    return text, spans_for(text, ["آیا از خرید این آیتم مطمئن هستید؟",
+                                  "✅ تایید", "❌ لغو"])
 
 
 def do_buy(chat_id, user_id, text, *, reference=None):
@@ -355,6 +452,23 @@ PROMPT_CITY = "🏙 شهر خود را بفرستید:"
 PROMPT_AGE = "🎂 سن خود را بفرستید:"
 PROMPT_NICKNAME = ("🏷 لقب خود را بفرستید.\n"
                    "این مورد اختیاری است؛ برای رد شدن ۰ بفرستید.")
+
+PROMPT_DELETED = (
+    "🗑 پروفایل شما حذف شد.\n\n"
+    "آیتم‌های خریداری‌شده و سکه‌هایتان دست‌نخورده باقی می‌مانند.\n"
+    f"برای ثبت دوباره «{COMMAND_REGISTER}» را بفرستید."
+)
+
+PROMPT_NOT_REGISTERED = (
+    "❌ هنوز پروفایلی ثبت نکرده‌اید.\n"
+    f"برای ثبت «{COMMAND_REGISTER}» را بفرستید."
+)
+
+PROMPT_ALREADY_REGISTERED = (
+    "ℹ️ پروفایل شما قبلاً ثبت شده است.\n"
+    f"برای دیدن آن «{COMMAND_SHOW}» و برای حذف "
+    f"«{COMMAND_DELETE}» را بفرستید."
+)
 
 PROMPT_EDIT = (
     "✏️ ویرایش اطلاعات\n\n"

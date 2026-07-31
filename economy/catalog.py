@@ -201,6 +201,32 @@ def resolve(text):
     return None
 
 
+def title_item_for(text):
+    """اگر متن دقیقاً یکی از لقب‌های فروشگاه باشد، همان آیتم را می‌دهد.
+
+    برای قفل کردن لقب‌های فروشگاه لازم است: کاربر نباید بتواند لقبی را
+    که فروشی است مستقیم در پروفایل بنویسد و از خرید فرار کند.
+    """
+    cleaned = _normalize(text)
+    if not cleaned:
+        return None
+    for item in titles():
+        if _normalize(item["title"]) == cleaned:
+            return item
+        if _normalize(item["typed"]) == cleaned:
+            return item
+        # بدون ایموجی و بدون فاصله هم نباید راه فرار باشد.
+        if _normalize(item["typed"]).replace(" ", "") == cleaned.replace(" ", ""):
+            return item
+    return None
+
+
+def shortfall(item, balance):
+    """چند سکه کم دارد تا بتواند این آیتم را بخرد."""
+    have = int(balance.get(item["coin_type"], 0))
+    return max(0, int(item["price"]) - have)
+
+
 def number_of(item_id):
     """شمارهٔ نمایشی یک آیتم در فهرست (از ۱)."""
     for index, item in enumerate(all_items(), 1):

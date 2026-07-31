@@ -109,8 +109,13 @@ def validate_age(text):
     return age
 
 
-def validate_nickname(text):
-    """``None`` یعنی کاربر لقب نمی‌خواهد."""
+def validate_nickname(text, *, owned_titles=()):
+    """``None`` یعنی کاربر لقب نمی‌خواهد.
+
+    لقب‌هایی که در فروشگاه فروخته می‌شوند قفل‌اند: تا وقتی کاربر آن آیتم
+    را نخریده باشد نمی‌تواند همان متن را دستی به‌عنوان لقب ثبت کند،
+    وگرنه خرید بی‌معنا می‌شد.
+    """
     value = _clean(text)
     if not value or value.translate(_DIGIT_MAP) == "0":
         return None
@@ -118,6 +123,15 @@ def validate_nickname(text):
         return None
     if len(value) > MAX_NICKNAME:
         raise ProfileError(f"لقب نباید بیشتر از {MAX_NICKNAME} نویسه باشد.")
+
+    locked = catalog.title_item_for(value)
+    if locked is not None and locked["id"] not in set(owned_titles):
+        price = str(catalog.TITLE_PRICE).translate(
+            {ord(str(i)): p for i, p in enumerate("۰۱۲۳۴۵۶۷۸۹")})
+        raise ProfileError(
+            f"لقب «{locked['title']}» یکی از آیتم‌های فروشگاه است.\n"
+            f"برای استفاده از آن باید ابتدا آن را بخرید ({price} برنز)."
+        )
     return value
 
 
@@ -193,7 +207,8 @@ def register(chat_id, user_id, *, name, city, age, nickname=None):
     clean_name = validate_name(name)
     clean_city = validate_city(city)
     clean_age = validate_age(age)
-    clean_nick = validate_nickname(nickname)
+    clean_nick = validate_nickname(
+        nickname, owned_titles=get(chat_id, user_id)["titles"])
 
     key = accounts.user_key(chat_id, user_id)
     with storage.transaction() as data:
@@ -210,11 +225,13 @@ def register(chat_id, user_id, *, name, city, age, nickname=None):
 
 def update(chat_id, user_id, **fields):
     """ویرایش تکی فیلدها؛ فقط فیلدهای شناخته‌شده پذیرفته می‌شوند."""
+    owned = get(chat_id, user_id)["titles"]
     validators = {
         "name": validate_name,
         "city": validate_city,
         "age": validate_age,
-        "nickname": validate_nickname,
+        "nickname": lambda value: validate_nickname(value,
+                                                    owned_titles=owned),
     }
     cleaned = {}
     for field, value in fields.items():
@@ -292,8 +309,27 @@ def buy(chat_id, user_id, item_id, *, reference=None):
         return (dict(item), accounts._snapshot_balance(user), dict(profile))
 
 
+def delete(chat_id, user_id):
+    """حذف پروفایل: اطلاعات شخصی پاک می‌شود.
+
+    آیتم‌های خریداری‌شده (نشان، سطح، لقب) *نگه داشته* می‌شوند چون با
+    سکهٔ واقعی خریده شده‌اند و پاک کردنشان یعنی سوزاندن پول کاربر.
+    کیف پول هم دست‌نخورده می‌ماند.
+    """
+    key = accounts.user_key(chat_id, user_id)
+    with storage.transaction() as data:
+        profile = _record(data, key)
+        profile["registered"] = False
+        profile["name"] = None
+        profile["city"] = None
+        profile["age"] = None
+        profile["nickname"] = None
+        profile["updated_at"] = _now()
+        return dict(profile)
+
+
 def reset(chat_id, user_id):
-    """پاک کردن کامل پروفایل — برای تست و پشتیبانی."""
+    """پاک کردن کامل پروفایل همراه آیتم‌ها — فقط برای تست و پشتیبانی."""
     key = accounts.user_key(chat_id, user_id)
     with storage.transaction() as data:
         user = accounts._user(data, key)

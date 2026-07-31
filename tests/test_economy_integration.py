@@ -478,17 +478,17 @@ def test_shop_section():
         bot = Bot()
         menu = Event()
         await send_eco(bot, menu, 1, "فروشگاه")
-        items = Event()
-        await send_eco(bot, items, 1, "1")
-        return menu, items
+        buy = Event()
+        await send_eco(bot, buy, 1, "1")
+        return menu, buy
 
-    menu, items = asyncio.run(scenario())
+    menu, buy = asyncio.run(scenario())
     check("منوی فروشگاه باز شد", menu.said("🛒 فروشگاه"))
-    check("گزینهٔ لیست موجود است", menu.said("لیست آیتم‌ها"))
-    check("گزینهٔ خرید موجود است", menu.said("خرید"))
-    # فهرست دیگر هرگز خالی نیست: ۳۲ آیتم ثابت نشان/سطح/لقب همیشه هستند.
-    check("فهرست ثابت آیتم‌ها نمایش داده می‌شود", items.said("نشان روباه"))
-    check("پیام «هنوز آیتمی» دیگر نمی‌آید", not items.said("هنوز آیتمی"))
+    check("گزینهٔ ترکیبی موجود است", menu.said("لیست آیتم ها و خرید"))
+    # فهرست هنگام ورود می‌آید و هرگز خالی نیست.
+    check("فهرست ثابت آیتم‌ها نمایش داده می‌شود", menu.said("نشان روباه"))
+    check("پیام «هنوز آیتمی» دیگر نمی‌آید", not menu.said("هنوز آیتمی"))
+    check("راهنمای انتخاب آیتم می‌آید", buy.said("شمارهٔ آیتم"))
     check("موجودی و ارزش کل در فروشگاه دیده می‌شود",
           menu.said("ارزش کل"))
     eco_handler.reset_all()
@@ -502,13 +502,13 @@ def test_shop_buy_flow():
 
     async def scenario():
         bot = Bot()
-        await send_eco(bot, Event(), 1, "فروشگاه")
         listing = Event()
-        await send_eco(bot, listing, 1, "1")
+        await send_eco(bot, listing, 1, "فروشگاه")
         prompt = Event()
-        await send_eco(bot, prompt, 1, "2")
+        await send_eco(bot, prompt, 1, "1")
+        await send_eco(bot, Event(), 1, "badge")
         buy = Event()
-        await send_eco(bot, buy, 1, "badge")
+        await send_eco(bot, buy, 1, "تایید")
         return listing, prompt, buy
 
     listing, prompt, buy = asyncio.run(scenario())

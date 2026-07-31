@@ -43,7 +43,11 @@ MARKERS = {
     ],
     "economy/ui/balance_menu.py": ['COMMAND = "موجودی"'],
     "economy/ui/shop_menu.py": ['COMMAND = "فروشگاه"'],
-    "economy/ui/profile_menu.py": ['COMMAND = "پروفایل"'],
+    "economy/ui/profile_menu.py": [
+        'COMMAND_REGISTER = "ثبت پرفایل"',
+        'COMMAND_SHOW = "پرفایلم"',
+        'COMMAND_DELETE = "حذف پرفایل"',
+    ],
 }
 
 # فایل‌هایی که باید حذف شده باشند (سیستم سکهٔ قدیمی).
@@ -197,7 +201,9 @@ def check_import():
         "print('IMPORT_OK', "
         "balance_menu.is_command('موجودی'), "
         "shop_menu.is_command('فروشگاه'), "
-        "profile_menu.is_command('پروفایل'), "
+        "profile_menu.is_show_command('پرفایلم'), "
+        "profile_menu.is_register_command('ثبت پرفایل'), "
+        "profile_menu.is_delete_command('حذف پرفایل'), "
         "'items=%%d' %% n)" % str(ROOT)
     )
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT,

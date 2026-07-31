@@ -181,38 +181,58 @@ async def _handle_shop_step(bot, event, chat_id, user_id, sender, text,
     state = shop_menu.session(chat_id, user_id)
     if state is None:
         return False
-    choice = shop_menu.normalize(text)
+    step = state.get("step", shop_menu.STEP_MENU)
     numeric = balance_menu._english(text)
 
-    if state["step"] == "buy":
-        if numeric == CANCEL:
-            shop_menu.close_session(chat_id, user_id)
-            await _send(event, "لغو شد.", logger)
+    # --- تایید نهایی خرید ------------------------------------------------
+    if step == shop_menu.STEP_CONFIRM:
+        pending = state.get("item_id")
+        if shop_menu.is_decline(text):
+            shop_menu.open_session(chat_id, user_id, step=shop_menu.STEP_BUY)
+            await _send(event, "❌ خرید لغو شد. هیچ سکه‌ای کسر نشد.", logger)
+            _log(logger, f"SHOP BUY DECLINED chat_id={chat_id} "
+                         f"user_id={user_id} item={pending!r}")
             return True
-        reference = f"shop:{chat_id}:{user_id}:{choice}:{event.message.id}"
-        ok, message = shop_menu.do_buy(chat_id, user_id, choice,
+        if not shop_menu.is_confirm(text):
+            await _send(event, "برای تایید ✅ یا ۱ و برای لغو ❌ یا ۰ "
+                               "بفرستید.", logger)
+            return True
+        reference = f"shop:{chat_id}:{user_id}:{pending}:{state.get('msg')}"
+        ok, message = shop_menu.do_buy(chat_id, user_id, pending,
                                        reference=reference)
-        if ok:
-            shop_menu.close_session(chat_id, user_id)
+        shop_menu.open_session(chat_id, user_id, step=shop_menu.STEP_BUY)
         await _send(event, message, logger)
-        _log(logger, f"ECONOMY SHOP BUY chat_id={chat_id} user_id={user_id} "
-                     f"item={choice!r} ok={ok}")
+        _log(logger, f"SHOP BUY CONFIRMED chat_id={chat_id} "
+                     f"user_id={user_id} item={pending!r} ok={ok}")
         return True
 
+    # --- انتخاب آیتم -----------------------------------------------------
+    if step == shop_menu.STEP_BUY:
+        if numeric == CANCEL:
+            shop_menu.close_session(chat_id, user_id)
+            await _send(event, "بسته شد.", logger)
+            return True
+        item, message = shop_menu.select_item(chat_id, user_id, text)
+        if item is None:
+            await _send(event, message, logger)
+            return True
+        shop_menu.open_session(chat_id, user_id,
+                               step=shop_menu.STEP_CONFIRM,
+                               item_id=item["id"],
+                               msg=getattr(event.message, "id", 0))
+        await _send(event, message, logger)
+        _log(logger, f"SHOP ITEM SELECTED chat_id={chat_id} "
+                     f"user_id={user_id} item={item['id']!r}")
+        return True
+
+    # --- منوی اصلی -------------------------------------------------------
     if numeric == CANCEL:
         shop_menu.close_session(chat_id, user_id)
         await _send(event, "بسته شد.", logger)
         return True
 
-    if numeric == shop_menu.MENU_LIST:
-        await _send(event, shop_menu.render_items(chat_id, user_id), logger)
-        return True
-
     if numeric == shop_menu.MENU_BUY:
-        # فهرست ثابت نشان/سطح/لقب همیشه پر است، پس گفتگوی خرید همیشه باز
-        # می‌شود. شرط قبلی به economy.shop نگاه می‌کرد که هیچ‌وقت پر
-        # نمی‌شد و خرید را برای همیشه می‌بست.
-        shop_menu.open_session(chat_id, user_id, step="buy")
+        shop_menu.open_session(chat_id, user_id, step=shop_menu.STEP_BUY)
         await _send(event, shop_menu.buy_prompt(chat_id, user_id), logger)
         return True
 
@@ -282,21 +302,45 @@ async def _handle_profile_step(bot, event, chat_id, user_id, sender, text,
                     profile_menu.render_menu(chat_id, user_id, sender), logger)
         return True
 
-    # --- خرید آیتم ------------------------------------------------------
+    # --- تایید نهایی خرید -----------------------------------------------
+    if step == profile_menu.STEP_CONFIRM:
+        pending = state.get("item_id")
+        if profile_menu.is_decline(text):
+            profile_menu.touch(chat_id, user_id, profile_menu.STEP_BUY)
+            await _send(event, "❌ خرید لغو شد. هیچ سکه‌ای کسر نشد.", logger)
+            _log(logger, f"PROFILE BUY DECLINED chat_id={chat_id} "
+                         f"user_id={user_id} item={pending!r}")
+            return True
+        if not profile_menu.is_confirm(text):
+            await _send(event, "برای تایید ✅ یا ۱ و برای لغو ❌ یا ۰ "
+                               "بفرستید.", logger)
+            return True
+        reference = (f"profile:{chat_id}:{user_id}:{pending}:"
+                     f"{state.get('msg')}")
+        ok, message = profile_menu.do_buy(chat_id, user_id, pending,
+                                          reference=reference)
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_BUY)
+        await _send(event, message, logger)
+        _log(logger, f"PROFILE BUY CONFIRMED chat_id={chat_id} "
+                     f"user_id={user_id} item={pending!r} ok={ok}")
+        return True
+
+    # --- انتخاب آیتم ----------------------------------------------------
     if step == profile_menu.STEP_BUY:
         if numeric == CANCEL:
             profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
             await _send(event, "لغو شد.", logger)
             return True
-        reference = (f"profile:{chat_id}:{user_id}:"
-                     f"{profile_menu.normalize(text)}:{event.message.id}")
-        ok, message = profile_menu.do_buy(chat_id, user_id, text,
-                                          reference=reference)
-        if ok:
-            profile_menu.touch(chat_id, user_id, profile_menu.STEP_MENU)
+        item, message = profile_menu.select_item(chat_id, user_id, text)
+        if item is None:
+            await _send(event, message, logger)
+            return True
+        profile_menu.touch(chat_id, user_id, profile_menu.STEP_CONFIRM,
+                           item_id=item["id"],
+                           msg=getattr(event.message, "id", 0))
         await _send(event, message, logger)
-        _log(logger, f"PROFILE BUY chat_id={chat_id} user_id={user_id} "
-                     f"item={profile_menu.normalize(text)!r} ok={ok}")
+        _log(logger, f"PROFILE ITEM SELECTED chat_id={chat_id} "
+                     f"user_id={user_id} item={item['id']!r}")
         return True
 
     # --- ویرایش ---------------------------------------------------------
@@ -337,12 +381,11 @@ async def _handle_profile_step(bot, event, chat_id, user_id, sender, text,
         await _send(event, "بسته شد.", logger)
         return True
 
-    if numeric == profile_menu.MENU_ITEMS:
-        await _send(event, profile_menu.render_items(chat_id, user_id), logger)
-        return True
-
     if numeric == profile_menu.MENU_BUY:
+        # فهرست و راهنمای انتخاب با هم؛ گزینهٔ جدا برای «لیست» وجود ندارد.
         profile_menu.touch(chat_id, user_id, profile_menu.STEP_BUY)
+        await _send(event, profile_menu.render_items(chat_id, user_id),
+                    logger)
         await _send(event, profile_menu.buy_prompt(chat_id, user_id), logger)
         return True
 
@@ -365,7 +408,8 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     # نکند. با این لاگ می‌توان فهمید پیام اصلاً به هندلر رسیده یا نه، و
     # اگر رسیده چرا تطبیق نکرده است.
     normalized = balance_menu.normalize(text)
-    if normalized in {"موجودی", "فروشگاه", "پروفایل"} or balance_menu.is_open(
+    if normalized in {"موجودی", "فروشگاه"} \
+            or profile_menu.is_command(text) or balance_menu.is_open(
             chat_id, user_id) or shop_menu.is_open(chat_id, user_id) \
             or profile_menu.is_open(chat_id, user_id):
         _log(logger,
@@ -384,22 +428,50 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
             display = _display_name(sender)
             if display:
                 economy.set_name(chat_id, user_id, display)
+            registered = profiles.is_registered(chat_id, user_id)
 
-            if profiles.is_registered(chat_id, user_id):
-                profile_menu.open_session(chat_id, user_id,
-                                          profile_menu.STEP_MENU)
-                payload = profile_menu.render_menu(chat_id, user_id, sender)
-                _log(logger,
-                     "PROFILE CARD RENDERED "
-                     f"chat_id={chat_id} user_id={user_id} "
-                     f"text_len={len(payload[0])} entities={len(payload[1])}")
-                await _send(event, payload, logger)
-            else:
+            # --- حذف پرفایل ---
+            if profile_menu.is_delete_command(text):
+                profile_menu.close_session(chat_id, user_id)
+                if not registered:
+                    await _send(event, profile_menu.PROMPT_NOT_REGISTERED,
+                                logger)
+                else:
+                    profiles.delete(chat_id, user_id)
+                    await _send(event, profile_menu.PROMPT_DELETED, logger)
+                    _log(logger, f"PROFILE DELETED chat_id={chat_id} "
+                                 f"user_id={user_id}")
+                return True
+
+            # --- ثبت پرفایل ---
+            if profile_menu.is_register_command(text):
+                if registered:
+                    profile_menu.open_session(chat_id, user_id,
+                                              profile_menu.STEP_MENU)
+                    await _send(event,
+                                profile_menu.PROMPT_ALREADY_REGISTERED,
+                                logger)
+                    return True
                 profile_menu.open_session(chat_id, user_id,
                                           profile_menu.STEP_NAME)
                 _log(logger, "PROFILE REGISTRATION START "
                              f"chat_id={chat_id} user_id={user_id}")
                 await _send(event, profile_menu.PROMPT_NAME, logger)
+                return True
+
+            # --- پرفایلم ---
+            if not registered:
+                profile_menu.close_session(chat_id, user_id)
+                await _send(event, profile_menu.PROMPT_NOT_REGISTERED, logger)
+                return True
+            profile_menu.open_session(chat_id, user_id,
+                                      profile_menu.STEP_MENU)
+            payload = profile_menu.render_menu(chat_id, user_id, sender)
+            _log(logger,
+                 "PROFILE CARD RENDERED "
+                 f"chat_id={chat_id} user_id={user_id} "
+                 f"text_len={len(payload[0])} entities={len(payload[1])}")
+            await _send(event, payload, logger)
             _log(logger, f"PROFILE MENU SENT chat_id={chat_id} "
                          f"user_id={user_id}")
         except Exception as error:
@@ -474,7 +546,8 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                  f"bronze={balance[economy.BRONZE]} "
                  f"total_coin_value={balance['total_coin_value']} "
                  f"items={len(economy.shop.list_items())}")
-            await _send(event, shop_menu.render_menu(chat_id, user_id), logger)
+            await _send(event, shop_menu.render_entry(chat_id, user_id),
+                        logger)
             _log(logger, f"ECONOMY SHOP MENU SENT chat_id={chat_id} "
                          f"user_id={user_id}")
         except Exception as error:

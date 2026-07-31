@@ -14,9 +14,13 @@ from economy.ui.formatting import fa, spans_for, u16
 COMMAND = "فروشگاه"
 SESSION_TIMEOUT = 180
 
-MENU_LIST = "1"
-MENU_BUY = "2"
+# «لیست آیتم‌ها» گزینهٔ جدا ندارد؛ فهرست هنگام ورود نمایش داده می‌شود.
+MENU_BUY = "1"
 MENU_CLOSE = "0"
+
+STEP_MENU = "menu"
+STEP_BUY = "buy"
+STEP_CONFIRM = "confirm"
 
 _COIN_NAMES = {
     economy.BRONZE: "برنز",
@@ -55,9 +59,12 @@ def is_open(chat_id, user_id):
     return _key(chat_id, user_id) in _SESSIONS
 
 
-def open_session(chat_id, user_id, step="menu"):
+def open_session(chat_id, user_id, step=STEP_MENU, **extra):
     _prune()
-    _SESSIONS[_key(chat_id, user_id)] = {"step": step, "at": time.monotonic()}
+    session = {"step": step, "at": time.monotonic()}
+    session.update(extra)
+    _SESSIONS[_key(chat_id, user_id)] = session
+    return session
 
 
 def close_session(chat_id, user_id):
@@ -90,12 +97,26 @@ def render_menu(chat_id, user_id):
         f"🥇 {fa(balance[economy.GOLD])}\n"
         f"💎 ارزش کل: {fa(balance['total_coin_value'])}\n\n"
         f"آیتم‌های موجود: {fa(count)}\n\n"
-        "برای انتخاب، شمارهٔ گزینه را بفرستید:\n\n"
-        "۱) لیست آیتم‌ها\n"
-        "۲) خرید\n"
+        "برای انتخاب، شماره گزینه را بفرستید:\n\n"
+        "۱) لیست آیتم ها و خرید\n"
         "۰) بستن"
     )
     return text, spans_for(text, [header, "💎 ارزش کل:"])
+
+
+def render_entry(chat_id, user_id):
+    """ورود به فروشگاه: منو + فهرست آیتم‌ها با هم.
+
+    کاربر دیگر لازم نیست اول «لیست آیتم‌ها» را انتخاب کند.
+    """
+    menu, _ = render_menu(chat_id, user_id)
+    items, _ = render_items(chat_id, user_id)
+    combined = f"{menu}\n\n{items}"
+    header_len = u16(f"{menu}\n\n")
+    spans = spans_for(combined, ["🛒 فروشگاه", "💎 ارزش کل:"])
+    # بخش فهرست کاملاً Bold می‌ماند.
+    spans.append(("bold", header_len, u16(items)))
+    return combined, spans
 
 
 def render_items(chat_id=None, user_id=None):
@@ -135,9 +156,14 @@ def render_items(chat_id=None, user_id=None):
 
 
 def buy_prompt(chat_id=None, user_id=None):
-    text, spans = render_items(chat_id, user_id)
-    text = f"{text}\nبرای لغو، ۰ بفرستید."
-    return text, [("bold", 0, u16(text))]
+    """راهنمای انتخاب آیتم. فهرست همان بالا نمایش داده شده است."""
+    text = (
+        "🛍 خرید آیتم\n\n"
+        "شمارهٔ آیتم موردنظر را بفرستید (۱ تا "
+        f"{fa(len(catalog.all_items()))}).\n"
+        "برای لغو، ۰ بفرستید."
+    )
+    return text, spans_for(text, ["🛍 خرید آیتم"])
 
 
 def _legacy_buy_prompt():
@@ -154,6 +180,52 @@ def _legacy_buy_prompt():
         f"{ids}\n\n"
         "برای لغو، ۰ بفرستید."
     )
+
+
+def select_item(chat_id, user_id, text):
+    """انتخاب آیتم: اول فهرست ثابت، بعد آیتم‌های پویای فروشگاه."""
+    if catalog.resolve(text) is not None:
+        return profile_menu.select_item(chat_id, user_id, text)
+
+    # آیتم پویا (ثبت‌شده با add_item) — با شناسه انتخاب می‌شود.
+    item = economy.shop.get_item(normalize(text))
+    if item is None:
+        return profile_menu.select_item(chat_id, user_id, text)
+
+    stock = item.get("stock")
+    if stock is not None and stock <= 0:
+        return None, "❌ موجودی این آیتم تمام شده است."
+
+    balance = economy.get_balance(chat_id, user_id)
+    have = int(balance.get(item["coin_type"], 0))
+    missing = max(0, int(item["price"]) - have)
+    if missing:
+        coin = _COIN_NAMES.get(item["coin_type"], "")
+        return None, (
+            "موجودی سکه کافی نیست.\n"
+            f"برای خرید این آیتم به {fa(missing)} سکه {coin} دیگر "
+            "نیاز دارید."
+        )
+    text_out = (
+        f"🛍 {item['title']}\n"
+        f"💵 قیمت: {fa(item['price'])} "
+        f"{_COIN_NAMES.get(item['coin_type'], '')}\n\n"
+        "آیا از خرید این آیتم مطمئن هستید؟\n\n"
+        "✅ تایید\n"
+        "❌ لغو"
+    )
+    return item, (text_out,
+                  spans_for(text_out,
+                            ["آیا از خرید این آیتم مطمئن هستید؟",
+                             "✅ تایید", "❌ لغو"]))
+
+
+def is_confirm(text):
+    return profile_menu.is_confirm(text)
+
+
+def is_decline(text):
+    return profile_menu.is_decline(text)
 
 
 def do_buy(chat_id, user_id, item_id, *, reference=None):
