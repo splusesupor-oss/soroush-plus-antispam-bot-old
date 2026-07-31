@@ -30,12 +30,19 @@ def _save(data):
 
 
 def flush():
-    """نوشتن batch شده؛ در loop دوره‌ای core فراخوانی می‌شود."""
+    """نوشتن batch شده؛ در loop دوره‌ای core فراخوانی می‌شود.
+
+    این فایل روی نصب‌های پرکاربر به چند مگابایت می‌رسد. ``indent=2`` هم
+    حجم را تقریباً دو برابر می‌کرد و هم زمان serialize را بالا می‌برد، در
+    حالی که این فایل داده‌ای است و کسی آن را با چشم نمی‌خواند. حذف indent
+    و جداکننده‌های فشرده، نوشتن را چند برابر سریع‌تر می‌کند.
+    """
     global _DIRTY
     if not _DIRTY:
         return False
     FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(_load(), ensure_ascii=False, indent=2), encoding='utf8')
+    payload = json.dumps(_load(), ensure_ascii=False, separators=(",", ":"))
+    FILE.write_text(payload, encoding='utf8')
     _DIRTY = False
     return True
 

@@ -252,9 +252,36 @@ class SoroushAntiSpamBot:
                         self.logger.log_error(
                             f"خطا در ارسال یادآوری {reminder.get('id')}: {error}"
                         )
-                flush_group_stats()
-                flush_user_activity()
-                await asyncio.sleep(15)
+                # این دو تابع فایل JSON می‌نویسند. روی نصب‌های پرکاربر،
+                # user_activity.json چند مگابایت می‌شود و صرفِ serialize
+                # آن ~۳۰ms طول می‌کشد. چون json.dumps قفل GIL را نگه
+                # می‌دارد، حتی thread هم آن را پنهان نمی‌کند؛ نتیجه‌اش
+                # قفل شدن دوره‌ای حلقهٔ رویداد بود که به شکل تأخیر در
+                # پاسخ و قطع شدن WebSocket دیده می‌شد.
+                #
+                # راه‌حل: فاصلهٔ ذخیره‌سازی متناسب با هزینهٔ واقعی آن
+                # تنظیم می‌شود. فایل کوچک مثل قبل هر ۱۵ ثانیه ذخیره
+                # می‌شود؛ فایل سنگین کمتر، تا سهم آن از زمان حلقه ناچیز
+                # بماند. داده از دست نمی‌رود چون در حافظه نگه داشته
+                # می‌شود و در نهایت نوشته خواهد شد.
+                try:
+                    started = time.perf_counter()
+                    await asyncio.to_thread(flush_group_stats)
+                    await asyncio.to_thread(flush_user_activity)
+                    cost = time.perf_counter() - started
+                except Exception as error:
+                    cost = 0.0
+                    self.logger.log_error(f"خطا در ذخیرهٔ دوره‌ای: {error}")
+
+                # فاصله هرگز کمتر از ۱۵ ثانیه نمی‌شود؛ اگر ذخیره‌سازی گران
+                # باشد فاصله بیشتر می‌شود تا سهم آن زیر ۰٫۲٪ بماند.
+                delay = max(15.0, min(300.0, cost * 500))
+                if delay > 15.0:
+                    self.logger.log_info(
+                        "PERIODIC FLUSH SLOW "
+                        f"cost_ms={cost * 1000:.0f} next_in_s={delay:.0f}"
+                    )
+                await asyncio.sleep(delay)
 
         asyncio.create_task(reminder_loop())
 
