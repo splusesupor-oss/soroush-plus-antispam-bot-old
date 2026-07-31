@@ -29,7 +29,7 @@ from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 # 💰 تسویهٔ روزانه از راه API اقتصاد جدید.
-from economy import settle_previous_days
+from economy import flush as flush_economy, settle_previous_days
 from modules.group_stats import flush as flush_group_stats
 from modules.user_activity import flush as flush_user_activity
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
@@ -268,6 +268,7 @@ class SoroushAntiSpamBot:
                     started = time.perf_counter()
                     await asyncio.to_thread(flush_group_stats)
                     await asyncio.to_thread(flush_user_activity)
+                    await asyncio.to_thread(flush_economy)
                     cost = time.perf_counter() - started
                 except Exception as error:
                     cost = 0.0

@@ -29,6 +29,7 @@ _state = threading.local()
 
 _cache = None
 _cache_mtime = None
+_dirty = False
 
 EMPTY = {"users": {}, "meta": {"version": 1, "sequence": 0}}
 
@@ -65,7 +66,7 @@ def _read():
 
 
 def _write(data):
-    global _cache, _cache_mtime
+    global _cache, _cache_mtime, _dirty
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     handle, temp_path = tempfile.mkstemp(dir=str(DATA_FILE.parent),
                                          suffix=".tmp")
@@ -83,39 +84,77 @@ def _write(data):
         raise
     _cache = data
     _cache_mtime = _mtime()
+    _dirty = False
 
 
 class _Transaction:
-    """مدیر زمینهٔ تراکنش؛ از ``transaction()`` استفاده کنید."""
+    """مدیر زمینهٔ تراکنش؛ از ``transaction()`` استفاده کنید.
+
+    ``defer=True`` یعنی تغییر فقط در حافظه بماند و نوشتن روی دیسک به
+    ``flush()`` سپرده شود. برای شمارنده‌های پرتکرار (مثل شمارش پیام) که
+    در هر پیام صدا زده می‌شوند و از دست رفتنشان فاجعه نیست.
+    """
+
+    def __init__(self, defer=False):
+        self._defer = defer
 
     def __enter__(self):
         _LOCK.acquire()
         depth = getattr(_state, "depth", 0)
         if depth == 0:
             # کپی عمیق: تا وقتی تراکنش موفق نشده، داده‌های اصلی دست‌نخورده‌اند.
-            _state.data = copy.deepcopy(_read())
+            # در حالت defer از خودِ کش استفاده می‌شود تا هزینهٔ کپی و نوشتن
+            # در مسیر داغ پرداخت نشود.
+            _state.data = _read() if self._defer else copy.deepcopy(_read())
+            _state.deferred = self._defer
         _state.depth = depth + 1
         return _state.data
 
     def __exit__(self, exc_type, exc, tb):
+        global _dirty
         try:
             _state.depth -= 1
             if _state.depth == 0:
                 if exc_type is None:
-                    _write(_state.data)
+                    if getattr(_state, "deferred", False):
+                        # فقط علامت‌گذاری؛ نوشتن در flush انجام می‌شود.
+                        _dirty = True
+                    else:
+                        _write(_state.data)
                 _state.data = None
+                _state.deferred = False
         finally:
             _LOCK.release()
         return False
 
 
-def transaction():
+def transaction(defer=False):
     """بلوک اتمیک برای خواندن-تغییر-نوشتن.
 
         with transaction() as data:
             data["users"]["1"]["bronze"] += 5
+
+    با ``defer=True`` نوشتن روی دیسک به ``flush()`` موکول می‌شود.
     """
-    return _Transaction()
+    return _Transaction(defer)
+
+
+def flush():
+    """تغییرات معوق را روی دیسک می‌نویسد. خروجی True یعنی نوشت."""
+    global _dirty
+    with _LOCK:
+        if not _dirty:
+            return False
+        if getattr(_state, "depth", 0) > 0:
+            # وسط یک تراکنش هستیم؛ خروج آن خودش می‌نویسد.
+            return False
+        _write(_cache if _cache is not None else copy.deepcopy(EMPTY))
+        _dirty = False
+        return True
+
+
+def is_dirty():
+    return _dirty
 
 
 def snapshot():
@@ -135,10 +174,11 @@ def next_sequence(data):
 
 def reset_all():
     """پاک‌سازی کامل — فقط برای تست."""
-    global _cache, _cache_mtime
+    global _cache, _cache_mtime, _dirty
     with _LOCK:
         _cache = None
         _cache_mtime = None
+        _dirty = False
         _state.depth = 0
         _state.data = None
         try:
@@ -149,10 +189,11 @@ def reset_all():
 
 def use_file(path):
     """تغییر مسیر فایل — فقط برای تست."""
-    global DATA_FILE, _cache, _cache_mtime
+    global DATA_FILE, _cache, _cache_mtime, _dirty
     with _LOCK:
         DATA_FILE = Path(path)
         _cache = None
         _cache_mtime = None
+        _dirty = False
         _state.depth = 0
         _state.data = None

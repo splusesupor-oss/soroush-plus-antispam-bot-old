@@ -32,10 +32,17 @@ def _today(now=None):
 
 
 def record_message(chat_id, user_id, name=None, *, now=None):
-    """یک پیام برای شمارش روزانه ثبت می‌کند."""
+    """یک پیام برای شمارش روزانه ثبت می‌کند.
+
+    این تابع در «هر پیام گروه» صدا زده می‌شود، پس مسیر داغ است.
+    ``defer=True`` یعنی فقط حافظه به‌روز شود و نوشتن روی دیسک به حلقهٔ
+    دوره‌ای سپرده شود — دقیقاً همان کاری که سیستم قدیمی با ``_DIRTY``
+    می‌کرد. بدون این، هر پیام یک deepcopy و یک نوشتن کامل دیتابیس
+    داشت که با بزرگ شدن دیتابیس به ده‌ها میلی‌ثانیه می‌رسید.
+    """
     key = accounts.user_key(user_id)
     day = _today(now)
-    with storage.transaction() as data:
+    with storage.transaction(defer=True) as data:
         daily = data.setdefault("daily_messages", {})
         group = daily.setdefault(day, {}).setdefault(str(chat_id), {})
         entry = group.setdefault(key, {"messages": 0})

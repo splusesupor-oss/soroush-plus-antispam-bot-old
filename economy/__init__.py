@@ -73,13 +73,18 @@ __all__ = [
     # تاریخچه و فروشگاه
     "transaction_history", "shop",
     # زیرساخت
-    "settings", "storage",
+    "settings", "storage", "flush",
 ]
 
 
 # ---------------------------------------------------------------------------
 # API مخصوص بازی‌ها
 # ---------------------------------------------------------------------------
+def flush():
+    """نوشتن تغییرات معوق اقتصاد روی دیسک (از حلقهٔ دوره‌ای)."""
+    return storage.flush()
+
+
 def award(user_id, amount, coin_type=BRONZE, *, reference=None, note=None,
           name=None, win=True):
     """تنها راه پرداخت جایزه از سمت بازی‌ها.

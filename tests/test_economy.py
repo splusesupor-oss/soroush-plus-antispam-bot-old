@@ -5,6 +5,7 @@
 
     python tests/test_economy.py
 """
+import json
 import sys
 import tempfile
 import threading
@@ -756,6 +757,69 @@ def test_games_use_api_only():
         check("spend بیش از موجودی رد می‌شود", True)
 
 
+def test_record_message_is_hot_path_cheap():
+    """گارد رگرسیون: شمارش پیام در «هر پیام» صدا زده می‌شود.
+
+    اگر این تابع دیتابیس را کپی و روی دیسک بنویسد، هزینه‌اش با بزرگ شدن
+    دیتابیس بالا می‌رود و کل ربات کند می‌شود. باید مستقل از اندازه بماند.
+    """
+    print("\n### ⚡ هزینهٔ ثبت پیام مستقل از اندازهٔ دیتابیس")
+    import time
+
+    def cost_with(users):
+        fresh()
+        with storage.transaction() as data:
+            bucket = data.setdefault("users", {})
+            for index in range(users):
+                bucket[str(index)] = {
+                    "bronze": index, "silver": 0, "gold": 0,
+                    "total_coin_value": index, "transactions": [],
+                    "references": [], "value_reached_seq": index, "wins": 0,
+                }
+        start = time.perf_counter()
+        for _ in range(20):
+            economy.record_message(-100123, 999, "علی")
+        return (time.perf_counter() - start) / 20 * 1000
+
+    small = cost_with(0)
+    large = cost_with(4000)
+    check("ثبت پیام روی دیتابیس بزرگ هم سریع است", large < 5.0,
+          f"-> {large:.2f} ms")
+    check("هزینه با اندازهٔ دیتابیس رشد نمی‌کند", large < small + 5.0,
+          f"-> small={small:.3f} large={large:.3f}")
+
+    # نباید در مسیر داغ روی دیسک بنویسد
+    fresh()
+    economy.record_message(-1, 7, "علی")
+    check("در مسیر داغ روی دیسک نمی‌نویسد",
+          not storage.DATA_FILE.exists())
+    check("علامت تغییر گذاشته شد", storage.is_dirty() is True)
+
+    # ولی داده باید با flush ماندگار شود
+    economy.record_message(-1, 7, "علی")
+    check("flush داده را می‌نویسد", economy.flush() is True)
+    check("فایل ساخته شد", storage.DATA_FILE.exists())
+    saved = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
+    day = list(saved["daily_messages"])[0]
+    check("هر دو پیام شمرده شدند",
+          saved["daily_messages"][day]["-1"]["7"]["messages"] == 2)
+    check("flush دوباره چیزی نمی‌نویسد", economy.flush() is False)
+
+
+def test_award_still_writes_immediately():
+    """جایزه و موجودی باید فوراً ذخیره شوند، نه معوق."""
+    print("\n### 💾 عملیات مالی فوراً روی دیسک می‌نشیند")
+    fresh()
+    economy.award(1, 10, name="علی")
+    check("جایزه بلافاصله نوشته شد", storage.DATA_FILE.exists())
+    saved = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
+    check("مقدار درست ذخیره شد", saved["users"]["1"]["bronze"] == 10)
+
+    economy.add_bronze(2, 5)
+    saved = json.loads(storage.DATA_FILE.read_text(encoding="utf-8"))
+    check("افزودن سکه هم فوری است", saved["users"]["2"]["bronze"] == 5)
+
+
 def main():
     test_coin_types()
     test_add_remove()
@@ -783,6 +847,8 @@ def main():
     test_independence()
     test_public_api_surface()
     test_games_use_api_only()
+    test_record_message_is_hot_path_cheap()
+    test_award_still_writes_immediately()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")
