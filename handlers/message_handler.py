@@ -1187,7 +1187,9 @@ async def handle_new_message(bot, event):
             return
 
         if waiting_translation(chat_id, user_id):
-            translated, error = translate_to_persian(message_text)
+            # ترجمه هم درخواست HTTP همگام است؛ خارج از حلقه اجرا می‌شود.
+            translated, error = await _asyncio.to_thread(
+                translate_to_persian, message_text)
             clear_translation(chat_id, user_id)
             if error:
                 await event.reply(error)
@@ -1301,7 +1303,10 @@ async def handle_new_message(bot, event):
                     await event.reply(f"⏳ لطفاً {wait} ثانیه صبر کنید")
                     return
 
-                result = search_web(query)
+                # جستجو یک درخواست HTTP همگام با timeout تا ۲۰ ثانیه است.
+                # اجرای مستقیم آن، حلقهٔ رویداد و در نتیجه همهٔ گروه‌ها را
+                # تا پایان درخواست قفل می‌کرد.
+                result = await _asyncio.to_thread(search_web, query)
                 await event.reply(result)
                 return
 
@@ -1376,7 +1381,11 @@ async def handle_new_message(bot, event):
                 f"chat_id={chat_id} user_id={user_id} "
                 f"line_count={len(clean_text.splitlines())} char_count={len(clean_text)}"
             )
-            submitted = submit_name_family(
+            # هر ثبت اسم فامیل ممکن است تا ۷ جستجوی وب همگام انجام دهد
+            # (هر دسته یک بار، هرکدام تا ۲ ثانیه). اجرای مستقیم آن حلقه را
+            # ده‌ها ثانیه قفل می‌کرد و همهٔ گروه‌ها بی‌پاسخ می‌ماندند.
+            submitted = await _asyncio.to_thread(
+                submit_name_family,
                 chat_id,
                 user_id,
                 _format_group_member(sender),
