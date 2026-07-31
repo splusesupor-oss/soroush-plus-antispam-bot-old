@@ -486,462 +486,476 @@ class SoroushAntiSpamBot:
 
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
-            instrument_event(event, self.logger)
-            raw_text = event.message.message or ""
-            # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
-            # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
-            # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
-            text = normalize_command_text(raw_text)
-            # BROADCAST TRACE: قبل از هر await ثبت می‌شود تا اگر یکی از
-            # فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
-            _broadcast_words = BROADCAST_COMMAND_WORDS
-            if is_broadcast_command(raw_text):
-                try:
-                    _owner_cfg = get_owner()
-                except Exception as _owner_error:
-                    _owner_cfg = {"error": repr(_owner_error)}
-                self.logger.log_info(
-                    "BROADCAST_COMMAND_RECEIVED "
-                    f"raw_text={raw_text!r} "
-                    f"normalized_text={text!r} "
-                    f"event_out={getattr(event, 'out', None)} "
-                    f"is_private={getattr(event, 'is_private', None)} "
-                    f"event_chat_id={getattr(event, 'chat_id', None)} "
-                    f"owner_id_from_config={_owner_cfg} "
-                    f"message_id={getattr(event.message, 'id', None)} "
-                    f"entity_count={len(getattr(event.message, 'entities', None) or [])}"
-                )
-            # get_chat() نیازمند resolve شدن peer است و روی session تازه (کش
-            # entity خالی) می‌تواند خطا بدهد. چون هیچ try/except بیرونی وجود
-            # ندارد، آن خطا کل handler را بی‌صدا از بین می‌برد و دستور کاربر
-            # هرگز اجرا نمی‌شود. اینجا خطا مهار می‌شود تا مسیر ادامه یابد.
-            routing_chat = None
+            # ⛑️ نگهبان سراسری هندلر پیام.
+            #
+            # کل بدنهٔ این تابع بدون try بود؛ هر استثنا در همان خطوط اول
+            # (instrument_event، خواندن متن، normalize) توسط splusthon
+            # بلعیده می‌شد و پیام بی‌صدا دور ریخته می‌شد، بدون هیچ ردی در
+            # لاگ. نتیجه: ربات روشن بود ولی به پیام‌ها جواب نمی‌داد.
             try:
-                routing_chat = await event.get_chat()
-            except Exception as error:
-                self.logger.log_error(
-                    "BROADCAST ROUTE ENTER get_chat FAILED "
-                    f"text={text!r} error={error!r} -> continuing with peer fallback"
-                )
-
-            # وقتی get_chat ناموفق است، نوع چت از خودِ peer رویداد استنتاج
-            # می‌شود؛ PeerUser یعنی پیوی. این مسیر به کش entity وابسته نیست.
-            peer_is_user = isinstance(
-                getattr(event, "_chat_peer", None), types.PeerUser
-            )
-            # آخرین fallback: در سروش پلاس شناسهٔ مثبت یعنی کاربر و شناسهٔ منفی
-            # یعنی گروه/کانال. فقط وقتی استفاده می‌شود که chat اصلاً resolve نشده.
-            event_chat_id = getattr(event, "chat_id", None)
-            positive_chat_id = (
-                routing_chat is None
-                and isinstance(event_chat_id, int)
-                and event_chat_id > 0
-            )
-            is_private_splus = bool(
-                event.is_private
-                or routing_chat.__class__.__name__ == "User"
-                or peer_is_user
-                or positive_chat_id
-            )
-            if text in _broadcast_words:
-                self.logger.log_info(
-                    "BROADCAST ROUTE CHAT RESOLVED "
-                    f"chat_type={routing_chat.__class__.__name__} "
-                    f"chat_id={getattr(routing_chat, 'id', None)} "
-                    f"private_route={is_private_splus}"
-                )
-            is_broadcast_text = text in {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
-            is_name_family_trace_message = (
-                text == "اسم فامیل" or len(text.splitlines()) >= 7
-            )
-            if is_broadcast_text:
-                self.logger.log_info(
-                    "BROADCAST COMMAND RECEIVED "
-                    f"text={text!r} event_out={event.out} "
-                    f"event_is_private={event.is_private} "
-                    f"chat_type={routing_chat.__class__.__name__} "
-                    f"private_route={is_private_splus}"
-                )
-            if (
-                event.out
-                and is_private_splus
-                and event.message.id in getattr(self, "broadcast_bot_message_ids", set())
-            ):
-                self.broadcast_bot_message_ids.discard(event.message.id)
-                return
-
-            is_mode_command = text in {"فعال", "غیر فعال"}
-            mode_username = None
-            if is_mode_command:
-                sender_for_mode = await event.get_sender()
-                sender_username_for_mode = getattr(sender_for_mode, "username", None)
-                try:
-                    client_me = await self.client.get_me()
-                    client_me_id = getattr(client_me, "id", None)
-                    client_me_username = getattr(client_me, "username", None)
-                except Exception as error:
-                    client_me_id = None
-                    client_me_username = None
-                    self.logger.log_error(f"OWNER RUNTIME TRACE get_me error: {error}")
-
-                normalized_sender = normalize_username(sender_username_for_mode)
-                normalized_client = normalize_username(client_me_username)
-                global_owner_config = get_owner()
-                is_global_owner_sender = is_global_owner(getattr(sender_for_mode, "id", None))
-                is_global_owner_client = is_global_owner(client_me_id)
-                mode_username = (
-                    client_me_username if event.out else sender_username_for_mode
-                )
-                self.logger.log_info(
-                    "OWNER RUNTIME TRACE\n"
-                    f"raw_text={raw_text!r}\n"
-                    f"event_out={event.out}\n"
-                    f"sender_id={getattr(sender_for_mode, 'id', None)}\n"
-                    f"sender_username={sender_username_for_mode!r}\n"
-                    f"client_me_id={client_me_id}\n"
-                    f"client_me_username={client_me_username!r}\n"
-                    f"normalized_sender={normalized_sender!r}\n"
-                    f"normalized_client={normalized_client!r}\n"
-                    f"global_owner_config={global_owner_config!r}\n"
-                    f"is_global_owner_sender={is_global_owner_sender}\n"
-                    f"is_global_owner_client={is_global_owner_client}"
-                )
-                is_global_owner_for_mode = (
-                    is_global_owner_client if event.out else is_global_owner_sender
-                )
-                if event.out and not is_global_owner_for_mode:
-                    self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
-                    return
-            elif event.out:
-                if is_private_splus:
-                    private_sender = await event.get_sender()
-                    if event.out:
-                        private_me = await self.client.get_me()
-                        private_owner_id = getattr(private_me, "id", None)
-                    else:
-                        private_owner_id = getattr(private_sender, "id", None)
-                    is_broadcast_trigger = text == "اطلاع رسانی"
-                    has_broadcast_session = bool(
-                        get_broadcast_state(private_owner_id)
-                    )
-                    if (
-                        is_global_owner(private_owner_id)
-                        and (is_broadcast_trigger or has_broadcast_session)
-                    ):
-                        pass
-                    # پیام‌های خروجی عادی باید به handler برسند؛ این ربات
-                    # userbot است و فرمان مالک نیز event.out=True دارد.
-                # پاسخ‌های خود ربات فرمان نیستند و در handler واکنش تازه‌ای
-                # تولید نمی‌کنند؛ پاسخ‌های broadcast هم با message id جدا می‌شوند.
-
-            # MASTER GROUP MODE GATE: every incoming group message passes here first.
-            if not is_private_splus:
-                try:
-                    chat_lock = await event.get_chat()
-                except Exception as error:
-                    chat_lock = routing_chat
-                    self.logger.log_error(
-                        f"GROUP GATE get_chat FAILED error={error!r}"
-                    )
-                lock_id = getattr(chat_lock, "id", None)
-                try:
-                    sender_lock = await event.get_sender()
-                except Exception as error:
-                    sender_lock = None
-                    self.logger.log_error(
-                        f"GROUP GATE get_sender FAILED error={error!r}"
-                    )
-                sender_id = getattr(sender_lock, "id", None)
-                if lock_id is None:
-                    # چت resolve نشده است؛ is_active(None) همیشه False است و
-                    # پیام بی‌صدا دور ریخته می‌شود. این حالت باید دیده شود.
-                    self.logger.log_error(
-                        "GROUP GATE UNRESOLVED CHAT "
-                        f"text={text[:40]!r} event_chat_id={event_chat_id} "
-                        f"event_is_private={event.is_private} -> message dropped"
-                    )
-                group_is_active = is_active(lock_id)
-                sender_username = (
-                    mode_username if is_mode_command else getattr(
-                        sender_lock, "username", None
-                    )
-                )
-                normalized_username = normalize_username(sender_username)
-                can_change_group_mode = is_global_owner(sender_id)
-                is_enable_command = text == "فعال"
-                is_disable_command = text == "غیر فعال"
-
-                if is_enable_command or is_disable_command:
-                    self.logger.log_info(
-                        "GROUP MODE DEBUG "
-                        f"chat_id={lock_id} sender_id={sender_id} "
-                        f"sender_username={sender_username!r} "
-                        f"normalized_username={normalized_username!r} "
-                        f"text={text!r} disabled_before={not group_is_active} "
-                        f"global_owner_check={can_change_group_mode} "
-                        f"mode_owner_check={can_change_group_mode} "
-                        f"enable_match={is_enable_command} "
-                        f"disable_match={is_disable_command}"
-                    )
-
-                if not group_is_active:
-                    if is_name_family_trace_message:
-                        self.logger.log_info(
-                            "NAME FAMILY TRACE CORE_BLOCK "
-                            f"reason=group_inactive chat_id={lock_id} "
-                            f"message_id={getattr(event.message, 'id', None)}"
-                        )
-                    if is_enable_command and can_change_group_mode:
-                        title = getattr(chat_lock, "title", "")
-                        activate_group(lock_id, title)
-                        await send_activation_message(
-                            self, event, lock_id, title
-                        )
-                        return
-                    # ⏳ گروهی که با پایان مهلت بسته شده باید بتواند دوباره
-                    # باز شود. بدون این استثنا، سه دستور انقضا هرگز به
-                    # هندلر نمی‌رسیدند و گروه برای همیشه قفل می‌ماند.
-                    if (
-                        expiry_command(text) is not None
-                        and can_change_group_mode
-                    ):
-                        self.logger.log_info(
-                            "GROUP EXPIRY REACTIVATION ALLOWED "
-                            f"chat_id={lock_id} sender_id={sender_id} "
-                            f"command={text!r}"
-                        )
-                        title = getattr(chat_lock, "title", "")
-                        activate_group(lock_id, title)
-                    else:
-                        return
-
-                if is_disable_command:
-                    if can_change_group_mode:
-                        title = getattr(chat_lock, "title", "")
-                        deactivate_group(lock_id, title)
-                        for task in self.group_timer_tasks.pop(lock_id, set()):
-                            task.cancel()
-                        # اسم فامیل صف تایمر مستقل خودش را دارد و باید
-                        # جداگانه و تمیز بسته شود.
-                        cancel_name_family_round(lock_id)
-                        await event.reply(
-                            f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
-                        )
-                    return
-
-            # آزاد کردن کاربر محروم شده
-            if not is_private_splus and text == "آزاد":
-                try:
-                    if not event.reply_to:
-                        await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
-                        return
-
-                    reply_msg = await self.client.get_messages(
-                        event.chat_id,
-                        ids=event.reply_to.reply_to_msg_id
-                    )
-
-                    user = await reply_msg.get_sender()
-                    if not user:
-                        await event.reply("❌ کاربر پیدا نشد")
-                        return
-
-                    async def unban_succeeded(_result):
-                        self.tracker.banned_users.pop(
-                            f"{event.chat_id}:{user.id}", None
-                        )
-                        restore_rejoin_spam_state(event.chat_id, user.id)
-                        self.spammer_messages.pop(user.id, None)
-                        self.logger.log_info(
-                            f"UNBAN COMPLETE user_id={user.id} removed successfully"
-                        )
-                        await event.reply("♻️ کاربر آزاد شد")
-
-                    async def unban_failed(_error):
-                        await event.reply("❌ آزاد کردن انجام نشد")
-
-                    self.moderation_queue.enqueue(
-                        event.chat_id,
-                        "unban",
-                        user_id=user.id,
-                        timeout_seconds=20,
-                        operation=lambda: self.admin_actions.unban_user(
-                            event.chat_id, user.id, getattr(user, "username", None)
-                        ),
-                        on_success=unban_succeeded,
-                        on_failure=unban_failed,
-                    )
-
-                except Exception as e:
-                    await event.reply(f"❌ خطا در آزاد کردن: {e}")
-                return
-
-
-
-              # پیوی فقط دستور صفر کردن تخلف
-            if is_private_splus:
-                text = (event.message.message or "").strip()
-                _is_broadcast_word = text in _broadcast_words
-                if _is_broadcast_word:
-                    self.logger.log_info(
-                        f"BROADCAST ROUTE PRIVATE BRANCH text={text!r}"
-                    )
-                try:
-                    sender = await event.get_sender()
-                except Exception as error:
-                    self.logger.log_error(
-                        f"BROADCAST OWNER CHECK get_sender FAILED error={error!r}"
-                    )
-                    raise
-                if event.out:
+                instrument_event(event, self.logger)
+                raw_text = event.message.message or ""
+                # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
+                # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
+                # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
+                text = normalize_command_text(raw_text)
+                # BROADCAST TRACE: قبل از هر await ثبت می‌شود تا اگر یکی از
+                # فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
+                _broadcast_words = BROADCAST_COMMAND_WORDS
+                if is_broadcast_command(raw_text):
                     try:
-                        private_me = await self.client.get_me()
-                    except Exception as error:
-                        self.logger.log_error(
-                            f"BROADCAST OWNER CHECK get_me FAILED error={error!r}"
-                        )
-                        raise
-                    sender_id = getattr(private_me, "id", None)
-                else:
-                    sender_id = getattr(sender, "id", None)
-
-                _owner_ok = is_global_owner(sender_id)
-                if _is_broadcast_word or _owner_ok:
+                        _owner_cfg = get_owner()
+                    except Exception as _owner_error:
+                        _owner_cfg = {"error": repr(_owner_error)}
                     self.logger.log_info(
-                        "BROADCAST OWNER CHECK "
-                        f"sender_id={sender_id} "
-                        f"sender_username={getattr(sender, 'username', None)!r} "
-                        f"event_out={event.out} "
-                        f"configured_owner={get_owner()!r} "
-                        f"is_global_owner={_owner_ok}"
+                        "BROADCAST_COMMAND_RECEIVED "
+                        f"raw_text={raw_text!r} "
+                        f"normalized_text={text!r} "
+                        f"event_out={getattr(event, 'out', None)} "
+                        f"is_private={getattr(event, 'is_private', None)} "
+                        f"event_chat_id={getattr(event, 'chat_id', None)} "
+                        f"owner_id_from_config={_owner_cfg} "
+                        f"message_id={getattr(event.message, 'id', None)} "
+                        f"entity_count={len(getattr(event.message, 'entities', None) or [])}"
                     )
-                if not _owner_ok and _is_broadcast_word:
-                    self.logger.log_info(
-                        "BROADCAST ROUTE STOP reason=not_global_owner "
-                        f"sender_id={sender_id}"
+                # get_chat() نیازمند resolve شدن peer است و روی session تازه (کش
+                # entity خالی) می‌تواند خطا بدهد. چون هیچ try/except بیرونی وجود
+                # ندارد، آن خطا کل handler را بی‌صدا از بین می‌برد و دستور کاربر
+                # هرگز اجرا نمی‌شود. اینجا خطا مهار می‌شود تا مسیر ادامه یابد.
+                routing_chat = None
+                try:
+                    routing_chat = await event.get_chat()
+                except Exception as error:
+                    self.logger.log_error(
+                        "BROADCAST ROUTE ENTER get_chat FAILED "
+                        f"text={text!r} error={error!r} -> continuing with peer fallback"
                     )
 
-                if _owner_ok:
+                # وقتی get_chat ناموفق است، نوع چت از خودِ peer رویداد استنتاج
+                # می‌شود؛ PeerUser یعنی پیوی. این مسیر به کش entity وابسته نیست.
+                peer_is_user = isinstance(
+                    getattr(event, "_chat_peer", None), types.PeerUser
+                )
+                # آخرین fallback: در سروش پلاس شناسهٔ مثبت یعنی کاربر و شناسهٔ منفی
+                # یعنی گروه/کانال. فقط وقتی استفاده می‌شود که chat اصلاً resolve نشده.
+                event_chat_id = getattr(event, "chat_id", None)
+                positive_chat_id = (
+                    routing_chat is None
+                    and isinstance(event_chat_id, int)
+                    and event_chat_id > 0
+                )
+                is_private_splus = bool(
+                    event.is_private
+                    or routing_chat.__class__.__name__ == "User"
+                    or peer_is_user
+                    or positive_chat_id
+                )
+                if text in _broadcast_words:
+                    self.logger.log_info(
+                        "BROADCAST ROUTE CHAT RESOLVED "
+                        f"chat_type={routing_chat.__class__.__name__} "
+                        f"chat_id={getattr(routing_chat, 'id', None)} "
+                        f"private_route={is_private_splus}"
+                    )
+                is_broadcast_text = text in {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
+                is_name_family_trace_message = (
+                    text == "اسم فامیل" or len(text.splitlines()) >= 7
+                )
+                if is_broadcast_text:
                     self.logger.log_info(
                         "BROADCAST COMMAND RECEIVED "
-                        f"owner_id={sender_id} text={text!r} event_out={event.out}"
+                        f"text={text!r} event_out={event.out} "
+                        f"event_is_private={event.is_private} "
+                        f"chat_type={routing_chat.__class__.__name__} "
+                        f"private_route={is_private_splus}"
                     )
-                    if await handle_private_broadcast(self, event, sender_id, text):
-                        self.logger.log_info(
-                            f"BROADCAST ROUTE HANDLED text={text!r}"
-                        )
-                        return
-                    if _is_broadcast_word:
-                        self.logger.log_info(
-                            "BROADCAST ROUTE NOT HANDLED "
-                            f"text={text!r} (handler returned False)"
-                        )
-
-                if "صفر" in text:
-                    sender = await event.get_sender()
-                    if not is_global_owner(getattr(sender, "id", None)):
-                        await event.reply(
-                            "❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد"
-                        )
-                        return
-                    try:
-                        import re
-                        from modules.group_storage import load_groups
-
-                        m = re.search(r"@([A-Za-z0-9_]+)", text)
-                        if not m:
-                            await event.reply("❌ آیدی کاربر پیدا نشد")
-                            return
-
-                        username = m.group(1)
-
-                        groups = load_groups()
-                        if not groups:
-                            await event.reply("❌ هیچ گروهی ثبت نشده")
-                            return
-
-                        import json
-
-                        with open("logs/user_map.json", "r", encoding="utf-8") as f:
-                            user_map = json.load(f)
-
-                        user_id = None
-
-                        for gid, users in user_map.items():
-                            for uname, uid in users.items():
-                                if str(uname).lower() == username.lower():
-                                    user_id = int(uid)
-                                    break
-                            if user_id:
-                                break
-
-                        if not user_id:
-                            await event.reply("❌ کاربر در لیست ثبت شده پیدا نشد")
-                            return
-
-                        reset_groups = []
-                        all_counts = self.tracker.get_all_counts()
-
-                        for gid, users in all_counts.items():
-                            if str(user_id) in users or user_id in users:
-                                self.tracker.reset_count(int(gid), user_id)
-                                reset_groups.append(gid)
-
-                                try:
-                                    await self.client.send_message(
-                                        int(gid),
-                                        f"✅ تخلفات @{username} صفر شد"
-                                    )
-                                except Exception as send_err:
-                                    self.logger.log_error(
-                                        f"خطای ارسال پیام صفر کردن در گروه {gid}: {send_err}"
-                                    )
-
-                        if not reset_groups:
-                            await event.reply("❌ این کاربر هیچ تخلف ثبت شده‌ای ندارد")
-                            return
-
-                        await event.reply("✅ انجام شد")
-
-                    except Exception as e:
-                        self.logger.log_error(
-                            f"خطای صفر کردن از پیوی: {e}"
-                        )
+                if (
+                    event.out
+                    and is_private_splus
+                    and event.message.id in getattr(self, "broadcast_bot_message_ids", set())
+                ):
+                    self.broadcast_bot_message_ids.discard(event.message.id)
                     return
 
-                # پیام خصوصی پس از route اختصاصی هرگز وارد handler گروهی نمی‌شود.
-                return
+                is_mode_command = text in {"فعال", "غیر فعال"}
+                mode_username = None
+                if is_mode_command:
+                    sender_for_mode = await event.get_sender()
+                    sender_username_for_mode = getattr(sender_for_mode, "username", None)
+                    try:
+                        client_me = await self.client.get_me()
+                        client_me_id = getattr(client_me, "id", None)
+                        client_me_username = getattr(client_me, "username", None)
+                    except Exception as error:
+                        client_me_id = None
+                        client_me_username = None
+                        self.logger.log_error(f"OWNER RUNTIME TRACE get_me error: {error}")
 
-            
-                # اجرای دستورات مدیریتی
-                if text.startswith(("!", "/", ".")):
+                    normalized_sender = normalize_username(sender_username_for_mode)
+                    normalized_client = normalize_username(client_me_username)
+                    global_owner_config = get_owner()
+                    is_global_owner_sender = is_global_owner(getattr(sender_for_mode, "id", None))
+                    is_global_owner_client = is_global_owner(client_me_id)
+                    mode_username = (
+                        client_me_username if event.out else sender_username_for_mode
+                    )
+                    self.logger.log_info(
+                        "OWNER RUNTIME TRACE\n"
+                        f"raw_text={raw_text!r}\n"
+                        f"event_out={event.out}\n"
+                        f"sender_id={getattr(sender_for_mode, 'id', None)}\n"
+                        f"sender_username={sender_username_for_mode!r}\n"
+                        f"client_me_id={client_me_id}\n"
+                        f"client_me_username={client_me_username!r}\n"
+                        f"normalized_sender={normalized_sender!r}\n"
+                        f"normalized_client={normalized_client!r}\n"
+                        f"global_owner_config={global_owner_config!r}\n"
+                        f"is_global_owner_sender={is_global_owner_sender}\n"
+                        f"is_global_owner_client={is_global_owner_client}"
+                    )
+                    is_global_owner_for_mode = (
+                        is_global_owner_client if event.out else is_global_owner_sender
+                    )
+                    if event.out and not is_global_owner_for_mode:
+                        self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
+                        return
+                elif event.out:
+                    if is_private_splus:
+                        private_sender = await event.get_sender()
+                        if event.out:
+                            private_me = await self.client.get_me()
+                            private_owner_id = getattr(private_me, "id", None)
+                        else:
+                            private_owner_id = getattr(private_sender, "id", None)
+                        is_broadcast_trigger = text == "اطلاع رسانی"
+                        has_broadcast_session = bool(
+                            get_broadcast_state(private_owner_id)
+                        )
+                        if (
+                            is_global_owner(private_owner_id)
+                            and (is_broadcast_trigger or has_broadcast_session)
+                        ):
+                            pass
+                        # پیام‌های خروجی عادی باید به handler برسند؛ این ربات
+                        # userbot است و فرمان مالک نیز event.out=True دارد.
+                    # پاسخ‌های خود ربات فرمان نیستند و در handler واکنش تازه‌ای
+                    # تولید نمی‌کنند؛ پاسخ‌های broadcast هم با message id جدا می‌شوند.
+
+                # MASTER GROUP MODE GATE: every incoming group message passes here first.
+                if not is_private_splus:
+                    try:
+                        chat_lock = await event.get_chat()
+                    except Exception as error:
+                        chat_lock = routing_chat
+                        self.logger.log_error(
+                            f"GROUP GATE get_chat FAILED error={error!r}"
+                        )
+                    lock_id = getattr(chat_lock, "id", None)
+                    try:
+                        sender_lock = await event.get_sender()
+                    except Exception as error:
+                        sender_lock = None
+                        self.logger.log_error(
+                            f"GROUP GATE get_sender FAILED error={error!r}"
+                        )
+                    sender_id = getattr(sender_lock, "id", None)
+                    if lock_id is None:
+                        # چت resolve نشده است؛ is_active(None) همیشه False است و
+                        # پیام بی‌صدا دور ریخته می‌شود. این حالت باید دیده شود.
+                        self.logger.log_error(
+                            "GROUP GATE UNRESOLVED CHAT "
+                            f"text={text[:40]!r} event_chat_id={event_chat_id} "
+                            f"event_is_private={event.is_private} -> message dropped"
+                        )
+                    group_is_active = is_active(lock_id)
+                    sender_username = (
+                        mode_username if is_mode_command else getattr(
+                            sender_lock, "username", None
+                        )
+                    )
+                    normalized_username = normalize_username(sender_username)
+                    can_change_group_mode = is_global_owner(sender_id)
+                    is_enable_command = text == "فعال"
+                    is_disable_command = text == "غیر فعال"
+
+                    if is_enable_command or is_disable_command:
+                        self.logger.log_info(
+                            "GROUP MODE DEBUG "
+                            f"chat_id={lock_id} sender_id={sender_id} "
+                            f"sender_username={sender_username!r} "
+                            f"normalized_username={normalized_username!r} "
+                            f"text={text!r} disabled_before={not group_is_active} "
+                            f"global_owner_check={can_change_group_mode} "
+                            f"mode_owner_check={can_change_group_mode} "
+                            f"enable_match={is_enable_command} "
+                            f"disable_match={is_disable_command}"
+                        )
+
+                    if not group_is_active:
+                        if is_name_family_trace_message:
+                            self.logger.log_info(
+                                "NAME FAMILY TRACE CORE_BLOCK "
+                                f"reason=group_inactive chat_id={lock_id} "
+                                f"message_id={getattr(event.message, 'id', None)}"
+                            )
+                        if is_enable_command and can_change_group_mode:
+                            title = getattr(chat_lock, "title", "")
+                            activate_group(lock_id, title)
+                            await send_activation_message(
+                                self, event, lock_id, title
+                            )
+                            return
+                        # ⏳ گروهی که با پایان مهلت بسته شده باید بتواند دوباره
+                        # باز شود. بدون این استثنا، سه دستور انقضا هرگز به
+                        # هندلر نمی‌رسیدند و گروه برای همیشه قفل می‌ماند.
+                        if (
+                            expiry_command(text) is not None
+                            and can_change_group_mode
+                        ):
+                            self.logger.log_info(
+                                "GROUP EXPIRY REACTIVATION ALLOWED "
+                                f"chat_id={lock_id} sender_id={sender_id} "
+                                f"command={text!r}"
+                            )
+                            title = getattr(chat_lock, "title", "")
+                            activate_group(lock_id, title)
+                        else:
+                            return
+
+                    if is_disable_command:
+                        if can_change_group_mode:
+                            title = getattr(chat_lock, "title", "")
+                            deactivate_group(lock_id, title)
+                            for task in self.group_timer_tasks.pop(lock_id, set()):
+                                task.cancel()
+                            # اسم فامیل صف تایمر مستقل خودش را دارد و باید
+                            # جداگانه و تمیز بسته شود.
+                            cancel_name_family_round(lock_id)
+                            await event.reply(
+                                f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
+                            )
+                        return
+
+                # آزاد کردن کاربر محروم شده
+                if not is_private_splus and text == "آزاد":
+                    try:
+                        if not event.reply_to:
+                            await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+                            return
+
+                        reply_msg = await self.client.get_messages(
+                            event.chat_id,
+                            ids=event.reply_to.reply_to_msg_id
+                        )
+
+                        user = await reply_msg.get_sender()
+                        if not user:
+                            await event.reply("❌ کاربر پیدا نشد")
+                            return
+
+                        async def unban_succeeded(_result):
+                            self.tracker.banned_users.pop(
+                                f"{event.chat_id}:{user.id}", None
+                            )
+                            restore_rejoin_spam_state(event.chat_id, user.id)
+                            self.spammer_messages.pop(user.id, None)
+                            self.logger.log_info(
+                                f"UNBAN COMPLETE user_id={user.id} removed successfully"
+                            )
+                            await event.reply("♻️ کاربر آزاد شد")
+
+                        async def unban_failed(_error):
+                            await event.reply("❌ آزاد کردن انجام نشد")
+
+                        self.moderation_queue.enqueue(
+                            event.chat_id,
+                            "unban",
+                            user_id=user.id,
+                            timeout_seconds=20,
+                            operation=lambda: self.admin_actions.unban_user(
+                                event.chat_id, user.id, getattr(user, "username", None)
+                            ),
+                            on_success=unban_succeeded,
+                            on_failure=unban_failed,
+                        )
+
+                    except Exception as e:
+                        await event.reply(f"❌ خطا در آزاد کردن: {e}")
+                    return
+
+
+
+                  # پیوی فقط دستور صفر کردن تخلف
+                if is_private_splus:
+                    text = (event.message.message or "").strip()
+                    _is_broadcast_word = text in _broadcast_words
+                    if _is_broadcast_word:
+                        self.logger.log_info(
+                            f"BROADCAST ROUTE PRIVATE BRANCH text={text!r}"
+                        )
                     try:
                         sender = await event.get_sender()
-                        await handle_admin_commands(
-                            self,
-                            event,
-                            text,
-                            getattr(sender, "id", 0),
-                            event.chat_id
+                    except Exception as error:
+                        self.logger.log_error(
+                            f"BROADCAST OWNER CHECK get_sender FAILED error={error!r}"
                         )
-                        return
-                    except Exception as e:
-                        self.logger.log_error(f"خطای اجرای دستور مدیر: {e}")
+                        raise
+                    if event.out:
+                        try:
+                            private_me = await self.client.get_me()
+                        except Exception as error:
+                            self.logger.log_error(
+                                f"BROADCAST OWNER CHECK get_me FAILED error={error!r}"
+                            )
+                            raise
+                        sender_id = getattr(private_me, "id", None)
+                    else:
+                        sender_id = getattr(sender, "id", None)
 
-            started = time.perf_counter()
-            if is_name_family_trace_message:
-                self.logger.log_info(
-                    "NAME FAMILY TRACE CORE_DISPATCH "
-                    f"chat_id={event.chat_id} message_id={getattr(event.message, 'id', None)} "
-                    f"line_count={len(text.splitlines())}"
-                )
-            await handle_new_message(self, event)
-            elapsed = time.perf_counter() - started
-            if elapsed >= 0.05:
-                self.logger.log_info(
-                    "MESSAGE PROCESS TIME "
-                    f"receive={started:.6f} total={elapsed:.4f}s "
-                    f"chat_id={event.chat_id} text={text!r}"
+                    _owner_ok = is_global_owner(sender_id)
+                    if _is_broadcast_word or _owner_ok:
+                        self.logger.log_info(
+                            "BROADCAST OWNER CHECK "
+                            f"sender_id={sender_id} "
+                            f"sender_username={getattr(sender, 'username', None)!r} "
+                            f"event_out={event.out} "
+                            f"configured_owner={get_owner()!r} "
+                            f"is_global_owner={_owner_ok}"
+                        )
+                    if not _owner_ok and _is_broadcast_word:
+                        self.logger.log_info(
+                            "BROADCAST ROUTE STOP reason=not_global_owner "
+                            f"sender_id={sender_id}"
+                        )
+
+                    if _owner_ok:
+                        self.logger.log_info(
+                            "BROADCAST COMMAND RECEIVED "
+                            f"owner_id={sender_id} text={text!r} event_out={event.out}"
+                        )
+                        if await handle_private_broadcast(self, event, sender_id, text):
+                            self.logger.log_info(
+                                f"BROADCAST ROUTE HANDLED text={text!r}"
+                            )
+                            return
+                        if _is_broadcast_word:
+                            self.logger.log_info(
+                                "BROADCAST ROUTE NOT HANDLED "
+                                f"text={text!r} (handler returned False)"
+                            )
+
+                    if "صفر" in text:
+                        sender = await event.get_sender()
+                        if not is_global_owner(getattr(sender, "id", None)):
+                            await event.reply(
+                                "❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد"
+                            )
+                            return
+                        try:
+                            import re
+                            from modules.group_storage import load_groups
+
+                            m = re.search(r"@([A-Za-z0-9_]+)", text)
+                            if not m:
+                                await event.reply("❌ آیدی کاربر پیدا نشد")
+                                return
+
+                            username = m.group(1)
+
+                            groups = load_groups()
+                            if not groups:
+                                await event.reply("❌ هیچ گروهی ثبت نشده")
+                                return
+
+                            import json
+
+                            with open("logs/user_map.json", "r", encoding="utf-8") as f:
+                                user_map = json.load(f)
+
+                            user_id = None
+
+                            for gid, users in user_map.items():
+                                for uname, uid in users.items():
+                                    if str(uname).lower() == username.lower():
+                                        user_id = int(uid)
+                                        break
+                                if user_id:
+                                    break
+
+                            if not user_id:
+                                await event.reply("❌ کاربر در لیست ثبت شده پیدا نشد")
+                                return
+
+                            reset_groups = []
+                            all_counts = self.tracker.get_all_counts()
+
+                            for gid, users in all_counts.items():
+                                if str(user_id) in users or user_id in users:
+                                    self.tracker.reset_count(int(gid), user_id)
+                                    reset_groups.append(gid)
+
+                                    try:
+                                        await self.client.send_message(
+                                            int(gid),
+                                            f"✅ تخلفات @{username} صفر شد"
+                                        )
+                                    except Exception as send_err:
+                                        self.logger.log_error(
+                                            f"خطای ارسال پیام صفر کردن در گروه {gid}: {send_err}"
+                                        )
+
+                            if not reset_groups:
+                                await event.reply("❌ این کاربر هیچ تخلف ثبت شده‌ای ندارد")
+                                return
+
+                            await event.reply("✅ انجام شد")
+
+                        except Exception as e:
+                            self.logger.log_error(
+                                f"خطای صفر کردن از پیوی: {e}"
+                            )
+                        return
+
+                    # پیام خصوصی پس از route اختصاصی هرگز وارد handler گروهی نمی‌شود.
+                    return
+
+            
+                    # اجرای دستورات مدیریتی
+                    if text.startswith(("!", "/", ".")):
+                        try:
+                            sender = await event.get_sender()
+                            await handle_admin_commands(
+                                self,
+                                event,
+                                text,
+                                getattr(sender, "id", 0),
+                                event.chat_id
+                            )
+                            return
+                        except Exception as e:
+                            self.logger.log_error(f"خطای اجرای دستور مدیر: {e}")
+
+                started = time.perf_counter()
+                if is_name_family_trace_message:
+                    self.logger.log_info(
+                        "NAME FAMILY TRACE CORE_DISPATCH "
+                        f"chat_id={event.chat_id} message_id={getattr(event.message, 'id', None)} "
+                        f"line_count={len(text.splitlines())}"
+                    )
+                await handle_new_message(self, event)
+                elapsed = time.perf_counter() - started
+                if elapsed >= 0.05:
+                    self.logger.log_info(
+                        "MESSAGE PROCESS TIME "
+                        f"receive={started:.6f} total={elapsed:.4f}s "
+                        f"chat_id={event.chat_id} text={text!r}"
+                    )
+            except Exception as handler_error:
+                import traceback as _tb
+                self.logger.log_error(
+                    "MESSAGE HANDLER CRASHED "
+                    f"chat_id={getattr(event, 'chat_id', None)} "
+                    f"error={handler_error!r}\n{_tb.format_exc()}"
                 )
 
 

@@ -830,6 +830,38 @@ def test_migration_merges_into_existing_wallets():
         mig.LEGACY_FILE = original
 
 
+def test_handler_never_drops_message_silently():
+    """گارد: هر استثنا در هندلر باید لاگ شود، نه اینکه پیام بی‌صدا بیفتد."""
+    print("\n### ⛑️ نگهبان سراسری هندلر پیام")
+    fresh()
+    import core.bot_working_split_ok as core
+
+    async def scenario():
+        bot, handler = await build_handler()
+        original = core.normalize_command_text
+        core.normalize_command_text = lambda t: (_ for _ in ()).throw(
+            RuntimeError("injected failure"))
+        escaped = False
+        try:
+            await handler(Event("سلام", 424242, chat_id=CHAT))
+        except Exception:
+            escaped = True
+        finally:
+            core.normalize_command_text = original
+        # بعد از خطا، ربات باید همچنان کار کند
+        ok = Event("موجودی", 424242, chat_id=CHAT)
+        await handler(ok)
+        return bot, escaped, ok
+
+    bot, escaped, ok = asyncio.run(scenario())
+    check("استثنا از هندلر بیرون نمی‌زند", not escaped)
+    check("خطا در لاگ ثبت می‌شود",
+          any("MESSAGE HANDLER CRASHED" in e for e in bot.logger.errors))
+    check("traceback ثبت می‌شود",
+          any("Traceback" in e for e in bot.logger.errors))
+    check("ربات بعد از خطا همچنان پاسخ می‌دهد", bool(ok.replies))
+
+
 def main():
     test_handler_is_registered()
     test_balance_command_routed()
@@ -854,6 +886,7 @@ def main():
     test_legacy_coin_migration()
     test_runtime_data_is_not_tracked_by_git()
     test_migration_merges_into_existing_wallets()
+    test_handler_never_drops_message_silently()
 
     print("\n" + "=" * 52)
     print(f"passed={PASSED} failed={FAILED}")
