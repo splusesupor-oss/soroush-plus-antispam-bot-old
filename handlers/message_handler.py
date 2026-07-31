@@ -2,7 +2,7 @@ import asyncio as _asyncio
 from collections import deque
 from datetime import date
 
-from modules.fill_blank import check_fill
+from modules.fill_blank import check_fill, get_token as get_fill_token
 from modules.riddles import check_answer
 from modules.group_stats import add_message, get_stats
 from modules.group_storage import activate_group, deactivate_group
@@ -72,6 +72,7 @@ from modules.emoji_guess import (
     start as start_emoji_guess,
 )
 from modules.flag_guess import (
+    get_active as get_flag_guess,
     EXHAUSTED_MESSAGE as FLAG_GUESS_EXHAUSTED_MESSAGE,
     answer as answer_flag_guess,
     finish as finish_flag_guess,
@@ -191,19 +192,28 @@ def _format_admin_display(user):
     return display_name or "Unknown User"
 
 
-async def _reward_coin_reply(event, chat_id, user_id, user, amount,
-                             reference=None):
-    """جایزه را از راه API اقتصاد پرداخت و موجودی تازه را اعلام می‌کند."""
-    balance = economy.award(
-        chat_id, user_id, amount, reference=reference,
-        name=_format_admin_display(user), note="جایزه بازی",
+async def _reward_game_reply(event, chat_id, user_id, user, game,
+                             reference=None, amount=None):
+    """جایزهٔ بازی را با نوع سکهٔ درست پرداخت و موجودی را اعلام می‌کند.
+
+    نوع سکه از ``economy.rewards`` می‌آید: بازی عادی برنز، بازی سخت نقره.
+    """
+    from economy import rewards as _rewards
+    coin_type = _rewards.coin_for(game)
+    paid = _rewards.amount_for(game) if amount is None else int(amount)
+    balance = economy.award_game(
+        chat_id, user_id, game, reference=reference, amount=amount,
+        name=_format_admin_display(user),
     )
+    coin_label = _rewards.coin_name(coin_type)
+    icon = "🥈" if coin_type == economy.SILVER else "🥉"
     await event.reply(
         "🎉 پاسخ صحیح بود.\n\n"
-        f"🪙 شما +{_math_digits(amount)} سکه برنز دریافت کردید.\n\n"
-        f"💰 موجودی برنز:\n{_math_digits(balance[economy.BRONZE])}\n\n"
+        f"🪙 شما +{_math_digits(paid)} سکه {coin_label} دریافت کردید.\n\n"
+        f"💰 موجودی {coin_label}:\n{icon} {_math_digits(balance[coin_type])}\n\n"
         f"💎 ارزش کل:\n{_math_digits(balance['total_coin_value'])}"
     )
+    return balance
 
 
 def _format_banned_user(user, user_id):
@@ -1341,14 +1351,20 @@ async def handle_new_message(bot, event):
                     reward = ""
                     if player["points"] >= 70:
                         try:
-                            economy.award(
-                                chat_id, player.get("user_id", "unknown"), 6,
+                            economy.award_game(
+                                chat_id, player.get("user_id", "unknown"),
+                                "name_family",
                                 reference=f"namefamily:{chat_id}:"
                                           f"{game['round_id']}:"
                                           f"{player.get('user_id')}",
-                                name=player["name"], note="اسم فامیل",
+                                name=player["name"],
                             )
-                            reward = " — 🪙 +6 سکه"
+                            reward = (
+                                " — 🪙 +"
+                                f"{_math_digits(economy.rewards.amount_for('name_family'))}"
+                                " سکه "
+                                f"{economy.rewards.coin_name(economy.rewards.coin_for('name_family'))}"
+                            )
                         except Exception as error:
                             # پاداش نباید مانع نمایش نتایج شود.
                             bot.logger.log_error(
@@ -1479,13 +1495,18 @@ async def handle_new_message(bot, event):
             return
 
         if flag_guess_active(chat_id):
+            # ⚠️ token باید *پیش* از answer() خوانده شود؛ answer() جلسه را
+            # می‌بندد. پیش‌تر اینجا از متغیر flag_game استفاده می‌شد که فقط
+            # در شاخهٔ «شروع» ساخته می‌شد، پس در پیام پاسخ اصلاً وجود نداشت
+            # و UnboundLocalError می‌داد: کاربر پیام «+۳ سکه» می‌دید ولی
+            # هیچ سکه‌ای دریافت نمی‌کرد.
+            flag_state = get_flag_guess(chat_id)
+            flag_token = flag_state["token"] if flag_state else 0
             country = answer_flag_guess(chat_id, clean_text, user_id)
             if country:
-                await event.reply("✅ پاسخ درست بود!\n+3 🪙 سکه")
-                economy.award(
-                    chat_id, user_id, 3,
-                    reference=f"flag:{chat_id}:{flag_game['token']}",
-                    name=_format_group_member(sender), note="حدس پرچم",
+                await _reward_game_reply(
+                    event, chat_id, user_id, sender, "flag",
+                    reference=f"flag:{chat_id}:{user_id}:{flag_token}",
                 )
                 return
 
@@ -1509,8 +1530,8 @@ async def handle_new_message(bot, event):
         result_correction = answer_correction(chat_id, clean_text)
         if result_correction is not None:
             if result_correction:
-                await _reward_coin_reply(
-                    event, chat_id, user_id, sender, 1,
+                await _reward_game_reply(
+                    event, chat_id, user_id, sender, "correction",
                     reference=f"correction:{chat_id}:"
                               f"{correction_state['token'] if correction_state else 0}",
                 )
@@ -1639,8 +1660,13 @@ async def handle_new_message(bot, event):
 
         # بررسی جواب جای خالی
         try:
+            fill_state = get_fill_token(chat_id, user_id)
             if check_fill(chat_id, user_id, clean_text):
-                await event.reply("✅ آفرین، پاسخ درست بود.")
+                # پیش‌تر این بازی هیچ جایزه‌ای نمی‌داد.
+                await _reward_game_reply(
+                    event, chat_id, user_id, sender, "fill_blank",
+                    reference=f"fill:{chat_id}:{user_id}:{fill_state}",
+                )
                 return
         except Exception as e:
             bot.logger.log_error(f"خطای جای خالی: {e}")
@@ -1648,8 +1674,8 @@ async def handle_new_message(bot, event):
         try:
             riddle_answer_token = get_riddle_token(chat_id, user_id)
             if check_answer(chat_id, user_id, clean_text):
-                await _reward_coin_reply(
-                    event, chat_id, user_id, sender, 3,
+                await _reward_game_reply(
+                    event, chat_id, user_id, sender, "riddle",
                     reference=f"riddle:{chat_id}:{user_id}:{riddle_answer_token}",
                 )
                 return
@@ -1662,8 +1688,8 @@ async def handle_new_message(bot, event):
             if result is not None:
                 is_correct, correct_option = result
                 if is_correct:
-                    await _reward_coin_reply(
-                        event, chat_id, user_id, sender, 3,
+                    await _reward_game_reply(
+                        event, chat_id, user_id, sender, "quiz",
                         reference=f"quiz:{chat_id}:"
                                   f"{quiz_state['token'] if quiz_state else 0}",
                     )

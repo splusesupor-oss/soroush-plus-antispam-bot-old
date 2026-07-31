@@ -637,7 +637,9 @@ def test_survival_per_round_coins():
             await router.handle(bot, event, CHAT, 3, User(3, names[3]),
                                 "پاسخ کاملا غلط", bot.logger)
             sv.eliminate_silent(CHAT, bot.logger)
-            round1 = {uid: coins.get_balance(CHAT, uid)[coins.BRONZE] for uid in names}
+            # سکهٔ مراحل بقا نقره است.
+            round1 = {uid: coins.get_balance(CHAT, uid)[coins.SILVER]
+                      for uid in names}
 
             # مرحله دوم: علی درست، حسین غلط
             sv.next_question(CHAT, bot.logger)
@@ -650,25 +652,31 @@ def test_survival_per_round_coins():
 
             champion = sv.finish(CHAT, None, bot.logger)
             router._coins(bot, CHAT, champion["user_id"], champion["name"],
-                          sv.WINNER_COINS, bot.logger)
+                          sv.WINNER_COINS, bot.logger, game="survival")
             return round1, champion
 
         round1, champion = asyncio.run(scenario())
 
-        check("علی پس از مرحله ۱: ۱ سکه", round1[1] == 1, f"-> {round1[1]}")
-        check("حسین پس از مرحله ۱: ۱ سکه", round1[2] == 1, f"-> {round1[2]}")
+        # بقا بازی «سخت» است: سکهٔ آن نقره است، نه برنز.
+        check("علی پس از مرحله ۱: ۱ سکه نقره", round1[1] == 1,
+              f"-> {round1[1]}")
+        check("حسین پس از مرحله ۱: ۱ سکه نقره", round1[2] == 1,
+              f"-> {round1[2]}")
         check("رضا (پاسخ غلط) سکه نگرفت", round1[3] == 0, f"-> {round1[3]}")
         check("میلاد (ساکت) سکه نگرفت", round1[4] == 0, f"-> {round1[4]}")
 
         check("برنده علی است", champion["name"] == "علی", f"-> {champion['name']}")
         check("سکهٔ مراحل برنده = ۲", champion["round_coins"] == 2,
               f"-> {champion['round_coins']}")
-        check("مجموع علی = ۱۰ سکه",
-              coins.get_balance(CHAT, 1)[coins.BRONZE] == 10,
+        check("مجموع علی = ۱۰ سکه نقره",
+              coins.get_balance(CHAT, 1)[coins.SILVER] == 10,
+              f"-> {coins.get_balance(CHAT, 1)[coins.SILVER]}")
+        check("بقا برنز نمی‌دهد",
+              coins.get_balance(CHAT, 1)[coins.BRONZE] == 0,
               f"-> {coins.get_balance(CHAT, 1)[coins.BRONZE]}")
         check("حسین سکهٔ مرحله‌اش را پس از حذف نگه داشت",
-              coins.get_balance(CHAT, 2)[coins.BRONZE] == 1,
-              f"-> {coins.get_balance(CHAT, 2)[coins.BRONZE]}")
+              coins.get_balance(CHAT, 2)[coins.SILVER] == 1,
+              f"-> {coins.get_balance(CHAT, 2)[coins.SILVER]}")
         check("مقدار سکهٔ هر مرحله = ۱", sv.CORRECT_COINS == 1)
     finally:
         _st.use_file(original)
@@ -1092,9 +1100,9 @@ def test_real_coin_payout():
         check("برندهٔ بخند یا بباز ۱ سکه گرفت",
               coins.get_balance(CHAT, 10)[coins.BRONZE] == 1,
               f"-> {coins.get_balance(CHAT, 10)[coins.BRONZE]}")
-        check("برندهٔ خون‌آشام ۷ سکه گرفت",
-              coins.get_balance(CHAT, guesser)[coins.BRONZE] == 7,
-              f"-> {coins.get_balance(CHAT, guesser)[coins.BRONZE]}")
+        check("برندهٔ خون‌آشام ۷ سکه نقره گرفت",
+              coins.get_balance(CHAT, guesser)[coins.SILVER] == 7,
+              f"-> {coins.get_balance(CHAT, guesser)[coins.SILVER]}")
         check("پرداخت لاگ شد", bot.logger.has("FOX REWARD PAID"))
 
         # بقا
@@ -1111,10 +1119,11 @@ def test_real_coin_payout():
         sv.eliminate_silent(CHAT, logger)
         champion = sv.finish(CHAT, None, logger)
         router._coins(RealBot(), CHAT, champion["user_id"],
-                      champion["name"], sv.WINNER_COINS, logger)
-        check("برندهٔ بقا ۸ سکه گرفت",
-              coins.get_balance(CHAT, champion["user_id"])[coins.BRONZE] == 8,
-              f"-> {coins.get_balance(CHAT, champion['user_id'])[coins.BRONZE]}")
+                      champion["name"], sv.WINNER_COINS, logger,
+                      game="survival")
+        check("برندهٔ بقا ۸ سکه نقره گرفت",
+              coins.get_balance(CHAT, champion["user_id"])[coins.SILVER] == 8,
+              f"-> {coins.get_balance(CHAT, champion['user_id'])[coins.SILVER]}")
     finally:
         _st.use_file(original_file)
         router.reset_all()

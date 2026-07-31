@@ -254,13 +254,13 @@ def test_emoji_coin_award():
     eg.reset_all()
 
     calls = []
-    original = eg._economy_award
+    original = eg._economy_award_game
 
-    def spy(chat_id, user_id, amount, **kwargs):
-        calls.append((user_id, amount, kwargs.get("reference")))
-        return {"bronze": amount, "total_coin_value": amount}
+    def spy(chat_id, user_id, game, **kwargs):
+        calls.append((user_id, game, kwargs.get("reference")))
+        return {"bronze": 0, "total_coin_value": 0}
 
-    eg._economy_award = spy
+    eg._economy_award_game = spy
     try:
         puzzle = eg.start(CHAT, 4012)
         eg.answer(CHAT, 4012, "U", "غلط")
@@ -269,8 +269,10 @@ def test_emoji_coin_award():
         check("پاسخ درست یک بار امتیاز می‌دهد", len(calls) == 1, f"-> {calls}")
         eg.answer(CHAT, 4012, "U", puzzle["answer"])
         check("پاسخ تکراری امتیاز دوباره نمی‌دهد", len(calls) == 1)
+        check("جایزه از جدول «حدس ایموجی» می‌آید",
+              calls and calls[0][1] == "emoji", f"-> {calls}")
     finally:
-        eg._economy_award = original
+        eg._economy_award_game = original
     eg.reset_all()
 
 

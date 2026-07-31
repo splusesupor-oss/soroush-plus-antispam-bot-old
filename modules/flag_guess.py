@@ -215,6 +215,15 @@ def is_active(chat_id):
     return chat_id in _ACTIVE
 
 
+def get_active(chat_id):
+    """جلسهٔ فعال این چت، یا ``None``.
+
+    برای خواندن token *پیش از* بستن جلسه توسط ``answer()`` لازم است.
+    """
+    state = _ACTIVE.get(chat_id)
+    return dict(state) if state else None
+
+
 def start(chat_id, user_id=None):
     """بازی تازه شروع می‌کند.
 

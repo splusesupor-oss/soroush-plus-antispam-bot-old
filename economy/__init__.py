@@ -20,6 +20,7 @@ from economy import ranking as _ranking
 from economy import settings, shop, storage
 from economy import catalog
 from economy import profiles
+from economy import rewards
 from economy.coins import accounts as _accounts
 from economy import activity
 from economy.activity import (
@@ -79,6 +80,8 @@ __all__ = [
     "transaction_history", "shop",
     # پروفایل و فهرست آیتم‌ها
     "profiles", "catalog",
+    # جدول جایزهٔ بازی‌ها
+    "rewards", "award_game",
     # زیرساخت
     "settings", "storage", "flush",
 ]
@@ -102,6 +105,25 @@ def award(chat_id, user_id, amount, coin_type=BRONZE, *, reference=None,
     return _accounts.add(
         chat_id, user_id, coin_type, amount,
         kind="reward", reference=reference, note=note, name=name, win=win,
+    )
+
+
+def award_game(chat_id, user_id, game, *, reference=None, name=None,
+               amount=None, win=True):
+    """جایزهٔ یک بازی را با *نوع سکهٔ درست* پرداخت می‌کند.
+
+    نوع سکه از ``economy.rewards`` می‌آید، نه از فراخوان؛ پس هیچ بازی‌ای
+    نمی‌تواند با نوع اشتباه سکه ثبت شود. ``amount`` فقط برای بازی‌هایی
+    مثل جعبهٔ شانسی است که مقدارشان متغیر است.
+    """
+    coin_type = rewards.coin_for(game)
+    value = rewards.amount_for(game) if amount is None else int(amount)
+    if value <= 0:
+        return get_balance(chat_id, user_id)
+    return _accounts.add(
+        chat_id, user_id, coin_type, value,
+        kind="reward", reference=reference, note=rewards.label_for(game),
+        name=name, win=win,
     )
 
 

@@ -274,9 +274,10 @@ def test_vampire_reward():
         return bot
 
     bot = asyncio.run(scenario())
-    check("برندهٔ خون‌آشام ۷ سکه گرفت",
-          economy.get_balance(CHAT, winner)[economy.BRONZE] == vp.WINNER_COINS,
-          f"-> {economy.get_balance(CHAT, winner)[economy.BRONZE]}")
+    # خون‌آشام بازی «سخت» است: نقره می‌دهد نه برنز.
+    check("برندهٔ خون‌آشام ۷ سکه نقره گرفت",
+          economy.get_balance(CHAT, winner)[economy.SILVER] == vp.WINNER_COINS,
+          f"-> {economy.get_balance(CHAT, winner)[economy.SILVER]}")
     router.reset_all()
 
 

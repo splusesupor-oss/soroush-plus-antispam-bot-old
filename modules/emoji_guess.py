@@ -18,7 +18,7 @@ from itertools import count
 
 # جایزه فقط از راه API اقتصاد پرداخت می‌شود؛ این ماژول هرگز مستقیماً
 # به دیتابیس اقتصاد دست نمی‌زند.
-from economy import award as _economy_award
+from economy import award_game as _economy_award_game
 
 # ---------------------------------------------------------------------------
 # سطح ۱ — آسان (۴۰ مرحله): اشیاء، حیوانات و مفاهیم روزمره
@@ -304,10 +304,10 @@ def answer(chat_id, user_id, name, text):
     _ACTIVE.pop(chat_id, None)
     _SEEN_BY_USER.setdefault(_user_key(user_id), set()).add(state["answer"])
     # reference یکتا: همین معما برای همین کاربر فقط یک بار سکه می‌دهد.
-    _economy_award(
-        chat_id, user_id, REWARD_BRONZE,
-        reference=f"emoji:{chat_id}:{state['token']}",
-        note="حدس ایموجی", name=name,
+    _economy_award_game(
+        chat_id, user_id, "emoji",
+        reference=f"emoji:{chat_id}:{user_id}:{state['token']}",
+        name=name,
     )
     return state["answer"]
 
