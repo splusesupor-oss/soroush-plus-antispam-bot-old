@@ -360,19 +360,23 @@ def test_transfer_from_menu_writes_db():
     print("\n### 💾 انتقال از داخل منو روی دیتابیس")
     fresh()
     economy.add_bronze(CHAT, 777, 100)
-    target = User(888, "حسین")
+    # انتقال با یوزرنیم انجام می‌شود، پس مقصد باید در دفترچه باشد.
+    economy.directory.remember(CHAT, 888, "@hosein")
+    storage.flush()
 
     async def scenario():
         bot, handler = await build_handler()
         await handler(Event("موجودی", 777))
         prompt = Event("3", 777)
         await handler(prompt)
-        amount = Event("40", 777, reply_target=target)
+        await handler(Event("@hosein", 777))
+        amount = Event("40", 777)
         await handler(amount)
         return prompt, amount
 
     prompt, amount = asyncio.run(scenario())
     check("راهنمای انتقال آمد", prompt.said("انتقال برنز"))
+    check("یوزرنیم خواسته شد", prompt.said("یوزرنیم کاربر مقصد"))
     check("انتقال انجام شد", amount.said("منتقل شد"))
     check("از فرستنده واقعاً کم شد",
           economy.get_balance(CHAT, 777)[economy.BRONZE] == 60,

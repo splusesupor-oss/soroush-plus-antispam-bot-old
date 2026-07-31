@@ -65,30 +65,6 @@ async def _send(event, payload, logger=None):
         await event.reply(text)
 
 
-async def _reply_to_user_id(event):
-    """شناسهٔ کاربری که روی پیامش ریپلای شده."""
-    try:
-        if not getattr(event, "reply_to", None):
-            return None, None
-        message = await event.get_reply_message()
-        if message is None:
-            return None, None
-        sender = await message.get_sender()
-        if sender is None:
-            return None, None
-        name = " ".join(
-            str(part).strip() for part in
-            (getattr(sender, "first_name", None),
-             getattr(sender, "last_name", None))
-            if part and str(part).strip()
-        ).strip()
-        username = getattr(sender, "username", None)
-        return getattr(sender, "id", None), (name or (f"@{username}"
-                                                      if username else None))
-    except Exception:
-        return None, None
-
-
 # ---------------------------------------------------------------------------
 # بخش موجودی
 # ---------------------------------------------------------------------------
@@ -99,32 +75,50 @@ async def _handle_balance_step(bot, event, chat_id, user_id, sender, text,
         return False
     choice = balance_menu._english(text)
 
-    # --- مرحلهٔ دریافت مقدار انتقال ---
+    # --- گام ۱: یوزرنیم مقصد ---
+    # انتقال با ریپلای کاملاً حذف شده؛ فقط یوزرنیم پذیرفته می‌شود.
     if state["step"] == "transfer":
+        if choice == CANCEL:
+            balance_menu.close_session(chat_id, user_id)
+            await _send(event, "لغو شد.", logger)
+            return True
+
+        target_id, username, error = balance_menu.resolve_target(
+            chat_id, text, user_id)
+        if error:
+            await _send(event, error, logger)
+            return True
+
+        balance_menu.open_session(chat_id, user_id, step="transfer_amount",
+                                  coin=state["coin"], target=target_id,
+                                  username=username)
+        await _send(event, balance_menu.transfer_amount_prompt(
+            chat_id, state["coin"], user_id, username), logger)
+        _log(logger, f"ECONOMY TRANSFER TARGET chat_id={chat_id} "
+                     f"from={user_id} to={target_id} username={username!r}")
+        return True
+
+    # --- گام ۲: مقدار سکه ---
+    if state["step"] == "transfer_amount":
         if choice == CANCEL:
             balance_menu.close_session(chat_id, user_id)
             await _send(event, "لغو شد.", logger)
             return True
         amount = balance_menu.parse_transfer_amount(text)
         if amount is None:
-            return False        # عدد نیست: پیام عادی، منو دست‌نخورده می‌ماند
-
-        target_id, target_name = await _reply_to_user_id(event)
-        if target_id is None:
-            await _send(event, "❌ باید روی پیام کاربر مقصد ریپلای کنید.", logger)
-            return True
-        if str(target_id) == str(user_id):
-            await _send(event, "❌ انتقال به خودتان ممکن نیست.", logger)
+            await _send(event, "❌ مقدار باید یک عدد مثبت باشد. مثال:\n10",
+                        logger)
             return True
 
+        target_id = state["target"]
         coin_type = state["coin"]
         reference = (f"transfer:{chat_id}:{user_id}:{target_id}:"
                      f"{coin_type}:{amount}:{event.message.id}")
         ok, message = balance_menu.do_transfer(
             chat_id, user_id, target_id, coin_type, amount,
             reference=reference)
-        if ok and target_name:
-            economy.set_name(chat_id, target_id, target_name)
+        if ok:
+            economy.set_name(chat_id, target_id, f"@{state['username']}")
         balance_menu.close_session(chat_id, user_id)
         await _send(event, message, logger)
         _log(logger, f"ECONOMY TRANSFER chat_id={chat_id} from={user_id} "

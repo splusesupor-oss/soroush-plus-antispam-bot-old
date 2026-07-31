@@ -369,49 +369,58 @@ def test_menu_conversion():
 
 
 def test_menu_transfer():
-    print("\n### 💰 انتقال از داخل منو")
+    """انتقال حالا دو گامی است: یوزرنیم، سپس مقدار. ریپلای حذف شده."""
+    print("\n### 💰 انتقال از داخل منو (با یوزرنیم)")
     fresh()
     economy.add_bronze(CHAT, 1, 100)
-    target = User(2, "حسین")
+    economy.directory.remember(CHAT, 2, "@hosein")
+    storage.flush()
 
     async def scenario():
         bot = Bot()
         await send_eco(bot, Event(), 1, "موجودی")
         prompt = Event()
         await send_eco(bot, prompt, 1, "3")
-        amount = Event(reply_target=target)
-        await eco_handler.handle(bot, amount, CHAT, 1, User(1, "علی"),
-                                 "40", bot.logger)
-        return prompt, amount
+        target = Event()
+        await send_eco(bot, target, 1, "@hosein")
+        amount = Event()
+        await send_eco(bot, amount, 1, "40")
+        return prompt, target, amount
 
-    prompt, amount = asyncio.run(scenario())
+    prompt, target, amount = asyncio.run(scenario())
     check("راهنمای انتقال نمایش داده شد", prompt.said("انتقال برنز"))
+    check("یوزرنیم خواسته می‌شود", prompt.said("یوزرنیم کاربر مقصد"))
+    check("ریپلای دیگر خواسته نمی‌شود", not prompt.said("ریپلای"))
+    check("پس از یوزرنیم، مقدار خواسته می‌شود", target.said("مقدار برنز"))
     check("انتقال انجام شد", amount.said("منتقل شد"))
-    check("از فرستنده کسر شد", economy.get_balance(CHAT, 1)[economy.BRONZE] == 60)
-    check("به گیرنده رسید", economy.get_balance(CHAT, 2)[economy.BRONZE] == 40)
-    check("نام گیرنده ذخیره شد", economy.get_profile(CHAT, 2)["name"] == "حسین")
+    check("از فرستنده کسر شد",
+          economy.get_balance(CHAT, 1)[economy.BRONZE] == 60)
+    check("به گیرنده رسید",
+          economy.get_balance(CHAT, 2)[economy.BRONZE] == 40)
+    check("نام گیرنده ذخیره شد",
+          economy.get_profile(CHAT, 2)["name"] == "@hosein")
     check("session بسته شد", not balance_menu.is_open(CHAT, 1))
 
-    # بدون ریپلای
+    # آیدی عددی به‌جای یوزرنیم
     async def scenario2():
         bot = Bot()
         await send_eco(bot, Event(), 1, "موجودی")
         await send_eco(bot, Event(), 1, "3")
-        no_reply = Event()
-        await send_eco(bot, no_reply, 1, "10")
-        return no_reply
+        numeric = Event()
+        await send_eco(bot, numeric, 1, "2")
+        return numeric
 
     event = asyncio.run(scenario2())
-    check("انتقال بدون ریپلای رد می‌شود", event.said("ریپلای"))
+    check("آیدی عددی رد می‌شود", event.said("آیدی عددی"))
 
     # بیش از موجودی
     async def scenario3():
         bot = Bot()
         await send_eco(bot, Event(), 1, "موجودی")
         await send_eco(bot, Event(), 1, "3")
-        too_much = Event(reply_target=target)
-        await eco_handler.handle(bot, too_much, CHAT, 1, User(1),
-                                 "99999", bot.logger)
+        await send_eco(bot, Event(), 1, "@hosein")
+        too_much = Event()
+        await send_eco(bot, too_much, 1, "99999")
         return too_much
 
     event = asyncio.run(scenario3())

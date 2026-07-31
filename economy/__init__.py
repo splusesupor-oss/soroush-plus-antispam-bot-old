@@ -19,6 +19,7 @@
 from economy import ranking as _ranking
 from economy import settings, shop, storage
 from economy import catalog
+from economy import directory
 from economy import profiles
 from economy import rewards
 from economy.coins import accounts as _accounts
@@ -82,6 +83,8 @@ __all__ = [
     "profiles", "catalog",
     # جدول جایزهٔ بازی‌ها
     "rewards", "award_game",
+    # دفترچهٔ یوزرنیم
+    "directory",
     # زیرساخت
     "settings", "storage", "flush",
 ]

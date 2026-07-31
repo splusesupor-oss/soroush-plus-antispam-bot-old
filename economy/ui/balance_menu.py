@@ -9,7 +9,7 @@
 import time
 
 import economy
-from economy import settings
+from economy import directory, settings
 from economy.ui.formatting import fa, format_duration, spans_for
 
 COMMAND = "موجودی"
@@ -262,13 +262,60 @@ def do_transfer(chat_id, sender_id, receiver_id, coin_type, amount, *, reference
 
 
 def transfer_prompt(chat_id, coin_type, user_id):
+    """گام ۱: یوزرنیم مقصد. ریپلای دیگر پذیرفته نمی‌شود."""
     balance = economy.get_balance(chat_id, user_id)
     return (
         f"📤 انتقال {_COIN_NAMES[coin_type]}\n\n"
         f"موجودی شما: {fa(balance[coin_type])}\n\n"
-        "روی پیام کاربر مقصد ریپلای کنید و فقط عدد را بفرستید.\n"
+        "یوزرنیم کاربر مقصد را ارسال کنید:\n"
+        "مثال:\n"
+        "@username\n\n"
         "برای لغو، ۰ بفرستید."
     )
+
+
+def transfer_amount_prompt(chat_id, coin_type, user_id, target_username):
+    """گام ۲: مقدار سکه."""
+    balance = economy.get_balance(chat_id, user_id)
+    return (
+        f"📤 انتقال {_COIN_NAMES[coin_type]} به @{target_username}\n\n"
+        f"موجودی شما: {fa(balance[coin_type])}\n\n"
+        f"مقدار {_COIN_NAMES[coin_type]} برای انتقال را ارسال کنید:\n\n"
+        "مثال:\n"
+        "10\n\n"
+        "برای لغو، ۰ بفرستید."
+    )
+
+
+def resolve_target(chat_id, text, sender_id):
+    """یوزرنیم مقصد را به شناسه تبدیل می‌کند.
+
+    خروجی ``(user_id, username, error)``. آیدی عددی عمداً رد می‌شود؛
+    فقط یوزرنیم معتبر پذیرفته است.
+    """
+    raw = str(text or "").strip()
+    cleaned = _english(raw).strip()
+    if cleaned.isdigit():
+        return None, None, (
+            "❌ آیدی عددی پذیرفته نمی‌شود.\n"
+            "فقط یوزرنیم کاربر مقصد را بفرستید. مثال:\n@username"
+        )
+    if not directory.is_valid(raw):
+        return None, None, (
+            "❌ یوزرنیم معتبر نیست.\n"
+            "یوزرنیم باید با حرف انگلیسی شروع شود. مثال:\n@username"
+        )
+
+    username = directory.normalize(raw)
+    target_id = directory.lookup(chat_id, username)
+    if target_id is None:
+        return None, None, (
+            f"❌ کاربری با یوزرنیم @{username} در این گروه پیدا نشد.\n"
+            "کاربر مقصد باید حداقل یک پیام در این گروه فرستاده باشد."
+        )
+    if str(target_id) == str(sender_id):
+        return None, None, "❌ انتقال به خودتان ممکن نیست."
+    return target_id, username, None
 
 
 def coin_for_option(option):
