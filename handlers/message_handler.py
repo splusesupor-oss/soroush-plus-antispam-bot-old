@@ -46,6 +46,12 @@ from handlers.fox_games_router import (
     FOX_GAME_COMMANDS,
     handle as handle_fox_games,
 )
+# ⏳ تاریخ انقضای گروه — قابلیتی کاملاً مستقل با مسیر پردازش جدا.
+from handlers.group_expiry_handler import (
+    EXPIRED_NOTICE as GROUP_EXPIRED_NOTICE,
+    blocks_message as group_expiry_blocks,
+    handle as handle_group_expiry,
+)
 from modules.name_family import (
     cancel_round as cancel_name_family_round,
     finish as finish_name_family,
@@ -741,6 +747,23 @@ async def handle_new_message(bot, event):
                 )
             return
         clean_text = message_text.strip()
+
+        # ------------------------------------------------------------------
+        # ⏳ تاریخ انقضای گروه — پیش از هر دستور دیگری.
+        #
+        # مسیر این سه دستور کاملاً جداست و تطبیق دقیق است، پس هیچ
+        # startswith عمومی نمی‌تواند آن‌ها را با دستور دیگری اشتباه بگیرد.
+        # ------------------------------------------------------------------
+        if not event.is_private:
+            if await handle_group_expiry(
+                bot, event, chat_id, sender, clean_text, bot.logger
+            ):
+                return
+            # گروه منقضی: همهٔ قابلیت‌ها متوقف می‌شوند تا مالک اصلی دوباره
+            # یکی از سه دستور را بفرستد.
+            if group_expiry_blocks(chat_id, sender):
+                return
+
         name_family_trace = (
             clean_text == "اسم فامیل" or name_family_active(chat_id)
         )

@@ -10,6 +10,10 @@ from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminAc
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
+from modules.group_expiry import match_command as expiry_command
+from handlers.group_expiry_handler import (
+    run_expiry_watcher as run_group_expiry_watcher,
+)
 from modules.banned_storage import (
     add_banned,
     remove_banned,
@@ -252,6 +256,19 @@ class SoroushAntiSpamBot:
                 await asyncio.sleep(15)
 
         asyncio.create_task(reminder_loop())
+
+        # ⏳ ناظر تاریخ انقضای گروه — کاملاً مستقل از بقیهٔ حلقه‌ها.
+        # بدون نیاز به هیچ پیامی، دقیقاً در زمان تعیین‌شده گروه را می‌بندد.
+        async def group_expiry_loop():
+            def deactivate(group_id, title):
+                deactivate_group(group_id, title)
+                for task in self.group_timer_tasks.pop(group_id, set()):
+                    task.cancel()
+
+            await run_group_expiry_watcher(
+                self, deactivate, logger=self.logger)
+
+        asyncio.create_task(group_expiry_loop())
 
         async def is_currently_restricted(chat_id, user):
             """وضعیت فعلی عضو را از SPlusthon می‌خواند؛ خطا یعنی حفظ بن فعلی."""
@@ -651,7 +668,23 @@ class SoroushAntiSpamBot:
                         await send_activation_message(
                             self, event, lock_id, title
                         )
-                    return
+                        return
+                    # ⏳ گروهی که با پایان مهلت بسته شده باید بتواند دوباره
+                    # باز شود. بدون این استثنا، سه دستور انقضا هرگز به
+                    # هندلر نمی‌رسیدند و گروه برای همیشه قفل می‌ماند.
+                    if (
+                        expiry_command(text) is not None
+                        and can_change_group_mode
+                    ):
+                        self.logger.log_info(
+                            "GROUP EXPIRY REACTIVATION ALLOWED "
+                            f"chat_id={lock_id} sender_id={sender_id} "
+                            f"command={text!r}"
+                        )
+                        title = getattr(chat_lock, "title", "")
+                        activate_group(lock_id, title)
+                    else:
+                        return
 
                 if is_disable_command:
                     if can_change_group_mode:
