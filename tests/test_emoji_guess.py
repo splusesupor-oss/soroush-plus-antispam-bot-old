@@ -41,7 +41,7 @@ def play(chat_id, user_id, rounds):
 def test_catalogue():
     print("\n### بانک معماها")
     total = len(eg.PUZZLES)
-    check(f"بانک دقیقاً ۱۲۰ مرحله دارد ({total})", total == 120, f"-> {total}")
+    check(f"بانک دقیقاً ۲۰۰ مرحله دارد ({total})", total == 200, f"-> {total}")
     answers = [item[1] for item in eg.PUZZLES]
     check("هیچ پاسخ تکراری در بانک نیست",
           len(answers) == len(set(answers)),
@@ -51,9 +51,9 @@ def test_catalogue():
     check("همهٔ ورودی‌ها ایموجی و پاسخ دارند",
           all(item[0] and item[1] for item in eg.PUZZLES))
     check("هر رکورد سه بخش دارد", all(len(item) == 3 for item in eg.PUZZLES))
-    check("سه سطح سختی وجود دارد", len(eg.TIERS) == 3)
-    check("هر سطح ۴۰ مرحله دارد",
-          all(len(tier) == 40 for tier in eg.TIERS),
+    check("شش سطح سختی وجود دارد", len(eg.TIERS) == 6)
+    check("مجموع سطوح برابر کل بانک است",
+          sum(len(tier) for tier in eg.TIERS) == total,
           f"-> {[len(t) for t in eg.TIERS]}")
 
     def emoji_count(value):
@@ -102,7 +102,7 @@ def test_hundreds_of_attempts():
           f"-> {duplicates[:5]}")
     check(f"دقیقاً {total} بازی انجام شد و سپس متوقف",
           len(seen) == total, f"-> {len(seen)}")
-    check("کاربر اکنون exhausted است", eg.is_exhausted(501))
+    check("کاربر اکنون exhausted است", eg.is_exhausted(CHAT, 501))
     check("start دیگر معما نمی‌دهد", eg.start(CHAT, 501) is None)
     check("هیچ بازی فعالی ساخته نشد", not eg.is_active(CHAT))
 
@@ -111,21 +111,21 @@ def test_exhaustion_counters():
     print("\n### شمارنده‌های تاریخچه")
     eg.reset_all()
     total = len(eg.PUZZLES)
-    check("در ابتدا چیزی دیده نشده", eg.seen_count(600) == 0)
+    check("در ابتدا چیزی دیده نشده", eg.seen_count(CHAT, 600) == 0)
     check(f"در ابتدا {total} معما باقی است",
-          eg.remaining_count(600) == total, f"-> {eg.remaining_count(600)}")
-    check("در ابتدا exhausted نیست", not eg.is_exhausted(600))
+          eg.remaining_count(CHAT, 600) == total, f"-> {eg.remaining_count(CHAT, 600)}")
+    check("در ابتدا exhausted نیست", not eg.is_exhausted(CHAT, 600))
 
     play(CHAT, 600, 5)
     check("پس از ۵ بازی، ۵ معما دیده شده",
-          eg.seen_count(600) == 5, f"-> {eg.seen_count(600)}")
+          eg.seen_count(CHAT, 600) == 5, f"-> {eg.seen_count(CHAT, 600)}")
     check("باقی‌مانده درست است",
-          eg.remaining_count(600) == total - 5, f"-> {eg.remaining_count(600)}")
+          eg.remaining_count(CHAT, 600) == total - 5, f"-> {eg.remaining_count(CHAT, 600)}")
 
     play(CHAT, 600, total)
     check("پس از اتمام، باقی‌مانده صفر است",
-          eg.remaining_count(600) == 0, f"-> {eg.remaining_count(600)}")
-    check("اکنون exhausted است", eg.is_exhausted(600))
+          eg.remaining_count(CHAT, 600) == 0, f"-> {eg.remaining_count(CHAT, 600)}")
+    check("اکنون exhausted است", eg.is_exhausted(CHAT, 600))
 
 
 def test_per_user_isolation():
@@ -133,15 +133,15 @@ def test_per_user_isolation():
     eg.reset_all()
     total = len(eg.PUZZLES)
     play(CHAT, 700, total)
-    check("کاربر اول exhausted شد", eg.is_exhausted(700))
-    check("کاربر دوم exhausted نیست", not eg.is_exhausted(701))
+    check("کاربر اول exhausted شد", eg.is_exhausted(CHAT, 700))
+    check("کاربر دوم exhausted نیست", not eg.is_exhausted(CHAT, 701))
 
     puzzle = eg.start(CHAT, 701)
     check("کاربر دوم معما می‌گیرد", puzzle is not None)
     check("کاربر دوم تاریخچهٔ خودش را دارد",
-          eg.seen_count(701) == 1, f"-> {eg.seen_count(701)}")
+          eg.seen_count(CHAT, 701) == 1, f"-> {eg.seen_count(CHAT, 701)}")
     check("تاریخچهٔ کاربر اول دست‌نخورده است",
-          eg.seen_count(700) == total, f"-> {eg.seen_count(700)}")
+          eg.seen_count(CHAT, 700) == total, f"-> {eg.seen_count(CHAT, 700)}")
     if puzzle:
         eg.finish(CHAT, puzzle["token"])
 
@@ -162,8 +162,8 @@ def test_many_users_parallel():
               len(set(seen)) == 15 and not duplicates,
               f"-> {len(set(seen))} dup={duplicates[:3]}")
     check("هر کاربر شمارندهٔ مستقل دارد",
-          all(eg.seen_count(uid) == 15 for uid in users),
-          f"-> {[eg.seen_count(u) for u in users]}")
+          all(eg.seen_count(CHAT, uid) == 15 for uid in users),
+          f"-> {[eg.seen_count(CHAT, u) for u in users]}")
 
 
 def test_reset_user():
@@ -171,10 +171,10 @@ def test_reset_user():
     eg.reset_all()
     total = len(eg.PUZZLES)
     play(CHAT, 900, total)
-    check("کاربر exhausted شد", eg.is_exhausted(900))
-    eg.reset_user(900)
-    check("پس از reset دوباره می‌تواند بازی کند", not eg.is_exhausted(900))
-    check("شمارنده صفر شد", eg.seen_count(900) == 0)
+    check("کاربر exhausted شد", eg.is_exhausted(CHAT, 900))
+    eg.reset_user(CHAT, 900)
+    check("پس از reset دوباره می‌تواند بازی کند", not eg.is_exhausted(CHAT, 900))
+    check("شمارنده صفر شد", eg.seen_count(CHAT, 900) == 0)
     puzzle = eg.start(CHAT, 900)
     check("معمای تازه دریافت شد", puzzle is not None)
     if puzzle:
@@ -211,7 +211,7 @@ def test_double_start_guard():
     check("بازی اول دست‌نخورده است",
           eg.is_active(CHAT) and eg._ACTIVE[CHAT]["answer"] == first["answer"])
     check("تاریخچه فقط یک بار افزایش یافت",
-          eg.seen_count(960) == 1, f"-> {eg.seen_count(960)}")
+          eg.seen_count(CHAT, 960) == 1, f"-> {eg.seen_count(CHAT, 960)}")
     eg.finish(CHAT, first["token"])
 
 
@@ -231,7 +231,7 @@ def test_isolation_from_other_games():
     check("بازی ایموجی هنوز فعال است", eg.is_active(CHAT))
     check("پاسخ ایموجی دست‌نخورده است",
           eg._ACTIVE[CHAT]["answer"] == puzzle["answer"])
-    own = {id(eg._ACTIVE), id(eg._SEEN_BY_USER)}
+    own = {id(eg._ACTIVE)}
     other = {id(fg._ACTIVE), id(fg._SEEN_HISTORY),
              id(rd.active_riddles), id(rd.used_riddles)}
     check("هیچ ساختار داده‌ای مشترک نیست", not (own & other))

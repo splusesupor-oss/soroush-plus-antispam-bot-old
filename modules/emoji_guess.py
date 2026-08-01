@@ -19,6 +19,7 @@ from itertools import count
 # جایزه فقط از راه API اقتصاد پرداخت می‌شود؛ این ماژول هرگز مستقیماً
 # به دیتابیس اقتصاد دست نمی‌زند.
 from economy import award_game as _economy_award_game
+from economy import game_progress as _progress
 
 # ---------------------------------------------------------------------------
 # سطح ۱ — آسان (۴۰ مرحله): اشیاء، حیوانات و مفاهیم روزمره
@@ -158,8 +159,111 @@ HARD = (
     ("🧠💭❓", "تفکر", ()),
 )
 
-TIERS = (EASY, MEDIUM, HARD)
-TIER_NAMES = ("آسان", "متوسط", "سخت")
+# ---------------------------------------------------------------------------
+# سطح ۴ — آسان‌تر از بقیهٔ مراحل جدید (۳۰ مرحله): حیوانات، غذا، اشیای روزمره
+#
+# ⚠️ ترتیب مهم است: این سه دستهٔ تازه *پس از* ۱۲۰ مرحلهٔ قبلی می‌آیند، پس
+# کاربری که در مرحلهٔ ۵۷ بوده دقیقاً از ۵۸ ادامه می‌دهد و مراحل جدید
+# فقط به انتهای مسیر اضافه می‌شوند.
+# ---------------------------------------------------------------------------
+EXTRA_EASY = (
+    ("🐮🥛", "شیر گاو", ()),
+    ("🐔🥚", "تخم مرغ", ()),
+    ("🐑🧶", "پشم", ()),
+    ("🐟🎣", "ماهیگیری", ()),
+    ("🐴🏇", "اسب سواری", ()),
+    ("🦒🌿", "زرافه", ()),
+    ("🐒🍌🌴", "میمون", ()),
+    ("🐰🥕", "خرگوش", ()),
+    ("🐻🍯🌲", "خرس", ()),
+    ("🦋🌸🌼", "بهار", ()),
+    ("🍞🧈", "نان", ()),
+    ("🍚🍛", "برنج", ()),
+    ("🥗🥬🥒", "سالاد", ()),
+    ("🍲🥄♨️", "سوپ", ()),
+    ("☕🥐", "قهوه", ()),
+    ("🍵🌿", "چای", ()),
+    ("🧃🍊", "آبمیوه", ()),
+    ("🍇🍷", "انگور", ()),
+    ("🍓🍰", "توت فرنگی", ()),
+    ("🌽🌾", "ذرت", ()),
+    ("🪑🍽️", "میز", ()),
+    ("🛏️😴🌙", "تختخواب", ()),
+    ("🚪🔑🏠", "در", ()),
+    ("🪟☀️", "پنجره", ()),
+    ("🧹🧼🫧", "نظافت", ()),
+    ("👞👟", "کفش", ()),
+    ("👕👖", "لباس", ()),
+    ("☂️🌦️", "چتر", ()),
+    ("🕶️😎☀️", "عینک آفتابی", ()),
+    ("🎈🎉🎊", "جشن", ()),
+)
+
+# ---------------------------------------------------------------------------
+# سطح ۵ — متوسط (۳۰ مرحله): کشورها، مکان‌ها، مشاغل و ورزش
+# ---------------------------------------------------------------------------
+EXTRA_MEDIUM = (
+    ("🗼🥖🇫🇷", "فرانسه", ()),
+    ("🍕🍝🇮🇹", "ایتالیا", ()),
+    ("🗽🍔🇺🇸", "آمریکا", ()),
+    ("🍣🗻🇯🇵", "ژاپن", ()),
+    ("🐨🦘🇦🇺", "استرالیا", ()),
+    ("🏛️🏺🇬🇷", "یونان", ()),
+    ("🐫🕌🏜️", "عربستان", ()),
+    ("🐼🥢🇨🇳", "چین", ()),
+    ("💃⚽🇧🇷", "برزیل", ()),
+    ("🌷🚲🧀", "هلند", ()),
+    ("🏔️🏂⛷️", "اسکی", ()),
+    ("🏊🌊🥇", "شنا", ()),
+    ("🏐🤾", "والیبال", ()),
+    ("🎾🏸", "تنیس", ()),
+    ("🥊🥋", "بوکس", ()),
+    ("🏃💨🏅", "دویدن", ()),
+    ("🚴⛰️", "دوچرخه سواری", ()),
+    ("⛳🏌️", "گلف", ()),
+    ("🎳🎯", "بولینگ", ()),
+    ("🏒🥅", "هاکی", ()),
+    ("👨‍🔧🔧⚙️", "مکانیک", ()),
+    ("👩‍🏫📐🍎", "معلم", ()),
+    ("👨‍🌾🚜🌾", "کشاورز", ()),
+    ("👷🏗️🧱", "بنا", ()),
+    ("🧑‍✈️✈️🎧", "خلبان", ()),
+    ("👨‍🍳🍳🔪", "سرآشپز", ()),
+    ("💇✂️💈", "سلمانی", ()),
+    ("🚒🧯🔥", "آتش نشان", ()),
+    ("📮🚚📦", "پستچی", ()),
+    ("🎣⛵🐠", "صیاد", ()),
+)
+
+# ---------------------------------------------------------------------------
+# سطح ۶ — سخت (۲۰ مرحله): فناوری، طبیعت و مفاهیم انتزاعی
+# ---------------------------------------------------------------------------
+EXTRA_HARD = (
+    ("🔋⚡🚗", "خودروی برقی", ()),
+    ("🤖🦾🏭", "رباتیک", ()),
+    ("🛰️📡🌐", "مخابرات", ()),
+    ("🧬🔬🧪", "ژنتیک", ()),
+    ("💉🦠🛡️", "واکسن", ()),
+    ("🌡️🌍🔥", "گرمایش زمین", ()),
+    ("💨🌬️⚡", "انرژی بادی", ()),
+    ("☀️🔆🔌", "انرژی خورشیدی", ()),
+    ("💧⚡🏞️", "برق آبی", ()),
+    ("🌳🪓🚫", "جنگل زدایی", ()),
+    ("🐋🌊🚢", "نهنگ", ()),
+    ("🏜️🌵🦂", "بیابان", ()),
+    ("🌊🏝️🗻", "جزیره", ()),
+    ("❄️🐻‍❄️🧊", "قطب شمال", ()),
+    ("🕸️🕷️🪤", "تله", ()),
+    ("🗝️🚪❓", "راز", ()),
+    ("⚖️👨‍⚖️📜", "عدالت", ()),
+    ("🤝🌍🕊️", "همکاری", ()),
+    ("📈💡🚀", "پیشرفت", ()),
+    ("🧭🗺️🌟", "جستجو", ()),
+)
+
+TIERS = (EASY, MEDIUM, HARD, EXTRA_EASY, EXTRA_MEDIUM, EXTRA_HARD)
+TIER_NAMES = ("آسان", "متوسط", "سخت",
+              "آسان پیشرفته", "متوسط پیشرفته", "سخت پیشرفته")
 PUZZLES = tuple(item for tier in TIERS for item in tier)
 
 _ACTIVE = {}
@@ -181,7 +285,12 @@ def _next_token():
         return next(_FALLBACK_TOKENS)
 
 
-_SEEN_BY_USER = {}
+# نام این بازی در دفتر پیشرفت دائمی.
+GAME = "emoji_guess"
+
+# ⚠️ پیشرفت دیگر در حافظه نگه داشته نمی‌شود. پیش‌تر یک dict ساده بود و
+# با هر ری‌استارت پاک می‌شد، پس کاربر از مرحلهٔ ۱ شروع می‌کرد. حالا در
+# فایل اقتصاد ذخیره می‌شود و به تفکیک گروه است.
 _RANDOM = random.SystemRandom()
 
 EXHAUSTED_MESSAGE = (
@@ -212,42 +321,58 @@ def _norm(text):
     )
 
 
-def seen_count(user_id):
-    """تعداد مرحله‌هایی که این کاربر تا کنون دیده است."""
-    return len(_SEEN_BY_USER.get(_user_key(user_id), ()))
+def _seen(chat_id, user_id):
+    """مرحله‌های دیده‌شدهٔ این کاربر در این گروه (از ذخیره‌سازی دائمی)."""
+    return _progress.seen(chat_id, user_id, GAME)
 
 
-def remaining_count(user_id):
-    """تعداد مرحله‌های باقی‌مانده برای این کاربر."""
-    return max(len(PUZZLES) - seen_count(user_id), 0)
+def seen_count(chat_id, user_id):
+    """تعداد مرحله‌هایی که این کاربر در این گروه دیده است."""
+    return _progress.seen_count(chat_id, user_id, GAME)
 
 
-def is_exhausted(user_id):
-    """آیا این کاربر همهٔ ۱۲۰ مرحله را دیده است."""
-    return remaining_count(user_id) == 0
+def remaining_count(chat_id, user_id):
+    """تعداد مرحله‌های باقی‌مانده برای این کاربر در این گروه."""
+    return max(len(PUZZLES) - seen_count(chat_id, user_id), 0)
 
 
-def current_tier(user_id):
+def is_exhausted(chat_id, user_id):
+    """آیا این کاربر همهٔ مرحله‌ها را در این گروه دیده است."""
+    return remaining_count(chat_id, user_id) == 0
+
+
+def next_stage_number(chat_id, user_id):
+    """شمارهٔ مرحله‌ای که این کاربر در ادامه می‌گیرد."""
+    return min(seen_count(chat_id, user_id) + 1, len(PUZZLES))
+
+
+def current_tier(chat_id, user_id):
     """نام سطحی که کاربر در آن قرار دارد؛ None اگر همه را دیده باشد."""
-    seen = _SEEN_BY_USER.get(_user_key(user_id), set())
+    seen = _seen(chat_id, user_id)
     for name, tier in zip(TIER_NAMES, TIERS):
         if any(item[1] not in seen for item in tier):
             return name
     return None
 
 
-def reset_user(user_id=None):
-    """تاریخچهٔ یک کاربر (یا همهٔ کاربران) را پاک می‌کند."""
-    if user_id is None:
-        _SEEN_BY_USER.clear()
-        return
-    _SEEN_BY_USER.pop(_user_key(user_id), None)
+def reset_user(chat_id, user_id):
+    """پیشرفت این کاربر در این گروه را پاک می‌کند.
+
+    تنها راه ریست کردن پیشرفت است؛ ری‌استارت ربات هرگز آن را پاک
+    نمی‌کند.
+    """
+    _ACTIVE.pop(chat_id, None)
+    return _progress.reset(chat_id, user_id, GAME)
 
 
 def reset_all():
-    """پاک‌سازی کامل — برای تست و ری‌استارت."""
+    """پاک‌سازی کامل — فقط برای تست.
+
+    ⚠️ این تابع دیگر هنگام ری‌استارت صدا زده نمی‌شود؛ صدا زدنش یعنی
+    پیشرفت همهٔ کاربران از بین برود.
+    """
     _ACTIVE.clear()
-    _SEEN_BY_USER.clear()
+    _progress.reset_game_everywhere(GAME)
 
 
 def is_active(chat_id):
@@ -274,14 +399,15 @@ def start(chat_id, user_id=None):
     if user_id is None:
         user_id = chat_id
 
-    key = _user_key(user_id)
-    seen = _SEEN_BY_USER.setdefault(key, set())
+    seen = _seen(chat_id, user_id)
     picked, tier_index = _pick(seen)
     if picked is None:
         return None
 
     emoji, answer, aliases = picked
-    seen.add(answer)
+    # همین‌جا ثبت دائمی می‌شود تا اگر ربات وسط مرحله خاموش شد، همان
+    # معما دوباره تکرار نشود.
+    stage = _progress.mark_seen(chat_id, user_id, GAME, answer)
     _ACTIVE[chat_id] = {
         "emoji": emoji,
         "answer": answer,
@@ -289,7 +415,7 @@ def start(chat_id, user_id=None):
         "token": _next_token(),
         "user_id": user_id,
         "tier": TIER_NAMES[tier_index],
-        "stage": len(seen),
+        "stage": stage,
     }
     return dict(_ACTIVE[chat_id])
 
@@ -314,12 +440,16 @@ def answer(chat_id, user_id, name, text):
     state = _ACTIVE.get(chat_id)
     if not state:
         return None
-    if is_exhausted(user_id):
+    # کاربری که همهٔ مرحله‌ها را تمام کرده نباید از دور دیگری امتیاز
+    # بگیرد؛ وگرنه می‌شد با شروع دادن دستور توسط دیگران بی‌نهایت سکه
+    # گرفت.
+    if is_exhausted(chat_id, user_id):
         return None
     if _norm(text) not in accepted_answers(state):
         return None
     _ACTIVE.pop(chat_id, None)
-    _SEEN_BY_USER.setdefault(_user_key(user_id), set()).add(state["answer"])
+    # پاسخ‌دهنده هم این مرحله را «دیده» ثبت می‌شود تا دوباره نگیردش.
+    _progress.mark_seen(chat_id, user_id, GAME, state["answer"])
     # reference یکتا: همین معما برای همین کاربر فقط یک بار سکه می‌دهد.
     _economy_award_game(
         chat_id, user_id, "emoji",

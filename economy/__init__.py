@@ -20,6 +20,7 @@ from economy import ranking as _ranking
 from economy import settings, shop, storage
 from economy import catalog
 from economy import directory
+from economy import game_progress
 from economy import profiles
 from economy import rewards
 from economy import upgrade_migration
@@ -86,6 +87,8 @@ __all__ = [
     "rewards", "award_game",
     # دفترچهٔ یوزرنیم
     "directory",
+    # پیشرفت دائمی بازی‌ها
+    "game_progress",
     # جبران تبدیل‌های قدیمی
     "upgrade_migration",
     # زیرساخت

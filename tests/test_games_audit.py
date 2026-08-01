@@ -213,7 +213,7 @@ def test_emoji_guess():
         eg.finish(CHAT, p["token"])
     check("هیچ ایموجی تکراری برای یک کاربر",
           len(set(seen)) == len(seen) == len(eg.PUZZLES), f"-> {len(seen)}")
-    check("بعد از اتمام، بازی برای کاربر بسته است", eg.is_exhausted(1))
+    check("بعد از اتمام، بازی برای کاربر بسته است", eg.is_exhausted(CHAT, 1))
     check("پیام اتمام درست است",
           eg.EXHAUSTED_MESSAGE == (
               "✅ تمام مراحل حدس ایموجی را انجام داده‌اید. "
@@ -245,10 +245,10 @@ def test_emoji_guess():
         farmed.append(eg.answer(CHAT, 999, "farmer", p["answer"]))
     check("هر پاسخ درست پذیرفته شد", all(farmed), f"-> {farmed}")
     check("پاسخ‌دهنده در تاریخچهٔ خودش ثبت می‌شود",
-          eg.seen_count(999) == len(set(farmed)),
-          f"-> {eg.seen_count(999)} vs {len(set(farmed))}")
+          eg.seen_count(CHAT, 999) == len(set(farmed)),
+          f"-> {eg.seen_count(CHAT, 999)} vs {len(set(farmed))}")
     check("همهٔ معماهای پاسخ‌داده‌شده در تاریخچه هستند",
-          set(farmed) <= eg._SEEN_BY_USER[str(999)])
+          set(farmed) <= eg._seen(CHAT, 999))
 
     # وقتی خودِ کاربر بازی را شروع کند هرگز تکراری نمی‌گیرد.
     eg.reset_all()
@@ -898,7 +898,7 @@ def test_no_shared_state():
     print("\n### 🔒 نبود state مشترک بین بازی‌ها")
     containers = {
         "emoji._ACTIVE": id(eg._ACTIVE),
-        "emoji._SEEN": id(eg._SEEN_BY_USER),
+        "emoji.GAME": id(eg.GAME),
         "flag._ACTIVE": id(fg._ACTIVE),
         "flag._SEEN": id(fg._SEEN_HISTORY),
         "riddle.active": id(rd.active_riddles),
@@ -993,7 +993,7 @@ def test_repeat_runs():
     for i in range(25):
         p = eg.start(CHAT, 1)
         eg.answer(CHAT, 1, "u", p["answer"])
-    check("۲۵ اجرای پیاپی حدس ایموجی بدون تکرار", eg.seen_count(1) == 25)
+    check("۲۵ اجرای پیاپی حدس ایموجی بدون تکرار", eg.seen_count(CHAT, 1) == 25)
     check("بعد از هر بار، state پاک است", not eg.is_active(CHAT))
 
     for i in range(25):

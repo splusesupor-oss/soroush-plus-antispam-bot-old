@@ -397,7 +397,7 @@ def test_state_isolation():
     ids = {
         "survival_history": id(sv._CHAT_HISTORY),
         "survival_store": id(sv._STORE),
-        "emoji_seen": id(eg._SEEN_BY_USER),
+        "emoji_game": id(eg.GAME),
         "flag_seen": id(fg._SEEN_HISTORY),
         "riddle_seen": id(rd._SEEN_BY_USER),
         "laugh_store": id(lol._STORE),

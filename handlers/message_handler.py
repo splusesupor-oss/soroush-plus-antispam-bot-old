@@ -69,6 +69,7 @@ from modules.emoji_guess import (
     finish as finish_emoji_guess,
     is_active as emoji_guess_active,
     is_exhausted as emoji_guess_exhausted,
+    reset_user as emoji_guess_reset,
     start as start_emoji_guess,
 )
 from modules.flag_guess import (
@@ -341,6 +342,12 @@ GAME_BUSY_MESSAGE = "⏳ یک بازی دیگر در این گروه در جری
 
 
 EMOJI_GUESS_TOTAL = _emoji_total_stages()
+
+# فقط این دستورها اجازهٔ ریست کردن پیشرفت را دارند.
+EMOJI_RESET_COMMANDS = {
+    "شروع دوباره حدس ایموجی",
+    "ریست حدس ایموجی",
+}
 
 
 def puzzle_token_for(chat_id):
@@ -912,7 +919,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه"} | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -1468,6 +1475,16 @@ async def handle_new_message(bot, event):
                 await event.reply("✅ پاسخ ثبت شد")
                 return
 
+        # ریست پیشرفت حدس ایموجی — تنها راه پاک کردن پیشرفت.
+        # ری‌استارت ربات هرگز پیشرفت را پاک نمی‌کند.
+        if clean_text in EMOJI_RESET_COMMANDS:
+            emoji_guess_reset(chat_id, user_id)
+            await event.reply(
+                "🔄 پیشرفت حدس ایموجی شما در این گروه پاک شد.\n\n"
+                "با «حدس ایموجی» از مرحله ۱ شروع کنید."
+            )
+            return
+
         # بازی حدس ایموجی
         if clean_text == "حدس ایموجی":
             if _chat_game_busy(chat_id):
@@ -1475,7 +1492,7 @@ async def handle_new_message(bot, event):
                 return
             # تاریخچه به تفکیک کاربر: هیچ معمای تکراری برای همان کاربر
             # ارسال نمی‌شود تا از گرفتن سکه با پاسخ قبلی جلوگیری شود.
-            if emoji_guess_exhausted(user_id):
+            if emoji_guess_exhausted(chat_id, user_id):
                 await event.reply(EMOJI_GUESS_EXHAUSTED_MESSAGE)
                 return
             puzzle = start_emoji_guess(chat_id, user_id)
