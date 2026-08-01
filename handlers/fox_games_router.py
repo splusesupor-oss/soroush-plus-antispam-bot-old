@@ -6,6 +6,8 @@
 ``handle`` مقدار True برمی‌گرداند یعنی پیام مصرف شد و هندلر اصلی نباید
 ادامه دهد.
 """
+from splusthon.tl.types import MessageEntitySpoiler
+
 from economy import award_game as economy_award_game
 from economy import rewards as economy_rewards
 from modules.fox_games import laugh_or_lose, lucky_box, survival, vampire
@@ -24,6 +26,15 @@ FOX_GAME_COMMANDS = frozenset({
     "خون آشام",
     "خون‌آشام",
 })
+
+
+def _spoiler_entities(spans):
+    """span خنثای بازی را به entity واقعی سروش تبدیل می‌کند."""
+    return [
+        MessageEntitySpoiler(offset=offset, length=length)
+        for kind, offset, length in spans
+        if kind == "spoiler"
+    ]
 
 
 def any_active(chat_id):
@@ -331,19 +342,35 @@ async def _start_vampire(bot, event, chat_id, logger):
     async def on_abort():
         await event.reply(vampire.NOT_ENOUGH)
 
+    # نتیجهٔ رساندن نقش، تا on_roster بداند چه اعلامی بدهد.
+    delivery = {"mode": None}
+
+    async def send_secret(text, spans):
+        """اعلام نقش داخل گروه، پشت اسپویلر.
+
+        اگر سرور entity را نپذیرد، متن ساده فرستاده نمی‌شود چون نقش لو
+        می‌رود؛ در آن حالت خطا بالا می‌رود تا مسیر «failed» انتخاب شود.
+        """
+        await event.reply(text, formatting_entities=_spoiler_entities(spans))
+
     async def on_roles(chosen):
-        """پیام خصوصی نقش. خروجی False یعنی بازی نباید ادامه یابد."""
-        ok, _error = await vampire.send_role_dm(
+        """رساندن نقش: اول پیوی، وگرنه اعلام مخفی داخل گروه."""
+        mode = await vampire.deliver_role(
             bot.client, chosen["player"], logger=logger, chat_id=chat_id,
+            send_secret=send_secret,
         )
-        return ok
+        delivery["mode"] = mode
+        return mode
 
     async def on_dm_failed():
+        # فقط وقتی *هیچ* راهی برای رساندن نقش نماند.
         await event.reply(vampire.DM_FAILED_MESSAGE)
 
     async def on_roster(chosen):
-        # فقط بعد از ارسال موفق پیوی: اعلام + فهرست شماره‌دار بازیکنان.
-        await event.reply(vampire.CHOSEN_MESSAGE)
+        # پیام اعلام فقط وقتی معنا دارد که نقش از راه پیوی رفته باشد؛
+        # در حالت اسپویلر، خودِ پیام مخفی همین نقش را نشان داده است.
+        if delivery["mode"] == "dm":
+            await event.reply(vampire.CHOSEN_MESSAGE)
         await event.reply(vampire.roster_lines(chosen["players"]))
 
     async def on_timeout(revealed):

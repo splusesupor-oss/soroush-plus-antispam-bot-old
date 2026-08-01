@@ -91,6 +91,18 @@ class Event:
         return any(needle in m for m in self.out)
 
 
+class SpoilerEvent(Event):
+    """مثل Event ولی entityهای هر پیام را هم نگه می‌دارد."""
+
+    def __init__(self):
+        super().__init__()
+        self.entities = []
+
+    async def reply(self, text, **kwargs):
+        self.entities.append(kwargs.get("formatting_entities"))
+        return await super().reply(text, **kwargs)
+
+
 class Logger:
     def __init__(self):
         self.info, self.errors = [], []
@@ -218,30 +230,172 @@ def test_old_behaviour_would_fail():
     vp.reset_all()
 
 
-def test_dm_failure_aborts_game():
-    print("\n### 🩸 شکست پیوی بازی را لغو می‌کند")
+def test_dm_failure_never_cancels_game():
+    """درخواست کاربر: نبود چت خصوصی نباید بازی را متوقف کند.
+
+    رفتار قبلی بازی را لغو می‌کرد و می‌گفت «کاربر باید یک بار به ربات
+    پیام خصوصی بدهد» — که در گروه عملاً یعنی بازی هرگز شروع نمی‌شود.
+    """
+    print("\n### 🩸 شکست پیوی بازی را لغو نمی‌کند")
 
     async def scenario():
         router.reset_all()
         bot = Bot(RealisticClient(fail_all=True))
-        event = Event()
+        event = SpoilerEvent()
         await send(bot, event, 1, "خون آشام")
         # ظرفیت کامل می‌شود تا پنجرهٔ ۶۰ ثانیه‌ای ثبت‌نام بلافاصله بسته شود.
         for uid in range(11, 11 + vp.MAX_PLAYERS):
             await send(bot, event, uid, "شرکت")
         await asyncio.sleep(0.6)
+        # وضعیت باید *داخل* همین حلقه خوانده شود: پایان ``asyncio.run``
+        # تسک بازی را cancel می‌کند و بند ``finally`` جلسه را می‌بندد،
+        # پس خواندن بعد از آن همیشه False می‌دهد و ربطی به محصول ندارد.
+        return bot, event, vp.is_active(CHAT), vp.phase(CHAT)
+
+    bot, event, active, phase = asyncio.run(scenario())
+    check("بازی لغو نشد و هنوز فعال است", active)
+    check("مرحلهٔ حدس باز شد", phase == "guessing", f"-> {phase}")
+    check("پیام «بازی لغو شد» داده نشد",
+          not event.said("بازی لغو شد"))
+    check("از کاربر درخواست پیوی دستی نشد",
+          not event.said("یک بار به ربات پیام خصوصی"))
+    check("نقش از راه جایگزین داخل گروه اعلام شد",
+          event.said(vp.SECRET_FALLBACK_HEADER))
+    check("فهرست بازیکنان نمایش داده شد", event.said("1."))
+    check("تلاش ناموفق پیوی لاگ شد", bot.logger.has_error("ROLE DM FAILED"))
+    check("استفاده از مسیر جایگزین لاگ شد",
+          bot.logger.has("ROLE SECRET SENT"))
+    check("هیچ سکه‌ای بدون حدس درست پرداخت نشد", bot.paid == [])
+    router.reset_all()
+
+
+def test_secret_fallback_hides_the_name():
+    """نام خون‌آشام باید پشت اسپویلر باشد، نه متن ساده."""
+    print("\n### 🕶 نام خون‌آشام پشت اسپویلر پنهان می‌شود")
+    player = {"name": "علی رضایی", "user_id": 7}
+    text, spans = vp.secret_role_message(player)
+
+    check("نام داخل متن هست", "علی رضایی" in text)
+    check("دقیقاً یک بازهٔ اسپویلر تولید شد", len(spans) == 1, f"-> {spans}")
+    kind, offset, length = spans[0]
+    check("نوع بازه spoiler است", kind == "spoiler")
+
+    # offset باید بر حسب UTF-16 باشد وگرنه روی متن فارسی می‌لغزد.
+    buf = text.encode("utf-16-le")
+    covered = buf[offset * 2:(offset + length) * 2].decode("utf-16-le")
+    check("بازه دقیقاً روی نام می‌افتد", covered == "علی رضایی",
+          f"-> {covered!r}")
+    check("راهنما برای بقیه هست", vp.SECRET_FALLBACK_HINT in text)
+
+
+def test_secret_fallback_entities_are_real():
+    """روتر باید span را به MessageEntitySpoiler واقعی تبدیل کند."""
+    print("\n### 🕶 entity واقعی اسپویلر ساخته می‌شود")
+    from splusthon.tl.types import MessageEntitySpoiler
+
+    _text, spans = vp.secret_role_message({"name": "حسین", "user_id": 3})
+    entities = router._spoiler_entities(spans)
+    check("یک entity ساخته شد", len(entities) == 1, f"-> {entities}")
+    check("از نوع MessageEntitySpoiler است",
+          isinstance(entities[0], MessageEntitySpoiler))
+    check("offset منتقل شد", entities[0].offset == spans[0][1])
+    check("length منتقل شد", entities[0].length == spans[0][2])
+    check("span غیر اسپویلر نادیده گرفته می‌شود",
+          router._spoiler_entities([("bold", 0, 3)]) == [])
+
+
+def test_dm_preferred_when_available():
+    """اگر پیوی ممکن باشد، همان استفاده شود و چیزی در گروه لو نرود."""
+    print("\n### 🩸 وقتی پیوی ممکن است، مسیر جایگزین استفاده نمی‌شود")
+
+    async def scenario():
+        router.reset_all()
+        bot = Bot()                       # پیوی سالم
+        event = SpoilerEvent()
+        await send(bot, event, 1, "خون آشام")
+        for uid in range(41, 41 + vp.MAX_PLAYERS):
+            await send(bot, event, uid, "شرکت")
+        await asyncio.sleep(0.6)
+        return bot, event, vp.is_active(CHAT)
+
+    bot, event, active = asyncio.run(scenario())
+    check("پیوی ارسال شد", len(bot.client.sent) == 1)
+    check("نقش در گروه اعلام نشد",
+          not event.said(vp.SECRET_FALLBACK_HEADER))
+    check("پیام اعلام معمولی داده شد", event.said(vp.CHOSEN_MESSAGE))
+    check("هیچ entity اسپویلری فرستاده نشد",
+          all(not e for e in event.entities))
+    check("بازی فعال است", active)
+    router.reset_all()
+
+
+def test_deliver_role_modes():
+    """قرارداد ``deliver_role``: dm / secret / failed."""
+    print("\n### 🩸 حالت‌های سه‌گانهٔ رساندن نقش")
+    logger = Logger()
+    seed(logger)
+    chosen = vp.choose_vampire(CHAT, logger)
+    player = chosen["player"]
+
+    sent = []
+
+    async def secret(text, spans):
+        sent.append((text, spans))
+
+    mode = asyncio.run(vp.deliver_role(
+        RealisticClient(), player, logger=logger, chat_id=CHAT,
+        send_secret=secret))
+    check("پیوی سالم -> dm", mode == "dm", f"-> {mode}")
+    check("مسیر جایگزین صدا نشد", sent == [])
+
+    mode = asyncio.run(vp.deliver_role(
+        RealisticClient(fail_all=True), player, logger=logger, chat_id=CHAT,
+        send_secret=secret))
+    check("پیوی خراب -> secret", mode == "secret", f"-> {mode}")
+    check("پیام مخفی ارسال شد", len(sent) == 1)
+
+    async def broken(_text, _spans):
+        raise RuntimeError("group send blocked")
+
+    mode = asyncio.run(vp.deliver_role(
+        RealisticClient(fail_all=True), player, logger=logger, chat_id=CHAT,
+        send_secret=broken))
+    check("هر دو مسیر خراب -> failed", mode == "failed", f"-> {mode}")
+
+    mode = asyncio.run(vp.deliver_role(
+        RealisticClient(fail_all=True), player, logger=logger, chat_id=CHAT,
+        send_secret=None))
+    check("بدون مسیر جایگزین -> failed", mode == "failed", f"-> {mode}")
+    vp.reset_all()
+
+
+def test_guessing_works_after_fallback():
+    """بعد از اعلام مخفی، بازی واقعاً قابل بازی است و جایزه می‌دهد."""
+    print("\n### 🩸 بازی بعد از مسیر جایگزین کامل انجام می‌شود")
+
+    async def scenario():
+        router.reset_all()
+        bot = Bot(RealisticClient(fail_all=True))
+        event = SpoilerEvent()
+        await send(bot, event, 1, "خون آشام")
+        for uid in range(51, 51 + vp.MAX_PLAYERS):
+            await send(bot, event, uid, "شرکت")
+        await asyncio.sleep(0.6)
+
+        vampire_uid = vp.vampire_player(CHAT)["user_id"]
+        players = vp._STORE.get(CHAT)["players"]
+        number = next(i for i, p in enumerate(players, 1)
+                      if p["user_id"] == vampire_uid)
+        guesser = next(p["user_id"] for p in players
+                       if p["user_id"] != vampire_uid)
+        await send(bot, event, guesser, str(number))
         return bot, event
 
     bot, event = asyncio.run(scenario())
-    check("پیام شکست پیوی به گروه اعلام شد",
-          event.said("ارسال پیام خصوصی به خون‌آشام ناموفق بود"))
-    check("بازی لغو و state پاک شد", not vp.is_active(CHAT))
-    check("شکست در لاگ خطا ثبت شد", bot.logger.has_error("ROLE DM FAILED"))
-    check("لغو به دلیل شکست پیوی لاگ شد",
-          bot.logger.has_error("reason=role_dm_failed"))
-    check("پیام شروع حدس نمایش داده نشد",
-          not event.said("حالا حدس بزنید خون‌آشام کیست"))
-    check("هیچ سکه‌ای پرداخت نشد", bot.paid == [])
+    check("حدس درست پذیرفته شد", bot.paid != [], f"-> {bot.paid}")
+    check("جایزه ۷ سکه بود", bot.paid and bot.paid[0][1] == vp.WINNER_COINS,
+          f"-> {bot.paid}")
+    check("بازی پس از برد بسته شد", not vp.is_active(CHAT))
     router.reset_all()
 
 
@@ -557,7 +711,12 @@ def main():
     test_join_stores_peer()
     test_dm_succeeds_with_cold_cache()
     test_old_behaviour_would_fail()
-    test_dm_failure_aborts_game()
+    test_dm_failure_never_cancels_game()
+    test_secret_fallback_hides_the_name()
+    test_secret_fallback_entities_are_real()
+    test_dm_preferred_when_available()
+    test_deliver_role_modes()
+    test_guessing_works_after_fallback()
     test_no_guessing_before_dm()
     test_group_messages_exact()
     test_full_flow_messages()
