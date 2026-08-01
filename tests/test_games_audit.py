@@ -634,7 +634,7 @@ def test_laugh_or_lose():
 
     win = lol.claim_win(CHAT, 1, User(1, "علی"), logger)
     check("اولین نفر برنده شد", win and win["user_id"] == 1)
-    check("جایزهٔ برنده ۱ سکه است", win["coins"] == lol.WINNER_COINS == 1)
+    check("جایزهٔ برنده ۳ سکه است", win["coins"] == lol.WINNER_COINS == 3)
     check("نفر دوم جایزه نمی‌گیرد",
           lol.claim_win(CHAT, 2, User(2, "حسین"), logger) is None)
     check("بعد از برنده، بازی بسته شد", not lol.is_active(CHAT))

@@ -10,7 +10,13 @@ GAME_NAME = "laugh_or_lose"
 COMMAND = "بخند یا بباز"
 COUNTDOWN_SECONDS = 3
 ROUND_TIMEOUT = 60
-WINNER_COINS = 1
+# مقدار جایزه از جدول واحد اقتصاد خوانده می‌شود تا در یک جا تعریف شود
+# و با مقدار پرداختی و متن پیام هم‌خوان بماند.
+try:
+    from economy import rewards as _rewards
+    WINNER_COINS = _rewards.amount_for("laugh_or_lose")
+except Exception:  # اگر اقتصاد در دسترس نبود، بازی نباید بخوابد.
+    WINNER_COINS = 3
 
 LAUGH_EMOJIS = frozenset({"😂", "🤣", "😆", "😹", "😄", "😁"})
 

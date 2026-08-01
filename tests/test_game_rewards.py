@@ -89,7 +89,7 @@ def test_reward_amounts_unchanged():
     print("\n### 🏆 مقدار سکه‌ها دست‌نخورده")
     expected = {
         "riddle": 3, "emoji": 4, "flag": 3, "name_family": 6,
-        "correction": 1, "quiz": 3, "laugh_or_lose": 1,
+        "correction": 3, "quiz": 3, "laugh_or_lose": 3,
         "survival": 8, "survival_step": 1, "vampire": 7,
     }
     for game, amount in expected.items():
@@ -404,8 +404,9 @@ def test_same_user_different_rank_per_group():
     check("در گروه A رتبهٔ دوم است", economy.get_rank(CHAT, 99) == 2)
     check("در گروه B رتبهٔ اول است", economy.get_rank(CHAT_B, 99) == 1)
     check("در گروه C رتبهٔ اول است", economy.get_rank(CHAT_C, 99) == 1)
+    correction_award = rewards.amount_for("correction")
     check("موجودی هر گروه مستقل است",
-          economy.get_balance(CHAT, 99)[economy.BRONZE] == 1
+          economy.get_balance(CHAT, 99)[economy.BRONZE] == correction_award
           and economy.get_balance(CHAT_B, 99)[economy.SILVER] == 8
           and economy.get_balance(CHAT_C, 99)[economy.BRONZE] == 3)
 
@@ -429,9 +430,14 @@ def test_many_users_many_groups():
         actual = [int(r["user_id"]) for r in economy.leaderboard(chat, 10)]
         check(f"ترتیب رتبه در گروه {chat} درست است",
               actual == expected, f"-> {actual} != {expected}")
+        award = rewards.amount_for("correction")
         for user_id, times in users.items():
-            check(f"موجودی کاربر {user_id} در گروه {chat} = {times}",
-                  economy.get_balance(chat, user_id)[economy.BRONZE] == times)
+            expected_bronze = times * award
+            check(f"موجودی کاربر {user_id} در گروه {chat} = "
+                  f"{expected_bronze}",
+                  economy.get_balance(chat, user_id)[economy.BRONZE]
+                  == expected_bronze,
+                  f"-> {economy.get_balance(chat, user_id)[economy.BRONZE]}")
 
 
 # ===========================================================================

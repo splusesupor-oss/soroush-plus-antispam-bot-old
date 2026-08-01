@@ -124,7 +124,7 @@ def test_laugh():
     check("خنده پیش از پایان شمارش پذیرفته نمی‌شود", not early)
     check("اولین خنده برنده است", first)
     check("نفر دوم نادیده گرفته می‌شود", not second)
-    check("برنده ۱ سکه گرفت", bot.paid == [(10, 1)], f"-> {bot.paid}")
+    check("برنده ۳ سکه گرفت", bot.paid == [(10, 3)], f"-> {bot.paid}")
     check("بازی بلافاصله بسته شد", not ll.is_active(CHAT))
     check("نام برنده اعلام شد", event.said("برنده"))
 
@@ -1097,8 +1097,8 @@ def test_real_coin_payout():
             return bot, guesser
 
         bot, guesser = asyncio.run(scenario())
-        check("برندهٔ بخند یا بباز ۱ سکه گرفت",
-              coins.get_balance(CHAT, 10)[coins.BRONZE] == 1,
+        check("برندهٔ بخند یا بباز ۳ سکه گرفت",
+              coins.get_balance(CHAT, 10)[coins.BRONZE] == 3,
               f"-> {coins.get_balance(CHAT, 10)[coins.BRONZE]}")
         check("برندهٔ خون‌آشام ۷ سکه نقره گرفت",
               coins.get_balance(CHAT, guesser)[coins.SILVER] == 7,
@@ -1131,7 +1131,7 @@ def test_real_coin_payout():
 
 def test_reward_values():
     print("\n### مقادیر جایزه مطابق راهنما")
-    check("بخند یا بباز = ۱ سکه", ll.WINNER_COINS == 1, f"-> {ll.WINNER_COINS}")
+    check("بخند یا بباز = ۳ سکه", ll.WINNER_COINS == 3, f"-> {ll.WINNER_COINS}")
     check("بقا = ۸ سکه", sv.WINNER_COINS == 8, f"-> {sv.WINNER_COINS}")
     check("خون‌آشام = ۷ سکه", vp.WINNER_COINS == 7, f"-> {vp.WINNER_COINS}")
     check("زمان حدس خون‌آشام = ۵۰ ثانیه", vp.GUESS_SECONDS == 50,

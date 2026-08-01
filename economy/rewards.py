@@ -25,10 +25,10 @@ _REWARDS = {
     "emoji":           (4, BRONZE, "حدس ایموجی"),
     "flag":            (3, BRONZE, "حدس پرچم"),
     "name_family":     (6, BRONZE, "اسم فامیل"),
-    "correction":      (1, BRONZE, "تصحیح کلمات"),
+    "correction":      (3, BRONZE, "تصحیح کلمات"),
     "quiz":            (3, BRONZE, "چهار گزینه‌ای"),
     "fill_blank":      (2, BRONZE, "جای خالی"),
-    "laugh_or_lose":   (1, BRONZE, "بخند یا بباز"),
+    "laugh_or_lose":   (3, BRONZE, "بخند یا بباز"),
     "lucky_box":       (0, BRONZE, "جعبه شانسی"),   # مقدار متغیر است
     # --- بازی‌های سخت → نقره --------------------------------------------
     "survival":        (8, SILVER, "بقا"),
