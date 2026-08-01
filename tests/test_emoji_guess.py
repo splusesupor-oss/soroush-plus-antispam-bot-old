@@ -49,7 +49,7 @@ def play(chat_id, user_id, rounds):
 def test_catalogue():
     print("\n### بانک معماها")
     total = len(eg.PUZZLES)
-    check(f"بانک دقیقاً ۲۰۰ مرحله دارد ({total})", total == 200, f"-> {total}")
+    check(f"بانک دست‌کم ۴۰۰ مرحله دارد ({total})", total >= 400, f"-> {total}")
     answers = [item[1] for item in eg.PUZZLES]
     check("هیچ پاسخ تکراری در بانک نیست",
           len(answers) == len(set(answers)),
@@ -59,7 +59,7 @@ def test_catalogue():
     check("همهٔ ورودی‌ها ایموجی و پاسخ دارند",
           all(item[0] and item[1] for item in eg.PUZZLES))
     check("هر رکورد سه بخش دارد", all(len(item) == 3 for item in eg.PUZZLES))
-    check("شش سطح سختی وجود دارد", len(eg.TIERS) == 6)
+    check("دست‌کم شش سطح سختی وجود دارد", len(eg.TIERS) >= 6)
     check("مجموع سطوح برابر کل بانک است",
           sum(len(tier) for tier in eg.TIERS) == total,
           f"-> {[len(t) for t in eg.TIERS]}")

@@ -85,10 +85,8 @@ def test_total_stages():
     print("\n### 🎮 تعداد مراحل")
     check("حداقل ۲۰۰ مرحله دارد", len(eg.PUZZLES) >= 200,
           f"-> {len(eg.PUZZLES)}")
-    check("دقیقاً ۲۰۰ مرحله است", len(eg.PUZZLES) == 200,
+    check("بانک دست‌کم ۴۰۰ مرحله دارد", len(eg.PUZZLES) >= 400,
           f"-> {len(eg.PUZZLES)}")
-    check("حداقل ۸۰ مرحله اضافه شده", len(eg.PUZZLES) - 120 >= 80,
-          f"-> {len(eg.PUZZLES) - 120}")
     check("total_stages هم‌خوان است", eg.total_stages() == len(eg.PUZZLES))
 
 
@@ -112,7 +110,7 @@ def test_new_stages_come_after_120():
           original[0] == "پیتزا" and original[-1] == "تفکر",
           f"-> {original[0]} … {original[-1]}")
     added = [answer for _, answer, _ in eg.PUZZLES[120:]]
-    check("۸۰ مرحلهٔ جدید بعد از آن‌ها هستند", len(added) == 80,
+    check("مرحله‌های جدید بعد از آن‌ها هستند", len(added) >= 80,
           f"-> {len(added)}")
     check("مرحلهٔ ۱۲۱ از دستهٔ جدید است", added[0] == "شیر گاو",
           f"-> {added[0]}")
@@ -138,14 +136,15 @@ def test_stage_content_is_valid():
 
 def test_tiers_progress_in_difficulty():
     print("\n### 🎮 سطح‌بندی سختی")
-    check("شش دسته وجود دارد", len(eg.TIERS) == 6, f"-> {len(eg.TIERS)}")
+    check("دست‌کم شش دسته وجود دارد", len(eg.TIERS) >= 6,
+          f"-> {len(eg.TIERS)}")
     check("نام هر دسته تعریف شده",
           len(eg.TIER_NAMES) == len(eg.TIERS))
     check("مجموع دسته‌ها = کل مراحل",
           sum(len(tier) for tier in eg.TIERS) == len(eg.PUZZLES))
     check("دستهٔ آسان اول است", eg.TIER_NAMES[0] == "آسان")
-    check("دسته‌های جدید در انتها هستند",
-          eg.TIER_NAMES[-1] == "سخت پیشرفته")
+    check("آخرین دسته از سطح سخت است",
+          eg.TIER_NAMES[-1].startswith("سخت"), f"-> {eg.TIER_NAMES[-1]}")
 
 
 # ===========================================================================
@@ -296,16 +295,17 @@ def test_reset_is_scoped():
 # اتمام و ادامه
 # ===========================================================================
 def test_exhaustion_needs_all_200():
-    print("\n### 🏁 اتمام پس از ۲۰۰ مرحله")
+    print("\n### 🏁 اتمام پس از کل بانک")
     fresh()
-    play(CHAT, 400, 199)
-    check("پس از ۱۹۹ مرحله تمام نشده",
+    total = len(eg.PUZZLES)
+    play(CHAT, 400, total - 1)
+    check("پیش از آخرین مرحله تمام نشده",
           not eg.is_exhausted(CHAT, 400),
           f"-> {eg.seen_count(CHAT, 400)}")
     check("یک مرحله باقی است", eg.remaining_count(CHAT, 400) == 1)
 
     play(CHAT, 400, 1)
-    check("پس از ۲۰۰ مرحله دور تمام است", eg.is_exhausted(CHAT, 400))
+    check("پس از کل بانک دور تمام است", eg.is_exhausted(CHAT, 400))
     check("باقی‌مانده صفر", eg.remaining_count(CHAT, 400) == 0)
     check("current_tier در پایان دور None است",
           eg.current_tier(CHAT, 400) is None)
@@ -322,10 +322,11 @@ def test_exhaustion_needs_all_200():
 
 
 def test_all_200_reachable():
-    print("\n### 🏁 هر ۲۰۰ مرحله قابل دسترسی است")
+    print("\n### 🏁 همهٔ مرحله‌های بانک قابل دسترسی‌اند")
     fresh()
-    answers = play(CHAT, 401, 200)
-    check("۲۰۰ مرحلهٔ متمایز بازی شد", len(set(answers)) == 200,
+    total = len(eg.PUZZLES)
+    answers = play(CHAT, 401, total)
+    check("همهٔ مرحله‌های متمایز بازی شد", len(set(answers)) == total,
           f"-> {len(set(answers))}")
     expected = {answer for _, answer, _ in eg.PUZZLES}
     check("همهٔ مراحل تعریف‌شده دیده شدند", set(answers) == expected)
@@ -365,7 +366,11 @@ def test_full_scenario_through_handler():
           f"-> {state['stage'] if state else None}")
     check("پیام مرحلهٔ ۵ را نشان می‌دهد", event.said("مرحله 𝟱"),
           f"-> {event.replies}")
-    check("از ۲۰۰ می‌گوید", event.said("𝟮𝟬𝟬"), f"-> {event.replies}")
+    from handlers.message_handler import EMOJI_GUESS_TOTAL
+    digits = str(EMOJI_GUESS_TOTAL).translate(
+        str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
+    check("تعداد کل بانک را می‌گوید", event.said(digits),
+          f"-> {event.replies}")
 
 
 def test_reset_command_through_handler():

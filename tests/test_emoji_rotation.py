@@ -318,8 +318,8 @@ def test_progress_still_persists():
 
 
 def test_bank_size_unchanged():
-    print("\n### 📦 بانک ۲۰۰ مرحله‌ای دست‌نخورده است")
-    check("۲۰۰ مرحله دارد", len(eg.PUZZLES) == 200,
+    print("\n### 📦 بانک دست‌نخورده و بدون تکرار است")
+    check("بانک دست‌کم ۴۰۰ مرحله دارد", len(eg.PUZZLES) >= 400,
           f"-> {len(eg.PUZZLES)}")
     answers = [answer for _, answer, _ in eg.PUZZLES]
     check("هیچ پاسخ تکراری نیست", len(set(answers)) == len(answers))

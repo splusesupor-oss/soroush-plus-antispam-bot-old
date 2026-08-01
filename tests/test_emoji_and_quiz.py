@@ -66,18 +66,16 @@ def drain_emoji(user_id, chat_id=CHAT):
 # 😀 حدس ایموجی
 # ===========================================================================
 def test_emoji_bank():
-    print("\n### 😀 بانک ۲۰۰ مرحله‌ای")
-    check("دقیقاً ۲۰۰ مرحله دارد", len(eg.PUZZLES) == 200,
-          f"-> {len(eg.PUZZLES)}")
-    check("total_stages با بانک هم‌خوان است", eg.total_stages() == 200)
-    check("شش سطح سختی دارد", len(eg.TIERS) == 6)
+    total = len(eg.PUZZLES)
+    print(f"\n### 😀 بانک {total} مرحله‌ای")
+    check("دست‌کم ۴۰۰ مرحله دارد", total >= 400, f"-> {total}")
+    check("total_stages با بانک هم‌خوان است", eg.total_stages() == total)
+    check("دست‌کم شش سطح سختی دارد", len(eg.TIERS) >= 6)
     check("مجموع سطوح برابر کل بانک است",
-          sum(len(t) for t in eg.TIERS) == 200,
+          sum(len(t) for t in eg.TIERS) == total,
           f"-> {[len(t) for t in eg.TIERS]}")
-    check("نام سطوح درست است",
-          eg.TIER_NAMES == ("آسان", "متوسط", "سخت",
-                            "آسان پیشرفته", "متوسط پیشرفته",
-                            "سخت پیشرفته"))
+    check("نام هر سطح تعریف شده",
+          len(eg.TIER_NAMES) == len(eg.TIERS))
 
 
 def test_emoji_structure():
@@ -123,16 +121,17 @@ def test_emoji_exhausted_message():
 
 
 def test_emoji_no_repeat_120():
-    print("\n### 😀 هیچ تکراری تا پایان ۲۰۰ مرحله")
+    print("\n### 😀 هیچ تکراری تا پایان بانک")
     eg.reset_all()
     drawn = drain_emoji(4001)
     answers = [p["answer"] for p in drawn]
-    check("دقیقاً ۲۰۰ مرحله داده شد", len(drawn) == 200, f"-> {len(drawn)}")
-    check("هیچ مرحله‌ای تکرار نشد", len(set(answers)) == 200,
+    total = len(eg.PUZZLES)
+    check("کل بانک داده شد", len(drawn) == total, f"-> {len(drawn)}")
+    check("هیچ مرحله‌ای تکرار نشد", len(set(answers)) == total,
           f"-> {len(set(answers))}")
     check("کل بانک پوشش داده شد",
           set(answers) == {i[1] for i in eg.PUZZLES})
-    check("کاربر پس از ۲۰۰ مرحله exhausted است", eg.is_exhausted(CHAT, 4001))
+    check("کاربر پس از کل بانک exhausted است", eg.is_exhausted(CHAT, 4001))
     check("باقی‌مانده صفر است", eg.remaining_count(CHAT, 4001) == 0)
     check("current_tier پس از اتمام None است", eg.current_tier(CHAT, 4001) is None)
     # پس از اتمام، بازی قفل نمی‌شود: دور تازه‌ای ساخته می‌شود.
@@ -165,8 +164,8 @@ def test_emoji_difficulty_progression():
           set(tiers[-len(eg.TIERS[-1]):]) == {eg.TIER_NAMES[-1]})
 
     stages = [p["stage"] for p in drawn]
-    check("شمارهٔ مرحله از ۱ تا ۲۰۰ صعودی است",
-          stages == list(range(1, 201)))
+    check("شمارهٔ مرحله صعودی است",
+          stages == list(range(1, len(eg.PUZZLES) + 1)))
     eg.reset_all()
 
 
@@ -177,8 +176,9 @@ def test_emoji_random_order():
     eg.reset_all()
     b = [p["answer"] for p in drain_emoji(4004)]
     check("ترتیب دو کاربر یکسان نیست", a != b)
+    total = len(eg.PUZZLES)
     check("هر دو کامل و بدون تکرارند",
-          len(set(a)) == 200 and len(set(b)) == 200)
+          len(set(a)) == total and len(set(b)) == total)
 
     eg.reset_all()
     firsts = set()
@@ -203,12 +203,14 @@ def test_emoji_per_user_history():
     check("کاربر دوم هنوز تاریخچه ندارد", eg.seen_count(CHAT, 4006) == 0)
 
     fresh = [p["answer"] for p in drain_emoji(4006)]
-    check("کاربر دوم دور کامل و مستقل گرفت", len(set(fresh)) == 200)
+    check("کاربر دوم دور کامل و مستقل گرفت",
+          len(set(fresh)) == len(eg.PUZZLES))
     check("تاریخچهٔ کاربر اول دست‌نخورده ماند", eg.seen_count(CHAT, 4005) == 30)
 
     eg.reset_user(CHAT, 4005)
     check("ریست یک کاربر فقط همان را پاک می‌کند",
-          eg.seen_count(CHAT, 4005) == 0 and eg.seen_count(CHAT, 4006) == 200)
+          eg.seen_count(CHAT, 4005) == 0
+          and eg.seen_count(CHAT, 4006) == len(eg.PUZZLES))
     eg.reset_all()
 
 
