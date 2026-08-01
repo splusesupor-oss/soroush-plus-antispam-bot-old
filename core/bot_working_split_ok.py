@@ -36,6 +36,7 @@ from modules.user_activity import flush as flush_user_activity
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
+from modules import connection_guard
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.name_family import cancel_round as cancel_name_family_round
@@ -167,6 +168,22 @@ class SoroushAntiSpamBot:
         self.spammer_messages = defaultdict(lambda: deque(maxlen=5000))
         instrument_client(self.client, self.logger)
 
+        # 🛡️ لایهٔ پایداری اتصال.
+        #
+        # سه نقص اثبات‌شده در لایهٔ شبکهٔ SPlusthon را می‌بندد:
+        #   • قاب‌های کهنهٔ سشن قبلی که بعد از reconnect باعث
+        #     «Server replied with a wrong session ID» می‌شدند،
+        #   • حلقهٔ reset دورهٔ ۳۰ دقیقه‌ای که خودش را cancel می‌کرد و
+        #     ترنسپورت را برای همیشه مرده رها می‌کرد،
+        #   • نبودِ سقف زمانی روی RPC که باعث می‌شد send_message
+        #     دقیقه‌ها معلق بماند.
+        #
+        # باید *قبل از* connect() نصب شود تا اولین سوکت هم وصله‌خورده
+        # ساخته شود.
+        self.connection_supervisor = connection_guard.install(
+            self.client, logger=self.logger
+        )
+
         self.admin_actions = AdminActions(
             self.client, self.logger, self.config_manager)
 
@@ -222,6 +239,12 @@ class SoroushAntiSpamBot:
             self.bot_account_id = None
             self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
         asyncio.create_task(process_delete(self))
+
+        # 🛡️ ناظر اتصال: اگر سشن خراب شد یا RPCها پشت سر هم timeout
+        # خوردند، درخواست‌های معلق را لغو و کلاینت را بدون ری‌استارت
+        # ربات بازسازی می‌کند.
+        if getattr(self, "connection_supervisor", None) is not None:
+            asyncio.create_task(self.connection_supervisor.run())
 
         # ⬆️ جبران یک‌بارهٔ تبدیل‌هایی که با نرخ قدیمی انجام شده‌اند.
         # خودکار اجرا می‌شود تا کاربر لازم نباشد دستی کاری کند؛ اجرای
@@ -986,6 +1009,19 @@ class SoroushAntiSpamBot:
                     "SPLUS RECONNECT "
                     f"reason={error!r} retry_in={reconnect_delay}s"
                 )
+                # درخواست‌های معلق را آزاد کن، وگرنه تسک‌هایی که روی
+                # آن‌ها await کرده‌اند تا ابد منتظر پاسخی می‌مانند که
+                # هرگز نمی‌آید (سشن قبلی دیگر وجود ندارد).
+                try:
+                    freed = connection_guard.cancel_pending_requests(
+                        self.client, f"reconnect: {error!r}"
+                    )
+                    if freed:
+                        self.logger.log_info(
+                            f"SPLUS RECONNECT freed {freed} pending request(s)"
+                        )
+                except Exception:
+                    pass
                 try:
                     await self.client.disconnect()
                 except Exception:
