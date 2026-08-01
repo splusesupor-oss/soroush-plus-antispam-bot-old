@@ -121,8 +121,15 @@ def _refresh_total(data, user):
 
 
 def _snapshot_balance(user):
+    """موجودی فعلی به‌همراه ارزش کل.
+
+    ارزش کل *همیشه* از روی موجودی واقعی سکه‌ها محاسبه می‌شود، نه از روی
+    فیلد ذخیره‌شده. آن فیلد فقط یک کش برای رتبه‌بندی است و می‌تواند از
+    واقعیت عقب بماند (مثلاً در مسیر «مرجع تکراری» که بدون بازمحاسبه
+    برمی‌گردد، یا وقتی ارزش سکه‌ها در تنظیمات عوض شود).
+    """
     balance = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
-    balance["total_coin_value"] = int(user.get("total_coin_value", 0))
+    balance["total_coin_value"] = compute_total_value(user)
     return balance
 
 
