@@ -29,9 +29,14 @@ DEFAULTS = {
     "BronzeValue": 1,
     "SilverValue": 10,
     "GoldValue": 100,
-    # نرخ تبدیل: ۱۰۰ برنز ➜ ۱۰ نقره، ۷۰ نقره ➜ ۱۰ طلا.
+    # نرخ تبدیل: ۱۰۰ برنز ➜ ۱۲ نقره، ۷۰ نقره ➜ ۱۰ طلا.
+    #
+    # تبدیل یک «ارتقای دارایی» است و باید سود داشته باشد:
+    #   ۱۰۰ برنز (ارزش ۱۰۰) ➜ ۱۲ نقره (ارزش ۱۲۰)  → +۲۰
+    #   ۷۰ نقره (ارزش ۷۰۰) ➜ ۱۰ طلا (ارزش ۱۰۰۰)   → +۳۰۰
+    # پیش‌تر نرخ برنز➜نقره ۱۰ بود که ارزش را دقیقاً ثابت نگه می‌داشت.
     "BronzeToSilverCost": 100,
-    "BronzeToSilverGain": 10,
+    "BronzeToSilverGain": 12,
     "SilverToGoldCost": 70,
     "SilverToGoldGain": 10,
     # جایزهٔ روزانه.
@@ -39,7 +44,15 @@ DEFAULTS = {
     "DailyRewardSilver": 0,
     "DailyRewardGold": 0,
     "DailyRewardCooldownSeconds": 24 * 60 * 60,
+    # نسخهٔ تنظیمات. با بالا رفتن این عدد، مقادیرِ «ارتقا» یک بار روی
+    # فایل موجود هم اعمال می‌شوند. بدون این، دستگاهی که از قبل
+    # config/economy_settings.json دارد برای همیشه با نرخ کهنه می‌ماند
+    # چون آن فایل در .gitignore است و با pull به‌روز نمی‌شود.
+    "SettingsVersion": 2,
 }
+
+# کلیدهایی که با بالا رفتن نسخه باید از DEFAULTS دوباره اعمال شوند.
+_UPGRADE_KEYS = ("BronzeToSilverGain", "SilverToGoldGain")
 
 _cache = None
 _cache_mtime = None
@@ -84,6 +97,12 @@ def load():
                 for key, value in raw.items():
                     if key in DEFAULTS and isinstance(value, (int, float)):
                         data[key] = value
+                # فایل قدیمی: نرخ‌های ارتقا را از DEFAULTS برگردان.
+                if int(raw.get("SettingsVersion", 1)) < DEFAULTS[
+                        "SettingsVersion"]:
+                    for key in _UPGRADE_KEYS:
+                        data[key] = DEFAULTS[key]
+                    data["SettingsVersion"] = DEFAULTS["SettingsVersion"]
         except (OSError, ValueError):
             data = dict(DEFAULTS)
     _cache = data

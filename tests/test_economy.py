@@ -136,11 +136,11 @@ def test_conversion():
 
     result = economy.convert_bronze(CHAT, 1)
     check("۱۰۰ برنز کسر شد", result["bronze"] == 150)
-    check("۱۰ نقره اضافه شد", result["silver"] == 10)
+    check("۱۲ نقره اضافه شد", result["silver"] == 12)
 
     result = economy.convert_bronze(CHAT, 1, times=1)
     check("تبدیل دوم درست بود",
-          result["bronze"] == 50 and result["silver"] == 20)
+          result["bronze"] == 50 and result["silver"] == 24)
 
     try:
         economy.convert_bronze(CHAT, 1)
@@ -167,7 +167,7 @@ def test_conversion():
     economy.add_bronze(CHAT, 1, 500)
     result = economy.convert_bronze(CHAT, 1, times=3)
     check("تبدیل سه‌تایی یک‌جا",
-          result["bronze"] == 200 and result["silver"] == 30)
+          result["bronze"] == 200 and result["silver"] == 36)
 
     for bad in (0, -1, 2.5):
         try:
@@ -178,14 +178,16 @@ def test_conversion():
 
 
 def test_conversion_preserves_value():
-    print("\n### 🔄 تبدیل ارزش را حفظ می‌کند")
+    # تبدیل حالا «ارتقا» است و باید ارزش را بالا ببرد، نه ثابت نگه دارد.
+    print("\n### 🔄 تبدیل ارزش را بالا می‌برد")
     fresh()
     economy.add_bronze(CHAT, 1, 100)
     before = economy.calculate_total_value(CHAT, 1)
     economy.convert_bronze(CHAT, 1)
-    check("۱۰۰ برنز و ۱۰ نقره ارزش برابر دارند",
-          economy.calculate_total_value(CHAT, 1) == before,
-          f"-> {before} vs {economy.calculate_total_value(CHAT, 1)}")
+    after = economy.calculate_total_value(CHAT, 1)
+    check("۱۰۰ برنز ➜ ۱۲ نقره سود می‌دهد", after > before,
+          f"-> {before} vs {after}")
+    check("سود دقیقاً ۲۰ است", after - before == 20, f"-> {after - before}")
 
     fresh()
     economy.add_silver(CHAT, 1, 70)
@@ -220,11 +222,13 @@ def test_total_value():
     check("پس از خرج کردن بازمحاسبه شد",
           economy.calculate_total_value(CHAT, 1) == expected + 200 - 52)
     economy.convert_bronze(CHAT, 1)
-    check("پس از تبدیل بازمحاسبه شد",
-          economy.calculate_total_value(CHAT, 1) == expected + 200 - 52)
+    check("پس از تبدیل بازمحاسبه شد (با سود ارتقا)",
+          economy.calculate_total_value(CHAT, 1)
+          == expected + 200 - 52 + 20)
     economy.transfer(CHAT, 1, 2, "gold", 1)
     check("پس از انتقال، فرستنده بازمحاسبه شد",
-          economy.calculate_total_value(CHAT, 1) == expected + 100 - 52)
+          economy.calculate_total_value(CHAT, 1)
+          == expected + 100 - 52 + 20)
     check("پس از انتقال، گیرنده بازمحاسبه شد",
           economy.calculate_total_value(CHAT, 2) == 100)
 

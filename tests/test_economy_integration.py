@@ -338,7 +338,7 @@ def test_menu_conversion():
     check("تبدیل برنز انجام شد", event.said("تبدیل شد"))
     balance = economy.get_balance(CHAT, 1)
     check("۱۰۰ برنز کسر شد", balance[economy.BRONZE] == 150)
-    check("۱۰ نقره اضافه شد", balance[economy.SILVER] == 10)
+    check("۱۲ نقره اضافه شد", balance[economy.SILVER] == 12)
 
     fresh()
     economy.add_silver(CHAT, 1, 100)

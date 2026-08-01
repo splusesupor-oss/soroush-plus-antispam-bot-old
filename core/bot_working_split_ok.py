@@ -30,6 +30,7 @@ from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 # 💰 تسویهٔ روزانه از راه API اقتصاد جدید.
 from economy import flush as flush_economy, settle_previous_days
+from economy import upgrade_migration
 from modules.group_stats import flush as flush_group_stats
 from modules.user_activity import flush as flush_user_activity
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
@@ -221,6 +222,19 @@ class SoroushAntiSpamBot:
             self.bot_account_id = None
             self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
         asyncio.create_task(process_delete(self))
+
+        # ⬆️ جبران یک‌بارهٔ تبدیل‌هایی که با نرخ قدیمی انجام شده‌اند.
+        # خودکار اجرا می‌شود تا کاربر لازم نباشد دستی کاری کند؛ اجرای
+        # دوباره بی‌اثر است چون هر تبدیل علامت می‌خورد.
+        try:
+            compensated = upgrade_migration.run()
+            if compensated:
+                self.logger.log_info(
+                    "UPGRADE MIGRATION applied to "
+                    f"{len(compensated)} wallet(s): {compensated}"
+                )
+        except Exception as error:
+            self.logger.log_error(f"UPGRADE MIGRATION FAILED: {error!r}")
 
         async def settle_daily_coins():
             while True:

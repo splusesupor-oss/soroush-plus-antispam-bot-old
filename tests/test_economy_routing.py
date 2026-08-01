@@ -914,7 +914,7 @@ def test_per_group_isolation():
     economy.add_bronze(GROUP_A, 1001, 100)
     economy.convert_bronze(GROUP_A, 1001)
     check("تبدیل فقط روی گروه A اثر گذاشت",
-          economy.get_balance(GROUP_A, 1001)[economy.SILVER] == 10
+          economy.get_balance(GROUP_A, 1001)[economy.SILVER] == 12
           and economy.get_balance(GROUP_B, 1001)[economy.SILVER] == 0)
 
     economy.award(GROUP_A, 1003, 30, name="user3")

@@ -22,6 +22,7 @@ from economy import catalog
 from economy import directory
 from economy import profiles
 from economy import rewards
+from economy import upgrade_migration
 from economy.coins import accounts as _accounts
 from economy import activity
 from economy.activity import (
@@ -85,6 +86,8 @@ __all__ = [
     "rewards", "award_game",
     # دفترچهٔ یوزرنیم
     "directory",
+    # جبران تبدیل‌های قدیمی
+    "upgrade_migration",
     # زیرساخت
     "settings", "storage", "flush",
 ]

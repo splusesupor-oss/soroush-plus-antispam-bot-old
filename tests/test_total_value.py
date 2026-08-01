@@ -53,6 +53,10 @@ def fresh():
     store._cache = None
     store._cache_mtime = None
     eco_handler.reset_all()
+    # تنظیمات هم باید موقت باشد، وگرنه save() فایل واقعی config را
+    # می‌نویسد و تست‌های بعدی را با نرخ دستکاری‌شده آلوده می‌کند.
+    settings.SETTINGS_FILE = temp / "economy_settings.json"
+    settings.reset_cache()
     settings.save({"BronzeValue": 1, "SilverValue": 10, "GoldValue": 100})
     group_storage.activate_group(CHAT, "گروه تست")
     return temp
@@ -174,13 +178,14 @@ def test_convert_bronze_to_silver():
 
     returned = economy.convert_bronze(CHAT, 10)
     after = economy.get_balance(CHAT, 10)
-    check("موجودی درست شد: ۷۳ برنز، ۱۲ نقره",
-          after[economy.BRONZE] == 73 and after[economy.SILVER] == 12,
+    # تبدیل حالا یک «ارتقا» است: ۱۰۰ برنز ➜ ۱۲ نقره.
+    check("موجودی درست شد: ۷۳ برنز، ۱۴ نقره",
+          after[economy.BRONZE] == 73 and after[economy.SILVER] == 14,
           f"-> {after}")
     check("مقدار برگشتی با فرمول هم‌خوان است", agrees(returned))
     check("get_balance با فرمول هم‌خوان است", agrees(after))
-    check("۱۰۰ برنز و ۱۰ نقره هم‌ارزش‌اند، پس ۱۹۳ می‌ماند",
-          after["total_coin_value"] == 193,
+    check("تبدیل سود می‌دهد: ۱۹۳ ➜ ۲۱۳",
+          after["total_coin_value"] == 213,
           f"-> {after['total_coin_value']}")
 
 
@@ -393,10 +398,10 @@ def test_conversion_through_handler():
     bot, before, after = asyncio.run(scenario())
     check("قبل: ۱۹۳ نمایش داده شد", before.said("💎 ارزش کل: ۱۹۳"),
           f"-> {before.replies}")
-    check("بعد: موجودی ۷۳ و ۱۲ شد",
-          after.said("🥉 برنز: ۷۳") and after.said("🥈 نقره: ۱۲"))
-    check("بعد: ارزش کل درست نمایش داده شد",
-          after.said("💎 ارزش کل: ۱۹۳"), f"-> {after.replies}")
+    check("بعد: موجودی ۷۳ و ۱۴ شد",
+          after.said("🥉 برنز: ۷۳") and after.said("🥈 نقره: ۱۴"))
+    check("بعد: ارزش کل بالا رفت",
+          after.said("💎 ارزش کل: ۲۱۳"), f"-> {after.replies}")
     check("عدد نمایش‌داده‌شده با دیتابیس یکی است",
           agrees(economy.get_balance(CHAT, 30)))
     check("هیچ خطایی نیست", not bot.logger.errors)
@@ -451,7 +456,7 @@ def test_all_menus_show_same_total():
     from economy.ui.formatting import fa_plain
     check("کارت پروفایل موجودی درست دارد",
           f"🥉 برنز: {fa_plain(73)}" in card
-          and f"🥈 نقره: {fa_plain(12)}" in card, f"-> {card[:200]}")
+          and f"🥈 نقره: {fa_plain(14)}" in card, f"-> {card[:200]}")
 
 
 # ===========================================================================
