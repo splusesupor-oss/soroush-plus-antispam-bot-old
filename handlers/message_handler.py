@@ -325,13 +325,12 @@ def _chat_game_busy(chat_id):
     """آیا یکی از بازی‌های «چت‌محور» همین حالا در این گروه فعال است.
 
     این بازی‌ها state خود را با کلید chat_id نگه می‌دارند، پس اجرای دوبارهٔ
-    دستور، دور قبلی را بازنویسی و خراب می‌کرد. بازی‌های کاربرمحور (چیستان و
-    جای خالی) عمداً در این فهرست نیستند؛ آن‌ها با کلید (chat_id, user_id)
-    کار می‌کنند و چند کاربر می‌توانند هم‌زمان بازی کنند.
+    دستور، دور قبلی را بازنویسی و خراب می‌کرد. بازی‌های کاربرمحور (چیستان،
+    جای خالی و حدس ایموجی) عمداً در این فهرست نیستند؛ آن‌ها با کلید
+    (chat_id, user_id) کار می‌کنند و چند کاربر می‌توانند هم‌زمان بازی کنند.
     """
     return (
         name_family_active(chat_id)
-        or emoji_guess_active(chat_id)
         or flag_guess_active(chat_id)
         or get_correction(chat_id) is not None
         or get_active_question(chat_id) is not None
@@ -350,10 +349,10 @@ EMOJI_RESET_COMMANDS = {
 }
 
 
-def puzzle_token_for(chat_id):
-    """توکن معمای فعال حدس ایموجی (برای لاگ و مرجع)."""
+def puzzle_token_for(chat_id, user_id=None):
+    """توکن معمای فعال همین کاربر (برای لاگ و مرجع)."""
     import modules.emoji_guess as _eg
-    state = _eg._ACTIVE.get(chat_id)
+    state = _eg.active_state(chat_id, user_id) if user_id is not None else None
     return state["token"] if state else 0
 
 
@@ -1490,6 +1489,12 @@ async def handle_new_message(bot, event):
             if _chat_game_busy(chat_id):
                 await event.reply(GAME_BUSY_MESSAGE)
                 return
+            # معمای باز خودِ کاربر نباید با دستور دوباره بازنویسی شود.
+            if emoji_guess_active(chat_id, user_id):
+                await event.reply(
+                    "⏳ شما یک معمای باز دارید؛ اول همان را پاسخ دهید."
+                )
+                return
             # تاریخچه به تفکیک کاربر: هیچ معمای تکراری برای همان کاربر
             # ارسال نمی‌شود. وقتی همهٔ مرحله‌ها مصرف شد، خودِ start یک
             # «دور» تازه می‌سازد، پس اینجا دیگر جلوی کاربر گرفته نمی‌شود.
@@ -1507,14 +1512,15 @@ async def handle_new_message(bot, event):
 
             async def emoji_timer():
                 await _asyncio.sleep(EMOJI_GUESS_SECONDS)
-                answer = finish_emoji_guess(chat_id, puzzle["token"])
+                answer = finish_emoji_guess(
+                    chat_id, puzzle["token"], user_id)
                 if answer:
                     await event.reply(f"⏰ زمان تمام شد!\n\n✅ پاسخ درست:\n{answer}")
             _track_group_timer(bot, chat_id, _asyncio.create_task(emoji_timer()))
             return
 
-        if emoji_guess_active(chat_id):
-            emoji_token = puzzle_token_for(chat_id)
+        if emoji_guess_active(chat_id, user_id):
+            emoji_token = puzzle_token_for(chat_id, user_id)
             winner_answer = answer_emoji_guess(chat_id, user_id, _format_group_member(sender), clean_text)
             if winner_answer:
                 # سکه را خودِ ماژول از راه API اقتصاد پرداخت کرده است؛

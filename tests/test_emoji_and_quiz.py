@@ -237,15 +237,17 @@ def test_emoji_answer_validation():
     # شکل‌های املایی همان جواب
     eg.reset_all()
     target = next(i for i in eg.PUZZLES if i[1] == "لاک پشت")
-    eg._ACTIVE[CHAT] = {"emoji": target[0], "answer": target[1],
-                        "aliases": target[2], "token": 0, "user_id": 4008}
+    eg._ACTIVE[eg._session_key(CHAT, 4008)] = {
+        "emoji": target[0], "answer": target[1],
+        "aliases": target[2], "token": 0, "user_id": 4008}
     check("نگارش بدون فاصله پذیرفته می‌شود",
           eg.answer(CHAT, 4008, "U", "لاکپشت") == "لاک پشت")
 
     eg.reset_all()
     target = next(i for i in eg.PUZZLES if i[1] == "کامپیوتر")
-    eg._ACTIVE[CHAT] = {"emoji": target[0], "answer": target[1],
-                        "aliases": target[2], "token": 0, "user_id": 4009}
+    eg._ACTIVE[eg._session_key(CHAT, 4009)] = {
+        "emoji": target[0], "answer": target[1],
+        "aliases": target[2], "token": 0, "user_id": 4009}
     check("نام مستعار تعریف‌شده پذیرفته می‌شود",
           eg.answer(CHAT, 4009, "U", "رایانه") == "کامپیوتر")
     eg.reset_all()
@@ -258,13 +260,15 @@ def test_emoji_timer_and_token():
 
     first = eg.start(CHAT, 4010)
     stale = first["token"]
-    check("اجرای دوم تا پایان دور فعال مسدود است",
-          eg.start(CHAT, 4011) is None)
+    check("همان کاربر دور دومی نمی‌گیرد",
+          eg.start(CHAT, 4010) is None)
+    check("کاربر دیگر هم‌زمان می‌تواند شروع کند",
+          eg.start(CHAT, 4011) is not None)
     check("دور اول دست‌نخورده ماند",
-          eg._ACTIVE[CHAT]["answer"] == first["answer"])
+          eg.active_state(CHAT, 4010)["answer"] == first["answer"])
 
     check("finish با توکن درست کار می‌کند",
-          eg.finish(CHAT, stale) == first["answer"])
+          eg.finish(CHAT, stale, 4010) == first["answer"])
     second = eg.start(CHAT, 4010)
     check("تایمر دور قبلی دور جدید را نمی‌بندد",
           eg.finish(CHAT, stale) is None)
@@ -310,22 +314,29 @@ def test_emoji_anti_farm():
     puzzle = eg.start(CHAT, 4014)
     check("کاربر تمام‌شده از دور دیگری امتیاز نمی‌گیرد",
           eg.answer(CHAT, 4013, "U", puzzle["answer"]) is None)
-    check("بازی برای صاحب دور فعال می‌ماند", eg.is_active(CHAT))
+    check("بازی برای صاحب دور فعال می‌ماند", eg.is_active(CHAT, 4014))
     check("صاحب دور پاسخ خود را می‌گیرد",
           eg.answer(CHAT, 4014, "U", puzzle["answer"]) == puzzle["answer"])
 
-    # پاسخ‌دهنده هم در تاریخچه ثبت می‌شود
+    # سشن‌ها per-user هستند: پاسخ دادن به معمای دیگران ممکن نیست.
     eg.reset_all()
     solved = []
     for i in range(10):
         item = eg.start(CHAT, 4200 + i)
         solved.append(eg.answer(CHAT, 4999, "farmer", item["answer"]))
-    check("همهٔ پاسخ‌ها درست بودند", all(solved))
-    check("پاسخ‌دهنده در تاریخچهٔ خودش ثبت می‌شود",
-          eg.seen_count(CHAT, 4999) == len(set(solved)),
-          f"-> {eg.seen_count(CHAT, 4999)} vs {len(set(solved))}")
-    check("مرحله‌های حل‌شده در تاریخچهٔ او هستند",
-          set(solved) <= eg._seen(CHAT, 4999))
+    check("هیچ پاسخی از دور دیگران پذیرفته نشد", not any(solved),
+          f"-> {solved}")
+    check("فارمر هیچ تاریخچه‌ای نگرفت",
+          eg.seen_count(CHAT, 4999) == 0,
+          f"-> {eg.seen_count(CHAT, 4999)}")
+
+    # هر کس معمای خودش را جواب دهد، در تاریخچهٔ خودش ثبت می‌شود.
+    own = [eg.answer(CHAT, 4200 + i, "u",
+                     eg.active_state(CHAT, 4200 + i)["answer"])
+           for i in range(10)]
+    check("هر کس معمای خودش را گرفت", all(own), f"-> {own}")
+    check("هر کدام یک مرحله در تاریخچه دارند",
+          all(eg.seen_count(CHAT, 4200 + i) == 1 for i in range(10)))
     eg.reset_all()
 
 

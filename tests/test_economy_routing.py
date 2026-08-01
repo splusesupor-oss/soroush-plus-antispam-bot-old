@@ -432,7 +432,7 @@ def test_game_reward_reaches_economy_via_real_route():
     async def scenario():
         bot, handler = await build_handler()
         await handler(Event("حدس ایموجی", 777))
-        puzzle = eg._ACTIVE.get(CHAT)
+        puzzle = eg.active_state(CHAT, 777)
         if puzzle is None:
             return None
         answer = Event(puzzle["answer"], 777)

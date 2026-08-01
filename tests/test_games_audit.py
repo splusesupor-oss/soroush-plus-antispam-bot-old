@@ -242,21 +242,28 @@ def test_emoji_guess():
     check("کاربر دوم پاسخ درست را می‌گیرد",
           eg.answer(CHAT, 2, "u2", p["answer"]) == p["answer"])
 
-    # پاسخ‌دهنده هم در تاریخچه ثبت می‌شود (ضد فارم)
-    # هر شروع‌کننده تاریخچهٔ مستقل دارد، پس دو نفر می‌توانند تصادفاً یک
-    # معما بگیرند. ملاک درست: هر معمای پاسخ‌داده‌شده در تاریخچهٔ پاسخ‌دهنده
-    # بنشیند تا دیگر هرگز برای او تکرار نشود.
+    # ضد فارم: سشن‌ها per-user هستند، پس یک نفر نمی‌تواند با پاسخ دادن
+    # به معمای دیگران سکه جمع کند. پیش‌تر همین کار ممکن بود.
     eg.reset_all()
     farmed = []
     for i in range(5):
         p = eg.start(CHAT, 100 + i)
         farmed.append(eg.answer(CHAT, 999, "farmer", p["answer"]))
-    check("هر پاسخ درست پذیرفته شد", all(farmed), f"-> {farmed}")
-    check("پاسخ‌دهنده در تاریخچهٔ خودش ثبت می‌شود",
-          eg.seen_count(CHAT, 999) == len(set(farmed)),
-          f"-> {eg.seen_count(CHAT, 999)} vs {len(set(farmed))}")
-    check("همهٔ معماهای پاسخ‌داده‌شده در تاریخچه هستند",
-          set(farmed) <= eg._seen(CHAT, 999))
+    check("هیچ پاسخی از دور دیگران پذیرفته نشد",
+          not any(farmed), f"-> {farmed}")
+    check("فارمر هیچ پیشرفتی نگرفت",
+          eg.seen_count(CHAT, 999) == 0,
+          f"-> {eg.seen_count(CHAT, 999)}")
+    check("معمای صاحبانش دست‌نخورده ماند",
+          all(eg.is_active(CHAT, 100 + i) for i in range(5)))
+
+    # ولی هرکس معمای خودش را جواب دهد، در تاریخچهٔ خودش می‌نشیند.
+    own = [eg.answer(CHAT, 100 + i, "u",
+                     eg.active_state(CHAT, 100 + i)["answer"])
+           for i in range(5)]
+    check("هر کس معمای خودش را گرفت", all(own), f"-> {own}")
+    check("هر کدام یک مرحله در تاریخچه دارند",
+          all(eg.seen_count(CHAT, 100 + i) == 1 for i in range(5)))
 
     # وقتی خودِ کاربر بازی را شروع کند هرگز تکراری نمی‌گیرد.
     eg.reset_all()
@@ -278,11 +285,16 @@ def test_emoji_guess():
           eg.answer(CHAT, 3, "n", p["answer"]) is None)
 
     # اجرای دوباره تا وقتی دور فعال است
+    # سشن‌ها per-user هستند: فقط خودِ کاربر نمی‌تواند دور بازش را
+    # بازنویسی کند؛ کاربر دیگر آزاد است هم‌زمان بازی کند.
     eg.reset_all()
     first = eg.start(CHAT, 4)
-    check("اجرای دوباره دور فعال را خراب نمی‌کند", eg.start(CHAT, 5) is None)
+    check("همان کاربر دور فعالش را بازنویسی نمی‌کند",
+          eg.start(CHAT, 4) is None)
+    check("کاربر دیگر می‌تواند هم‌زمان شروع کند",
+          eg.start(CHAT, 5) is not None)
     check("دور اول دست‌نخورده باقی ماند",
-          eg._ACTIVE[CHAT]["answer"] == first["answer"])
+          eg.active_state(CHAT, 4)["answer"] == first["answer"])
     eg.reset_all()
 
 

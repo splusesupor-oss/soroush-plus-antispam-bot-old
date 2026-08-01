@@ -212,8 +212,9 @@ def test_answer_and_coins():
     # نام مستعار انگلیسی همچنان کار می‌کند
     eg.reset_all()
     target = next(p for p in eg.PUZZLES if p[1] == "مرد عنکبوتی")
-    eg._ACTIVE[CHAT] = {"emoji": target[0], "answer": target[1],
-                        "aliases": target[2], "token": 0, "user_id": 951}
+    eg._ACTIVE[eg._session_key(CHAT, 951)] = {
+        "emoji": target[0], "answer": target[1],
+        "aliases": target[2], "token": 0, "user_id": 951}
     check("نام مستعار فارسی پذیرفته می‌شود",
           eg.answer(CHAT, 951, "U", "اسپایدرمن") == "مرد عنکبوتی")
 
@@ -225,7 +226,8 @@ def test_double_start_guard():
     second = eg.start(CHAT, 960)
     check("بازی دوم شروع نمی‌شود", second is None, f"-> {second}")
     check("بازی اول دست‌نخورده است",
-          eg.is_active(CHAT) and eg._ACTIVE[CHAT]["answer"] == first["answer"])
+          eg.is_active(CHAT, 960)
+          and eg.active_state(CHAT, 960)["answer"] == first["answer"])
     check("تاریخچه فقط یک بار افزایش یافت",
           eg.seen_count(CHAT, 960) == 1, f"-> {eg.seen_count(CHAT, 960)}")
     eg.finish(CHAT, first["token"])
@@ -246,7 +248,7 @@ def test_isolation_from_other_games():
 
     check("بازی ایموجی هنوز فعال است", eg.is_active(CHAT))
     check("پاسخ ایموجی دست‌نخورده است",
-          eg._ACTIVE[CHAT]["answer"] == puzzle["answer"])
+          eg.active_state(CHAT, 970)["answer"] == puzzle["answer"])
     own = {id(eg._ACTIVE)}
     other = {id(fg._ACTIVE), id(fg._SEEN_HISTORY),
              id(rd.active_riddles), id(rd.used_riddles)}

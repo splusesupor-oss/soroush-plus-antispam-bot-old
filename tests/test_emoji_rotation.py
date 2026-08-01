@@ -234,19 +234,26 @@ def test_exhausted_user_cannot_steal_others_round():
           eg.answer(CHAT, 62, "U", owner["answer"]) == owner["answer"])
 
 
-def test_one_puzzle_per_chat_at_a_time():
-    print("\n### 🛡 یک معما هم‌زمان برای چند نفر فعال نمی‌شود")
+def test_one_puzzle_per_user_at_a_time():
+    """سشن‌ها per-user هستند: هر کاربر یک معمای باز، نه هر گروه."""
+    print("\n### 🛡 هر کاربر فقط یک معمای باز دارد")
     fresh()
     first = eg.start(CHAT, 70)
-    second = eg.start(CHAT, 71)
+    again = eg.start(CHAT, 70)
+    other = eg.start(CHAT, 71)
     check("معمای اول ساخته شد", first is not None)
-    check("تا پایان آن، معمای دوم ساخته نمی‌شود", second is None)
-    check("فقط یک بازی فعال است", eg.is_active(CHAT))
-    eg.finish(CHAT, first["token"])
-    third = eg.start(CHAT, 71)
-    check("پس از پایان، نفر بعدی می‌تواند شروع کند", third is not None)
-    check("معمای نفر بعد متفاوت است",
-          third["answer"] != first["answer"], f"-> {third['answer']}")
+    check("همان کاربر معمای دوم نمی‌گیرد", again is None)
+    check("کاربر دیگر آزادانه شروع می‌کند", other is not None)
+    check("دو معما متفاوت‌اند",
+          other["answer"] != first["answer"], f"-> {other['answer']}")
+    check("هر دو سشن هم‌زمان بازند",
+          eg.is_active(CHAT, 70) and eg.is_active(CHAT, 71))
+
+    eg.finish(CHAT, first["token"], 70)
+    check("بستن سشن اول روی دومی اثر ندارد", eg.is_active(CHAT, 71))
+    third = eg.start(CHAT, 70)
+    check("پس از پایان، همان کاربر دوباره شروع می‌کند",
+          third is not None)
 
 
 # ===========================================================================
@@ -261,7 +268,7 @@ def test_second_user_does_not_see_known_answer():
         used = []
         for _ in range(12):
             await handler(Event("حدس ایموجی", 80))
-            state = eg._ACTIVE.get(CHAT)
+            state = eg.active_state(CHAT, 80)
             if not state:
                 break
             used.append(state["answer"])
@@ -269,7 +276,7 @@ def test_second_user_does_not_see_known_answer():
 
         event = Event("حدس ایموجی", 81)
         await handler(event)
-        return bot, used, eg._ACTIVE.get(CHAT), event
+        return bot, used, eg.active_state(CHAT, 81), event
 
     bot, used, state, event = asyncio.run(scenario())
     check("کاربر اول ۱۲ مرحله بازی کرد", len(used) == 12, f"-> {len(used)}")
@@ -339,7 +346,7 @@ def main():
     test_cycle_survives_restart()
     test_owner_can_finish_own_last_round()
     test_exhausted_user_cannot_steal_others_round()
-    test_one_puzzle_per_chat_at_a_time()
+    test_one_puzzle_per_user_at_a_time()
     test_second_user_does_not_see_known_answer()
     test_exhausted_user_gets_new_cycle_through_handler()
     test_progress_still_persists()

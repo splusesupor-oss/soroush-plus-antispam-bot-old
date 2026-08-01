@@ -345,7 +345,7 @@ def test_full_scenario_through_handler():
         # ۱) چند مرحله رد می‌کنیم
         for _ in range(4):
             await handler(Event("حدس ایموجی", 500))
-            state = eg._ACTIVE.get(CHAT)
+            state = eg.active_state(CHAT, 500)
             if state:
                 await handler(Event(state["answer"], 500))
         before = eg.seen_count(CHAT, 500)
@@ -357,7 +357,7 @@ def test_full_scenario_through_handler():
         # ۴) دوباره اجرا
         event = Event("حدس ایموجی", 500)
         await handler2(event)
-        return before, event, eg._ACTIVE.get(CHAT)
+        return before, event, eg.active_state(CHAT, 500)
 
     before, event, state = asyncio.run(scenario())
     check("۴ مرحله بازی شد", before == 4, f"-> {before}")
@@ -381,7 +381,7 @@ def test_reset_command_through_handler():
         bot, handler = await build_handler()
         for _ in range(3):
             await handler(Event("حدس ایموجی", 501))
-            state = eg._ACTIVE.get(CHAT)
+            state = eg.active_state(CHAT, 501)
             if state:
                 await handler(Event(state["answer"], 501))
         before = eg.seen_count(CHAT, 501)
@@ -414,7 +414,7 @@ def test_reward_still_paid():
     async def scenario():
         bot, handler = await build_handler()
         await handler(Event("حدس ایموجی", 502))
-        state = eg._ACTIVE.get(CHAT)
+        state = eg.active_state(CHAT, 502)
         before = economy.get_balance(CHAT, 502)[economy.BRONZE]
         event = Event(state["answer"], 502)
         await handler(event)

@@ -183,7 +183,7 @@ def test_emoji_reward_survives_restart():
     async def play(user_id):
         bot, handler = await build_handler()
         await handler(Event("حدس ایموجی", user_id))
-        answer = emoji_guess._ACTIVE[CHAT]["answer"]
+        answer = emoji_guess.active_state(CHAT, user_id)["answer"]
         event = Event(answer, user_id)
         await handler(event)
         return event

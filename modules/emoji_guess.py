@@ -589,7 +589,7 @@ def reset_user(chat_id, user_id):
     تنها راه ریست کردن پیشرفت است؛ ری‌استارت ربات هرگز آن را پاک
     نمی‌کند.
     """
-    _ACTIVE.pop(chat_id, None)
+    _ACTIVE.pop(_session_key(chat_id, user_id), None)
     had = _progress.reset(chat_id, user_id, GAME)
     # اگر دیگر هیچ‌کس در این گروه پیشرفتی ندارد، پنجرهٔ «تازه» هم بی‌معنا
     # است و پاک می‌شود تا انتخاب معما بی‌دلیل محدود نماند.
@@ -608,8 +608,34 @@ def reset_all():
     _progress.reset_game_everywhere(GAME)
 
 
-def is_active(chat_id):
-    return chat_id in _ACTIVE
+def _session_key(chat_id, user_id):
+    """کلید سشن: هر کاربر در هر گروه سشن مستقل خودش را دارد."""
+    return (str(chat_id), str(user_id))
+
+
+def is_active(chat_id, user_id=None):
+    """آیا سشنی فعال است.
+
+    با ``user_id`` یعنی «آیا همین کاربر سشن باز دارد». بدون آن یعنی
+    «آیا کسی در این گروه سشن باز دارد» — فقط برای گزارش، چون بازی دیگر
+    گروه را قفل نمی‌کند.
+    """
+    if user_id is not None:
+        return _session_key(chat_id, user_id) in _ACTIVE
+    chat = str(chat_id)
+    return any(key[0] == chat for key in _ACTIVE)
+
+
+def active_state(chat_id, user_id):
+    """سشن فعال همین کاربر، یا ``None``."""
+    state = _ACTIVE.get(_session_key(chat_id, user_id))
+    return dict(state) if state else None
+
+
+def active_players(chat_id):
+    """شناسهٔ کاربرانی که همین حالا در این گروه سشن باز دارند."""
+    chat = str(chat_id)
+    return [key[1] for key in _ACTIVE if key[0] == chat]
 
 
 # چند مرحلهٔ اخیرِ گروه کنار گذاشته می‌شوند تا کاربر تازه‌وارد معمایی را
@@ -642,10 +668,11 @@ def start(chat_id, user_id=None):
     ``None`` یعنی شروع نشد: یا بازی دیگری در همین چت فعال است، یا کاربر
     همهٔ ۱۲۰ مرحله را تمام کرده. برای تفکیک از ``is_exhausted`` استفاده کنید.
     """
-    if chat_id in _ACTIVE:
-        return None
     if user_id is None:
         user_id = chat_id
+    # فقط سشن *همین* کاربر مانع شروع دوباره است؛ بازی دیگران آزاد است.
+    if _session_key(chat_id, user_id) in _ACTIVE:
+        return None
 
     seen = _seen(chat_id, user_id)
     if len(seen) >= len(PUZZLES):
@@ -665,16 +692,18 @@ def start(chat_id, user_id=None):
     stage = _progress.mark_seen(chat_id, user_id, GAME, answer)
     # در سطح گروه هم ثبت می‌شود تا کاربر بعدی همین معما را نگیرد.
     _progress.mark_recent(chat_id, GAME, answer, RECENT_WINDOW)
-    _ACTIVE[chat_id] = {
+    key = _session_key(chat_id, user_id)
+    _ACTIVE[key] = {
         "emoji": emoji,
         "answer": answer,
         "aliases": tuple(aliases),
         "token": _next_token(),
         "user_id": user_id,
+        "chat_id": chat_id,
         "tier": TIER_NAMES[tier_index],
         "stage": stage,
     }
-    return dict(_ACTIVE[chat_id])
+    return dict(_ACTIVE[key])
 
 
 def accepted_answers(state):
@@ -688,27 +717,21 @@ def answer(chat_id, user_id, name, text):
     """پاسخ را بررسی و در صورت درستی مرحله را می‌بندد.
 
     محافظ‌های ضدسوءاستفاده:
-      • کاربری که همهٔ مرحله‌ها را دیده امتیاز نمی‌گیرد، حتی اگر معما را
-        شخص دیگری شروع کرده باشد.
-      • پاسخ‌دهنده (نه فقط شروع‌کننده) این مرحله را «دیده» ثبت می‌شود تا
-        هرگز دوباره همان را نگیرد.
+      • هر کاربر فقط به معمای *خودش* پاسخ می‌دهد. پاسخ به معمای شخص
+        دیگر نه امتیاز می‌دهد و نه معمای او را می‌بندد؛ چون سشن‌ها با
+        کلید (chat_id, user_id) از هم جدا هستند.
       • فقط پاسخ تعیین‌شده پذیرفته می‌شود؛ هر متن دیگری رد است.
+      • هر معما فقط یک بار برای همان کاربر سکه می‌دهد (reference یکتا).
     """
-    state = _ACTIVE.get(chat_id)
+    state = _ACTIVE.get(_session_key(chat_id, user_id))
     if not state:
-        return None
-    # کاربری که همهٔ مرحله‌ها را تمام کرده نباید از دور *دیگران* امتیاز
-    # بگیرد؛ وگرنه می‌شد با شروع دادن دستور توسط دیگران بی‌نهایت سکه
-    # گرفت. ولی صاحب همین دور استثناست: مرحلهٔ آخرِ خودش را باید بتواند
-    # ببندد، وگرنه دور روی همان معما قفل می‌ماند و دور تازه ساخته
-    # نمی‌شود.
-    owns_round = str(state.get("user_id")) == str(user_id)
-    if not owns_round and is_exhausted(chat_id, user_id):
+        # این کاربر معمای بازی ندارد. اگر معمای شخص دیگری در جریان است،
+        # دست‌نخورده می‌ماند.
         return None
     if _norm(text) not in accepted_answers(state):
         return None
-    _ACTIVE.pop(chat_id, None)
-    # پاسخ‌دهنده هم این مرحله را «دیده» ثبت می‌شود تا دوباره نگیردش.
+    # فقط سشن همین کاربر بسته می‌شود.
+    _ACTIVE.pop(_session_key(chat_id, user_id), None)
     _progress.mark_seen(chat_id, user_id, GAME, state["answer"])
     # reference یکتا: همین معما برای همین کاربر فقط یک بار سکه می‌دهد.
     _economy_award_game(
@@ -719,10 +742,27 @@ def answer(chat_id, user_id, name, text):
     return state["answer"]
 
 
-def finish(chat_id, token=None):
-    """پایان مرحله با گارد توکن، تا تایمر دور قبلی دور جدید را نبندد."""
-    state = _ACTIVE.get(chat_id)
-    if not state or (token is not None and state["token"] != token):
-        return None
-    _ACTIVE.pop(chat_id, None)
-    return state["answer"]
+def finish(chat_id, token=None, user_id=None):
+    """پایان مرحله با گارد توکن، تا تایمر دور قبلی دور جدید را نبندد.
+
+    ``user_id`` سشن همان کاربر را می‌بندد. اگر داده نشود، سشنی که توکنش
+    مطابق است بسته می‌شود؛ پس تایمر هر کاربر فقط معمای خودش را تمام
+    می‌کند و به بقیه دست نمی‌زند.
+    """
+    if user_id is not None:
+        key = _session_key(chat_id, user_id)
+        state = _ACTIVE.get(key)
+        if not state or (token is not None and state["token"] != token):
+            return None
+        _ACTIVE.pop(key, None)
+        return state["answer"]
+
+    chat = str(chat_id)
+    for key, state in list(_ACTIVE.items()):
+        if key[0] != chat:
+            continue
+        if token is not None and state["token"] != token:
+            continue
+        _ACTIVE.pop(key, None)
+        return state["answer"]
+    return None
