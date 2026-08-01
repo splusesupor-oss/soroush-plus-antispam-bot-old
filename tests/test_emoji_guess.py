@@ -10,7 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ⚠️ پیش از import هر بازی اجرا می‌شود: خودِ economy هنگام import مسیر
+# config/economy.json واقعی را می‌بندد و نوشتن‌های بعدی همان‌جا می‌نشیند.
+import tempfile as _tempfile
+import economy.storage as _storage
+_storage.use_file(Path(_tempfile.mkdtemp()) / "economy.json")
+
+
 import modules.emoji_guess as eg
+
 
 PASSED = FAILED = 0
 CHAT = -100321
@@ -92,19 +100,25 @@ def test_no_repeat_for_one_user():
 
 
 def test_hundreds_of_attempts():
-    """صدها اجرای پشت‌سرهم نباید هیچ تکراری تولید کند."""
+    """صدها اجرا: داخل هر دور تکراری نباشد و بازی قفل نشود.
+
+    پس از مصرف شدن بانک، دور تازه‌ای ساخته می‌شود؛ پس تکرار *بین* دورها
+    طبیعی است، ولی *داخل* یک دور هرگز نباید رخ دهد.
+    """
     print("\n### صدها اجرای پشت‌سرهم")
     eg.reset_all()
     total = len(eg.PUZZLES)
-    seen = play(CHAT, 501, 1000)          # بسیار بیشتر از اندازهٔ بانک
-    duplicates = [a for a, c in Counter(seen).items() if c > 1]
-    check("هیچ تکراری حتی با ۱۰۰۰ تلاش", not duplicates,
-          f"-> {duplicates[:5]}")
-    check(f"دقیقاً {total} بازی انجام شد و سپس متوقف",
-          len(seen) == total, f"-> {len(seen)}")
-    check("کاربر اکنون exhausted است", eg.is_exhausted(CHAT, 501))
-    check("start دیگر معما نمی‌دهد", eg.start(CHAT, 501) is None)
-    check("هیچ بازی فعالی ساخته نشد", not eg.is_active(CHAT))
+    first = play(CHAT, 501, total)
+    duplicates = [a for a, c in Counter(first).items() if c > 1]
+    check("دور اول بدون هیچ تکراری", not duplicates, f"-> {duplicates[:5]}")
+    check(f"دور اول دقیقاً {total} مرحله دارد",
+          len(first) == total, f"-> {len(first)}")
+
+    more = play(CHAT, 501, 1000)
+    check("پس از اتمام بازی قفل نمی‌شود", len(more) > 0, f"-> {len(more)}")
+    check("دورهای بعدی هم معما می‌دهند",
+          all(answer for answer in more))
+    eg.finish(CHAT)
 
 
 def test_exhaustion_counters():
@@ -122,7 +136,9 @@ def test_exhaustion_counters():
     check("باقی‌مانده درست است",
           eg.remaining_count(CHAT, 600) == total - 5, f"-> {eg.remaining_count(CHAT, 600)}")
 
-    play(CHAT, 600, total)
+    # دقیقاً تا انتهای همین دور بازی می‌کنیم (نه بیشتر)، وگرنه دور تازه
+    # شروع می‌شود و شمارنده دوباره از صفر بالا می‌رود.
+    play(CHAT, 600, total - 5)
     check("پس از اتمام، باقی‌مانده صفر است",
           eg.remaining_count(CHAT, 600) == 0, f"-> {eg.remaining_count(CHAT, 600)}")
     check("اکنون exhausted است", eg.is_exhausted(CHAT, 600))

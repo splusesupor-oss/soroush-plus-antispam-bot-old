@@ -305,15 +305,20 @@ def test_exhaustion_needs_all_200():
     check("یک مرحله باقی است", eg.remaining_count(CHAT, 400) == 1)
 
     play(CHAT, 400, 1)
-    check("پس از ۲۰۰ مرحله تمام است", eg.is_exhausted(CHAT, 400))
+    check("پس از ۲۰۰ مرحله دور تمام است", eg.is_exhausted(CHAT, 400))
     check("باقی‌مانده صفر", eg.remaining_count(CHAT, 400) == 0)
-    check("start دیگر معما نمی‌دهد", eg.start(CHAT, 400) is None)
-    check("current_tier پس از اتمام None است",
+    check("current_tier در پایان دور None است",
           eg.current_tier(CHAT, 400) is None)
 
     restart()
-    check("اتمام هم پس از ری‌استارت می‌ماند",
+    check("پایان دور پس از ری‌استارت هم می‌ماند",
           eg.is_exhausted(CHAT, 400))
+
+    # بازی قفل نمی‌شود: شروع بعدی یک دور تازه می‌سازد.
+    again = eg.start(CHAT, 400)
+    check("start دور تازه می‌دهد", again is not None)
+    check("دور تازه از مرحلهٔ ۱ شروع می‌شود",
+          again and again["stage"] == 1, f"-> {again}")
 
 
 def test_all_200_reachable():

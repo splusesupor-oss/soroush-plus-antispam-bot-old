@@ -11,7 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ⚠️ پیش از import هر بازی اجرا می‌شود: خودِ economy هنگام import مسیر
+# config/economy.json واقعی را می‌بندد و نوشتن‌های بعدی همان‌جا می‌نشیند.
+import tempfile as _tempfile
+import economy.storage as _storage
+_storage.use_file(Path(_tempfile.mkdtemp()) / "economy.json")
+
+
 import modules.emoji_guess as eg
+
 import modules.multiple_choice as mc
 
 PASSED = FAILED = 0
@@ -38,9 +46,14 @@ def emoji_count(value):
 
 
 def drain_emoji(user_id, chat_id=CHAT):
-    """همهٔ مرحله‌های یک کاربر تا اتمام."""
+    """همهٔ مرحله‌های یک «دور» کامل.
+
+    ⚠️ پس از مصرف شدن بانک، ``start`` دور تازه‌ای می‌سازد و دیگر هرگز
+    ``None`` نمی‌دهد. پس حلقه با شمارهٔ مرحله متوقف می‌شود، نه با None،
+    وگرنه بی‌نهایت ادامه پیدا می‌کرد.
+    """
     out = []
-    while True:
+    for _ in range(len(eg.PUZZLES)):
         puzzle = eg.start(chat_id, user_id)
         if puzzle is None:
             break
@@ -120,9 +133,14 @@ def test_emoji_no_repeat_120():
     check("کل بانک پوشش داده شد",
           set(answers) == {i[1] for i in eg.PUZZLES})
     check("کاربر پس از ۲۰۰ مرحله exhausted است", eg.is_exhausted(CHAT, 4001))
-    check("start پس از اتمام None می‌دهد", eg.start(CHAT, 4001) is None)
     check("باقی‌مانده صفر است", eg.remaining_count(CHAT, 4001) == 0)
     check("current_tier پس از اتمام None است", eg.current_tier(CHAT, 4001) is None)
+    # پس از اتمام، بازی قفل نمی‌شود: دور تازه‌ای ساخته می‌شود.
+    again = eg.start(CHAT, 4001)
+    check("دور تازه ساخته می‌شود", again is not None)
+    check("دور تازه از مرحلهٔ ۱ شروع می‌شود",
+          again and again["stage"] == 1, f"-> {again}")
+    eg.finish(CHAT)
     eg.reset_all()
 
 

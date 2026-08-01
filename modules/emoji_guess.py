@@ -337,7 +337,12 @@ def remaining_count(chat_id, user_id):
 
 
 def is_exhausted(chat_id, user_id):
-    """آیا این کاربر همهٔ مرحله‌ها را در این گروه دیده است."""
+    """آیا این کاربر همهٔ مرحله‌های دور فعلی را دیده است.
+
+    ⚠️ این دیگر یعنی «بازی تمام شد» نیست؛ با شروع بعدی یک دور تازه
+    ساخته می‌شود. فقط برای جلوگیری از امتیاز گرفتن روی دور دیگران و
+    گزارش وضعیت به کار می‌رود.
+    """
     return remaining_count(chat_id, user_id) == 0
 
 
@@ -362,7 +367,12 @@ def reset_user(chat_id, user_id):
     نمی‌کند.
     """
     _ACTIVE.pop(chat_id, None)
-    return _progress.reset(chat_id, user_id, GAME)
+    had = _progress.reset(chat_id, user_id, GAME)
+    # اگر دیگر هیچ‌کس در این گروه پیشرفتی ندارد، پنجرهٔ «تازه» هم بی‌معنا
+    # است و پاک می‌شود تا انتخاب معما بی‌دلیل محدود نماند.
+    if not _progress.all_users(chat_id, GAME):
+        _progress.clear_recent(chat_id, GAME)
+    return had
 
 
 def reset_all():
@@ -379,12 +389,27 @@ def is_active(chat_id):
     return chat_id in _ACTIVE
 
 
-def _pick(seen):
-    """اولین سطحی که هنوز مرحلهٔ دیده‌نشده دارد؛ انتخاب تصادفی درون آن."""
+# چند مرحلهٔ اخیرِ گروه کنار گذاشته می‌شوند تا کاربر تازه‌وارد معمایی را
+# نگیرد که همین حالا جلوی چشم همه جواب داده شده. عدد کوچک‌تر از بانک است
+# تا هیچ‌وقت انتخاب ممکن تمام نشود.
+RECENT_WINDOW = 25
+
+
+def _pick(seen, avoid=()):
+    """اولین سطحی که هنوز مرحلهٔ دیده‌نشده دارد؛ انتخاب تصادفی درون آن.
+
+    ``avoid`` مرحله‌هایی است که به‌تازگی در همین گروه استفاده شده‌اند.
+    اگر کنار گذاشتنشان چیزی باقی نگذارد، نادیده گرفته می‌شود تا بازی
+    هرگز قفل نشود.
+    """
+    avoid = set(avoid)
     for index, tier in enumerate(TIERS):
         remaining = [item for item in tier if item[1] not in seen]
-        if remaining:
-            return _RANDOM.choice(remaining), index
+        if not remaining:
+            continue
+        preferred = [item for item in remaining if item[1] not in avoid]
+        pool = preferred or remaining
+        return _RANDOM.choice(pool), index
     return None, None
 
 
@@ -400,7 +425,14 @@ def start(chat_id, user_id=None):
         user_id = chat_id
 
     seen = _seen(chat_id, user_id)
-    picked, tier_index = _pick(seen)
+    if len(seen) >= len(PUZZLES):
+        # همهٔ مرحله‌ها مصرف شده: دور تازه‌ای ساخته می‌شود تا بازی
+        # برای همیشه بسته نماند.
+        _progress.start_new_cycle(chat_id, user_id, GAME)
+        seen = _seen(chat_id, user_id)
+
+    picked, tier_index = _pick(
+        seen, _progress.recent(chat_id, GAME))
     if picked is None:
         return None
 
@@ -408,6 +440,8 @@ def start(chat_id, user_id=None):
     # همین‌جا ثبت دائمی می‌شود تا اگر ربات وسط مرحله خاموش شد، همان
     # معما دوباره تکرار نشود.
     stage = _progress.mark_seen(chat_id, user_id, GAME, answer)
+    # در سطح گروه هم ثبت می‌شود تا کاربر بعدی همین معما را نگیرد.
+    _progress.mark_recent(chat_id, GAME, answer, RECENT_WINDOW)
     _ACTIVE[chat_id] = {
         "emoji": emoji,
         "answer": answer,
@@ -440,10 +474,13 @@ def answer(chat_id, user_id, name, text):
     state = _ACTIVE.get(chat_id)
     if not state:
         return None
-    # کاربری که همهٔ مرحله‌ها را تمام کرده نباید از دور دیگری امتیاز
+    # کاربری که همهٔ مرحله‌ها را تمام کرده نباید از دور *دیگران* امتیاز
     # بگیرد؛ وگرنه می‌شد با شروع دادن دستور توسط دیگران بی‌نهایت سکه
-    # گرفت.
-    if is_exhausted(chat_id, user_id):
+    # گرفت. ولی صاحب همین دور استثناست: مرحلهٔ آخرِ خودش را باید بتواند
+    # ببندد، وگرنه دور روی همان معما قفل می‌ماند و دور تازه ساخته
+    # نمی‌شود.
+    owns_round = str(state.get("user_id")) == str(user_id)
+    if not owns_round and is_exhausted(chat_id, user_id):
         return None
     if _norm(text) not in accepted_answers(state):
         return None

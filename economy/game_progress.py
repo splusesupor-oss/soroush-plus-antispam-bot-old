@@ -24,6 +24,8 @@ from economy import storage
 from economy.coins import accounts
 
 ROOT = "game_progress"
+RECENT = "game_recent"
+CYCLE_KEY = "__cycle__"
 
 
 def _chat(chat_id):
@@ -90,12 +92,85 @@ def reset(chat_id, user_id, game):
 
 
 def reset_game_everywhere(game):
-    """پیشرفت یک بازی را برای همهٔ کاربران پاک می‌کند — فقط برای تست."""
+    """پیشرفت یک بازی را برای همهٔ کاربران پاک می‌کند — فقط برای تست.
+
+    فهرست «تازه‌مصرف‌شدهٔ» گروه‌ها هم پاک می‌شود؛ در غیر این صورت یک
+    پنجرهٔ کهنه باقی می‌ماند و انتخاب معما را بی‌دلیل محدود می‌کند.
+    """
     with storage.transaction() as data:
         root = data.get(ROOT, {})
         for chat in list(root.values()):
             for user in list(chat.values()):
                 user.pop(game, None)
+                user.pop(f"{game}{CYCLE_KEY}", None)
+        for chat in list(data.get(RECENT, {}).values()):
+            chat.pop(game, None)
+
+
+# ---------------------------------------------------------------------------
+# مرحله‌های «تازه استفاده‌شده» در کل گروه
+#
+# بدون این، کاربر تازه‌وارد ممکن بود همان معمایی را بگیرد که چند لحظه
+# پیش کاربر دیگری در همان گروه جواب داده بود، پس بقیه جواب را می‌دانستند.
+# ---------------------------------------------------------------------------
+def recent(chat_id, game):
+    data = storage.snapshot()
+    bucket = data.get(RECENT, {}).get(_chat(chat_id), {}).get(game, [])
+    return [str(item) for item in bucket]
+
+
+def mark_recent(chat_id, game, item, limit):
+    """مرحله را در فهرست «تازه استفاده‌شدهٔ گروه» ثبت می‌کند.
+
+    فهرست کوتاه نگه داشته می‌شود (``limit``) تا با مصرف شدن بانک، بازی
+    قفل نشود.
+    """
+    value = str(item)
+    with storage.transaction(defer=True) as data:
+        chat = data.setdefault(RECENT, {}).setdefault(_chat(chat_id), {})
+        bucket = chat.setdefault(game, [])
+        if value in bucket:
+            bucket.remove(value)
+        bucket.append(value)
+        if limit > 0 and len(bucket) > limit:
+            del bucket[:-limit]
+        size = len(bucket)
+    try:
+        storage.flush()
+    except Exception:
+        pass
+    return size
+
+
+def clear_recent(chat_id, game):
+    with storage.transaction() as data:
+        chat = data.get(RECENT, {}).get(_chat(chat_id), {})
+        chat.pop(game, None)
+
+
+# ---------------------------------------------------------------------------
+# دور (cycle): وقتی کاربر همهٔ مرحله‌ها را دید، دور تازه شروع می‌شود
+# ---------------------------------------------------------------------------
+def cycle(chat_id, user_id, game):
+    data = storage.snapshot()
+    user = data.get(ROOT, {}).get(_chat(chat_id), {}).get(str(user_id), {})
+    return int(user.get(f"{game}{CYCLE_KEY}", 0) or 0)
+
+
+def start_new_cycle(chat_id, user_id, game):
+    """تاریخچهٔ کاربر را خالی و شمارندهٔ دور را یکی زیاد می‌کند."""
+    with storage.transaction() as data:
+        root = data.setdefault(ROOT, {})
+        chat = root.setdefault(_chat(chat_id), {})
+        user = chat.setdefault(str(user_id), {})
+        user[game] = []
+        current = int(user.get(f"{game}{CYCLE_KEY}", 0) or 0) + 1
+        user[f"{game}{CYCLE_KEY}"] = current
+    try:
+        storage.flush()
+    except Exception:
+        pass
+    return current
 
 
 def all_users(chat_id, game):

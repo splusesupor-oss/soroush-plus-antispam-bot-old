@@ -16,6 +16,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ⚠️ پیش از import هر بازی اجرا می‌شود: خودِ economy هنگام import مسیر
+# config/economy.json واقعی را می‌بندد و نوشتن‌های بعدی همان‌جا می‌نشیند.
+import economy.storage as _storage
+_storage.use_file(pathlib.Path(tempfile.mkdtemp()) / "economy.json")
+
+
 import economy as coins
 import economy.storage as _economy_storage
 import modules.emoji_guess as eg
@@ -204,8 +210,10 @@ def test_emoji_guess():
     eg.reset_all()
     CHAT = -5003
 
+    # پس از مصرف بانک، start دور تازه می‌سازد و دیگر None نمی‌دهد؛
+    # پس حلقه به اندازهٔ یک دور کامل محدود می‌شود.
     seen = []
-    while True:
+    for _ in range(len(eg.PUZZLES)):
         p = eg.start(CHAT, 1)
         if p is None:
             break
@@ -222,7 +230,7 @@ def test_emoji_guess():
 
     # کاربر تمام‌شده نمی‌تواند از دور دیگران سکه بگیرد
     eg.reset_all()
-    while True:
+    for _ in range(len(eg.PUZZLES)):
         drained = eg.start(CHAT, 1)
         if drained is None:
             break

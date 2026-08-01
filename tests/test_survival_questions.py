@@ -11,6 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ⚠️ پیش از import هر بازی اجرا می‌شود: خودِ economy هنگام import مسیر
+# config/economy.json واقعی را می‌بندد و نوشتن‌های بعدی همان‌جا می‌نشیند.
+import tempfile as _tempfile
+import economy.storage as _storage
+_storage.use_file(Path(_tempfile.mkdtemp()) / "economy.json")
+
+
 from modules.fox_games import survival as sv
 from modules.fox_games.survival_questions import (
     LEVELS,

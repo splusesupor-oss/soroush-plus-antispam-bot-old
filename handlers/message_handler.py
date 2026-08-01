@@ -1491,10 +1491,8 @@ async def handle_new_message(bot, event):
                 await event.reply(GAME_BUSY_MESSAGE)
                 return
             # تاریخچه به تفکیک کاربر: هیچ معمای تکراری برای همان کاربر
-            # ارسال نمی‌شود تا از گرفتن سکه با پاسخ قبلی جلوگیری شود.
-            if emoji_guess_exhausted(chat_id, user_id):
-                await event.reply(EMOJI_GUESS_EXHAUSTED_MESSAGE)
-                return
+            # ارسال نمی‌شود. وقتی همهٔ مرحله‌ها مصرف شد، خودِ start یک
+            # «دور» تازه می‌سازد، پس اینجا دیگر جلوی کاربر گرفته نمی‌شود.
             puzzle = start_emoji_guess(chat_id, user_id)
             if puzzle is None:
                 await event.reply(EMOJI_GUESS_EXHAUSTED_MESSAGE)
