@@ -502,7 +502,7 @@ def test_multiple_choice():
         mc.clear_question(-5, item["token"])
     check("کاربر دوم در همان گروه دور تازه گرفت", len(set(second)) == 60)
     check("تاریخچهٔ دو کاربر جداست",
-          mc.seen_count(81) == 60 and mc.seen_count(82) == 60)
+          mc.seen_count(-5, 81) == 60 and mc.seen_count(-5, 82) == 60)
 
     # ارقام فارسی هم پذیرفته می‌شوند
     mc.reset_all()
@@ -514,7 +514,9 @@ def test_multiple_choice():
     # اتمام کامل بانک
     mc.reset_all()
     drained = 0
-    while True:
+    # حلقهٔ کران‌دار: بازی دیگر پس از اتمام بانک ``None`` نمی‌دهد،
+    # بلکه دور تازه می‌سازد. ``while True`` قدیمی بی‌پایان می‌شد.
+    for _ in range(len(mc.QUESTIONS)):
         item = mc.start_question(-7, 84)
         if item is None:
             break
@@ -522,7 +524,7 @@ def test_multiple_choice():
         mc.clear_question(-7, item["token"])
     check("کل بانک برای یک کاربر مصرف شد",
           drained == len(mc.QUESTIONS), f"-> {drained}")
-    check("کاربر پس از اتمام exhausted است", mc.is_exhausted(84))
+    check("کاربر پس از اتمام دور، exhausted است", mc.is_exhausted(-7, 84))
     check("پیام اتمام تعریف شده است", bool(mc.EXHAUSTED_MESSAGE))
     mc.reset_all()
 

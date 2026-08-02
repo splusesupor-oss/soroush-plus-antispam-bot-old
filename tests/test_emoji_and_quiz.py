@@ -356,10 +356,17 @@ def test_quiz_bank():
     categories = Counter(q["category"] for q in mc.QUESTIONS)
     check("دست‌کم ۱۰ دستهٔ موضوعی دارد", len(categories) >= 10,
           f"-> {len(categories)}")
-    expected = {"جغرافیا", "فناوری", "ورزش", "سینما",
-                "حیوانات", "قرآن", "ایران", "عمومی"}
-    check("همهٔ موضوع‌های خواسته‌شده موجودند",
-          expected <= set(categories), f"-> {expected - set(categories)}")
+    # ⚠️ فهرست موضوع‌ها روی مقدار ثابت قفل نمی‌شود.
+    #
+    # نسخهٔ قبلی «قرآن/ایران/عمومی» را الزامی می‌کرد؛ آن دسته‌ها با
+    # بازطراحی بانک حذف شدند و تست بی‌دلیل می‌شکست. حالا از منبع حقیقت
+    # (خود بانک) خوانده می‌شود تا با هر تغییر بعدی هم درست بماند.
+    # پوشش کاملِ موضوع‌های خواسته‌شده در tests/test_quiz_bank.py است.
+    check("هر سوال دقیقاً یک موضوع ناتهی دارد",
+          all(str(q.get("category", "")).strip() for q in mc.QUESTIONS))
+    check("هیچ موضوعی بر بانک غالب نیست",
+          max(categories.values()) <= total * 0.2,
+          f"-> {categories.most_common(2)}")
 
 
 def test_quiz_options_valid():
@@ -390,10 +397,13 @@ def test_quiz_no_repeat_per_user():
     mc.reset_all()
     total = len(mc.QUESTIONS)
     drawn = []
-    while True:
+    # ⚠️ حلقهٔ کران‌دار، نه ``while True``.
+    #
+    # بازی دیگر پس از دیدن همهٔ سوال‌ها برای همیشه بسته نمی‌شود؛
+    # ``start_question`` دور تازه می‌سازد و هرگز ``None`` نمی‌دهد.
+    # حلقهٔ بی‌کران قدیمی با این رفتار برای همیشه می‌چرخید.
+    for _ in range(total):
         item = mc.start_question(CHAT, 5001)
-        if item is None:
-            break
         drawn.append(item["question"])
         mc.clear_question(CHAT, item["token"])
     check(f"همهٔ {total} سوال داده شد", len(drawn) == total, f"-> {len(drawn)}")
@@ -401,9 +411,10 @@ def test_quiz_no_repeat_per_user():
           f"-> {len(set(drawn))}")
     check("کل بانک پوشش داده شد",
           set(drawn) == {q["question"] for q in mc.QUESTIONS})
-    check("کاربر پس از اتمام exhausted است", mc.is_exhausted(5001))
-    check("start پس از اتمام None می‌دهد",
-          mc.start_question(CHAT, 5001) is None)
+    check("کاربر پس از اتمام دور، exhausted است",
+          mc.is_exhausted(CHAT, 5001))
+    check("پس از اتمام، دور تازه شروع می‌شود و بازی قفل نمی‌شود",
+          mc.start_question(CHAT, 5001) is not None)
     check("پیام اتمام تعریف شده است", bool(mc.EXHAUSTED_MESSAGE))
     mc.reset_all()
 
@@ -417,7 +428,8 @@ def test_quiz_history_per_user():
         first.append(item["question"])
         mc.clear_question(CHAT, item["token"])
     check("کاربر اول ۶۰ سوال بدون تکرار گرفت", len(set(first)) == 60)
-    check("کاربر دوم تاریخچه ندارد", mc.seen_count(5003) == 0)
+    # تاریخچه حالا per-group است، پس امضا ``(chat_id, user_id)`` شده.
+    check("کاربر دوم تاریخچه ندارد", mc.seen_count(CHAT, 5003) == 0)
 
     second = []
     for _ in range(60):
@@ -426,11 +438,11 @@ def test_quiz_history_per_user():
         mc.clear_question(CHAT, item["token"])
     check("کاربر دوم در همان گروه دور تازه گرفت", len(set(second)) == 60)
     check("تاریخچهٔ دو کاربر جداست",
-          mc.seen_count(5002) == 60 and mc.seen_count(5003) == 60)
+          mc.seen_count(CHAT, 5002) == 60 and mc.seen_count(CHAT, 5003) == 60)
 
-    mc.reset_user(5002)
+    mc.reset_user(CHAT, 5002)
     check("ریست یک کاربر فقط همان را پاک می‌کند",
-          mc.seen_count(5002) == 0 and mc.seen_count(5003) == 60)
+          mc.seen_count(CHAT, 5002) == 0 and mc.seen_count(CHAT, 5003) == 60)
     mc.reset_all()
 
 
@@ -571,11 +583,11 @@ def test_state_isolation():
     check("بستن چهار گزینه‌ای، حدس ایموجی را نبست", eg.is_active(CHAT))
     eg.answer(CHAT, 6001, "U", puzzle["answer"])
     check("تاریخچهٔ دو بازی مستقل است",
-          eg.seen_count(CHAT, 6001) == 1 and mc.seen_count(6001) == 1)
+          eg.seen_count(CHAT, 6001) == 1 and mc.seen_count(CHAT, 6001) == 1)
 
     eg.reset_all()
     check("ریست ایموجی تاریخچهٔ چهار گزینه‌ای را پاک نکرد",
-          mc.seen_count(6001) == 1)
+          mc.seen_count(CHAT, 6001) == 1)
     mc.reset_all()
 
 
@@ -594,7 +606,7 @@ def test_repeated_runs():
         item = mc.start_question(CHAT, 7001)
         mc.answer_question(CHAT, str(item["answer"]), 7001)
     check("۵۰ اجرای پیاپی چهار گزینه‌ای بدون تکرار",
-          mc.seen_count(7001) == 50)
+          mc.seen_count(CHAT, 7001) == 50)
     check("سوال بعد از هر بار بسته است",
           mc.get_active_question(CHAT) is None)
 

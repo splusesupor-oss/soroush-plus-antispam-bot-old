@@ -1616,10 +1616,14 @@ async def handle_new_message(bot, event):
             if _chat_game_busy(chat_id):
                 await event.reply(GAME_BUSY_MESSAGE)
                 return
-            if quiz_exhausted(user_id):
-                await event.reply(QUIZ_EXHAUSTED_MESSAGE)
-                return
             try:
+                # ⚠️ اینجا عمداً گیتِ «تمام شد» وجود ندارد.
+                #
+                # پیش‌تر اگر کاربر همهٔ سوال‌ها را دیده بود، بازی برای
+                # همیشه برایش بسته می‌شد. حالا ``start_question`` خودش
+                # دور تازه می‌سازد و سوال‌هایی که دیرتر دیده شده‌اند
+                # دوباره وارد چرخه می‌شوند. ``None`` فقط یعنی واقعاً
+                # هیچ سوالی در بانک نیست.
                 quiz = start_question(chat_id, user_id)
                 if quiz is None:
                     await event.reply(QUIZ_EXHAUSTED_MESSAGE)
