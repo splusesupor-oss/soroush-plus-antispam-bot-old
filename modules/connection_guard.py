@@ -253,6 +253,74 @@ class RpcTimeout(Exception):
 
 
 _RPC_MARKER = "_connection_guard_rpc_timeout"
+_STAMP_MARKER = "_connection_guard_stamped"
+
+
+def _seen_at(sender):
+    """جدول کناری «msg_id → زمان اولین مشاهده» برای یک سِندر.
+
+    ``RequestState`` دارای ``__slots__`` است و اصلاً فیلد تازه قبول
+    نمی‌کند (بررسی شد: ``AttributeError``)، پس زمان را نمی‌توان روی
+    خودِ state چسباند. این جدول کنار سِندر نگه داشته می‌شود و همراه
+    خودِ سِندر آزاد می‌شود.
+    """
+    table = getattr(sender, "_guard_seen_at", None)
+    if table is None:
+        table = {}
+        try:
+            sender._guard_seen_at = table
+        except AttributeError:
+            return {}
+    return table
+
+
+def note_pending(sender):
+    """درخواست‌های معلقِ تازه را زمان‌گذاری و ورودی‌های مرده را پاک می‌کند."""
+    pending = getattr(sender, "_pending_state", None)
+    if pending is None:
+        return
+    table = _seen_at(sender)
+    now = time.monotonic()
+    for msg_id in pending:
+        table.setdefault(msg_id, now)
+    if len(table) > len(pending):
+        for msg_id in [m for m in table if m not in pending]:
+            table.pop(msg_id, None)
+
+
+def drop_stale_pending(sender, deadline):
+    """درخواست‌های معلقی که از مهلت گذشته‌اند را از جدول سِندر پاک می‌کند.
+
+    ``asyncio.wait_for`` فقط *منتظر ماندن* را لغو می‌کند؛ خودِ درخواست
+    در ``sender._pending_state`` باقی می‌ماند چون آن جدول را لایهٔ
+    شبکه پر می‌کند نه فراخوان. بدون پاک‌سازی، هر RPC تایم‌اوت‌خورده
+    یک «زامبی» می‌شود که:
+
+      • تا ابد در حافظه می‌ماند،
+      • ``_pop_states`` را که پیمایش خطی روی همین جدول است کند می‌کند،
+      • و بدتر از همه، در هر reconnect خط
+        ``_send_queue.extend(self._pending_state.values())``
+        همهٔ آن‌ها را دوباره روی سوکت می‌فرستد.
+
+    خروجی: تعداد زامبی‌های پاک‌شده.
+    """
+    pending = getattr(sender, "_pending_state", None)
+    if not pending:
+        return 0
+
+    table = _seen_at(sender)
+    removed = 0
+    for msg_id, state in list(pending.items()):
+        started = table.get(msg_id)
+        if started is None or started > deadline:
+            continue
+        pending.pop(msg_id, None)
+        table.pop(msg_id, None)
+        future = getattr(state, "future", None)
+        if future is not None and not future.done():
+            future.cancel()
+        removed += 1
+    return removed
 
 
 def install_rpc_timeout(client, timeout=60.0, on_timeout=None, logger=None):
@@ -261,27 +329,43 @@ def install_rpc_timeout(client, timeout=60.0, on_timeout=None, logger=None):
     بدون این، گم شدن یک پاسخ یعنی `await` ابدی. با این، درخواست پس از
     `timeout` ثانیه شکست می‌خورد، تسکِ هندلر آزاد می‌شود و ناظر خبردار
     می‌شود تا در صورت لزوم اتصال را بازسازی کند.
+
+    ⚠️ صرفِ `wait_for` کافی نیست و خودش نشتی می‌سازد: درخواست در
+    ``sender._pending_state`` جا می‌ماند. برای همین پس از هر timeout،
+    زامبی‌های همان سِندر پاک می‌شوند.
     """
     original = getattr(client, "_call", None)
     if original is None or getattr(original, _RPC_MARKER, False):
         return False
 
     async def _call(sender, request, ordered=False, flood_sleep_threshold=None):
-        try:
-            return await asyncio.wait_for(
-                original(
-                    sender,
-                    request,
-                    ordered=ordered,
-                    flood_sleep_threshold=flood_sleep_threshold,
-                ),
-                timeout=timeout,
+        started = time.monotonic()
+        task = asyncio.ensure_future(
+            original(
+                sender,
+                request,
+                ordered=ordered,
+                flood_sleep_threshold=flood_sleep_threshold,
             )
+        )
+        # یک چرخهٔ رویداد بعد، درخواست در جدول معلق‌ها نشسته است و
+        # می‌توان زمان آن را ثبت کرد.
+        try:
+            await asyncio.sleep(0)
+            note_pending(sender)
+        except Exception:
+            pass
+        try:
+            return await asyncio.wait_for(task, timeout=timeout)
         except asyncio.TimeoutError:
             name = request.__class__.__name__
+            # هر چیزی که پیش از شروع این درخواست معلق مانده قطعاً
+            # زامبی است؛ همراه با خودِ این درخواست پاک می‌شود.
+            dropped = drop_stale_pending(sender, started)
             if logger is not None:
                 logger.log_error(
-                    f"CONNECTION GUARD rpc timeout after {timeout}s request={name}"
+                    f"CONNECTION GUARD rpc timeout after {timeout}s "
+                    f"request={name} dropped_pending={dropped}"
                 )
             if on_timeout is not None:
                 on_timeout(request)

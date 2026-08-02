@@ -710,7 +710,12 @@ def test_independence():
           imported <= {"economy", "json", "os", "tempfile", "threading",
                        "copy", "datetime", "pathlib", "time", "zoneinfo",
                        # فیلتر نام: فقط کتابخانهٔ استاندارد.
-                       "re", "unicodedata", "importlib"},
+                       "re", "unicodedata", "importlib",
+                       # game_progress نوشتن روی دیسک را به thread
+                       # می‌سپارد تا حلقهٔ رویداد بلاک نشود؛ asyncio هم
+                       # کتابخانهٔ استاندارد است و قید «نداشتن وابستگی
+                       # بیرونی» را نمی‌شکند.
+                       "asyncio"},
           f"-> {sorted(imported)}")
 
     check("فایل دادهٔ اقتصاد جداست",

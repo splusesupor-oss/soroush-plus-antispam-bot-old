@@ -158,11 +158,41 @@ def is_dirty():
 
 
 def snapshot():
-    """کپی فقط-خواندنی از کل داده‌ها."""
+    """کپی فقط-خواندنی از کل داده‌ها.
+
+    ⚠️ این تابع کل فایل را deepcopy می‌کند و هزینه‌اش با رشد داده خطی
+    بالا می‌رود (۲۷KB → ۰٫۴ms، ۱۰۷KB → ۱٫۶ms). برای خواندن یک بخش
+    کوچک از ``read_path`` استفاده کنید، نه این.
+    """
     with _LOCK:
         if getattr(_state, "depth", 0) > 0:
             return copy.deepcopy(_state.data)
         return copy.deepcopy(_read())
+
+
+_MISSING = object()
+
+
+def read_path(*keys, default=None):
+    """فقط یک شاخهٔ کوچک از داده را کپی و برمی‌گرداند.
+
+    جایگزین ارزانِ ``snapshot()`` برای مسیرهای داغ. به‌جای deepcopy از
+    کل فایل، تا رسیدن به شاخهٔ مورد نظر فقط ارجاع دنبال می‌شود و در
+    پایان همان شاخهٔ کوچک کپی می‌شود؛ پس هزینه به *اندازهٔ همان شاخه*
+    بستگی دارد نه به حجم کل فایل.
+
+    کپی لازم است تا فراخوان نتواند کش داخلی را تغییر دهد.
+    """
+    with _LOCK:
+        data = _state.data if getattr(_state, "depth", 0) > 0 else _read()
+        node = data
+        for key in keys:
+            if not isinstance(node, dict):
+                return copy.deepcopy(default)
+            node = node.get(key, _MISSING)
+            if node is _MISSING:
+                return copy.deepcopy(default)
+        return copy.deepcopy(node)
 
 
 def next_sequence(data):

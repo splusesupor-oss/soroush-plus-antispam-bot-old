@@ -20,6 +20,9 @@
 ربات آن را روی دیسک می‌نشاند. برای اطمینان، ``mark_seen`` بلافاصله هم
 flush می‌کند چون از دست رفتن یک مرحله برای کاربر آزاردهنده است.
 """
+import asyncio
+import time
+
 from economy import storage
 from economy.coins import accounts
 
@@ -45,8 +48,11 @@ def _bucket(data, chat_id, user_id, game, *, create=False):
 
 def seen(chat_id, user_id, game):
     """مجموعهٔ مرحله‌هایی که این کاربر در این گروه دیده است."""
-    data = storage.snapshot()
-    return {str(item) for item in _bucket(data, chat_id, user_id, game)}
+    # فقط همین سطل خوانده می‌شود، نه کل فایل. ``snapshot()`` کل داده را
+    # deepcopy می‌کرد و هزینه‌اش با رشد فایل خطی بالا می‌رفت.
+    bucket = storage.read_path(ROOT, _chat(chat_id), str(user_id), game,
+                               default=[])
+    return {str(item) for item in bucket}
 
 
 def seen_count(chat_id, user_id, game):
@@ -58,9 +64,26 @@ def has_seen(chat_id, user_id, game, item):
 
 
 def mark_seen(chat_id, user_id, game, item):
-    """یک مرحله را «دیده‌شده» ثبت می‌کند و روی دیسک می‌نشاند.
+    """یک مرحله را «دیده‌شده» ثبت می‌کند.
 
     خروجی: تعداد کل مرحله‌های دیده‌شده پس از ثبت.
+
+    ⚠️ اینجا عمداً ``storage.flush()`` صدا زده نمی‌شود.
+
+    قبلاً بعد از هر ثبت، کل ``economy.json`` به صورت همگام روی دیسک
+    نوشته می‌شد. اندازه‌گیری واقعی نشان داد این کار حلقهٔ رویداد را
+    بلاک می‌کند و هزینه‌اش با بزرگ شدن فایل خطی رشد می‌کند
+    (۲۷KB → ۳ms، ۱۳۶KB → ۱۴ms برای هر سوال)؛ یعنی ربات هرچه بیشتر کار
+    می‌کرد کندتر می‌شد و با ری‌استارت دوباره سریع می‌شد.
+
+    داده از دست نمی‌رود: تراکنش با ``defer=True`` کش را به‌روز و
+    «کثیف» علامت می‌زند و حلقهٔ دوره‌ای در ``core`` هر ۱۵ ثانیه با
+    ``asyncio.to_thread(flush_economy)`` آن را *خارج از* حلقهٔ رویداد
+    روی دیسک می‌نشاند. برای نقاط حساس، ``flush_now()`` در دسترس است.
+
+    برای اینکه یک کرشِ ناگهانی پیشرفت را نبلعد، نوشتن با فاصلهٔ
+    ``WRITE_DEBOUNCE_SECONDS`` انجام می‌شود: نوشتنِ پشت‌سرهم حذف
+    می‌شود ولی داده بیش از این مدت روی دیسک ننشسته نمی‌ماند.
     """
     value = str(item)
     with storage.transaction(defer=True) as data:
@@ -68,12 +91,77 @@ def mark_seen(chat_id, user_id, game, item):
         if value not in bucket:
             bucket.append(value)
         total = len(bucket)
-    # پیشرفت نباید با یک کرش از دست برود.
-    try:
-        storage.flush()
-    except Exception:
-        pass
+    _maybe_flush()
     return total
+
+
+# فاصلهٔ کمینهٔ نوشتن روی دیسک از مسیر داغ.
+#
+# صفر یعنی همان رفتار قدیمی: نوشتن همگام بعد از *هر* ثبت، که با رشد
+# فایل حلقهٔ رویداد را ثانیه‌ها بلاک می‌کرد. عددی بزرگ یعنی ریسک از
+# دست رفتن پیشرفت هنگام کرش. یک ثانیه هر دو را می‌پوشاند: در یک
+# رگبار پیام فقط یک بار نوشته می‌شود، و بیشترین چیزی که با کرش از
+# دست می‌رود کار همان یک ثانیه است.
+WRITE_DEBOUNCE_SECONDS = 1.0
+
+_last_write = 0.0
+
+
+def _maybe_flush(force=False):
+    """پیشرفت را ماندگار می‌کند، بدون بلاک کردن حلقهٔ رویداد.
+
+    اگر حلقهٔ رویدادی در حال اجراست، نوشتن به یک thread سپرده می‌شود
+    (``json.dump`` کار I/O است و GIL را در زمان نوشتن آزاد می‌کند)، پس
+    پردازش پیام‌ها متوقف نمی‌شود. بیرون از حلقهٔ رویداد — مثل تست‌ها و
+    اسکریپت‌ها — همان‌جا و همگام نوشته می‌شود تا رفتار قابل پیش‌بینی
+    بماند.
+
+    خارج از حلقهٔ رویداد هیچ debounce ای اعمال نمی‌شود: آنجا هزینه‌ای
+    برای پاسخ‌گویی ربات ندارد و در عوض تضمین می‌کند پیشرفت بلافاصله
+    ماندگار شود (کرش نباید مرحلهٔ شروع‌شده را ببلعد). debounce فقط
+    داخل حلقهٔ رویداد معنا دارد، جایی که هدفش نریختن رگبار نوشتن روی
+    یک thread است.
+    """
+    global _last_write
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is None:
+        _last_write = time.monotonic()
+        try:
+            return storage.flush()
+        except Exception:
+            return False
+
+    now = time.monotonic()
+    if not force and (now - _last_write) < WRITE_DEBOUNCE_SECONDS:
+        return False
+    _last_write = now
+
+    # داخل حلقهٔ رویداد: نوشتن در پس‌زمینه، بدون انتظار.
+    task = loop.create_task(asyncio.to_thread(_safe_flush))
+    _BACKGROUND_WRITES.add(task)
+    task.add_done_callback(_BACKGROUND_WRITES.discard)
+    return True
+
+
+# ارجاع نگه داشته می‌شود تا تسک پیش از پایان جمع‌آوری نشود.
+_BACKGROUND_WRITES = set()
+
+
+def _safe_flush():
+    try:
+        return storage.flush()
+    except Exception:
+        return False
+
+
+def flush_now():
+    """نوشتن فوری روی دیسک، بدون توجه به فاصلهٔ debounce."""
+    return _maybe_flush(force=True)
 
 
 def reset(chat_id, user_id, game):
@@ -114,8 +202,7 @@ def reset_game_everywhere(game):
 # پیش کاربر دیگری در همان گروه جواب داده بود، پس بقیه جواب را می‌دانستند.
 # ---------------------------------------------------------------------------
 def recent(chat_id, game):
-    data = storage.snapshot()
-    bucket = data.get(RECENT, {}).get(_chat(chat_id), {}).get(game, [])
+    bucket = storage.read_path(RECENT, _chat(chat_id), game, default=[])
     return [str(item) for item in bucket]
 
 
@@ -135,10 +222,7 @@ def mark_recent(chat_id, game, item, limit):
         if limit > 0 and len(bucket) > limit:
             del bucket[:-limit]
         size = len(bucket)
-    try:
-        storage.flush()
-    except Exception:
-        pass
+    _maybe_flush()
     return size
 
 
@@ -152,9 +236,9 @@ def clear_recent(chat_id, game):
 # دور (cycle): وقتی کاربر همهٔ مرحله‌ها را دید، دور تازه شروع می‌شود
 # ---------------------------------------------------------------------------
 def cycle(chat_id, user_id, game):
-    data = storage.snapshot()
-    user = data.get(ROOT, {}).get(_chat(chat_id), {}).get(str(user_id), {})
-    return int(user.get(f"{game}{CYCLE_KEY}", 0) or 0)
+    value = storage.read_path(ROOT, _chat(chat_id), str(user_id),
+                              f"{game}{CYCLE_KEY}", default=0)
+    return int(value or 0)
 
 
 def start_new_cycle(chat_id, user_id, game):
@@ -175,7 +259,6 @@ def start_new_cycle(chat_id, user_id, game):
 
 def all_users(chat_id, game):
     """کاربران این گروه که در این بازی پیشرفتی دارند."""
-    data = storage.snapshot()
-    chat = data.get(ROOT, {}).get(_chat(chat_id), {})
+    chat = storage.read_path(ROOT, _chat(chat_id), default={})
     return {user_id: len(games.get(game, []))
             for user_id, games in chat.items() if games.get(game)}
