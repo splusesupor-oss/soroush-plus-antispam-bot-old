@@ -381,6 +381,8 @@ def test_vampire_full_game():
             )
             await bot.client.send_message(chosen["player"]["user_id"],
                                           vp.ROLE_MESSAGE)
+            # قرارداد تازهٔ ``on_roles``: ``(chosen, mode)``.
+            return chosen, "dm"
 
         vp.schedule(CHAT, session_id, {
             "on_abort": noop, "on_roles": on_roles, "on_timeout": noop,

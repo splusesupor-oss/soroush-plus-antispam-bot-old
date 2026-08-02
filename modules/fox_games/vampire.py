@@ -33,46 +33,25 @@ CHOSEN_MESSAGE = (
     "حالا حدس بزنید خون‌آشام کیست!"
 )
 
-# ⚠️ این پیام دیگر هرگز فرستاده نمی‌شود و بازی هم لغو نمی‌شود.
+# 🔒 قانون طلایی این بازی: نقش فقط و فقط در پیام خصوصی.
 #
-# فقط برای سازگاری عقب‌رو نگه داشته شده تا اگر جایی هنوز به آن ارجاع
-# می‌دهد خطای import ندهد. مسیر جدید در ``deliver_role`` است.
+# نسخهٔ قبلی وقتی پیوی نمی‌رفت نقش را داخل گروه «پشت اسپویلر» اعلام
+# می‌کرد. این کار امنیت بازی را نابود می‌کرد: اسپویلر فقط یک پوشش
+# نمایشی است و هر عضو گروه می‌تواند روی آن بزند و نام خون‌آشام را
+# ببیند. آن مسیر کاملاً حذف شد.
+#
+# جای آن، اگر پیوی یک بازیکن نرود، همان بازیکن خون‌آشام نمی‌شود و
+# نقش به بازیکن دیگری می‌رسد که پیوی‌اش باز است. چون انتخاب خون‌آشام
+# از ابتدا تصادفی است، این جابه‌جایی نه چیزی لو می‌دهد و نه بازی را
+# متوقف می‌کند.
+#
+# فقط اگر پیوی *هیچ* بازیکنی باز نشود بازی انجام نمی‌شود، چون در آن
+# حالت رساندن نقش بدون لو رفتن اساساً ممکن نیست. پیام زیر عمداً هیچ
+# نامی نمی‌برد و از کسی نمی‌خواهد دستی به ربات پیام بدهد.
 DM_FAILED_MESSAGE = (
-    "❌ ارسال پیام خصوصی به خون‌آشام ناموفق بود؛ بازی لغو شد.\n\n"
-    "بازیکن باید یک بار به ربات پیام خصوصی بدهد تا امکان ارسال فراهم شود."
+    "🧛 این دور انجام نشد.\n\n"
+    "چند لحظه دیگر دوباره «خون آشام» را بفرستید."
 )
-
-# 🩸 وقتی پیوی هیچ بازیکنی نرسد، نقش داخل گروه ولی پشت «اسپویلر»
-# اعلام می‌شود. متن تا وقتی روی آن نزنند دیده نمی‌شود، پس بازی
-# می‌تواند ادامه پیدا کند بدون آنکه کسی مجبور شود از قبل به ربات
-# پیام خصوصی داده باشد.
-SECRET_FALLBACK_HEADER = "🧛 نقش مخفی این دور"
-SECRET_FALLBACK_HINT = (
-    "فقط همین بازیکن روی کادر زیر بزند؛ بقیه نگاه نکنند.\n\n"
-    "بعد از دیدن نقش، حدس بزنید خون‌آشام کیست!"
-)
-
-
-def secret_role_message(player):
-    """متن اعلام نقش داخل گروه + بازهٔ اسپویلر روی نام.
-
-    خروجی ``(text, spans)`` است. ``spans`` همان قالب خنثای پروژه است
-    (``(kind, offset, length)`` با offset بر حسب UTF-16) تا لایهٔ هندلر
-    آن را به entity واقعی سروش تبدیل کند؛ این ماژول عمداً هیچ چیزی از
-    splusthon import نمی‌کند.
-    """
-    name = player.get("name") or "بازیکن ناشناس"
-    text = (
-        f"{SECRET_FALLBACK_HEADER}\n\n"
-        f"{name}\n\n"
-        f"{SECRET_FALLBACK_HINT}"
-    )
-    index = text.find(name)
-    if index < 0:
-        return text, []
-    offset = len(text[:index].encode("utf-16-le")) // 2
-    length = len(name.encode("utf-16-le")) // 2
-    return text, [("spoiler", offset, length)]
 
 
 async def send_role_dm(client, player, logger=None, chat_id=None):
@@ -119,45 +98,74 @@ async def send_role_dm(client, player, logger=None, chat_id=None):
     return False, last_error
 
 
-async def deliver_role(client, player, logger=None, chat_id=None,
-                       send_secret=None):
-    """نقش را می‌رساند و **هرگز** بازی را لغو نمی‌کند.
+def reassign_vampire(chat_id, user_id, logger=None):
+    """خون‌آشام را به بازیکن دیگری منتقل می‌کند.
 
-    ترتیب:
-      ۱. تلاش برای پیام خصوصی. سروش اجازهٔ شروع خودکار گفت‌وگو را
-         می‌دهد چون شیء ``User`` رویداد گروه ``access_hash`` دارد و
-         بدون هیچ چت قبلی به ``InputPeerUser`` تبدیل می‌شود.
-      ۲. اگر سرور اجازه نداد (حریم خصوصی، بلاک، نبود چت قبلی و…)،
-         نقش داخل همان گروه پشت اسپویلر اعلام می‌شود.
-
-    خروجی: ``"dm"`` یا ``"secret"`` یا ``"failed"``. حالت ``"failed"``
-    فقط وقتی رخ می‌دهد که راه جایگزین هم در دسترس نباشد؛ حتی در آن
-    حالت هم فراخوان نباید بازی را لغو کند.
+    وقتی پیوی بازیکن انتخاب‌شده باز نمی‌شود، به‌جای لو دادن نقش داخل
+    گروه یا لغو بازی، نفر بعدی امتحان می‌شود. خروجی همان ساختار
+    ``choose_vampire`` است، یا ``None`` اگر کسی باقی نمانده باشد.
     """
-    ok, error = await send_role_dm(client, player, logger=logger,
-                                   chat_id=chat_id)
-    if ok:
-        return "dm"
+    session = _STORE.get(chat_id)
+    if not session or session.get("phase") != "assigning":
+        return None
 
-    log(logger, f"FOX VAMPIRE ROLE FALLBACK chat_id={chat_id} "
-                f"user_id={player.get('user_id')} reason={error!r}")
+    session.setdefault("unreachable", set()).add(user_id)
+    remaining = [
+        index
+        for index, player in enumerate(session["players"])
+        if player["user_id"] not in session["unreachable"]
+    ]
+    if not remaining:
+        log_error(logger, f"FOX VAMPIRE NO REACHABLE PLAYER chat_id={chat_id}")
+        return None
 
-    if send_secret is None:
-        log_error(logger, f"FOX VAMPIRE ROLE FALLBACK UNAVAILABLE "
-                          f"chat_id={chat_id} user_id={player.get('user_id')}")
-        return "failed"
+    index = _RANDOM.choice(remaining)
+    session["vampire"] = index
+    vampire = session["players"][index]
+    log(logger, f"FOX VAMPIRE REASSIGNED chat_id={chat_id} "
+                f"from_user_id={user_id} to_user_id={vampire['user_id']} "
+                f"number={index + 1}")
+    return {
+        "number": index + 1,
+        "player": dict(vampire),
+        "players": list(session["players"]),
+    }
 
-    text, spans = secret_role_message(player)
-    try:
-        await send_secret(text, spans)
-    except Exception as fallback_error:
-        log_error(logger, f"FOX VAMPIRE ROLE FALLBACK FAILED "
-                          f"chat_id={chat_id} error={fallback_error!r}")
-        return "failed"
 
-    log(logger, f"FOX VAMPIRE ROLE SECRET SENT chat_id={chat_id} "
-                f"user_id={player.get('user_id')}")
-    return "secret"
+async def deliver_role(client, chat_id, chosen, logger=None):
+    """نقش را **فقط** از راه پیام خصوصی می‌رساند.
+
+    سروش اجازهٔ شروع خودکار گفت‌وگوی خصوصی را می‌دهد: شیء ``User`` که
+    همراه رویداد گروه می‌آید ``access_hash`` واقعی دارد و بدون هیچ چت
+    قبلی، بدون کش و بدون درخواست شبکه به ``InputPeerUser`` تبدیل
+    می‌شود. پس در حالت عادی نیازی نیست کاربر از قبل به ربات پیام داده
+    باشد.
+
+    اگر با این حال سرور اجازه نداد (حریم خصوصی، بلاک و…)، نقش داخل
+    گروه اعلام **نمی‌شود**؛ خون‌آشام به بازیکن دیگری منتقل می‌شود.
+
+    خروجی ``(chosen, mode)`` با mode برابر ``"dm"`` یا ``"failed"``.
+    ``chosen`` ممکن است با ورودی فرق کند، چون نقش جابه‌جا شده است.
+    """
+    attempted = 0
+    while chosen is not None:
+        attempted += 1
+        ok, error = await send_role_dm(
+            client, chosen["player"], logger=logger, chat_id=chat_id)
+        if ok:
+            log(logger, f"FOX VAMPIRE ROLE DELIVERED chat_id={chat_id} "
+                        f"attempts={attempted}")
+            return chosen, "dm"
+
+        log(logger, f"FOX VAMPIRE ROLE UNREACHABLE chat_id={chat_id} "
+                    f"user_id={chosen['player'].get('user_id')} "
+                    f"reason={error!r} -> trying another player")
+        chosen = reassign_vampire(
+            chat_id, chosen["player"].get("user_id"), logger)
+
+    log_error(logger, f"FOX VAMPIRE ROLE UNDELIVERABLE chat_id={chat_id} "
+                      f"attempts={attempted}")
+    return None, "failed"
 
 
 def is_active(chat_id):
@@ -380,6 +388,21 @@ def format_reveal(vampire):
     return f"⏰ زمان تمام شد.\n\n🧛 خون‌آشام:\n\n{name}{suffix}"
 
 
+def _normalize_delivery(result, fallback_chosen):
+    """خروجی ``on_roles`` را به ``(chosen, mode)`` یکدست می‌کند.
+
+    قرارداد رسمی ``(chosen, mode)`` است، ولی فراخوان‌های ساده‌تر (مثل
+    تست‌هایی که فقط جریان زمان‌بندی را می‌سنجند) ممکن است ``None`` یا
+    یک مقدار boolean برگردانند. آن‌ها به معنی «نقش رسید» تفسیر می‌شوند
+    تا این حالت‌ها بازی را بی‌دلیل لغو نکنند.
+    """
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+    if result is False:
+        return None, "failed"
+    return fallback_chosen, "dm"
+
+
 async def run_game(chat_id, session_id, callbacks, logger=None,
                    join_seconds=None, guess_seconds=None):
     """چرخهٔ کامل بازی؛ افشای خون‌آشام همیشه تضمین شده است."""
@@ -405,15 +428,14 @@ async def run_game(chat_id, session_id, callbacks, logger=None,
             revealed = True
             return
 
-        # نقش باید *قبل* از باز شدن مرحلهٔ حدس برسد.
+        # نقش باید *قبل* از باز شدن مرحلهٔ حدس برسد، و فقط از راه پیوی.
         #
-        # پیش از این، شکست پیام خصوصی کل بازی را لغو می‌کرد و از کاربر
-        # می‌خواست دستی به ربات پیوی بدهد — تجربهٔ بدی که در گروه عملاً
-        # یعنی بازی هرگز شروع نمی‌شود. حالا ``on_roles`` خودش راه
-        # جایگزین (اعلام پشت اسپویلر داخل گروه) را امتحان می‌کند و بازی
-        # فقط در صورتی متوقف می‌شود که *هیچ* راهی برای رساندن نقش نماند.
-        delivery = await callbacks["on_roles"](chosen)
-        if delivery == "failed" or delivery is False:
+        # ``on_roles`` اگر پیوی بازیکن باز نشود، نقش را به بازیکن دیگری
+        # منتقل می‌کند و ``chosen`` تازه را برمی‌گرداند. هیچ نقشی و هیچ
+        # نامی داخل گروه اعلام نمی‌شود.
+        chosen, delivery = _normalize_delivery(
+            await callbacks["on_roles"](chosen), chosen)
+        if delivery != "dm" or chosen is None:
             log_error(logger, f"FOX VAMPIRE ABORT chat_id={chat_id} "
                               f"session_id={session_id} reason=role_undeliverable")
             abandon(chat_id, session_id, logger)
