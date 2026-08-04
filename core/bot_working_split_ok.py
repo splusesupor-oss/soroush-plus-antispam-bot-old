@@ -94,6 +94,14 @@ global functions
 
 from splusthon.tl import functions
 from collections import defaultdict, deque
+
+# وصلهٔ ارسالِ فایل: درخواست‌های SaveFilePart را به media DC می‌فرستد تا
+# خطای FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER در آپلود عکس رخ ندهد.
+try:
+    from modules.splusthon_upload_fix import install_media_upload
+    _MEDIA_UPLOAD_PATCH_AVAILABLE = True
+except Exception:  # pragma: no cover - اگر ماژول در دسترس نبود، ربات بی‌ضرر ادامه می‌دهد
+    _MEDIA_UPLOAD_PATCH_AVAILABLE = False
 # ---------------------------------------------------
 
 
@@ -170,6 +178,11 @@ class SoroushAntiSpamBot:
             raise RuntimeError("SPlusthon نصب نیست")
 
         self.client = self._make_client()
+
+        # وصلهٔ آپلودِ فایل (media DC) را روی کلاسِ کلاینت نصب می‌کند.
+        # چون روی کلاس است، کلاینت‌هایِ بازسازی‌شده هم خودکار وصله‌خورده‌اند.
+        if _MEDIA_UPLOAD_PATCH_AVAILABLE:
+            install_media_upload()
 
         self.spammer_messages = defaultdict(lambda: deque(maxlen=5000))
         instrument_client(self.client, self.logger)
