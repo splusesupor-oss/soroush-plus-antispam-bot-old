@@ -46,6 +46,8 @@ from handlers.fox_games_router import (
     FOX_GAME_COMMANDS,
     handle as handle_fox_games,
 )
+# 📥 قابلیت مستقل «دانلود عکس».
+from handlers.photo_download_handler import handle as handle_photo_download
 # ⏳ تاریخ انقضای گروه — قابلیتی کاملاً مستقل با مسیر پردازش جدا.
 from handlers.group_expiry_handler import (
     EXPIRED_NOTICE as GROUP_EXPIRED_NOTICE,
@@ -864,6 +866,19 @@ async def handle_new_message(bot, event):
         clean_text = message_text.strip()
 
         # ------------------------------------------------------------------
+        # 📥 دانلود عکس — اتصالِ زودهنگام تا پیامِ مرحله‌ای (عبارت/تأیید/لغو)
+        # پیش از spam/repeat/سایر شاخه‌ها به هندلرِ مستقل برسد. فقط وقتی
+        # جریانِ دانلودِ این کاربر فعال است یا خودِ دستور ارسال شده.
+        # ------------------------------------------------------------------
+        from modules import photo_download as _photo_dl
+        if (clean_text == _photo_dl.COMMAND
+                or _photo_dl.session(chat_id, user_id) is not None):
+            if await handle_photo_download(
+                bot, event, chat_id, user_id, sender, clean_text, bot.logger
+            ):
+                return
+
+        # ------------------------------------------------------------------
         # 📇 دفترچهٔ یوزرنیم — پیش از هر شاخهٔ دستوری.
         #
         # انتقال سکه با یوزرنیم انجام می‌شود، پس مقصد باید شناخته شده
@@ -1430,6 +1445,12 @@ async def handle_new_message(bot, event):
                 await event.reply(result)
                 return
 
+
+        # ---- 📥 دانلود عکس (مستقل، قبل از بازی‌ها) ----
+        if await handle_photo_download(
+            bot, event, chat_id, user_id, sender, clean_text, bot.logger
+        ):
+            return
 
         # ---- بازی‌های Fox AI (کاملاً مستقل، فقط از این نقطه وصل می‌شوند) ----
         if await handle_fox_games(

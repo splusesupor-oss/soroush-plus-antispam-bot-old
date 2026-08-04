@@ -222,7 +222,7 @@ def test_dm_succeeds_with_cold_cache():
     chosen = vp.choose_vampire(CHAT, logger)
     client = RealisticClient(cache={})       # کش خالی، مثل بعد از ری‌استارت
 
-    ok, error = asyncio.run(
+    ok, error, _transient = asyncio.run(
         vp.send_role_dm(client, chosen["player"], logger=logger, chat_id=CHAT))
     check("ارسال پیوی موفق بود", ok is True, f"-> {error!r}")
     check("دقیقاً یک پیام ارسال شد", len(client.sent) == 1)
@@ -244,7 +244,7 @@ def test_old_behaviour_would_fail():
     legacy = dict(chosen["player"])
     legacy["peer"] = None                     # همان کاری که کد قدیمی می‌کرد
     client = RealisticClient(cache={})
-    ok, error = asyncio.run(
+    ok, error, _transient = asyncio.run(
         vp.send_role_dm(client, legacy, logger=logger, chat_id=CHAT))
     check("با شناسهٔ عددی و کش خالی ارسال شکست می‌خورد", ok is False)
     check("خطا از نوع ValueError است", isinstance(error, ValueError),
