@@ -256,6 +256,14 @@ def _make_image_stream(data, index=0):
     return stream
 
 
+def _log(bot, message):
+    """لاگِ امن روی logger ربات (در صورت وجود)."""
+    try:
+        bot.logger.log_info(message)
+    except Exception:
+        pass
+
+
 async def _send_by_url(bot, chat_id, url):
     """ارسالِ عکس با URL (InputMediaPhotoExternal).
 
@@ -275,34 +283,48 @@ async def _send_by_url(bot, chat_id, url):
 async def _send_image(bot, chat_id, url):
     """ارسالِ یک عکس به چت؛ برمی‌گرداند True اگر موفق.
 
-    ترتیب (به‌ترتیب برای «واقعی انجام دادن»):
-      ۱) دانلودِ bytes و اعتبارسنجی (فقط عکسِ واقعی) — اگر دانلود نشد،
-         این عکس ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود.
-      ۲) آپلود با ``send_file`` (مسیرِ اصلیِ ارسال فایل).
-      ۳) در صورتِ شکستِ آپلود: ارسال با URL (InputMediaPhotoExternal) —
-         سرور خودش تصویر را می‌گیرد؛ بدونِ آپلود، بدونِ خطای SaveFilePart.
+    ترتیبِ روشِ ارسال (با لاگ):
+      ۱) ارسال با URL (InputMediaPhotoExternal) — سرورِ سروش خودش تصویر را
+         می‌گیرد؛ **بدونِ آپلود**، بدونِ خطای SaveFilePart. این روشِ مطمئنِ
+         اصلی است چون آپلودِ فایل در این محیطِ سروش روی connection server
+         کار نمی‌کند.
+      ۲) در صورتِ شکستِ روشِ بالا: دانلودِ bytes + آپلود با ``send_file``
+         (fallback؛ فقط در محیط‌هایی که media-DC کار کند موفق می‌شود).
+    هزینه فقط بابت عکس‌هایی که واقعاً در چت ارسال شدند کسر می‌شود.
     """
-    # ۱) دانلود + اعتبارسنجی
+    _log(bot, f"PHOTO SEND START chat_id={chat_id} url={url}")
+
+    # ۱) دانلود + اعتبارسنجی — فقط عکسِ واقعی. اگر دانلود نشد، این عکس
+    #    ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود.
     try:
         data = await asyncio.to_thread(_fetch_image_bytes, url)
     except Exception:
         data = None
     if not data:
+        _log(bot, "PHOTO SEND result=SKIP reason=download_invalid")
         return False
 
-    # ۲) آپلود (مسیرِ اصلی)
+    # ۲) ارسال با URL (InputMediaPhotoExternal) — سرورِ سروش خودش تصویر را
+    #    می‌گیرد؛ بدونِ آپلود، بدونِ خطای SaveFilePart. این روشِ مطمئنِ اصلی
+    #    است چون آپلودِ فایل در این محیطِ سروش روی connection server
+    #    کار نمی‌کند.
+    try:
+        await _send_by_url(bot, chat_id, url)
+        _log(bot, "PHOTO SEND method=external_url result=OK")
+        return True
+    except Exception as e:
+        _log(bot, f"PHOTO SEND method=external_url result=FAIL "
+                  f"reason={type(e).__name__}: {e}")
+
+    # ۳) fallback: آپلود با send_file (فقط در محیط‌هایی که media-DC کار کند).
     stream = _make_image_stream(data, 0)
     try:
         await bot.client.send_file(chat_id, stream)
+        _log(bot, "PHOTO SEND method=upload result=OK")
         return True
-    except Exception:
-        pass
-
-    # ۳) fallback: ارسال با URL (بدونِ آپلود)
-    try:
-        await _send_by_url(bot, chat_id, url)
-        return True
-    except Exception:
+    except Exception as e:
+        _log(bot, f"PHOTO SEND method=upload result=FAIL "
+                  f"reason={type(e).__name__}: {e}")
         return False
 
 

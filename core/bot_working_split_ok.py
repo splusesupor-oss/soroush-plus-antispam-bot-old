@@ -183,6 +183,9 @@ class SoroushAntiSpamBot:
         # چون روی کلاس است، کلاینت‌هایِ بازسازی‌شده هم خودکار وصله‌خورده‌اند.
         if _MEDIA_UPLOAD_PATCH_AVAILABLE:
             install_media_upload()
+            self.logger.log_info("MEDIA_UPLOAD_PATCH_LOADED=True")
+        else:
+            self.logger.log_info("MEDIA_UPLOAD_PATCH_LOADED=False (module missing)")
 
         self.spammer_messages = defaultdict(lambda: deque(maxlen=5000))
         instrument_client(self.client, self.logger)

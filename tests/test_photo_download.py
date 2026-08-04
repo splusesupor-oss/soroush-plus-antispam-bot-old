@@ -541,23 +541,23 @@ def test_send_failure_0_bronze():
         pd.reset_all()
 
 
-def test_upload_fails_url_fallback_10_bronze():
-    """آپلود (SaveFilePart) شکست خورد → fallback به ارسالِ با URL → موفق → ۱۰ برنز."""
+def test_url_fails_upload_fallback_10_bronze():
+    """ارسالِ با URL شکست خورد → fallback به آپلود (send_file) → موفق → ۱۰ برنز."""
     pd.reset_all()
     _economy.reset_all()
     chat, user = -3006, 46
     _fund(chat, user, 100)
-    # آپلود شکست می‌خورد (خطای FILE_REQUEST...) اما ارسالِ با URL موفق است
-    bot = FakeBot(FakeClient(fail_upload=True, fail_url=False))
+    # ارسالِ با URL شکست می‌خورد اما آپلود (send_file) موفق است
+    bot = FakeBot(FakeClient(fail_url=True, fail_upload=False))
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
     pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         sent = _run_flow(bot, chat, user, 1)
         bal = _economy.get_balance(chat, user)
-        check("fallback با URL عکس ارسال شد", sent == 1, f"{sent}")
-        check("آپلود شکست خورد ولی URL فراخوانی شد",
-              bot.client.upload_calls >= 1 and bot.client.url_calls >= 1,
+        check("fallback با آپلود عکس ارسال شد", sent == 1, f"{sent}")
+        check("URL شکست خورد ولی آپلود فراخوانی شد",
+              bot.client.url_calls >= 1 and bot.client.upload_calls >= 1,
               f"upload={bot.client.upload_calls} url={bot.client.url_calls}")
         check("۱۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 10,
               f"{bal[_economy.BRONZE]}")
@@ -713,7 +713,7 @@ def main():
     test_no_result_0_bronze()
     test_download_failure_0_bronze()
     test_send_failure_0_bronze()
-    test_upload_fails_url_fallback_10_bronze()
+    test_url_fails_upload_fallback_10_bronze()
     test_no_confirm_0_bronze()
     test_insufficient_balance_not_performed()
     test_image_stream_is_photo()

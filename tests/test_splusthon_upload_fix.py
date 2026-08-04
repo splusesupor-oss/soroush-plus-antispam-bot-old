@@ -118,7 +118,8 @@ def test_redirect_file_upload_to_media():
           isinstance(calls[0][1], _up.SaveFilePartRequest))
 
 
-def test_no_media_falls_back_to_original():
+def test_no_media_raises_error():
+    """بدون media sender → به sender اصلی برنمی‌گردد و خطای واضح می‌دهد."""
     async def run():
         fs = FakeSelf()
         orig = []
@@ -126,14 +127,18 @@ def test_no_media_falls_back_to_original():
             orig.append(request)
             return "orig"
         req = _up.SaveFilePartRequest(7, 0, b"data")
-        result = await fx._redirected_call(
-            fs, req, _orig_call=orig_call,
-            _get_sender=await _sender_returns(None))
-        return result, orig, fs.calls
+        try:
+            await fx._redirected_call(
+                fs, req, _orig_call=orig_call,
+                _get_sender=await _sender_returns(None))
+            return "no-error", orig, fs.calls
+        except fx.MediaSenderUnavailableError:
+            return "raised", orig, fs.calls
     result, orig, calls = asyncio.run(run())
-    check("بدون media sender → به مسیرِ اصلی برگشت", result == "orig", f"{result}")
-    check("درخواست به _call با media sender نرفت", len(calls) == 0, f"{calls}")
-    check("درخواست به orig_call رسید", len(orig) == 1, f"{orig}")
+    check("بدون media sender → MediaSenderUnavailableError",
+          result == "raised", f"{result}")
+    check("هرگز به _call با media sender نرفت", len(calls) == 0, f"{calls}")
+    check("هرگز به orig_call (sender اصلی) نرسید", len(orig) == 0, f"{orig}")
 
 
 def test_non_file_not_redirected():
@@ -171,7 +176,7 @@ def main():
     test_find_media_dc_no_config()
     test_is_file_upload()
     test_redirect_file_upload_to_media()
-    test_no_media_falls_back_to_original()
+    test_no_media_raises_error()
     test_non_file_not_redirected()
     test_install_idempotent_and_patches()
     print(f"\npassed={PASSED} failed={FAILED}")

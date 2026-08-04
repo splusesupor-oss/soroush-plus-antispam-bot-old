@@ -13,14 +13,14 @@ SPlusthon آپلود را با ``self(request)`` یعنی از طریق همان
 اصلی (که به im-server.splus.ir یعنی connection server وصل است) می‌فرستد؛
 بنابراین ``SaveFilePartRequest`` به سرورِ اتصال می‌رسد و رد می‌شود.
 
-راه‌حل
-------
-این ماژول با monkey-patch کردن ``SoroushClient.__call__``، درخواست‌های
-``SaveFilePartRequest`` / ``SaveBigFilePartRequest`` را از طریق یک
-``MTProtoSender`` اختصاصی (متصل به media DC خوانده‌شده از config زندهٔ
-سرور، یا در نبودِ media DC، یک اتصالِ جداگانه به DC فعلی) ارسال می‌کند.
-اگر ساختِ sender رسانه‌ای ممکن نبود، به رفتارِ قبلی (sender اصلی) برمی‌گردد
-تا هیچ چیزی بدتر نشود.
+قانونِ این وصله
+---------------
+**هرگز** ``SaveFilePart``/``SaveBigFilePart`` را روی connection server
+اصلی نفرست. اگر sender رسانه‌ای (media/file DC) ساخته شد → آپلود از طریقِ
+آن برود. اگر ساخته نشد → به‌جای fallback روی sender اصلی، خطای واضحِ
+``MediaSenderUnavailableError`` صادر می‌شود تا لایهٔ بالاتر (photo_download)
+با ``InputMediaPhotoExternal`` ارسال کند؛ هیچ‌وقت آپلود روی سرورِ اتصال
+انجام نمی‌شود.
 """
 import logging
 
@@ -38,6 +38,11 @@ _FILE_UPLOAD_TYPES = (
 
 _INSTALLED = False
 _ORIGINAL_CALL = None
+
+
+class MediaSenderUnavailableError(RuntimeError):
+    """sender رسانه‌ای/فایل در دسترس نیست؛ برای جلوگیری از ارسالِ
+    SaveFilePart روی connection server اصلی صادر می‌شود."""
 
 
 def _find_media_dc(client):
@@ -72,20 +77,31 @@ def _fallback_dc(client):
 
 
 async def _ensure_config(client):
+    """اطمینان از اینکه config زندهٔ سرور (dc_options) لود شده است."""
     if getattr(client, "_config", None) is None:
         try:
             client._config = await client(functions.help.GetConfigRequest())
+            _log.info("MEDIA SENDER: config loaded with %d dc_options",
+                      len(getattr(client._config, "dc_options", []) or []))
         except Exception as e:  # pragma: no cover - فقط دفاعی
             _log.warning("GetConfig failed while preparing upload: %s", e)
+            return False
+    return getattr(client, "_config", None) is not None
 
 
 async def _create_media_sender(client, dc):
     """یک MTProtoSender اختصاصی به سرورِ فایل/DC داده‌شده می‌سازد.
 
-    هم‌انند ``_create_exported_sender`` کتابخانه، اما به‌جای
-    ``_get_dc`` (که همه‌چیز را به im-server می‌برد) به آدرسِ واقعیِ
-    media DC وصل می‌شود.
+    آدرسِ WebSocket/DC را log می‌کند تا علتِ قطعِ اتصال معلوم شود.
     """
+    _log.info(
+        "MEDIA SENDER connecting to ws dc=%s ip=%s port=%s "
+        "(media_only=%s)",
+        getattr(dc, "id", None),
+        getattr(dc, "ip_address", None),
+        getattr(dc, "port", None),
+        getattr(dc, "media_only", None),
+    )
     sender = MTProtoSender(None, loggers=getattr(client, "_log", None))
     await sender.connect(client._connection(
         dc.ip_address,
@@ -95,13 +111,14 @@ async def _create_media_sender(client, dc):
         proxy=getattr(client, "_proxy", None),
         local_addr=getattr(client, "_local_addr", None),
     ))
-    _log.info("Exporting auth for media/file sender DC %s", dc.id)
+    _log.info("MEDIA SENDER connected; exporting auth for DC %s", getattr(dc, "id", None))
     auth = await client(functions.auth.ExportAuthorizationRequest(dc.id))
     client._init_request.query = functions.auth.ImportAuthorizationRequest(
         id=auth.id, bytes=auth.bytes)
     req = functions.InvokeWithLayerRequest(LAYER, client._init_request)
     await sender.send(req)
     sender.dc_id = dc.id
+    _log.info("MEDIA SENDER ready dc=%s", dc.id)
     return sender
 
 
@@ -114,16 +131,42 @@ def _sender_alive(sender):
 
 
 async def _get_media_sender(client):
-    """sender مخصوصِ آپلود را برای این کلاینت می‌سازد/برمی‌گرداند (یا None)."""
+    """sender مخصوصِ آپلود را برای این کلاینت می‌سازد/برمی‌گرداند (یا None).
+
+    اگر ساخت قبلاً شکست خورده باشد (``_media_sender_failed``)، برای جلوگیری
+    از تلاشِ تکراریِ بی‌نتیجه سریعاً None برمی‌گرداند.
+    """
     sender = getattr(client, "_media_sender", None)
     if sender is not None and _sender_alive(sender):
         return sender
-    await _ensure_config(client)
+    if getattr(client, "_media_sender_failed", False):
+        return None
+
+    if not await _ensure_config(client):
+        _log.error("MEDIA SENDER unavailable: client._config is None")
+        client._media_sender_failed = True
+        return None
+
     dc = _find_media_dc(client) or _fallback_dc(client)
+    _log.info(
+        "MEDIA SENDER selected dc=%s ip=%s port=%s media_only=%s",
+        getattr(dc, "id", None),
+        getattr(dc, "ip_address", None),
+        getattr(dc, "port", None),
+        getattr(dc, "media_only", None),
+    )
     try:
         sender = await _create_media_sender(client, dc)
     except Exception as e:
-        _log.warning("Could not create media sender (%s); uploads use main sender", e)
+        _log.error(
+            "MEDIA SENDER creation FAILED dc=%s ip=%s reason=%s: %s "
+            "(will NOT fall back to main sender)",
+            getattr(dc, "id", None),
+            getattr(dc, "ip_address", None),
+            type(e).__name__,
+            e,
+        )
+        client._media_sender_failed = True
         return None
     client._media_sender = sender
     return sender
@@ -137,14 +180,23 @@ def _is_file_upload(request):
 
 async def _redirected_call(self, request, ordered=False, flood_sleep_threshold=None,
                            _orig_call=None, _get_sender=None):
-    """پیاده‌سازیِ واقعیِ هدایتِ آپلود به media DC (برای تست قابلِ فراخوانی)."""
+    """پیاده‌سازیِ واقعیِ هدایتِ آپلود (برای تست قابلِ فراخوانی).
+
+    قانونِ کلیدی: اگر درخواستِ SaveFilePart/SaveBigFilePart باشد و sender
+    رسانه‌ای در دسترس نباشد، **به sender اصلی برنمی‌گردد** و خطای واضح
+    می‌دهد تا لایهٔ بالاتر با InputMediaPhotoExternal ارسال کند.
+    """
     get_sender = _get_sender or _get_media_sender
     if _is_file_upload(request):
         media = await get_sender(self)
-        if media is not None:
-            return await self._call(
-                media, request, ordered=ordered,
-                flood_sleep_threshold=flood_sleep_threshold)
+        if media is None:
+            raise MediaSenderUnavailableError(
+                "Media/file sender unavailable; refusing to send "
+                "SaveFilePart on the main connection server "
+                "(would trigger FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER)")
+        return await self._call(
+            media, request, ordered=ordered,
+            flood_sleep_threshold=flood_sleep_threshold)
     orig = _orig_call or _ORIGINAL_CALL
     return await orig(self, request, ordered=ordered,
                       flood_sleep_threshold=flood_sleep_threshold)
@@ -153,9 +205,10 @@ async def _redirected_call(self, request, ordered=False, flood_sleep_threshold=N
 def install_media_upload():
     """مونکی‌پچِ ``SoroushClient.__call__`` برای مسیریابیِ آپلود به media DC.
 
-    بی‌ضرر است: فقط درخواست‌های SaveFilePart/SaveBigFilePart را در صورتِ
-    در دسترس‌بودنِ sender رسانه‌ای هدایت می‌کند؛ بقیهٔ درخواست‌ها دست‌نخورده
-    می‌مانند. چند بار صدا زدنِ آن بی‌اثر است (idempotent).
+    - درخواست‌های SaveFilePart/SaveBigFilePart را در صورتِ در دسترس‌بودنِ
+      sender رسانه‌ای به آن هدایت می‌کند.
+    - اگر sender رسانه‌ای در دسترس نبود → خطای واضح (هرگز sender اصلی).
+    - بقیهٔ درخواست‌ها دست‌نخورده. چند بار صدا زدن بی‌اثر است.
     """
     global _INSTALLED, _ORIGINAL_CALL
     if _INSTALLED:
@@ -169,3 +222,4 @@ def install_media_upload():
 
     SoroushClient.__call__ = _bound_redirect
     _INSTALLED = True
+    _log.info("MEDIA_UPLOAD_PATCH_LOADED=True")
