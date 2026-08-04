@@ -499,7 +499,7 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
 # 🧩 معما
 # ---------------------------------------------------------------------------
 async def _show_maemma_question(event, question, logger=None):
-    """یک معما را نمایش می‌دهد."""
+    """یک معما را نمایش می‌دهد (متن سوال Bold)."""
     title = f"🧩 معما — سوال {to_persian_digits(question['number'])} " \
             f"از {to_persian_digits(question['total'])}"
     time_line = f"⏳ {to_persian_digits(maemma.TIMEOUT_SECONDS)} ثانیه فرصت دارید"
@@ -508,7 +508,7 @@ async def _show_maemma_question(event, question, logger=None):
         f"{question['emoji']}\n\n"
         f"{time_line}"
     )
-    await _bold_reply(event, text, [title, time_line])
+    await _bold_reply(event, text, [title, question['emoji'], time_line])
 
 
 async def _show_maemma_result(event, correct, total, logger=None):
@@ -772,19 +772,11 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
                 await _bold_reply(event, msg, [msg])
                 return True
         result, _info = battle.answer(chat_id, user_id, text, logger)
+        # هنگام بازی، هیچ پیامِ پاداشی/خطایی نمایش داده نمی‌شود تا خروجی
+        # تمیز بماند؛ فقط سوال‌ها و در پایان، نتیجهٔ نهایی و جایزه اعلام می‌شود.
         if result in {"no_game", "no_question"}:
             return False
-        if result == "not_assignee":
-            return True  # سوالِ این کاربر نیست؛ ساکت
-        if result == "already":
-            return True
-        if result == "correct":
-            msg = "✅ درست بود!"
-            await _bold_reply(event, msg, [msg])
-            return True
-        if result == "wrong":
-            msg = "❌ پاسخ اشتباه بود."
-            await _bold_reply(event, msg, [msg])
+        if result in {"not_assignee", "already", "correct", "wrong"}:
             return True
     return False
 

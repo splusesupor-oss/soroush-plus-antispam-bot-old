@@ -187,7 +187,7 @@ async def _test_maemma_three_questions():
 
 
 def _test_maemma_dedup_and_bank():
-    check("معما: بانک معماها متنوع است", len(MAEMMA_PUZZLES) >= 40,
+    check("معما: بانک معماها حداقل ۱۹۰ عدد", len(MAEMMA_PUZZLES) >= 190,
           f"count={len(MAEMMA_PUZZLES)}")
     ans = [p[1] for p in MAEMMA_PUZZLES]
     check("معما: پاسخ‌ها یکتا هستند",
@@ -530,6 +530,48 @@ def _test_battle_double_payment_guard():
     check("نبرد: فقط یک بار در هر دور خوانده می‌شود", True)
 
 
+async def _test_battle_no_per_answer_feedback():
+    """در طول بازی نبرد، هیچ پیامِ اضافه (درست/اشتباه) ارسال نمی‌شود."""
+    router.reset_all()
+    bot = Bot()
+    for g in ("maemma", "best_answer", "battle"):
+        import economy.game_progress as gp
+        gp.clear_recent(CHAT, g)
+    await send(bot, Event(), CHAT, 100, "نبرد", name="P1")
+    join_ev = CapturingEvent()
+    await send(bot, join_ev, CHAT, 200, "شرکت", name="P2")
+
+    original = battle.ANSWER_SECONDS
+    battle.ANSWER_SECONDS = 0.15
+    answer_events = []
+    try:
+        for qidx in range(battle.TOTAL_QUESTIONS):
+            for _ in range(30):
+                cur = battle.current_question(CHAT)
+                if cur:
+                    break
+                await asyncio.sleep(0.01)
+            if cur is None:
+                break
+            ev = CapturingEvent()
+            await send(bot, ev, CHAT, cur["assignee"],
+                       cur["question"]["answer"], name="X")
+            answer_events.append(ev)
+            await asyncio.sleep(0.03)
+        for _ in range(50):
+            if not battle.is_active(CHAT):
+                break
+            await asyncio.sleep(0.03)
+    finally:
+        battle.ANSWER_SECONDS = original
+
+    # هیچ پیام درست/اشتباه جداگانه‌ای نباید در پاسخ‌ها آمده باشد
+    extra = [msg for ev in answer_events for msg in ev.messages
+             if "درست بود" in msg or "اشتباه بود" in msg]
+    check("نبرد: پیام اضافهٔ درست/اشتباه ارسال نشد", not extra, f"{extra}")
+    router.reset_all()
+
+
 async def _test_battle_chat_isolation():
     router.reset_all()
     bot = Bot()
@@ -744,6 +786,7 @@ def main():
         await _test_battle_start_join_third()
         await _test_battle_active_blocks_new_start()
         await _test_battle_finish_blockquote()
+        await _test_battle_no_per_answer_feedback()
         await _test_battle_non_assignee_cannot_answer()
         await _test_battle_play_and_loser_reward()
         await _test_battle_loser_no_answer_no_reward()
