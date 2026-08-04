@@ -256,6 +256,56 @@ def _make_image_stream(data, index=0):
     return stream
 
 
+async def _send_by_url(bot, chat_id, url):
+    """ارسالِ عکس با URL (InputMediaPhotoExternal).
+
+    در این روش سرورِ سروش خودش تصویر را از ``url`` می‌گیرد و آن را به‌صورت
+    یک عکسِ واقعی داخل چت می‌فرستد. **هیچ آپلودی رخ نمی‌دهد** و درخواستِ
+    ``upload.saveFilePart`` ساخته نمی‌شود؛ بنابراین خطای
+    ``FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER`` پیش نمی‌آید.
+    """
+    from splusthon.tl import types, functions
+    entity = await bot.client.get_input_entity(chat_id)
+    media = types.InputMediaPhotoExternal(url=url)
+    request = functions.messages.SendMediaRequest(entity, media, message="")
+    await bot.client(request)
+    return True
+
+
+async def _send_image(bot, chat_id, url):
+    """ارسالِ یک عکس به چت؛ برمی‌گرداند True اگر موفق.
+
+    ترتیب (به‌ترتیب برای «واقعی انجام دادن»):
+      ۱) دانلودِ bytes و اعتبارسنجی (فقط عکسِ واقعی) — اگر دانلود نشد،
+         این عکس ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود.
+      ۲) آپلود با ``send_file`` (مسیرِ اصلیِ ارسال فایل).
+      ۳) در صورتِ شکستِ آپلود: ارسال با URL (InputMediaPhotoExternal) —
+         سرور خودش تصویر را می‌گیرد؛ بدونِ آپلود، بدونِ خطای SaveFilePart.
+    """
+    # ۱) دانلود + اعتبارسنجی
+    try:
+        data = await asyncio.to_thread(_fetch_image_bytes, url)
+    except Exception:
+        data = None
+    if not data:
+        return False
+
+    # ۲) آپلود (مسیرِ اصلی)
+    stream = _make_image_stream(data, 0)
+    try:
+        await bot.client.send_file(chat_id, stream)
+        return True
+    except Exception:
+        pass
+
+    # ۳) fallback: ارسال با URL (بدونِ آپلود)
+    try:
+        await _send_by_url(bot, chat_id, url)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 #  API عمومی برای هندلر
 # ---------------------------------------------------------------------------
@@ -357,42 +407,22 @@ async def process(chat_id, user_id, bot):
             close_session(chat_id, user_id)
             return "no_results", NO_RESULTS
 
-        # ۲) دانلود تصاویر (خارج از حلقه)
-        images = []
-        for idx, url in enumerate(urls[:IMAGE_COUNT]):
-            try:
-                data = await asyncio.to_thread(_fetch_image_bytes, url)
-            except Exception:
-                data = None
-            if data:
-                images.append(_make_image_stream(data, idx))
-            if len(images) >= IMAGE_COUNT:
-                break
-        if not images:
+        # ۲) جستجو نتیجه نداد
+        if not urls:
             close_session(chat_id, user_id)
-            return "error", ERROR_MSG
+            return "no_results", NO_RESULTS
 
-        # ۳) ارسال در چت (نه لینک) — ابتدا ارسال می‌کنیم تا فقط در صورتِ
-        # موفقیتِ واقعیِ ارسال، سکه کم شود. برای هر عکس تلاشِ مجددِ محدود
-        # انجام می‌شود تا خطاهای گذرای سرور (مثل خطاهای آپلود فایل) منجر به
-        # از دست رفتنِ بی‌دلیلِ عکس نشود.
+        # ۳) ارسال حداکثر IMAGE_COUNT عکس در چت.
+        #    برای هر عکس: دانلود + آپلود، و در صورتِ شکستِ آپلود، fallback به
+        #    ارسال با URL. فقط عکس‌هایی که واقعاً با موفقیت در چت ارسال شوند
+        #    شمرده می‌شوند و بابتِ آن‌ها سکه کم می‌شود.
         sent = 0
-        for img in images:
-            ok = False
-            for attempt in range(SEND_RETRIES):
-                # هر بار جریان را به ابتدا برمی‌گردانیم؛ چون ارسالِ ناموفق
-                # جریان را تا همان‌جا مصرف کرده است و تلاشِ مجدد باید از
-                # ابتدای فایلِ تصویر دوباره آپلود کند.
-                img.seek(0)
-                try:
-                    await bot.client.send_file(chat_id, img)
-                    ok = True
-                    break
-                except Exception:
-                    if attempt + 1 < SEND_RETRIES:
-                        await asyncio.sleep(0.6)
+        for url in urls[:IMAGE_COUNT]:
+            ok = await _send_image(bot, chat_id, url)
             if ok:
                 sent += 1
+                if sent >= IMAGE_COUNT:
+                    break
             await asyncio.sleep(0.3)
 
         if sent == 0:

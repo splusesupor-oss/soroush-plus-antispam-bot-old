@@ -128,11 +128,36 @@ def test_insufficient_balance_aborts():
 #  کسر سکه فقط بعد از آماده‌بودن تصاویر + آزادسازی قفل در خطا
 # ===========================================================================
 class FakeClient:
-    def __init__(self):
+    """کلاینت تستی که هم آپلود (send_file) و هم ارسالِ URL را شبیه‌سازی می‌کند.
+
+    - fail_upload=True: آپلود (send_file) همیشه شکست می‌خورد (مثلِ خطای
+      FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER).
+    - fail_url=True: ارسالِ با URL (InputMediaPhotoExternal) همیشه شکست
+      می‌خورد.
+    """
+    def __init__(self, fail_upload=False, fail_url=False):
         self.sent = 0
+        self.fail_upload = fail_upload
+        self.fail_url = fail_url
+        self.upload_calls = 0
+        self.url_calls = 0
+
+    async def get_input_entity(self, entity):
+        return entity
+
+    async def __call__(self, request, *a, **k):
+        # مسیرِ ارسالِ با URL (InputMediaPhotoExternal)
+        self.url_calls += 1
+        if self.fail_url:
+            raise RuntimeError("URL_INVALID")
+        self.sent += 1
+        return None
 
     async def send_file(self, entity, img, **kw):
         await asyncio.sleep(0.01)
+        self.upload_calls += 1
+        if self.fail_upload:
+            raise RuntimeError("FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER")
         self.sent += 1
 
 
@@ -397,20 +422,6 @@ def test_two_step_flow():
 # ===========================================================================
 #  سناریوهای هزینه — دقیقاً مطابق درخواست کاربر
 # ===========================================================================
-class FailingClient(FakeClient):
-    """ارسال که به تعداد معینی شکست می‌خورد و بعد موفق می‌شود."""
-    def __init__(self, fail_times=0):
-        super().__init__()
-        self.fail_left = fail_times
-
-    async def send_file(self, entity, img, **kw):
-        await asyncio.sleep(0.01)
-        if self.fail_left > 0:
-            self.fail_left -= 1
-            raise RuntimeError("FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER")
-        self.sent += 1
-
-
 def _run_flow(bot, chat, user, images=None):
     """اجرای کاملِ دو مرحله‌ای: «دانلود عکس» → «گربه» → «بله»؛ خروجی sent."""
     async def scenario():
@@ -509,13 +520,13 @@ def test_download_failure_0_bronze():
 
 
 def test_send_failure_0_bronze():
-    """۴ب) ارسال ناموفق → ۰ برنز بابت آن عکس کم شود (حتی بعد از تلاش مجدد)."""
+    """۴ب) آپلود و ارسالِ URL هر دو ناموفق → ۰ برنز بابت آن عکس کم شود."""
     pd.reset_all()
     _economy.reset_all()
     chat, user = -3005, 45
     _fund(chat, user, 100)
-    # ارسال همیشه شکست می‌خورد (بیشتر از SEND_RETRIES بار)
-    bot = FakeBot(FailingClient(fail_times=99))
+    # آپلود و ارسالِ URL هر دو همیشه شکست می‌خورند
+    bot = FakeBot(FakeClient(fail_upload=True, fail_url=True))
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
     pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
@@ -530,21 +541,24 @@ def test_send_failure_0_bronze():
         pd.reset_all()
 
 
-def test_send_failure_then_retry_success_10_bronze():
-    """ارسال با یک خطای گذرا → تلاش مجدد → موفق → فقط ۱۰ برنز کم شود."""
+def test_upload_fails_url_fallback_10_bronze():
+    """آپلود (SaveFilePart) شکست خورد → fallback به ارسالِ با URL → موفق → ۱۰ برنز."""
     pd.reset_all()
     _economy.reset_all()
     chat, user = -3006, 46
     _fund(chat, user, 100)
-    # اولین ارسال (از ۲ تلاشِ ممکن) شکست می‌خورد و دومی موفق می‌شود
-    bot = FakeBot(FailingClient(fail_times=1))
+    # آپلود شکست می‌خورد (خطای FILE_REQUEST...) اما ارسالِ با URL موفق است
+    bot = FakeBot(FakeClient(fail_upload=True, fail_url=False))
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
     pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         sent = _run_flow(bot, chat, user, 1)
         bal = _economy.get_balance(chat, user)
-        check("بعد از تلاش مجدد عکس ارسال شد", sent == 1, f"{sent}")
+        check("fallback با URL عکس ارسال شد", sent == 1, f"{sent}")
+        check("آپلود شکست خورد ولی URL فراخوانی شد",
+              bot.client.upload_calls >= 1 and bot.client.url_calls >= 1,
+              f"upload={bot.client.upload_calls} url={bot.client.url_calls}")
         check("۱۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 10,
               f"{bal[_economy.BRONZE]}")
     finally:
@@ -559,9 +573,11 @@ def test_no_confirm_0_bronze():
     chat, user = -3007, 47
     _fund(chat, user, 100)
     async def scenario():
-        ev1 = Event()
-        await hdl.handle(bot, ev1, chat, user, None, "دانلود عکس گربه", None)
-        # کاربر «لغو» می‌کند
+        # دستورِ دقیق → عبارت خواسته می‌شود
+        await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
+        # کاربر عبارت می‌دهد → پیامِ تأیید
+        await hdl.handle(bot, Event(), chat, user, None, "گربه", None)
+        # کاربر «لغو» می‌کند → هیچ کسری
         ev2 = Event()
         await hdl.handle(bot, ev2, chat, user, None, "لغو", None)
         return bot.client.sent
@@ -621,6 +637,44 @@ def test_image_stream_is_photo():
     check("محتوا سالم برگردانده می‌شود", stream.read().startswith(b"\xff\xd8\xff\xe0"))
 
 
+class CaptureClient:
+    """کلاینت تستی که درخواستِ ارسال را می‌گیرد تا ساختارِ آن بررسی شود."""
+    def __init__(self):
+        self.requests = []
+
+    async def get_input_entity(self, entity):
+        return entity
+
+    async def __call__(self, request, *a, **k):
+        self.requests.append(request)
+        return None
+
+
+def test_send_by_url_uses_photo_external():
+    """ارسالِ با URL باید InputMediaPhotoExternal بسازد (بدونِ آپلود/SaveFilePart)."""
+    from splusthon.tl.types import InputMediaPhotoExternal
+    from splusthon.tl.functions.messages import SendMediaRequest
+    pd.reset_all()
+    client = CaptureClient()
+    bot = FakeBot(client)
+    try:
+        ok = asyncio.run(pd._send_by_url(bot, -777, "https://x.com/a.jpg"))
+        check("ارسالِ با URL موفق", ok is True)
+        check("یک درخواست ساخته شد", len(client.requests) == 1,
+              f"{len(client.requests)}")
+        req = client.requests[0]
+        check("SendMediaRequest ساخته شد", isinstance(req, SendMediaRequest),
+              f"{type(req).__name__}")
+        media = getattr(req, "media", None)
+        check("InputMediaPhotoExternal استفاده شد",
+              isinstance(media, InputMediaPhotoExternal), f"{type(media).__name__}")
+        check("URLِ عکس درست است",
+              getattr(media, "url", None) == "https://x.com/a.jpg",
+              f"{getattr(media, 'url', None)}")
+    finally:
+        pd.reset_all()
+
+
 def test_confirm_text_exact():
     """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
     pd.reset_all()
@@ -659,10 +713,11 @@ def main():
     test_no_result_0_bronze()
     test_download_failure_0_bronze()
     test_send_failure_0_bronze()
-    test_send_failure_then_retry_success_10_bronze()
+    test_upload_fails_url_fallback_10_bronze()
     test_no_confirm_0_bronze()
     test_insufficient_balance_not_performed()
     test_image_stream_is_photo()
+    test_send_by_url_uses_photo_external()
     test_confirm_text_exact()
 
     print(f"\npassed={PASSED} failed={FAILED}")
