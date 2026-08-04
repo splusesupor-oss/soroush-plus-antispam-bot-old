@@ -31,6 +31,12 @@ DM_RETRIES = 3           # حداکثر تلاش روی همان بازیکن ب
 _STORE = SessionStore(GAME_NAME)
 _RANDOM = random.SystemRandom()
 
+# یادآوریِ خون‌آشامِ آخرین دورِ هر چت، به تفکیک chat_id.
+# تنها محدودیت انتخابِ این بازی: یک نفر نباید در دو دورِ پشت‌سرهم انتخاب
+# شود. این dict «دورِ قبلی» را برای هر چت نگه می‌دارد؛ در انتخابِ هر دورِ
+# جدید فقط این یک نفر از گزینه‌ها کنار گذاشته می‌شود و بقیه کاملاً تصادفی‌اند.
+_LAST_VAMPIRE_BY_CHAT = {}
+
 ALREADY_RUNNING = "🧛 بازی خون‌آشام همین حالا در جریان است."
 NOT_ENOUGH = "🧛 تعداد شرکت‌کننده کافی نبود؛ بازی لغو شد."
 ROLE_MESSAGE = "🧛 شما خون‌آشام هستید.\n\nتا پایان بازی چیزی نگویید."
@@ -178,7 +184,13 @@ def reassign_vampire(chat_id, user_id, logger=None):
         log_error(logger, f"FOX VAMPIRE NO REACHABLE PLAYER chat_id={chat_id}")
         return None
 
-    index = _RANDOM.choice(remaining)
+    # در جابه‌جاییِ نقش هم خون‌آشامِ دورِ قبلی کنار گذاشته می‌شود (در صورت
+    # امکان) تا حتی مسیر جایگزین هم دو دورِ پشت‌سرهم تکرار نشود.
+    last_vampire = _LAST_VAMPIRE_BY_CHAT.get(chat_id)
+    preferred = [i for i in remaining
+                 if session["players"][i]["user_id"] != last_vampire]
+    pool = preferred or remaining
+    index = _RANDOM.choice(pool)
     session["vampire"] = index
     vampire = session["players"][index]
     log(logger, f"FOX VAMPIRE REASSIGNED chat_id={chat_id} "
@@ -318,12 +330,48 @@ def roster_lines(players):
     )
 
 
+def _remember_vampire(chat_id, user_id):
+    """خون‌آشامِ این دور را برای همین چت به خاطر می‌سپارد.
+
+    این تنها معیارِ «محدودیت انتخابِ پشت‌سرهم» است: دورِ بعدی این نفر از
+    گزینه‌ها کنار گذاشته می‌شود. بقیهٔ انتخاب کاملاً تصادفی است و هیچ
+    محدودیتِ تعداد/ترتیبی دیگری وجود ندارد.
+    """
+    if user_id is not None:
+        _LAST_VAMPIRE_BY_CHAT[chat_id] = user_id
+
+
+def _pick_vampire_index(session, chat_id, exclude_user_id=None):
+    """یک ایندکسِ تصادفی از بازیکنان برای خون‌آشام انتخاب می‌کند.
+
+    تنها محدودیت: ``exclude_user_id`` (خون‌آشامِ دورِ قبلی همین چت) از
+    گزینه‌ها حذف می‌شود تا کسی دو دورِ پشت‌سرهم انتخاب نشود. اگر بعد از
+    حذف چیزی باقی نماند (عملاً با حداقل ۴ بازیکن اتفاق نمی‌افتد)، از کل
+    بازیکنان انتخاب می‌شود تا بازی هرگز قفل نشود. انتخاب همچنان کاملاً
+    تصادفی است و ترتیب/قابل پیش‌بینی نیست.
+    """
+    players = session["players"]
+    if exclude_user_id is not None:
+        candidates = [
+            i for i, p in enumerate(players)
+            if p["user_id"] != exclude_user_id
+        ]
+    else:
+        candidates = list(range(len(players)))
+    if not candidates:
+        candidates = list(range(len(players)))
+    return _RANDOM.choice(candidates)
+
+
 def choose_vampire(chat_id, logger=None):
     """یک بازیکن را تصادفی خون‌آشام می‌کند. None اگر تعداد کافی نباشد.
 
     مرحله عمداً روی ``assigning`` می‌ماند، نه ``guessing``. تا وقتی پیام
     خصوصی واقعاً ارسال نشده هیچ حدسی پذیرفته نمی‌شود؛ پیش از این بازی حتی
     با شکست ارسال پیوی هم باز می‌شد.
+
+    تنها محدودیتِ انتخاب: خون‌آشامِ دورِ قبلیِ همین چت نباید دوباره
+    انتخاب شود (جلوگیری از دو دورِ پشت‌سرهم). بقیهٔ انتخاب کاملاً تصادفی‌اند.
     """
     session = _STORE.get(chat_id)
     if not session or session.get("phase") != "joining":
@@ -332,14 +380,15 @@ def choose_vampire(chat_id, logger=None):
         log(logger, f"FOX VAMPIRE ABORT chat_id={chat_id} reason=not_enough_players "
                     f"count={len(session['players'])}")
         return None
-    index = _RANDOM.randrange(len(session["players"]))
+    last_vampire = _LAST_VAMPIRE_BY_CHAT.get(chat_id)
+    index = _pick_vampire_index(session, chat_id, exclude_user_id=last_vampire)
     session["vampire"] = index
     session["phase"] = "assigning"
     vampire = session["players"][index]
     log(logger,
         f"FOX VAMPIRE CHOSEN chat_id={chat_id} session_id={session['session_id']} "
         f"vampire_user_id={vampire['user_id']} number={index + 1} "
-        f"phase=assigning")
+        f"phase=assigning last_vampire={last_vampire!r}")
     return {
         "number": index + 1,
         "player": dict(vampire),
@@ -407,6 +456,9 @@ def guess(chat_id, user_id, text, logger=None):
 
     if number - 1 == vampire_index:
         vampire = dict(session["players"][vampire_index])
+        # پایانِ این دور با حدسِ درست: خون‌آشامِ آن را یاد می‌سپاریم تا در
+        # دورِ بعدی دوباره پشت‌سرهم انتخاب نشود.
+        _remember_vampire(chat_id, vampire["user_id"])
         closed = _STORE.close(chat_id, session["session_id"])
         _STORE.cancel_task(chat_id)
         if closed is None:
@@ -430,6 +482,9 @@ def reveal(chat_id, session_id=None, logger=None):
     vampire = None
     if session.get("vampire") is not None:
         vampire = dict(session["players"][session["vampire"]])
+        # پایانِ این دور: خون‌آشامِ آن را برای جلوگیری از تکرارِ پشت‌سرهم
+        # در دورِ بعد یاد می‌سپاریم.
+        _remember_vampire(chat_id, vampire["user_id"])
     closed = _STORE.close(chat_id, session_id or session["session_id"])
     _STORE.cancel_task(chat_id)
     if closed is None:
@@ -548,3 +603,7 @@ def schedule(chat_id, session_id, callbacks, logger=None,
 
 def reset_all(chat_id=None):
     _STORE.reset(chat_id)
+    if chat_id is None:
+        _LAST_VAMPIRE_BY_CHAT.clear()
+    else:
+        _LAST_VAMPIRE_BY_CHAT.pop(chat_id, None)
