@@ -105,14 +105,18 @@ async def _test_maemma_owner_only():
     check("معما: پاسخ B مصرف نشد", r is False)
     check("معما: B سکه نگرفت", not bot.paid, f"{bot.paid}")
 
-    # A پاسخ درست می‌دهد
-    state = maemma.active_state(CHAT, 1)
-    ev3 = Event()
-    r = await send(bot, ev3, CHAT, 1, state["answer"], name="A")
-    check("معما: پاسخ A مصرف شد", r is True)
-    check("معما: A دقیقاً ۳ برنز گرفت",
-          bot.paid and bot.paid[0] == (1, maemma.REWARD), f"{bot.paid}")
-    check("معما: سشن A بسته شد", not maemma.is_active(CHAT, 1))
+    # A هر ۳ معما را درست جواب می‌دهد
+    for qnum in range(1, maemma.QUESTIONS_PER_GAME + 1):
+        q = maemma.current_question(CHAT, 1)
+        check(f"معما: سوال {qnum} در جریان است", q is not None
+              and q["number"] == qnum, f"{q}")
+        ev3 = Event()
+        r = await send(bot, ev3, CHAT, 1, q["answer"], name="A")
+        check(f"معما: پاسخ سوال {qnum} مصرف شد", r is True)
+    check("معما: A دقیقاً ۳ بار برنز گرفت (هر پاسخ ۳)",
+          len(bot.paid) == 3 and all(p == (1, maemma.REWARD) for p in bot.paid),
+          f"{bot.paid}")
+    check("معما: سشن A پس از ۳ سوال بسته شد", not maemma.is_active(CHAT, 1))
 
 
 async def _test_maemma_concurrent():
@@ -125,10 +129,16 @@ async def _test_maemma_concurrent():
     sx = maemma.active_state(CHAT, 10)
     sy = maemma.active_state(CHAT, 20)
     check("معما: توکن‌های متفاوت", sx["token"] != sy["token"])
+    # سوال‌های دو کاربر مستقل‌اند
+    qx = maemma.current_question(CHAT, 10)
+    qy = maemma.current_question(CHAT, 20)
+    check("معما: سوال‌های دو کاربر جدا", qx["answer"] != qy["answer"]
+          or qx["emoji"] != qy["emoji"], f"{qx} vs {qy}")
     # پاسخ X سشن Y را نمی‌بندد
     ev = Event()
-    await send(bot, ev, CHAT, 10, sx["answer"], name="X")
-    check("معما: X بسته شد", not maemma.is_active(CHAT, 10))
+    await send(bot, ev, CHAT, 10, qx["answer"], name="X")
+    check("معما: X هنوز باز است (فقط یک سوال جواب داد)",
+          maemma.is_active(CHAT, 10))
     check("معما: Y هنوز باز است", maemma.is_active(CHAT, 20))
 
 
@@ -140,8 +150,40 @@ async def _test_maemma_timeout():
     state = maemma.active_state(CHAT, 1)
     # شبیه‌سازی timeout
     result = maemma.finish(CHAT, state["token"], 1, bot.logger)
-    check("معما: timeout بدون خطا بسته شد", result == state["answer"])
+    check("معما: timeout بدون خطا بسته شد",
+          result is not None and "answer" in result, f"{result}")
     check("معما: پس از timeout سشن بسته است", not maemma.is_active(CHAT, 1))
+
+
+async def _test_maemma_three_questions():
+    """هر بازی معما شامل ۳ سوال بدون تکرار است و نتیجهٔ نهایی می‌دهد."""
+    router.reset_all()
+    bot = Bot()
+    ev = Event()
+    await send(bot, ev, CHAT, 1, "معما", name="A")
+    state = maemma.active_state(CHAT, 1)
+    check("معما: هر بازی ۳ سوال دارد",
+          len(state["questions"]) == 3, f"{len(state['questions'])}")
+    answers = [q["answer"] for q in state["questions"]]
+    check("معما: سوال‌های یک بازی تکراری نیستند",
+          len(set(answers)) == len(answers), f"{answers}")
+
+    # بعد از پاسخ هر سوال، سوال بعدی نمایش داده می‌شود
+    from modules.fox_games.session_core import to_persian_digits as _fa
+    for qnum in range(1, 3):
+        ev = Event()
+        await send(bot, ev, CHAT, 1, state["questions"][qnum - 1]["answer"], name="A")
+        # باید سوال بعدی هم نمایش داده شده باشد
+        check(f"معما: بعد از سوال {qnum} سوال بعدی آمده",
+              any(f"سوال {_fa(qnum + 1)}" in m for m in ev.out), f"{ev.out}")
+
+    # جواب سوال سوم → نتیجهٔ نهایی
+    ev = Event()
+    await send(bot, ev, CHAT, 1, state["questions"][2]["answer"], name="A")
+    check("معما: نتیجهٔ نهایی نمایش داده شد",
+          any("پایان بازی معما" in m or "پاسخ" in m for m in ev.out),
+          f"{ev.out}")
+    check("معما: بعد از ۳ سوال سشن بسته شد", not maemma.is_active(CHAT, 1))
 
 
 def _test_maemma_dedup_and_bank():
@@ -249,6 +291,72 @@ async def _test_battle_start_join_third():
     ev = Event()
     r = await send(bot, ev, CHAT, 300, "شرکت", name="P3")
     check("نبرد: نفر سوم رد شد", r is True and ev.said("نم"))
+
+
+async def _test_battle_active_blocks_new_start():
+    """تا وقتی نبرد فعال است، هیچ‌کس نمی‌تواند نبرد تازه شروع کند."""
+    router.reset_all()
+    bot = Bot()
+    await send(bot, Event(), CHAT, 100, "نبرد", name="P1")
+
+    # کاربر دیگری می‌خواهد نبرد تازه شروع کند → رد با پیام «ابتدا تمام کن»
+    ev = Event()
+    r = await send(bot, ev, CHAT, 999, "نبرد", name="X")
+    check("نبرد: شروعِ نبردِ دوم در حین نبرد فعال رد شد", r is True,
+          f"{ev.out}")
+    check("نبرد: پیام «ابتدا بازی فعلی را تمام کنید»",
+          any("تمام" in m for m in ev.out), f"{ev.out}")
+    check("نبرد: سشن نبرد اول دست‌نخورده است", battle.phase(CHAT) == "joining")
+
+
+async def _test_battle_finish_blockquote():
+    """نام و امتیاز بازیکنان در نتیجهٔ نبرد داخل نقل‌قول شیشه‌ای (Blockquote) است."""
+    router.reset_all()
+    bot = Bot()
+    for g in ("maemma", "best_answer", "battle"):
+        import economy.game_progress as gp
+        gp.clear_recent(CHAT, g)
+    await send(bot, Event(), CHAT, 100, "نبرد", name="P1")
+    join_ev = CapturingEvent()
+    await send(bot, join_ev, CHAT, 200, "شرکت", name="P2")
+
+    original = battle.ANSWER_SECONDS
+    battle.ANSWER_SECONDS = 0.12
+    try:
+        for qidx in range(6):
+            for _ in range(30):
+                cur = battle.current_question(CHAT)
+                if cur:
+                    break
+                await asyncio.sleep(0.01)
+            if cur is None:
+                break
+            assignee = cur["assignee"]
+            ans = cur["question"]["answer"]
+            if assignee == 200 and qidx == 1:
+                ans = "غلط غلط"
+            await send(bot, Event(), CHAT, assignee, ans)
+            await asyncio.sleep(0.03)
+        for _ in range(50):
+            if not battle.is_active(CHAT):
+                break
+            await asyncio.sleep(0.03)
+    finally:
+        battle.ANSWER_SECONDS = original
+
+    finish = next(((t, e) for t, e in join_ev.messages if "پایان" in t), None)
+    check("نبرد: پیام پایان وجود دارد", finish is not None)
+    if finish:
+        text, entities = finish
+        qwords = []
+        for e in (entities or []):
+            if "Blockquote" in type(e).__name__:
+                qwords.append(text.encode("utf-16-le")[
+                    e.offset * 2:(e.offset + e.length) * 2].decode("utf-16-le"))
+        check("نبرد: خطوط امتیاز داخل Blockquote",
+              len(qwords) >= 2 and any("P1" in w for w in qwords)
+              and any("P2" in w for w in qwords), f"{qwords}")
+    router.reset_all()
 
 
 async def _test_battle_non_assignee_cannot_answer():
@@ -472,7 +580,7 @@ async def _test_bold_start_messages():
     text, ents = ev.messages[0]
     check("معما: بدون کاراکتر \n\u200cلیترال", "\\n" not in text, f"{text!r}")
     bw = _bold_words(text, ents)
-    check("معما: عنوان Bold", "🧩 معما" in bw, f"{bw}")
+    check("معما: عنوان Bold", any(w.startswith("🧩 معما") for w in bw), f"{bw}")
     check("معما: زمان Bold", "⏳ ۴۰ ثانیه فرصت دارید" in bw, f"{bw}")
     router.reset_all()
 
@@ -581,6 +689,7 @@ def main():
         await _test_maemma_owner_only()
         await _test_maemma_concurrent()
         await _test_maemma_timeout()
+        await _test_maemma_three_questions()
         _test_maemma_dedup_and_bank()
 
         await _test_best_answer_flow()
@@ -590,6 +699,8 @@ def main():
 
         _battle_constants()
         await _test_battle_start_join_third()
+        await _test_battle_active_blocks_new_start()
+        await _test_battle_finish_blockquote()
         await _test_battle_non_assignee_cannot_answer()
         await _test_battle_play_and_loser_reward()
         await _test_battle_loser_no_answer_no_reward()

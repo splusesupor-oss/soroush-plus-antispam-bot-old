@@ -8,7 +8,7 @@
 """
 from economy import award_game as economy_award_game
 from economy import rewards as economy_rewards
-from splusthon.tl.types import MessageEntityBold
+from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 from modules.fox_games import (
     battle,
     best_answer,
@@ -116,6 +116,36 @@ async def _bold_reply(event, text, parts=()):
                 offset=_u16(text[:pos]),
                 length=_u16(part),
             ))
+            search = pos + len(part)
+    try:
+        await event.reply(text, formatting_entities=entities or None)
+    except Exception:
+        try:
+            await event.reply(text)
+        except Exception:
+            pass
+
+
+async def _quote_reply(event, text, parts):
+    """بخش‌های مشخص‌شده را هم Bold و هم داخل «نقل قول شیشه‌ای» (Blockquote) می‌کند.
+
+    همان الگوی استفاده در اقتصاد/انقضا: span به دو entity تبدیل می‌شود تا
+    متن هم پررنگ باشد هم در کادر نقل‌قول دیده شود. اگر سرور entityها را
+    نپذیرد، متن بدون قالب‌بندی فرستاده می‌شود.
+    """
+    entities = []
+    for part in parts:
+        if not part:
+            continue
+        search = 0
+        while True:
+            pos = text.find(part, search)
+            if pos == -1:
+                break
+            offset = _u16(text[:pos])
+            length = _u16(part)
+            entities.append(MessageEntityBold(offset=offset, length=length))
+            entities.append(MessageEntityBlockquote(offset=offset, length=length))
             search = pos + len(part)
     try:
         await event.reply(text, formatting_entities=entities or None)
@@ -468,6 +498,30 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
 # ---------------------------------------------------------------------------
 # 🧩 معما
 # ---------------------------------------------------------------------------
+async def _show_maemma_question(event, question, logger=None):
+    """یک معما را نمایش می‌دهد."""
+    title = f"🧩 معما — سوال {to_persian_digits(question['number'])} " \
+            f"از {to_persian_digits(question['total'])}"
+    time_line = f"⏳ {to_persian_digits(maemma.TIMEOUT_SECONDS)} ثانیه فرصت دارید"
+    text = (
+        f"{title}\n\n"
+        f"{question['emoji']}\n\n"
+        f"{time_line}"
+    )
+    await _bold_reply(event, text, [title, time_line])
+
+
+async def _show_maemma_result(event, correct, total, logger=None):
+    """نتیجهٔ نهایی بازی معما را نمایش می‌دهد."""
+    title = "🧩 پایان بازی معما"
+    result_line = (f"پاسخ‌های صحیح: {to_persian_digits(correct)} "
+                   f"از {to_persian_digits(total)}")
+    coins = correct * maemma.REWARD
+    reward_line = f"🪙 +{to_persian_digits(coins)} سکه برنز"
+    text = f"{title}\n\n{result_line}\n\n{reward_line}"
+    await _bold_reply(event, text, [title, result_line, reward_line])
+
+
 async def _start_maemma(bot, event, chat_id, user_id, sender, logger):
     if maemma.is_active(chat_id, user_id):
         await _bold_reply(event, "⏳ شما یک معما دارید؛ اول همان را پاسخ دهید.",
@@ -478,21 +532,18 @@ async def _start_maemma(bot, event, chat_id, user_id, sender, logger):
         await _bold_reply(event, "⏳ امکان شروع معما نیست؛ کمی بعد دوباره تلاش کنید.",
                           ["⏳ امکان شروع معما نیست؛ کمی بعد دوباره تلاش کنید."])
         return True
-    title = "🧩 معما"
-    time_line = f"⏳ {to_persian_digits(maemma.TIMEOUT_SECONDS)} ثانیه فرصت دارید"
-    text = (
-        f"{title}\n\n"
-        f"{state['emoji']}\n\n"
-        f"{time_line}"
-    )
-    await _bold_reply(event, text, [title, time_line])
 
-    async def on_timeout(answer_value):
+    async def on_timeout(result):
         t = "⏰ زمان تمام شد!"
         a = "✅ پاسخ درست:"
-        text = f"{t}\n\n{a}\n{answer_value}"
-        await _bold_reply(event, text, [t, a, answer_value])
+        text = f"{t}\n\n{a}\n{result['answer']}"
+        await _bold_reply(event, text, [t, a, result["answer"]])
+        # پایانِ زودهنگام: نتیجهٔ همان چیزهایی که پاسخ داده شده
+        await _show_maemma_result(event, result["correct"], result["total"], logger)
 
+    # معمای اول
+    first = maemma.current_question(chat_id, user_id)
+    await _show_maemma_question(event, first, logger)
     maemma.schedule(
         chat_id, user_id, state["token"], on_timeout, logger=logger,
     )
@@ -507,12 +558,35 @@ async def _maemma_message(bot, event, chat_id, user_id, sender, text, logger):
     if result is None:
         return False  # پاسخ اشتباه یا ناقص؛ مصرف نمی‌شود
     paid = _coins(bot, chat_id, user_id, result["name"], maemma.REWARD,
-                  logger, reference=f"maemma:{chat_id}:{user_id}:{result['token']}",
+                  logger,
+                  reference=f"maemma:{chat_id}:{user_id}:{result['token']}:"
+                            f"{result['number']}",
                   game="maemma")
     title = "🎉 پاسخ صحیح بود!"
     reward = (f"\n\n🪙 +{to_persian_digits(maemma.REWARD)} سکه برنز"
               if paid else "")
     await _bold_reply(event, f"{title}{reward}", [title, reward.strip()])
+
+    if result["completed"]:
+        # هر سه معما پاسخ داده شد → نتیجهٔ نهایی
+        await _show_maemma_result(event, result["correct"], result["total"], logger)
+        return True
+
+    # معمای بعدی
+    next_q = result["next"]
+    await _show_maemma_question(event, next_q, logger)
+
+    async def on_timeout(timeout_result):
+        t = "⏰ زمان تمام شد!"
+        a = "✅ پاسخ درست:"
+        text = f"{t}\n\n{a}\n{timeout_result['answer']}"
+        await _bold_reply(event, text, [t, a, timeout_result["answer"]])
+        await _show_maemma_result(event, timeout_result["correct"],
+                                  timeout_result["total"], logger)
+
+    maemma.schedule(
+        chat_id, user_id, result["token"], on_timeout, logger=logger,
+    )
     return True
 
 
@@ -653,18 +727,17 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
                               [title, q['question'], time_line, for_line])
 
         async def on_finish(result):
-            lines = ["🏁 پایان نبرد!"]
+            header = "🏁 پایان نبرد!"
             score1 = f"{result['p1']['name']}: {to_persian_digits(result['score1'])}"
             score2 = f"{result['p2']['name']}: {to_persian_digits(result['score2'])}"
-            lines.append(score1)
-            lines.append(score2)
             if result["winner"] is not None:
                 w_name = (result["p1"]["name"]
                           if result["winner"] == result["p1"]["user_id"]
                           else result["p2"]["name"])
-                lines.append(f"🏆 برنده: {w_name}")
+                outcome = f"🏆 برنده: {w_name}"
             else:
-                lines.append("🤝 مساوی شد.")
+                outcome = "🤝 مساوی شد."
+            reward_line = ""
             if result["loser_eligible"]:
                 paid = _coins(
                     bot, chat_id, result["loser"],
@@ -673,12 +746,18 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
                     game="battle",
                 )
                 if paid:
-                    lines.append(
-                        f"🪙 {result['loser_info']['name']} (بازنده) "
+                    reward_line = (
+                        f"\n🪙 {result['loser_info']['name']} (بازنده) "
                         f"+{to_persian_digits(battle.REWARD)} سکه برنز"
                     )
-            parts = list(lines)
-            await _bold_reply(event, "\n".join(lines), parts)
+            text = (
+                f"{header}\n\n"
+                f"{score1}\n"
+                f"{score2}\n\n"
+                f"{outcome}{reward_line}"
+            )
+            # نام و امتیاز هر بازیکن داخل «نقل قول شیشه‌ای» (Blockquote)
+            await _quote_reply(event, text, [score1, score2])
 
         battle.schedule_game(chat_id, on_question, on_finish, logger=logger)
         return True

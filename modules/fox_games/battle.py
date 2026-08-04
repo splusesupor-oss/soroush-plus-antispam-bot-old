@@ -37,7 +37,10 @@ RECENT_WINDOW = 30
 _STORE = SessionStore(GAME)
 _RANDOM = random.SystemRandom()
 
-ALREADY_RUNNING = "⚔️ یک نبرد همین حالا در این گروه در جریان است."
+ALREADY_RUNNING = (
+    "⚔️ یک نبرد همین حالا در این گروه در جریان است.\n"
+    "لطفاً ابتدا بازی فعلی را تمام کنید و سپس دوباره «نبرد» بفرستید."
+)
 NOT_ENOUGH = "⏰ مهلت ثبت‌نام تمام شد؛ بازیکن دوم نیامد. نبرد لغو شد."
 
 
