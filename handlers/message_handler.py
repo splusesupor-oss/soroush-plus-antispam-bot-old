@@ -2160,7 +2160,13 @@ async def handle_new_message(bot, event):
                     gs = pre_admin.index(games_marker)
                     # پایان بخش بازی‌ها = شروع «جستجوی آهنگ»
                     ge = pre_admin.index("🎵 جستجوی آهنگ و مطالب:")
-                    help_text = pre_admin[:gs] + pre_admin[ge:]
+                    # بخش «🎮 لیست بازی‌ها» را نگه می‌داریم ولی فقط تا قبل از
+                    # اولین بازی؛ تا کاربر بداند برای دیدن بازی‌ها «لیست بازی»
+                    # بنویسد، بدون اینکه تک‌تک بازی‌ها در «لیست کاربران» بیایند.
+                    first_game = pre_admin.find("🧩 معما:", gs)
+                    games_intro = pre_admin[gs:first_game] if first_game != -1 \
+                        else pre_admin[gs:ge]
+                    help_text = pre_admin[:gs] + games_intro + pre_admin[ge:]
                 else:
                     help_text = pre_admin
             elif clean_text.strip() == "لیست ادمینی":
