@@ -90,12 +90,19 @@ _STALE_MARKER = "_connection_guard_stale_session"
 
 
 class StaleSessionTracker:
-    """قاب‌های متعلق به سشن قبلی را می‌شمارد."""
+    """قاب‌های متعلق به سشن قبلی را می‌شمارد.
+
+    علاوه بر شمارش، «آخرین باری که هر MTProto message با موفقیت رمزگشایی
+    شد» را هم نگه می‌دارد (``last_data_ts``). این همان سیگنالِ «زنده بودنِ
+    سوکت» است: یک اتصال سالم به‌لطف keepalive هر چند ثانیه یک Pong می‌گیرد
+    و برای هر قابِ دریافتی ``decrypt_message_data`` صدا می‌شود.
+    """
 
     def __init__(self, window=120.0):
         self.window = EventWindow(window)
         self.total = 0
         self.last_at = None
+        self.last_data_ts = None
 
     def record(self):
         self.total += 1
@@ -104,6 +111,10 @@ class StaleSessionTracker:
 
     def recent(self):
         return self.window.count()
+
+    def note_received(self):
+        """ثبت دریافت هر قابِ سالم از سوکت (مبنای تشخیص مرگِ بی‌صدا)."""
+        self.last_data_ts = time.monotonic()
 
     def reset(self):
         self.window.clear()
@@ -122,10 +133,15 @@ def install_stale_session_filter(state_class, tracker, logger=None):
 
     def decrypt_message_data(self, body):
         try:
-            return original(self, body)
+            result = original(self, body)
+            # حتی اگر قاب از سشن قبلی باشد، همین که یک قابِ معتبر رسیده
+            # یعنی سوکت زنده است → لایو-نس را تازه نگه دار.
+            tracker.note_received()
+            return result
         except Exception as error:
             if not _is_wrong_session(error):
                 raise
+            tracker.note_received()
             recent = tracker.record()
             if logger is not None:
                 logger.log_info(
@@ -408,7 +424,11 @@ class ConnectionSupervisor:
     * تعداد قاب‌های کهنهٔ سشن در پنجرهٔ زمانی از حد بگذرد
       (یعنی `_state.reset()` رخ داده ولی جریان پاسخ‌ها ترمیم نشده)،
     * یا RPCها پشت سر هم timeout بخورند،
-    * یا کلاینت اصلاً connected نباشد.
+    * یا کلاینت اصلاً connected نباشد،
+    * یا حلقه‌ی دریافت بدون دلیل خارج شده باشد (`_recv_loop_handle` تمام
+      شده ولی کلاینت هنوز connected است)،
+    * یا برای مدت طولانی هیچ MTProto message‌ای دریافت نشده باشد
+      (مرگِ بی‌صدای سوکت که هیچ‌کدام از نشانه‌های بالا را ندارد).
     """
 
     def __init__(
@@ -420,6 +440,7 @@ class ConnectionSupervisor:
         timeout_threshold=3,
         check_interval=15.0,
         window=120.0,
+        receive_dead_threshold=180.0,
     ):
         self.client = client
         self.logger = logger
@@ -427,6 +448,7 @@ class ConnectionSupervisor:
         self.stale_threshold = stale_threshold
         self.timeout_threshold = timeout_threshold
         self.check_interval = check_interval
+        self.receive_dead_threshold = receive_dead_threshold
         self.timeouts = EventWindow(window)
         self.rebuilds = 0
         self.last_reason = None
@@ -435,6 +457,11 @@ class ConnectionSupervisor:
     # -- ورودی‌های رویداد ------------------------------------------------
     def note_rpc_timeout(self, request=None):
         self.timeouts.record()
+
+    def note_received(self):
+        """ثبت دریافت یک قابِ سالم؛ به‌صورت دستی از بیرون هم قابل صدا زدن است."""
+        if self.tracker is not None:
+            self.tracker.note_received()
 
     # -- تصمیم -----------------------------------------------------------
     def diagnose(self):
@@ -450,6 +477,34 @@ class ConnectionSupervisor:
         is_connected = getattr(self.client, "is_connected", None)
         if callable(is_connected) and not is_connected():
             return "client reported not connected"
+
+        # مرگِ بی‌صدای حلقه‌ی دریافت: هندلِ `_recv_loop` تمام شده ولی سِندر
+        # هنوز خودش را متصل می‌داند و reconnectی در جریان نیست. این یعنی
+        # loop خارج شده و هیچ کس آن را برنگردانده — همان «process زنده ولی
+        # receive مرده».
+        sender = getattr(self.client, "_sender", None)
+        if sender is not None:
+            recv_handle = getattr(sender, "_recv_loop_handle", None)
+            user_connected = getattr(sender, "_user_connected", False)
+            reconnecting = getattr(sender, "_reconnecting", False)
+            if (
+                recv_handle is not None
+                and recv_handle.done()
+                and not recv_handle.cancelled()
+                and user_connected
+                and not reconnecting
+            ):
+                return "receive loop exited unexpectedly"
+
+        # مرگِ بی‌صدای سوکت: هیچ قابی (حتی Pong) به‌مدت طولانی نرسیده.
+        # این سناریو هیچ نشانه‌ی خطایی ندارد، پس تنها سیگنال قابل‌اعتماد
+        # همین «زنده بودنِ ترافیک دریافتی» است.
+        if self.tracker is not None:
+            last = self.tracker.last_data_ts
+            if last is not None:
+                idle = time.monotonic() - last
+                if idle > self.receive_dead_threshold:
+                    return f"no data received for {idle:.0f}s"
 
         return None
 
@@ -479,6 +534,10 @@ class ConnectionSupervisor:
             await self.client.connect()
 
             self.tracker.reset()
+            # لایو-نس را تازه کن تا بلافاصله بعد از یک بازسازیِ موفق،
+            # ناظر دوباره «سکوت» تشخیص ندهد (سوکت تازه است و قاب اول
+            # به‌زودی از keepalive می‌رسد).
+            self.tracker.note_received()
             self.timeouts.clear()
             self.rebuilds += 1
             self._log_info("CONNECTION GUARD rebuild complete")

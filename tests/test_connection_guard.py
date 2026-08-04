@@ -409,6 +409,36 @@ class FakeRequest:
     pass
 
 
+class _DoneHandle:
+    """شبیه‌ساز یک هندلِ تسکِ تمام‌شده (برای تست مرگِ حلقه‌ی دریافت)."""
+
+    def done(self):
+        return True
+
+    def cancelled(self):
+        return False
+
+
+class _PendingHandle:
+    """شبیه‌ساز یک هندلِ تسکِ در حال اجرا."""
+
+    def done(self):
+        return False
+
+    def cancelled(self):
+        return False
+
+
+class FakeSenderDeadRecv(FakeSender):
+    """سِندری که حلقه‌ی دریافتش تمام شده ولی هنوز «متصل» است."""
+
+    def __init__(self, recv_done=True, reconnecting=False):
+        super().__init__()
+        self._user_connected = True
+        self._reconnecting = reconnecting
+        self._recv_loop_handle = _DoneHandle() if recv_done else _PendingHandle()
+
+
 def test_rpc_hangs_forever_without_timeout():
     """اثبات وضعیت «قبل»: بدون وصله، RPC معلق تمام نمی‌شود."""
 
@@ -688,6 +718,115 @@ def test_event_window_clear():
 
 
 # ===========================================================================
+#  ۵) واچ‌داگِ مرگِ بی‌صدا (دریافت هیچ قابی برای مدت طولانی)
+# ===========================================================================
+def test_note_received_tracks_liveness():
+    """با دریافت قاب، لایو-نس تازه می‌شود و سکوتِ کوتاه بازسازی نمی‌کند."""
+    tracker = connection_guard.StaleSessionTracker()
+    check("ابتدا هیچ لایو-نسی ثبت نشده", tracker.last_data_ts is None)
+    tracker.note_received()
+    check("پس از دریافت، لایو-نس ثبت شد", tracker.last_data_ts is not None)
+
+    client = FakeClient()
+    supervisor = connection_guard.ConnectionSupervisor(
+        client, tracker=tracker, receive_dead_threshold=3600.0
+    )
+    # فقط همین چند لحظه پیش قاب رسیده؛ با آستانه‌ی بزرگ، سکوت نیست.
+    check("لایو-نس اخیر یعنی سالم است", supervisor.diagnose() is None,
+          f"-> {supervisor.diagnose()}")
+
+
+def test_supervisor_detects_silent_death():
+    """اگر مدت طولانی هیچ قابی نرسیده باشد، ناظر باید بازسازی کند."""
+    tracker = connection_guard.StaleSessionTracker()
+    tracker.note_received()
+    tracker.last_data_ts = time.monotonic() - 600.0  # ۱۰ دقیقه پیش
+
+    client = FakeClient()
+    client.connected = True
+    supervisor = connection_guard.ConnectionSupervisor(
+        client, tracker=tracker, receive_dead_threshold=120.0
+    )
+    reason = supervisor.diagnose()
+    check("سکوتِ طولانی تشخیص داده می‌شود",
+          reason is not None and "no data" in reason, f"-> {reason}")
+
+
+def test_supervisor_detects_dead_recv_loop():
+    """هندلِ تمام‌شده‌ی دریافت در حالی که کلاینت متصل است → بازسازی."""
+    client = FakeClient()
+    client._sender = FakeSenderDeadRecv(recv_done=True, reconnecting=False)
+    client.connected = True
+    supervisor = connection_guard.ConnectionSupervisor(client)
+    reason = supervisor.diagnose()
+    check("مرگِ حلقه‌ی دریافت تشخیص داده می‌شود",
+          reason is not None and "receive loop" in reason, f"-> {reason}")
+
+
+def test_supervisor_no_false_positive_while_reconnecting():
+    """در حین reconnect، خارج شدنِ هندلِ قدیمی نباید بازسازیِ مضاعف کند."""
+    client = FakeClient()
+    client._sender = FakeSenderDeadRecv(recv_done=True, reconnecting=True)
+    client.connected = True
+    supervisor = connection_guard.ConnectionSupervisor(client)
+    check("هنگام reconnect، تشخیصِ خطا نمی‌دهد", supervisor.diagnose() is None,
+          f"-> {supervisor.diagnose()}")
+
+
+def test_supervisor_recovers_on_silence():
+    """حلقه‌ی ناظر، مرگِ بی‌صدا را خودش می‌بیند و بازسازی را اجرا می‌کند."""
+
+    async def scenario():
+        client = FakeClient()
+        tracker = connection_guard.StaleSessionTracker()
+        tracker.note_received()
+        tracker.last_data_ts = time.monotonic() - 9999.0  # خیلی کهنه
+        supervisor = connection_guard.ConnectionSupervisor(
+            client,
+            tracker=tracker,
+            receive_dead_threshold=0.05,
+            check_interval=0.01,
+        )
+        task = asyncio.ensure_future(supervisor.run())
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if supervisor.rebuilds:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return supervisor.rebuilds, client.connects, supervisor.last_reason
+
+    rebuilds, connects, reason = asyncio.run(scenario())
+    check("ناظر روی سکوت بازسازی را اجرا کرد", rebuilds >= 1, f"-> {rebuilds}")
+    check("کلاینت دوباره وصل شد", connects >= 1, f"-> {connects}")
+    check("دلیل بازسازی ثبت شد",
+          reason is not None and "no data" in reason, f"-> {reason}")
+
+
+def test_stale_frame_still_counts_as_liveness():
+    """یک قابِ کهنه‌ی سشن هم یعنی سوکت زنده است → لایو-نس باید تازه شود."""
+    auth = AuthKey(os.urandom(256))
+
+    class Isolated(MTProtoState):
+        pass
+
+    tracker = connection_guard.StaleSessionTracker()
+    connection_guard.install_stale_session_filter(Isolated, tracker, None)
+    state = Isolated(auth, loggers=Loggers())
+    old_session = state.id
+    state.reset()
+    stale = server_frame(auth, old_session)
+
+    check("قبل از قاب کهنه، لایو-نس نیست", tracker.last_data_ts is None)
+    state.decrypt_message_data(stale)
+    check("قاب کهنه هم لایو-نس را تازه می‌کند",
+          tracker.last_data_ts is not None)
+
+
+# ===========================================================================
 #  نصب یک‌جا
 # ===========================================================================
 def test_rebuild_keeps_handlers_and_auth_key():
@@ -768,6 +907,13 @@ def main():
 
     test_event_window_expires()
     test_event_window_clear()
+
+    test_note_received_tracks_liveness()
+    test_supervisor_detects_silent_death()
+    test_supervisor_detects_dead_recv_loop()
+    test_supervisor_no_false_positive_while_reconnecting()
+    test_supervisor_recovers_on_silence()
+    test_stale_frame_still_counts_as_liveness()
 
     test_rebuild_keeps_handlers_and_auth_key()
     test_install_returns_supervisor()
