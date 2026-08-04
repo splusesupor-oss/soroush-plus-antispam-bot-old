@@ -226,39 +226,62 @@ def test_release_on_network_error():
 # ===========================================================================
 #  موارد جدید: دستور یک‌خطی + هزینهٔ هر عکس + جستجوی واقعی
 # ===========================================================================
-def test_one_line_command_parses_query():
-    """«دانلود عکس گربه» باید عبارتِ «گربه» را همان‌جا بگیرد و تأیید بخواهد."""
+def test_only_exact_command_triggers():
+    """فقط دستورِ دقیقِ «دانلود عکس» قابلیت را فعال می‌کند؛ متنِ بعد از آن نه."""
     pd.reset_all()
     _economy.reset_all()
     chat, user = -2001, 30
     _fund(chat, user, 100)
     bot = FakeBot()
-    orig_search = pd._search_image_urls
-    orig_fetch = pd._fetch_image_bytes
-    pd._search_image_urls = _monkey_search(["http://example.com/a.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0fakejpeg"
     try:
         async def scenario():
-            ev = Event()
-            await hdl.handle(bot, ev, chat, user, None, "دانلود عکس گربه", None)
-            return ev.out
-        out = asyncio.run(scenario())
-        check("یک‌خطی: پیام تأیید آمد",
-              any("تأیید" in m for m in out), f"{out}")
-        s = pd.session(chat, user)
-        check("یک‌خطی: عبارت ذخیره شد",
-              s is not None and s.get("query") == "گربه", f"{s}")
+            results = []
+            for msg in ("دانلود عکس گربه", "دانلود عکس ماشین",
+                        "دانلود عکس چجوریه؟", "دانلود عکس یعنی چی؟",
+                        "دانلود عکسخوب"):
+                ev = Event()
+                consumed = await hdl.handle(bot, ev, chat, user, None, msg, None)
+                results.append((msg, consumed, list(ev.out)))
+            return results
+        results = asyncio.run(scenario())
+        for msg, consumed, out in results:
+            check(f"غیرفعال: «{msg}» مصرف نشد و جریان شروع نشد",
+                  consumed is False and len(out) == 0, f"consumed={consumed} out={out}")
+        # هیچ جریانی برای این کاربر ساخته نشده
+        check("هیچ جریانی برای این کاربر فعال نشد", pd.session(chat, user) is None)
+        check("هیچ سکهای کم نشد",
+              _economy.get_balance(chat, user)[_economy.BRONZE] == 100)
     finally:
-        pd._search_image_urls = orig_search
-        pd._fetch_image_bytes = orig_fetch
         pd.reset_all()
 
 
-def test_one_line_full_flow():
-    """«دانلود عکس گربه» → تأیید → ارسال ۲ تصویر → کسرِ ۴۰ برنز (۲×۲۰)."""
+def test_exact_command_asks_query():
+    """دستورِ دقیق «دانلود عکس» → ربات عبارت می‌خواهد و جریان ساخته می‌شود."""
     pd.reset_all()
     _economy.reset_all()
     chat, user = -2002, 31
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    try:
+        async def scenario():
+            ev = Event()
+            consumed = await hdl.handle(bot, ev, chat, user, None, "دانلود عکس", None)
+            return consumed, ev.out
+        consumed, out = asyncio.run(scenario())
+        check("دستورِ دقیق مصرف شد", consumed is True, f"{consumed}")
+        check("درخواستِ عبارت شد", any("چه تصویری" in m for m in out), f"{out}")
+        s = pd.session(chat, user)
+        check("جریان ساخته شد و عبارت هنوز خالی است",
+              s is not None and s.get("query") is None, f"{s}")
+    finally:
+        pd.reset_all()
+
+
+def test_two_step_full_flow_20_bronze():
+    """«دانلود عکس» → «گربه» → تأیید → ارسال ۲ تصویر → کسرِ ۲۰ برنز (۲×۱۰)."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -2003, 32
     _fund(chat, user, 100)
     bot = FakeBot()
     orig_search = pd._search_image_urls
@@ -268,17 +291,15 @@ def test_one_line_full_flow():
     pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0fakejpeg"
     try:
         async def scenario():
-            ev1 = Event()
-            await hdl.handle(bot, ev1, chat, user, None, "دانلود عکس گربه", None)
-            # تأیید
-            ev2 = Event()
-            await hdl.handle(bot, ev2, chat, user, None, "بله", None)
-            return ev2.out, bot.client.sent
-        out, sent = asyncio.run(scenario())
+            await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
+            await hdl.handle(bot, Event(), chat, user, None, "گربه", None)
+            await hdl.handle(bot, Event(), chat, user, None, "بله", None)
+            return bot.client.sent
+        sent = asyncio.run(scenario())
         bal = _economy.get_balance(chat, user)
-        check("یک‌خطی: ۲ تصویر ارسال شد", sent == 2, f"{sent}")
-        check("یک‌خطی: ۴۰ برنز کسر شد (۲×۲۰)",
-              bal[_economy.BRONZE] == 100 - 40, f"{bal[_economy.BRONZE]}")
+        check("دو مرحله‌ای: ۲ تصویر ارسال شد", sent == 2, f"{sent}")
+        check("دو مرحله‌ای: ۲۰ برنز کسر شد (۲×۱۰)",
+              bal[_economy.BRONZE] == 100 - 20, f"{bal[_economy.BRONZE]}")
     finally:
         pd._search_image_urls = orig_search
         pd._fetch_image_bytes = orig_fetch
@@ -286,7 +307,7 @@ def test_one_line_full_flow():
 
 
 def test_per_image_cost_1_image():
-    """اگر فقط ۱ تصویر قابل دانلود باشد، فقط ۲۰ برنز کم می‌شود."""
+    """اگر فقط ۱ تصویر قابل دانلود باشد، فقط ۱۰ برنز کم می‌شود."""
     pd.reset_all()
     _economy.reset_all()
     chat, user = -2003, 32
@@ -304,15 +325,14 @@ def test_per_image_cost_1_image():
     pd._fetch_image_bytes = fetch_ok
     try:
         async def scenario():
-            ev1 = Event()
-            await hdl.handle(bot, ev1, chat, user, None, "دانلود عکس گربه", None)
-            ev2 = Event()
-            await hdl.handle(bot, ev2, chat, user, None, "بله", None)
+            await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
+            await hdl.handle(bot, Event(), chat, user, None, "گربه", None)
+            await hdl.handle(bot, Event(), chat, user, None, "بله", None)
             return bot.client.sent
         sent = asyncio.run(scenario())
         bal = _economy.get_balance(chat, user)
         check("۱ تصویر ارسال شد", sent == 1, f"{sent}")
-        check("فقط ۲۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 20,
+        check("فقط ۱۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 10,
               f"{bal[_economy.BRONZE]}")
     finally:
         pd._search_image_urls = orig_search
@@ -375,6 +395,248 @@ def test_two_step_flow():
 
 
 # ===========================================================================
+#  سناریوهای هزینه — دقیقاً مطابق درخواست کاربر
+# ===========================================================================
+class FailingClient(FakeClient):
+    """ارسال که به تعداد معینی شکست می‌خورد و بعد موفق می‌شود."""
+    def __init__(self, fail_times=0):
+        super().__init__()
+        self.fail_left = fail_times
+
+    async def send_file(self, entity, img, **kw):
+        await asyncio.sleep(0.01)
+        if self.fail_left > 0:
+            self.fail_left -= 1
+            raise RuntimeError("FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER")
+        self.sent += 1
+
+
+def _run_flow(bot, chat, user, images=None):
+    """اجرای کاملِ دو مرحله‌ای: «دانلود عکس» → «گربه» → «بله»؛ خروجی sent."""
+    async def scenario():
+        await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
+        await hdl.handle(bot, Event(), chat, user, None, "گربه", None)
+        await hdl.handle(bot, Event(), chat, user, None, "بله", None)
+        return bot.client.sent
+    return asyncio.run(scenario())
+
+
+def test_2_images_success_20_bronze():
+    """۱) ۲ عکس موفق → مجموعاً ۲۰ برنز کم شود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3001, 41
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg", "http://e.com/2.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        sent = _run_flow(bot, chat, user, 2)
+        bal = _economy.get_balance(chat, user)
+        check("۲ عکس ارسال شد", sent == 2, f"{sent}")
+        check("۲۰ برنز کسر شد (۲×۱۰)", bal[_economy.BRONZE] == 100 - 20,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_1_image_success_10_bronze():
+    """۲) فقط ۱ عکس موفق → فقط ۱۰ برنز کم شود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3002, 42
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg", "http://e.com/2.jpg"])
+    def fetch_only_first(url, timeout=None):
+        return b"\xff\xd8\xff\xe0jpeg" if "1.jpg" in url else None
+    pd._fetch_image_bytes = fetch_only_first
+    try:
+        sent = _run_flow(bot, chat, user, 1)
+        bal = _economy.get_balance(chat, user)
+        check("فقط ۱ عکس ارسال شد", sent == 1, f"{sent}")
+        check("۱۰ برنز کسر شد (۱×۱۰)", bal[_economy.BRONZE] == 100 - 10,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_no_result_0_bronze():
+    """۳) بدون نتیجه → ۰ برنز کم شود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3003, 43
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search([])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        sent = _run_flow(bot, chat, user, 0)
+        bal = _economy.get_balance(chat, user)
+        check("هیچ عکسی ارسال نشد", sent == 0, f"{sent}")
+        check("۰ برنز کسر شد", bal[_economy.BRONZE] == 100, f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_download_failure_0_bronze():
+    """۴) دانلود/دریافت ناموفق همه → ۰ برنز بابت آن عکس‌ها کم شود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3004, 44
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg", "http://e.com/2.jpg"])
+    def fetch_fail(url, timeout=None):
+        raise ConnectionError("download failed")
+    pd._fetch_image_bytes = fetch_fail
+    try:
+        sent = _run_flow(bot, chat, user, 0)
+        bal = _economy.get_balance(chat, user)
+        check("دانلود ناموفق → هیچ عکسی ارسال نشد", sent == 0, f"{sent}")
+        check("دانلود ناموفق → ۰ برنز کسر شد", bal[_economy.BRONZE] == 100,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_send_failure_0_bronze():
+    """۴ب) ارسال ناموفق → ۰ برنز بابت آن عکس کم شود (حتی بعد از تلاش مجدد)."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3005, 45
+    _fund(chat, user, 100)
+    # ارسال همیشه شکست می‌خورد (بیشتر از SEND_RETRIES بار)
+    bot = FakeBot(FailingClient(fail_times=99))
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        sent = _run_flow(bot, chat, user, 0)
+        bal = _economy.get_balance(chat, user)
+        check("ارسال ناموفق → هیچ عکسی ارسال نشد", sent == 0, f"{sent}")
+        check("ارسال ناموفق → ۰ برنز کسر شد", bal[_economy.BRONZE] == 100,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_send_failure_then_retry_success_10_bronze():
+    """ارسال با یک خطای گذرا → تلاش مجدد → موفق → فقط ۱۰ برنز کم شود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3006, 46
+    _fund(chat, user, 100)
+    # اولین ارسال (از ۲ تلاشِ ممکن) شکست می‌خورد و دومی موفق می‌شود
+    bot = FakeBot(FailingClient(fail_times=1))
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        sent = _run_flow(bot, chat, user, 1)
+        bal = _economy.get_balance(chat, user)
+        check("بعد از تلاش مجدد عکس ارسال شد", sent == 1, f"{sent}")
+        check("۱۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 10,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_no_confirm_0_bronze():
+    """۵) عدم تأیید کاربر → ۰ برنز کم شود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3007, 47
+    _fund(chat, user, 100)
+    async def scenario():
+        ev1 = Event()
+        await hdl.handle(bot, ev1, chat, user, None, "دانلود عکس گربه", None)
+        # کاربر «لغو» می‌کند
+        ev2 = Event()
+        await hdl.handle(bot, ev2, chat, user, None, "لغو", None)
+        return bot.client.sent
+    bot = FakeBot()
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        sent = asyncio.run(scenario())
+        bal = _economy.get_balance(chat, user)
+        check("لغو → هیچ عکسی ارسال نشد", sent == 0, f"{sent}")
+        check("لغو → ۰ برنز کسر شد", bal[_economy.BRONZE] == 100,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_insufficient_balance_not_performed():
+    """۶) موجودی ناکافی → عملیات انجام نشود و چیزی کم نشود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3008, 48
+    # بدون شارژ → موجودی ۰
+    bot = FakeBot()
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        async def scenario():
+            # دستورِ دقیق → ربات عبارت می‌خواهد
+            await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
+            # ارسالِ عبارت → اینجا موجودیِ ناکافی بررسی می‌شود
+            ev = Event()
+            await hdl.handle(bot, ev, chat, user, None, "گربه", None)
+            return ev.out
+        out = asyncio.run(scenario())
+        bal = _economy.get_balance(chat, user)
+        check("موجودی کم → پیامِ insufficient",
+              any("کمتر از" in m for m in out), f"{out}")
+        check("موجودی کم → هیچ عکسی ارسال نشد", bot.client.sent == 0,
+              f"{bot.client.sent}")
+        check("موجودی کم → ۰ برنز کسر شد", bal[_economy.BRONZE] == 0,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_image_stream_is_photo():
+    """تصویرِ آماده‌شده برای ارسال، باید نام/پسوندِ عکس داشته باشد (photo)."""
+    stream = pd._make_image_stream(b"\xff\xd8\xff\xe0jpegdata", 0)
+    check("استریم نامِ .jpg دارد",
+          getattr(stream, "name", "").endswith(".jpg"), f"{getattr(stream, 'name', '')}")
+    check("استریم در ابتدای جریان است", stream.tell() == 0, f"{stream.tell()}")
+    stream.seek(0)
+    check("محتوا سالم برگردانده می‌شود", stream.read().startswith(b"\xff\xd8\xff\xe0"))
+
+
+def test_confirm_text_exact():
+    """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
+    pd.reset_all()
+    t = pd.CONFIRM_TEXT
+    check("متن تأیید: عنوان دانلود تصویر", "📥 دانلود تصویر" in t)
+    check("متن تأیید: ۱۰ سکه برای هر عکس", "برای هر عکس ۱۰ سکه برنز نیاز است." in t)
+    check("متن تأیید: حداکثر ۲ تصویر / ۲۰ برنز",
+          "در صورت ارسال هر دو عکس ۲۰ سکه برنز از موجودی شما کم می‌شود." in t)
+    check("متن تأیید: سؤال تأیید", "آیا تأیید می‌کنید؟" in t)
+    check("متن تأیید: گزینه‌های تأیید", "بله / تایید / تأیید   → انجام" in t)
+    check("متن تأیید: گزینه‌های لغو", "خیر / لغو             → انصراف" in t)
+    check("عدد ۴۰ در متن نیست", "۴۰" not in t)
+    check("هزینهٔ هر عکس = ۱۰", pd.COST_PER_IMAGE == 10, f"{pd.COST_PER_IMAGE}")
+
+
+# ===========================================================================
 def main():
     test_content_filter()
     test_confirm_flow_no_charge_before_confirm()
@@ -384,11 +646,24 @@ def main():
     test_lock_serializes_group()
     test_release_on_network_error()
 
-    test_one_line_command_parses_query()
-    test_one_line_full_flow()
+    test_only_exact_command_triggers()
+    test_exact_command_asks_query()
+    test_two_step_full_flow_20_bronze()
     test_per_image_cost_1_image()
     test_real_image_bytes_are_valid()
     test_two_step_flow()
+
+    # سناریوهای هزینهٔ دقیق
+    test_2_images_success_20_bronze()
+    test_1_image_success_10_bronze()
+    test_no_result_0_bronze()
+    test_download_failure_0_bronze()
+    test_send_failure_0_bronze()
+    test_send_failure_then_retry_success_10_bronze()
+    test_no_confirm_0_bronze()
+    test_insufficient_balance_not_performed()
+    test_image_stream_is_photo()
+    test_confirm_text_exact()
 
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0

@@ -3,9 +3,14 @@
 ``handle`` مقدار True برمی‌گرداند یعنی پیام مصرف شد و هندلر اصلی نباید
 ادامه دهد.
 
+فعال‌سازی فقط با دستورِ دقیق و مستقل «دانلود عکس»:
+  - پیام‌هایی مثل «دانلود عکس گربه» یا «دانلود عکس چجوریه؟» این قابلیت را
+    فعال نمی‌کنند؛ چون بعد از «دانلود عکس» متن دیگری دارند.
+  - فقط «دانلود عکس» به‌تنهایی (بدون متن بعد از آن) جریان را شروع می‌کند.
+
 جریان:
-  «دانلود عکس» → درخواستِ عبارت → تأیید → (فیلتر + جستجو + دانلود + ارسال +
-  کسرِ ۲۰ برنز) — همه با قفلِ گروه و صفِ کاربر.
+  «دانلود عکس» → درخواستِ عبارت → کاربر عبارت را می‌فرستد → پیامِ تأیید →
+  (فیلتر + جستجو + دانلود + ارسال + کسرِ سکه) — همه با قفلِ گروه و صفِ کاربر.
 """
 import asyncio
 
@@ -29,10 +34,11 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     """پیامِ مربوط به دانلود عکس را پردازش می‌کند. True یعنی مصرف شد."""
     clean = (text or "").strip()
 
-    # ۱) دستورِ شروع — دو حالت:
-    #    «دانلود عکس»              → بعداً عبارت می‌خواهیم
-    #    «دانلود عکس گربه»         → عبارت همان‌جا آمده
-    if clean == COMMAND or clean.startswith(COMMAND + " "):
+    # ۱) دستورِ شروع — فقط با دستورِ دقیق و مستقل «دانلود عکس» فعال می‌شود.
+    #    یعنی پیام باید دقیقاً برابرِ «دانلود عکس» باشد؛ اگر بعد از آن متنِ
+    #    دیگری آمده باشد («دانلود عکس گربه»، «دانلود عکس چجوریه؟»، ...)
+    #    این قابلیت شروع نمی‌شود و پیام به‌عنوان دستور دیگری پردازش می‌شود.
+    if clean == COMMAND:
         if photo_download.is_busy(chat_id, user_id):
             if chat_id in photo_download._BUSY_GROUPS:
                 await event.reply(BUSY_GROUP)
@@ -40,27 +46,8 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                 await event.reply(BUSY_USER)
             return True
         photo_download.start_session(chat_id, user_id)
-        # استخراج عبارتِ همراهِ دستور (اگر باشد)
-        inline_query = clean[len(COMMAND):].strip() if len(clean) > len(COMMAND) else ""
-        if inline_query:
-            # عبارتِ همراه → فیلتر/موجودی → پیامِ تأیید (بدون پرسیدنِ دوباره)
-            result, payload = photo_download.handle_query(
-                chat_id, user_id, inline_query)
-            if result == "blocked":
-                await event.reply(payload)
-                _log(bot, f"PHOTO DOWNLOAD BLOCKED chat_id={chat_id} "
-                          f"user_id={user_id} query={inline_query!r}")
-                return True
-            if result == "insufficient":
-                await event.reply(payload)
-                return True
-            if result == "ask_confirm":
-                await event.reply(payload)
-                return True
-        else:
-            await event.reply(ASK_QUERY)
-        _log(bot, f"PHOTO DOWNLOAD START chat_id={chat_id} user_id={user_id} "
-                  f"inline_query={inline_query!r}")
+        await event.reply(ASK_QUERY)
+        _log(bot, f"PHOTO DOWNLOAD START chat_id={chat_id} user_id={user_id}")
         return True
 
     # ۲) اگر کاربر جریانِ فعال دارد، پیامِ او همان مرحلهٔ جریان است
