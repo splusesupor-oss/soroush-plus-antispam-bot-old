@@ -79,6 +79,7 @@ def start(chat_id, logger=None):
         "question": question,
         "keywords": tuple(keywords),
         "sample": sample,
+        "question_msg_id": None,   # شناسهٔ پیامِ سوال؛ برای ریپلای
         "answers": {},          # user_id -> {"name","text","ts"}
         "order": [],
         "winner": None,
@@ -91,15 +92,31 @@ def start(chat_id, logger=None):
     return dict(session)
 
 
-def submit(chat_id, user_id, name, text, logger=None):
-    """پاسخ را در همین دور ثبت می‌کند (اولین پاسخ هر کاربر).
+def set_question_msg_id(chat_id, msg_id):
+    """شناسهٔ پیامِ سوال را در سشن ثبت می‌کند (برای بررسی ریپلای)."""
+    session = _STORE.get(chat_id)
+    if session is None:
+        return False
+    session["question_msg_id"] = msg_id
+    return True
+
+
+def submit(chat_id, user_id, name, text, reply_to_msg_id=None, logger=None):
+    """پاسخ را فقط اگر «ریپلای مستقیم به سوال» باشد ثبت می‌کند.
+
+    هر کاربر فقط اولین پاسخش ثبت می‌شود. پیامِ بدون ریپلای یا ریپلایِ به
+    پیامِ دیگری به‌عنوان پاسخ ثبت نمی‌شود.
 
     خروجی: "ok" اگر ثبت شد، "already" اگر قبلاً پاسخ داده بود،
-    None اگر دوری فعال نیست.
+    "not_reply" اگر ریپلایِ درست نبود، None اگر دوری فعال نیست.
     """
     session = _STORE.get(chat_id)
     if not session or session.get("finished"):
         return None
+    # فقط ریپلایِ مستقیم به پیامِ سوال به‌عنوان پاسخ پذیرفته می‌شود.
+    if session.get("question_msg_id") is None \
+            or reply_to_msg_id != session.get("question_msg_id"):
+        return "not_reply"
     if user_id in session["answers"]:
         return "already"  # قبلاً پاسخ داده، دست نخورده
     session["answers"][user_id] = {

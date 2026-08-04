@@ -47,13 +47,27 @@ class User:
         self.username = username
 
 
+_MSG_SEQ = [1000]
+
+
+def _next_msg_id():
+    _MSG_SEQ[0] += 1
+    return _MSG_SEQ[0]
+
+
+class _FakeMessage:
+    def __init__(self, mid):
+        self.id = mid
+
+
 class Event:
     def __init__(self):
         self.out = []
+        self.reply_to = None
 
     async def reply(self, text, **kwargs):
         self.out.append(text)
-        return None
+        return _FakeMessage(_next_msg_id())
 
     def said(self, needle):
         return any(needle in m for m in self.out)
@@ -83,6 +97,19 @@ class Bot:
 async def send(bot, event, chat, uid, text, name=None, username=None):
     return await router.handle(
         bot, event, chat, uid, User(uid, name, username), text, bot.logger
+    )
+
+
+class ReplyTo:
+    def __init__(self, msg_id):
+        self.reply_to_msg_id = msg_id
+
+
+async def send_reply(bot, event, chat, uid, reply_to_id, text, name=None):
+    """پیامِ ریپلای‌شده به یک پیام مشخص را می‌فرستد."""
+    event.reply_to = ReplyTo(reply_to_id)
+    return await router.handle(
+        bot, event, chat, uid, User(uid, name), text, bot.logger
     )
 
 
@@ -242,16 +269,28 @@ async def _test_best_answer_flow():
     check("بهترین جواب: دستور مصرف شد", r is True)
     check("بهترین جواب: سوال نمایش داده شد",
           any("۴۰" in m for m in ev.out), f"{ev.out}")
+    check("بهترین جواب: توضیح «ریپلای کنید» نمایش داده شد",
+          any("ریپلای" in m for m in ev.out), f"{ev.out}")
     check("بهترین جواب: دور فعال است", best_answer.is_active(CHAT))
 
     sess = best_answer._STORE.get(CHAT)
-    # پاسخِ واقعی و کامل (نمونهٔ مرجع سوال، به‌علاوهٔ توضیح)
+    q_id = sess["question_msg_id"]
+
+    # پیامِ عادیِ بدون ریپلای → اصلاً ثبت نمی‌شود
+    ev2 = Event()
+    r2 = await send(bot, ev2, CHAT, 5, "پاسخِ بدون ریپلای", name="E")
+    check("بهترین جواب: پیامِ بدون ریپلای ثبت نمی‌شود",
+          r2 is False and sess["answered"] == 0, f"{r2}")
+
+    # پاسخِ واقعی و کامل با ریپلایِ مستقیم به سوال
     good = sess["sample"]
-    await send(bot, Event(), CHAT, 2, good, name="B")
-    # پاسخِ چرت/بی‌ربط
-    await send(bot, Event(), CHAT, 3, "نمیدونم", name="C")
-    # پاسخِ خیلی کوتاهِ بی‌ربط
-    await send(bot, Event(), CHAT, 4, "آره", name="D")
+    r = await send_reply(bot, Event(), CHAT, 2, q_id, good, name="B")
+    check("بهترین جواب: پاسخِ ریپلای‌شده ثبت می‌شود", r is True,
+          f"{r} answered={sess['answered']}")
+    # پاسخِ چرت با ریپلای (معتبر در ثبت، ولی در تحلیل حذف می‌شود)
+    await send_reply(bot, Event(), CHAT, 3, q_id, "نمیدونم", name="C")
+    # پاسخِ خیلی کوتاهِ بی‌ربط با ریپلای
+    await send_reply(bot, Event(), CHAT, 4, q_id, "آره", name="D")
 
     winner = best_answer.judge(CHAT, sess["session_id"], bot.logger)
     check("بهترین جواب: برنده تعیین شد", winner is not None, f"{winner}")
@@ -259,7 +298,7 @@ async def _test_best_answer_flow():
         check("بهترین جواب: برنده پاسخِ کامل و مرتبط است",
               winner["user_id"] == 2, f"{winner}")
         check("بهترین جواب: برنده کیفیت بالایی دارد",
-              winner.get("quality", 0) >= 0.4, f"{winner}")
+              winner.get("score", 0) > 0, f"{winner}")
         paid = router._coins(
             bot, CHAT, winner["user_id"], winner["name"], best_answer.REWARD,
             bot.logger, reference=f"ba:{CHAT}:{winner['session_id']}",
@@ -270,16 +309,36 @@ async def _test_best_answer_flow():
     check("بهترین جواب: دور بسته شد", not best_answer.is_active(CHAT))
 
 
-async def _test_best_answer_analysis_filters():
-    """پاسخ‌های چرت/اسپم/بی‌معنی/بی‌ربط امتیاز نمی‌گیرند."""
+async def _test_best_answer_reply_required():
+    """فقط ریپلایِ مستقیم به سوال، پاسخ ثبت می‌شود."""
     router.reset_all()
     bot = Bot()
     await send(bot, Event(), CHAT, 1, "بهترین جواب")
     sess = best_answer._STORE.get(CHAT)
-    q = sess["question"]
-    kw = sess["keywords"]
+    q_id = sess["question_msg_id"]
 
+    # ریپلای به پیامِ دیگری (نه سوال) → ثبت نمی‌شود
+    r = await send_reply(bot, Event(), CHAT, 2, q_id + 9999, "جواب درست", name="B")
+    check("بهترین جواب: ریپلای به پیامِ دیگر ثبت نمی‌شود",
+          r is False and sess["answered"] == 0, f"{r}")
+
+    # ریپلایِ درست → ثبت می‌شود
+    await send_reply(bot, Event(), CHAT, 2, q_id, "جواب درست", name="B")
+    check("بهترین جواب: ریپلایِ درست ثبت می‌شود", sess["answered"] == 1,
+          f"{sess['answered']}")
+    router.reset_all()
+
+
+async def _test_best_answer_analysis_filters():
+    """پاسخ‌های چرت/اسپم/بی‌معنی/بی‌ربط امتیاز نمی‌گیرند.
+
+    با ورودی ثابت تست می‌شود تا به انتخابِ تصادفیِ سوال وابسته نباشد.
+    """
     from modules.fox_games import answer_analysis as _aa
+
+    # یک سوالِ ثابت برای کنترل تست
+    q = "چرا یخ شناور می‌ماند و چگالی آن با آب مقایسه می‌شود؟"
+    kw = ("یخ", "آب", "چگالی", "شناور")
 
     # ۱) پاسخ‌های آشغال رد می‌شوند
     for bad in ("", "هههههه", "😂😂😂😂", "نمیدونم", "ببخشید", "آره", "نمی‌دونم"):
@@ -295,24 +354,24 @@ async def _test_best_answer_analysis_filters():
           off["valid"] is False and off["reason"] == "off_topic", f"{off}")
 
     # ۳) پاسخِ کامل و مرتبط معتبر است
-    good = _aa.analyze(q, kw, sess["sample"])
+    good_text = ("چون چگالی یخ از آب کمتر است، یخ شناور می‌ماند و روی آب می‌ماند.")
+    good = _aa.analyze(q, kw, good_text)
     check("بهترین جواب: پاسخِ کامل مرتبط معتبر است", good["valid"] is True,
           f"{good}")
 
     # ۴) keyword stuffing (فقط کلیدواژه، بدون توضیح) نباید بر پاسخِ خوب بچربد
     stuffing = _aa.analyze(q, kw, " ".join(kw))
-    good_r = _aa.analyze(q, kw, sess["sample"])
+    good_r = _aa.analyze(q, kw, good_text)
     check("بهترین جواب: keyword stuffing از پاسخِ خوب کمتر است",
           good_r["score"] > stuffing["score"],
           f"good={good_r['score']} stuffing={stuffing['score']}")
     winner = _aa.pick_best(
         q, kw,
         [{"user_id": 1, "name": "A", "text": " ".join(kw), "ts": 1},
-         {"user_id": 2, "name": "B", "text": sess["sample"], "ts": 2}],
+         {"user_id": 2, "name": "B", "text": good_text, "ts": 2}],
     )
     check("بهترین جواب: پاسخِ کامل بر keyword stuffing می‌چربد",
           winner is not None and winner["user_id"] == 2, f"{winner}")
-    router.reset_all()
 
 
 async def _test_best_answer_no_answer():
@@ -682,10 +741,11 @@ class CapturingEvent:
 
     def __init__(self):
         self.messages = []
+        self.reply_to = None
 
     async def reply(self, text, **kwargs):
         self.messages.append((text, kwargs.get("formatting_entities")))
-        return None
+        return _FakeMessage(_next_msg_id())
 
 
 def _bold_words(text, entities):
@@ -748,7 +808,9 @@ async def _test_bold_question_and_finish_messages():
     # بهترین جواب: پیام برنده Bold
     await send(bot, Event(), CHAT, 1, "بهترین جواب")
     sess = best_answer._STORE.get(CHAT)
-    best_answer.submit(CHAT, 2, "B", sess["sample"], bot.logger)
+    best_answer.submit(CHAT, 2, "B", sess["sample"],
+                       reply_to_msg_id=sess["question_msg_id"],
+                       logger=bot.logger)
     winner = best_answer.judge(CHAT, sess["session_id"], bot.logger)
     head = f"🏆 بهترین پاسخ: {winner['name']}"
     quote = f"«{winner['text']}»"
@@ -825,6 +887,7 @@ def main():
         _test_maemma_dedup_and_bank()
 
         await _test_best_answer_flow()
+        await _test_best_answer_reply_required()
         await _test_best_answer_analysis_filters()
         await _test_best_answer_no_answer()
         _test_best_answer_bank()

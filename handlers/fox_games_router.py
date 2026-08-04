@@ -102,6 +102,9 @@ async def _bold_reply(event, text, parts=()):
     بیایند Bold می‌شوند. اگر سرور entityها را نپذیرد (که روی برخی نسخهٔ
     Soroush Plus رخ می‌دهد)، همان متن بدون قالب‌بندی فرستاده می‌شود تا
     کاربر هیچ‌وقت «خروجی خالی» نبیند.
+
+    خروجی: شناسهٔ پیام ارسال‌شده (برای بازی‌هایی که به ریپلای نیاز دارند)
+    یا None اگر نتوان مشخص کرد.
     """
     entities = []
     for part in parts:
@@ -117,13 +120,17 @@ async def _bold_reply(event, text, parts=()):
                 length=_u16(part),
             ))
             search = pos + len(part)
+    sent = None
     try:
-        await event.reply(text, formatting_entities=entities or None)
+        sent = await event.reply(text, formatting_entities=entities or None)
     except Exception:
         try:
-            await event.reply(text)
+            sent = await event.reply(text)
         except Exception:
             pass
+    if sent is None:
+        return None
+    return getattr(sent, "id", None)
 
 
 async def _quote_reply(event, text, parts):
@@ -609,7 +616,7 @@ async def _start_best_answer(bot, event, chat_id, logger):
         await _bold_reply(event, busy, [busy])
         return True
     title = "🎯 بهترین جواب"
-    prompt = "پاسخ خود را بنویسید و بفرستید."
+    prompt = "برای ثبت پاسخ، روی سوال ریپلای کنید و جواب خود را ارسال کنید."
     time_line = f"⏳ {to_persian_digits(best_answer.ANSWER_SECONDS)} ثانیه"
     text = (
         f"{title}\n\n"
@@ -617,8 +624,10 @@ async def _start_best_answer(bot, event, chat_id, logger):
         f"{prompt}\n\n"
         f"{time_line}"
     )
-    await _bold_reply(event, text,
-                      [title, session['question'], prompt, time_line])
+    question_msg_id = await _bold_reply(
+        event, text, [title, session['question'], prompt, time_line])
+    # شناسهٔ پیامِ سوال را نگه می‌داریم تا فقط ریپلایِ مستقیمِ به آن ثبت شود.
+    best_answer.set_question_msg_id(chat_id, question_msg_id)
 
     async def on_finish(winner):
         if winner is None:
@@ -647,9 +656,16 @@ async def _start_best_answer(bot, event, chat_id, logger):
 async def _best_answer_message(bot, event, chat_id, user_id, sender, text, logger):
     if not best_answer.is_active(chat_id):
         return False
+    # شناسهٔ پیامی که این پیام به آن ریپلای شده است (اگر ریپلای باشد).
+    reply_to = getattr(event, "reply_to", None)
+    reply_to_msg_id = getattr(reply_to, "reply_to_msg_id", None)
     result = best_answer.submit(
-        chat_id, user_id, display_name(sender), text, logger)
+        chat_id, user_id, display_name(sender), text,
+        reply_to_msg_id=reply_to_msg_id, logger=logger)
     if result is None:
+        return False
+    if result == "not_reply":
+        # پیامِ عادی بدون ریپلایِ به سوال؛ ثبت نمی‌شود و مصرف هم نمی‌شود
         return False
     if result == "already":
         return True  # پاسخ قبلاً ثبت شده؛ ساکت
