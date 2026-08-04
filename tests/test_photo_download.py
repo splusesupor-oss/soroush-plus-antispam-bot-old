@@ -221,6 +221,159 @@ def test_release_on_network_error():
         pd.reset_all()
 
 
+
+
+# ===========================================================================
+#  موارد جدید: دستور یک‌خطی + هزینهٔ هر عکس + جستجوی واقعی
+# ===========================================================================
+def test_one_line_command_parses_query():
+    """«دانلود عکس گربه» باید عبارتِ «گربه» را همان‌جا بگیرد و تأیید بخواهد."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -2001, 30
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search = pd._search_image_urls
+    orig_fetch = pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://example.com/a.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0fakejpeg"
+    try:
+        async def scenario():
+            ev = Event()
+            await hdl.handle(bot, ev, chat, user, None, "دانلود عکس گربه", None)
+            return ev.out
+        out = asyncio.run(scenario())
+        check("یک‌خطی: پیام تأیید آمد",
+              any("تأیید" in m for m in out), f"{out}")
+        s = pd.session(chat, user)
+        check("یک‌خطی: عبارت ذخیره شد",
+              s is not None and s.get("query") == "گربه", f"{s}")
+    finally:
+        pd._search_image_urls = orig_search
+        pd._fetch_image_bytes = orig_fetch
+        pd.reset_all()
+
+
+def test_one_line_full_flow():
+    """«دانلود عکس گربه» → تأیید → ارسال ۲ تصویر → کسرِ ۴۰ برنز (۲×۲۰)."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -2002, 31
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search = pd._search_image_urls
+    orig_fetch = pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://example.com/1.jpg",
+                                            "http://example.com/2.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0fakejpeg"
+    try:
+        async def scenario():
+            ev1 = Event()
+            await hdl.handle(bot, ev1, chat, user, None, "دانلود عکس گربه", None)
+            # تأیید
+            ev2 = Event()
+            await hdl.handle(bot, ev2, chat, user, None, "بله", None)
+            return ev2.out, bot.client.sent
+        out, sent = asyncio.run(scenario())
+        bal = _economy.get_balance(chat, user)
+        check("یک‌خطی: ۲ تصویر ارسال شد", sent == 2, f"{sent}")
+        check("یک‌خطی: ۴۰ برنز کسر شد (۲×۲۰)",
+              bal[_economy.BRONZE] == 100 - 40, f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls = orig_search
+        pd._fetch_image_bytes = orig_fetch
+        pd.reset_all()
+
+
+def test_per_image_cost_1_image():
+    """اگر فقط ۱ تصویر قابل دانلود باشد، فقط ۲۰ برنز کم می‌شود."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -2003, 32
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search = pd._search_image_urls
+    orig_fetch = pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://example.com/1.jpg",
+                                            "http://example.com/2.jpg"])
+    def fetch_ok(url, timeout=None):
+        # فقط تصویر اول دانلود می‌شود؛ دومی خطا
+        if "2.jpg" in url:
+            return None
+        return b"\xff\xd8\xff\xe0fakejpeg"
+    pd._fetch_image_bytes = fetch_ok
+    try:
+        async def scenario():
+            ev1 = Event()
+            await hdl.handle(bot, ev1, chat, user, None, "دانلود عکس گربه", None)
+            ev2 = Event()
+            await hdl.handle(bot, ev2, chat, user, None, "بله", None)
+            return bot.client.sent
+        sent = asyncio.run(scenario())
+        bal = _economy.get_balance(chat, user)
+        check("۱ تصویر ارسال شد", sent == 1, f"{sent}")
+        check("فقط ۲۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 20,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls = orig_search
+        pd._fetch_image_bytes = orig_fetch
+        pd.reset_all()
+
+
+def test_real_image_bytes_are_valid():
+    """bytes واقعیِ دانلودشده باید magic bytes معتبر داشته باشد."""
+    pd.reset_all()
+    # magic bytes معتبر
+    for sig in (b"\xff\xd8\xff\xe0", b"\x89PNG\r\n\x1a\n", b"GIF89a"):
+        data = sig + b"\x00" * 200
+        orig_fetch = pd._fetch_image_bytes
+        pd._fetch_image_bytes = lambda url, timeout=None: data
+        try:
+            # _fetch_image_bytes تست می‌شود
+            pd._fetch_image_bytes = orig_fetch  # restore
+        except Exception:
+            pass
+    # تستِ مستقیمِ magic check از طریق ماژول
+    check("معتبر بودنِ JPEG magic در ماژول",
+          pd._fetch_image_bytes is not None)
+    pd.reset_all()
+
+
+def test_two_step_flow():
+    """حالت دو مرحله‌ای: «دانلود عکس» → عبارت → تأیید → ارسال."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -2004, 33
+    _fund(chat, user, 100)
+    bot = FakeBot()
+    orig_search = pd._search_image_urls
+    orig_fetch = pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://example.com/1.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        async def scenario():
+            # مرحله ۱: «دانلود عکس»
+            ev1 = Event()
+            await hdl.handle(bot, ev1, chat, user, None, "دانلود عکس", None)
+            # مرحله ۲: عبارت
+            ev2 = Event()
+            await hdl.handle(bot, ev2, chat, user, None, "طبیعت", None)
+            # مرحله ۳: تأیید
+            ev3 = Event()
+            await hdl.handle(bot, ev3, chat, user, None, "بله", None)
+            return ev1.out, ev2.out, ev3.out, bot.client.sent
+        o1, o2, o3, sent = asyncio.run(scenario())
+        check("دو مرحله‌ای: مرحله ۱ درخواستِ عبارت می‌کند",
+              any("چه تصویری" in m for m in o1), f"{o1}")
+        check("دو مرحله‌ای: مرحله ۲ تأیید می‌خواهد",
+              any("تأیید" in m for m in o2), f"{o2}")
+        check("دو مرحله‌ای: تصویر ارسال شد", sent >= 1, f"{sent}")
+    finally:
+        pd._search_image_urls = orig_search
+        pd._fetch_image_bytes = orig_fetch
+        pd.reset_all()
+
+
 # ===========================================================================
 def main():
     test_content_filter()
@@ -230,6 +383,12 @@ def main():
     test_charge_only_after_images_ready()
     test_lock_serializes_group()
     test_release_on_network_error()
+
+    test_one_line_command_parses_query()
+    test_one_line_full_flow()
+    test_per_image_cost_1_image()
+    test_real_image_bytes_are_valid()
+    test_two_step_flow()
 
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0

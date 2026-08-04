@@ -29,8 +29,10 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     """پیامِ مربوط به دانلود عکس را پردازش می‌کند. True یعنی مصرف شد."""
     clean = (text or "").strip()
 
-    # ۱) دستورِ شروع
-    if clean == COMMAND:
+    # ۱) دستورِ شروع — دو حالت:
+    #    «دانلود عکس»              → بعداً عبارت می‌خواهیم
+    #    «دانلود عکس گربه»         → عبارت همان‌جا آمده
+    if clean == COMMAND or clean.startswith(COMMAND + " "):
         if photo_download.is_busy(chat_id, user_id):
             if chat_id in photo_download._BUSY_GROUPS:
                 await event.reply(BUSY_GROUP)
@@ -38,8 +40,27 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                 await event.reply(BUSY_USER)
             return True
         photo_download.start_session(chat_id, user_id)
-        await event.reply(ASK_QUERY)
-        _log(bot, f"PHOTO DOWNLOAD START chat_id={chat_id} user_id={user_id}")
+        # استخراج عبارتِ همراهِ دستور (اگر باشد)
+        inline_query = clean[len(COMMAND):].strip() if len(clean) > len(COMMAND) else ""
+        if inline_query:
+            # عبارتِ همراه → فیلتر/موجودی → پیامِ تأیید (بدون پرسیدنِ دوباره)
+            result, payload = photo_download.handle_query(
+                chat_id, user_id, inline_query)
+            if result == "blocked":
+                await event.reply(payload)
+                _log(bot, f"PHOTO DOWNLOAD BLOCKED chat_id={chat_id} "
+                          f"user_id={user_id} query={inline_query!r}")
+                return True
+            if result == "insufficient":
+                await event.reply(payload)
+                return True
+            if result == "ask_confirm":
+                await event.reply(payload)
+                return True
+        else:
+            await event.reply(ASK_QUERY)
+        _log(bot, f"PHOTO DOWNLOAD START chat_id={chat_id} user_id={user_id} "
+                  f"inline_query={inline_query!r}")
         return True
 
     # ۲) اگر کاربر جریانِ فعال دارد، پیامِ او همان مرحلهٔ جریان است

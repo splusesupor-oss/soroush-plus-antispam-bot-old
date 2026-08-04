@@ -27,7 +27,7 @@ import requests
 
 import economy
 
-COST_BRONZE = 20
+COST_PER_IMAGE = 20   # هزینهٔ هر عکس (برنز)
 IMAGE_COUNT = 2
 NETWORK_TIMEOUT = (10, 20)
 
@@ -38,12 +38,13 @@ COMMAND = "دانلود عکس"
 
 CONFIRM_TEXT = (
     "📥 دانلود تصویر\n\n"
-    "برای دریافت ۲ تصویر از این جستجو، ۲۰ سکه برنز از موجودی شما کم می‌شود.\n"
+    "برای هر عکس ۲۰ سکه برنز نیاز است.\n"
+    "برای دریافت ۲ تصویر از این جستجو، ۴۰ سکه برنز از موجودی شما کم می‌شود.\n"
     "آیا تأیید می‌کنید؟\n\n"
     "بله / تایید / تأیید   → انجام\n"
     "خیر / لغو             → انصراف"
 )
-INSUFFICIENT = "❌ موجودی شما کمتر از ۲۰ سکه برنز است؛ این درخواست انجام نمی‌شود."
+INSUFFICIENT = ("❌ موجودی شما کمتر از ۲۰ سکه برنز است؛ این درخواست انجام نمی‌شود.")
 BLOCKED_CONTENT = "🚫 این درخواست ممنوع است و قابل انجام نیست."
 CANCELLED = "❌ درخواست لغو شد؛ هیچ سکه‌ای کم نشد."
 BUSY_GROUP = "⏳ یک دانلود عکس در همین گروه در حال پردازش است؛ لطفاً صبر کنید."
@@ -141,44 +142,93 @@ def is_blocked(query):
 #  جستجو و دانلود تصویر (خارج از Event Loop، با timeout)
 # ---------------------------------------------------------------------------
 def _search_image_urls(query, limit=IMAGE_COUNT):
-    """عبارت را جستجو و آدرس تصویر را برمی‌گرداند (همگام، داخل thread)."""
+    """عبارت را جستجو و آدرسِ مستقیمِ تصویر را برمی‌گرداند (همگام، داخل thread).
+
+    ترتیب منابع (همه بدون کلید، روی Termux قابل اجرا):
+      ۱) Bing Image — آدرسِ مستقیمِ فایلِ تصویر (برای فارسی و انگلیسی کار می‌کند).
+      ۲) Openverse API — آدرسِ مستقیمِ تصویر.
+    خروجی فقط «آدرسِ فایلِ تصویر» است، نه لینکِ صفحه/مقاله.
+    """
     from urllib.parse import quote
-    url = "https://html.duckduckgo.com/html/?q=" + quote(query + " تصویر")
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; SoroushPlusSearch/1.0)"}
-    resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
-    if resp.status_code != 200:
-        return []
-    html = resp.text
-    # استخراج آدرس‌های تصویر از نتایج DuckDuckGo
-    urls = []
-    # الگوی استاندارد تصاویر DDG: "img" با srcdata
-    for m in re.findall(r'data-src="([^"]+)"', html):
-        u = m.strip()
-        if u and not u.endswith((".gif",)) and "//" in u:
-            if u not in urls:
-                urls.append(u)
-        if len(urls) >= limit:
-            break
-    if len(urls) < limit:
-        # fallback: هر لینک خارجی
-        for m in re.findall(r'href="([^"]+)"', html):
-            u = m.strip()
-            if "duckduckgo" in u or "uddg=" in u:
-                continue
-            if "http" in u and "ir.lih" not in u and u not in urls:
-                urls.append(u)
-            if len(urls) >= limit:
-                break
-    return urls[:limit]
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0 Safari/537.36"),
+    }
+
+    # ۱) Bing Image search
+    try:
+        url = "https://www.bing.com/images/search?q=" + quote(query)
+        resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
+        if resp.status_code == 200:
+            html = resp.text
+            urls = re.findall(r'murl&quot;:&quot;([^&]+)&quot;', html)
+            urls += re.findall(r'"murl":"([^"]+)"', html)
+            seen = []
+            for u in urls:
+                u = u.replace("\\/", "/").strip()
+                if u and "http" in u and u not in seen:
+                    seen.append(u)
+                if len(seen) >= limit:
+                    break
+            if seen:
+                return seen[:limit]
+    except Exception:
+        pass
+
+    # ۲) Openverse API
+    try:
+        url = ("https://api.openverse.org/v1/images/?q="
+               + quote(query) + "&page_size=15")
+        resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            urls = []
+            for item in data.get("results", []):
+                u = (item.get("url") or "").strip()
+                if u and "http" in u and u not in urls:
+                    urls.append(u)
+                if len(urls) >= limit:
+                    break
+            if urls:
+                return urls[:limit]
+    except Exception:
+        pass
+
+    return []
 
 
 def _fetch_image_bytes(url, timeout=NETWORK_TIMEOUT):
-    """تصویر را دانلود و به bytes تبدیل می‌کند (همگام، داخل thread)."""
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; SoroushPlusSearch/1.0)"}
+    """تصویر را دانلود و به bytes تبدیل می‌کند (همگام، داخل thread).
+
+    از یک User-Agent شبیه مرورگر استفاده می‌شود؛ بعضی میزبان‌ها (مثل
+    flickr) درخواستِ bot/ساده را رد می‌کنند. فقط محتوایی برمی‌گردد که
+    شبیه فایلِ تصویر معتبر باشد.
+    """
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0 Safari/537.36"),
+    }
     resp = requests.get(url, headers=headers, timeout=timeout)
     if resp.status_code != 200:
         return None
-    return resp.content
+    content = resp.content
+    if not content or len(content) < 100:
+        return None
+    # بررسیِ magic bytes تا مطمئن شویم فایلِ تصویر واقعی است، نه HTML/مقاله
+    if content[:4] in (b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1",
+                       b"\xff\xd8\xff\xe8"):  # JPEG
+        return content
+    if content[:8] == b"\x89PNG\r\n\x1a\n":  # PNG
+        return content
+    if content[:6] in (b"GIF87a", b"GIF89a"):  # GIF
+        return content
+    if content[:2] == b"BM":  # BMP
+        return content
+    if content[:4] == b"RIFF":  # WEBP
+        return content
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +272,7 @@ def handle_query(chat_id, user_id, query):
         return "blocked", BLOCKED_CONTENT
 
     balance = economy.get_balance(chat_id, user_id)
-    if balance.get(economy.BRONZE, 0) < COST_BRONZE:
+    if balance.get(economy.BRONZE, 0) < COST_PER_IMAGE:
         close_session(chat_id, user_id)
         return "insufficient", INSUFFICIENT
 
@@ -297,18 +347,8 @@ async def process(chat_id, user_id, bot):
             close_session(chat_id, user_id)
             return "error", ERROR_MSG
 
-        # ۳) کسرِ سکه — فقط وقتی تصاویر واقعاً آماده‌اند
-        try:
-            economy.spend(
-                chat_id, user_id, COST_BRONZE, economy.BRONZE,
-                reference=f"photo_download:{chat_id}:{user_id}:{int(time.time())}",
-                note="دانلود عکس (۲ تصویر)",
-            )
-        except Exception:
-            close_session(chat_id, user_id)
-            return "error", ERROR_MSG
-
-        # ۴) ارسال در چت (نه لینک)
+        # ۳) ارسال در چت (نه لینک) — ابتدا ارسال می‌کنیم تا فقط در صورتِ
+        # موفقیتِ واقعی، سکه کم شود.
         sent = 0
         for img in images:
             try:
@@ -318,10 +358,24 @@ async def process(chat_id, user_id, bot):
                 break
             await asyncio.sleep(0.3)
 
-        close_session(chat_id, user_id)
         if sent == 0:
+            close_session(chat_id, user_id)
             return "error", ERROR_MSG
-        return "done", f"✅ {sent} تصویر ارسال شد. {COST_BRONZE} سکه برنز کسر شد."
+
+        # ۴) کسرِ سکه — فقط بعد از موفقیتِ واقعیِ ارسال؛ ۲۰ برنز به‌ازای هر عکس.
+        cost = COST_PER_IMAGE * sent
+        try:
+            economy.spend(
+                chat_id, user_id, cost, economy.BRONZE,
+                reference=f"photo_download:{chat_id}:{user_id}:{int(time.time())}",
+                note=f"دانلود عکس ({sent} تصویر)",
+            )
+        except Exception:
+            close_session(chat_id, user_id)
+            return "error", ERROR_MSG
+
+        close_session(chat_id, user_id)
+        return "done", f"✅ {sent} تصویر ارسال شد. {cost} سکه برنز کسر شد."
     finally:
         _release_busy(chat_id, user_id)
 
