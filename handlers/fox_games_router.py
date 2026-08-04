@@ -8,8 +8,17 @@
 """
 from economy import award_game as economy_award_game
 from economy import rewards as economy_rewards
-from modules.fox_games import laugh_or_lose, lucky_box, survival, vampire
+from modules.fox_games import (
+    battle,
+    best_answer,
+    laugh_or_lose,
+    lucky_box,
+    maemma,
+    survival,
+    vampire,
+)
 from modules.fox_games.session_core import (
+    display_name,
     log,
     log_error,
     normalize_text,
@@ -23,6 +32,10 @@ FOX_GAME_COMMANDS = frozenset({
     "جعبه شانسی",
     "خون آشام",
     "خون‌آشام",
+    "معما",
+    "بهترین جواب",
+    "نبرد",
+    "شرکت",
 })
 
 
@@ -33,6 +46,9 @@ def any_active(chat_id):
         or survival.is_active(chat_id)
         or lucky_box.is_active(chat_id)
         or vampire.is_active(chat_id)
+        or best_answer.is_active(chat_id)
+        or battle.is_active(chat_id)
+        or maemma.is_active(chat_id)
     )
 
 
@@ -413,6 +429,219 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
 
 
 # ---------------------------------------------------------------------------
+# 🧩 معما
+# ---------------------------------------------------------------------------
+async def _start_maemma(bot, event, chat_id, user_id, sender, logger):
+    if maemma.is_active(chat_id, user_id):
+        await event.reply("⏳ شما یک معما دارید؛ اول همان را پاسخ دهید.")
+        return True
+    state = maemma.start(chat_id, user_id, logger)
+    if state is None:
+        await event.reply("⏳ امکان شروع معما نیست؛ کمی بعد دوباره تلاش کنید.")
+        return True
+    await event.reply(
+        "🧩 معما\\n\\n"
+        f"{state['emoji']}\\n\\n"
+        f"⏳ {to_persian_digits(maemma.TIMEOUT_SECONDS)} ثانیه فرصت دارید"
+    )
+
+    async def on_timeout(answer_value):
+        await event.reply(
+            f"⏰ زمان تمام شد!\\n\\n✅ پاسخ درست:\\n{answer_value}"
+        )
+
+    maemma.schedule(
+        chat_id, user_id, state["token"], on_timeout, logger=logger,
+    )
+    return True
+
+
+async def _maemma_message(bot, event, chat_id, user_id, sender, text, logger):
+    if not maemma.is_active(chat_id, user_id):
+        return False
+    result = maemma.answer(
+        chat_id, user_id, display_name(sender), text, logger)
+    if result is None:
+        return False  # پاسخ اشتباه یا ناقص؛ مصرف نمی‌شود
+    paid = _coins(bot, chat_id, user_id, result["name"], maemma.REWARD,
+                  logger, reference=f"maemma:{chat_id}:{user_id}:{result['token']}",
+                  game="maemma")
+    reward = (f"\\n\\n🪙 +{to_persian_digits(maemma.REWARD)} سکه برنز"
+              if paid else "")
+    await event.reply(f"🎉 پاسخ صحیح بود!{reward}")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 🎯 بهترین جواب
+# ---------------------------------------------------------------------------
+async def _start_best_answer(bot, event, chat_id, logger):
+    if best_answer.is_active(chat_id):
+        await event.reply("🎯 یک بازی «بهترین جواب» همین حالا در جریان است.")
+        return True
+    session = best_answer.start(chat_id, logger)
+    if session is None:
+        await event.reply("🎯 یک بازی «بهترین جواب» همین حالا در جریان است.")
+        return True
+    await event.reply(
+        "🎯 بهترین جواب\\n\\n"
+        f"{session['question']}\\n\\n"
+        "پاسخ خود را بنویسید و بفرستید.\\n"
+        f"⏳ {to_persian_digits(best_answer.ANSWER_SECONDS)} ثانیه"
+    )
+
+    async def on_finish(winner):
+        if winner is None:
+            await event.reply("🎯 هیچ پاسخ درستی ثبت نشد.")
+            return
+        paid = _coins(
+            bot, chat_id, winner["user_id"], winner["name"],
+            best_answer.REWARD, logger,
+            reference=f"best_answer:{chat_id}:{winner['session_id']}",
+            game="best_answer",
+        )
+        reward = (f"\\n\\n🪙 +{to_persian_digits(best_answer.REWARD)} سکه برنز"
+                  if paid else "")
+        await event.reply(
+            f"🏆 بهترین پاسخ: {winner['name']}\\n\\n"
+            f"«{winner['text']}»{reward}"
+        )
+
+    best_answer.schedule(
+        chat_id, session["session_id"], on_finish, logger=logger,
+    )
+    return True
+
+
+async def _best_answer_message(bot, event, chat_id, user_id, sender, text, logger):
+    if not best_answer.is_active(chat_id):
+        return False
+    result = best_answer.submit(
+        chat_id, user_id, display_name(sender), text, logger)
+    if result is None:
+        return False
+    if result == "already":
+        return True  # پاسخ قبلاً ثبت شده؛ ساکت
+    await event.reply("✅ پاسخ شما ثبت شد!")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# ⚔️ نبرد
+# ---------------------------------------------------------------------------
+async def _start_battle(bot, event, chat_id, user_id, sender, logger):
+    if battle.is_active(chat_id):
+        await event.reply(battle.ALREADY_RUNNING)
+        return True
+    session = battle.start(chat_id, user_id, display_name(sender), logger)
+    if session is None:
+        await event.reply(battle.ALREADY_RUNNING)
+        return True
+    await event.reply(
+        "⚔️ نبرد شروع شد!\\n\\n"
+        "شما بازیکن اول هستید.\\n"
+        "برای پیوستن بازیکن دوم بنویسید:\\n"
+        "شرکت\\n\\n"
+        f"⏳ مهلت ثبت‌نام: {to_persian_digits(battle.JOIN_SECONDS)} ثانیه"
+    )
+
+    async def on_abort():
+        await event.reply(battle.NOT_ENOUGH)
+
+    battle.schedule_join_timeout(
+        chat_id, session["session_id"], on_abort, logger=logger,
+    )
+    return True
+
+
+async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
+    if not battle.is_active(chat_id):
+        return False
+    state = battle.phase(chat_id)
+
+    if state == "joining":
+        if normalize_text(text) != normalize_text(battle.JOIN_WORD):
+            return False
+        result, players = battle.join(
+            chat_id, user_id, display_name(sender), logger)
+        if result == "duplicate":
+            await event.reply("⚠️ شما بازیکن اول هستید؛ نمی‌توانید دوباره وارد شوید.")
+            return True
+        if result == "full":
+            await event.reply("⚠️ نبرد همین حالا پر است.")
+            return True
+        if result == "not_open":
+            return False
+        await event.reply("⚔️ بازیکن دوم پیوست! نبرد شروع می‌شود...")
+        session = battle.begin(chat_id, logger)
+        if session is None:
+            return True
+        p1, p2 = session["p1"], session["p2"]
+
+        async def on_question(num, q, assignee):
+            name = p1["name"] if assignee == p1["user_id"] else p2["name"]
+            await event.reply(
+                f"⚔️ سوال {to_persian_digits(num)}\\n\\n"
+                f"{q['question']}\\n\\n"
+                f"⏳ {to_persian_digits(battle.ANSWER_SECONDS)} ثانیه\\n"
+                f"برای: {name}"
+            )
+
+        async def on_finish(result):
+            lines = [
+                "🏁 پایان نبرد!",
+                f"{result['p1']['name']}: {to_persian_digits(result['score1'])}",
+                f"{result['p2']['name']}: {to_persian_digits(result['score2'])}",
+            ]
+            if result["winner"] is not None:
+                w_name = (result["p1"]["name"]
+                          if result["winner"] == result["p1"]["user_id"]
+                          else result["p2"]["name"])
+                lines.append(f"🏆 برنده: {w_name}")
+            else:
+                lines.append("🤝 مساوی شد.")
+            if result["loser_eligible"]:
+                paid = _coins(
+                    bot, chat_id, result["loser"],
+                    result["loser_info"]["name"], battle.REWARD, logger,
+                    reference=f"battle:{chat_id}:{result['session_id']}",
+                    game="battle",
+                )
+                if paid:
+                    lines.append(
+                        f"🪙 {result['loser_info']['name']} (بازنده) "
+                        f"+{to_persian_digits(battle.REWARD)} سکه برنز"
+                    )
+            await event.reply("\\n".join(lines))
+
+        battle.schedule_game(chat_id, on_question, on_finish, logger=logger)
+        return True
+
+    if state == "playing":
+        # تلاش یک نفر سوم برای پیوستن به نبردِ در جریان → رد و هشدار
+        if normalize_text(text) == normalize_text(battle.JOIN_WORD):
+            p1 = battle.players(chat_id)
+            uids = {p["user_id"] for p in p1 if p}
+            if user_id not in uids:
+                await event.reply("⚠️ نبرد همین حالا در جریان است؛ نمی‌توانید وارد شوید.")
+                return True
+        result, _info = battle.answer(chat_id, user_id, text, logger)
+        if result in {"no_game", "no_question"}:
+            return False
+        if result == "not_assignee":
+            return True  # سوالِ این کاربر نیست؛ ساکت
+        if result == "already":
+            return True
+        if result == "correct":
+            await event.reply("✅ درست بود!")
+            return True
+        if result == "wrong":
+            await event.reply("❌ پاسخ اشتباه بود.")
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
@@ -427,10 +656,17 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         return await _start_lucky_box(bot, event, chat_id, user_id, logger)
     if command in {normalize_text("خون آشام"), normalize_text("خون‌آشام")}:
         return await _start_vampire(bot, event, chat_id, logger)
+    if command == normalize_text("معما"):
+        return await _start_maemma(bot, event, chat_id, user_id, sender, logger)
+    if command == normalize_text("بهترین جواب"):
+        return await _start_best_answer(bot, event, chat_id, logger)
+    if command == normalize_text("نبرد"):
+        return await _start_battle(bot, event, chat_id, user_id, sender, logger)
 
     # پیام‌های درون‌بازی — هر بازی فقط session خودش را می‌بیند.
     for responder in (
         _laugh_message, _survival_message, _lucky_box_message, _vampire_message,
+        _maemma_message, _best_answer_message, _battle_message,
     ):
         if await responder(bot, event, chat_id, user_id, sender, text, logger):
             return True
@@ -442,3 +678,6 @@ def reset_all(chat_id=None):
     survival.reset_all(chat_id)
     lucky_box.reset_all(chat_id)
     vampire.reset_all(chat_id)
+    maemma.reset_all(chat_id)
+    best_answer.reset_all(chat_id)
+    battle.reset_all(chat_id)

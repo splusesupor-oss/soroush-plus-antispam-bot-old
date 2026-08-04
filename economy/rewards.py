@@ -30,6 +30,9 @@ _REWARDS = {
     "fill_blank":      (2, BRONZE, "جای خالی"),
     "laugh_or_lose":   (3, BRONZE, "بخند یا بباز"),
     "lucky_box":       (0, BRONZE, "جعبه شانسی"),   # مقدار متغیر است
+    "maemma":          (3, BRONZE, "معما"),
+    "best_answer":     (4, BRONZE, "بهترین جواب"),
+    "battle":          (4, BRONZE, "نبرد"),
     # --- بازی‌های سخت → نقره --------------------------------------------
     "survival":        (8, SILVER, "بقا"),
     "survival_step":   (1, SILVER, "بقا — پاسخ صحیح"),
