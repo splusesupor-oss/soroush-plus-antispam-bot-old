@@ -19,6 +19,10 @@ import random
 import time
 
 from economy import game_progress as _gp
+from modules.fox_games.answer_analysis import (
+    analyze as _analyze_answer,
+    pick_best as _pick_best,
+)
 from modules.fox_games.best_answer_questions import BEST_ANSWER_QUESTIONS
 from modules.fox_games.session_core import (
     SessionStore,
@@ -47,22 +51,16 @@ def _norm(value):
 
 
 def _score(answer_text, keywords):
-    """امتیاز پاسخ: تعداد کلیدواژه‌های حاضر + همپوشانی توکن نرمال‌شده.
+    """امتیاز سازگار با تحلیل جدید (برای تست/لاگ).
 
-    برنده با این معیار مشخص (غیرتصادفی) انتخاب می‌شود.
+    برندهٔ واقعی با ``_pick_best`` تعیین می‌شود؛ این فقط یک نمای ساده از
+    کیفیت می‌دهد تا رفتار قدیمی در لاگ‌ها قابل مقایسه بماند.
     """
-    norm = normalize_text(answer_text)
-    words = set(norm.split())
-    hits = sum(1 for kw in keywords if _norm(kw) and _norm(kw) in _norm(norm))
-    overlap = 0
-    for kw in keywords:
-        kw_clean = _norm(kw)
-        if not kw_clean:
-            continue
-        kw_words = set(kw_clean.replace(" ", ""))
-        if kw_words and kw_words & set(_norm(norm)):
-            overlap += 1
-    return hits * 10 + overlap, norm
+    from modules.fox_games import answer_analysis as _aa
+    result = _aa.analyze("", keywords, answer_text)
+    if not result["valid"]:
+        return 0, _norm(answer_text)
+    return result["score"], _norm(answer_text)
 
 
 def start(chat_id, logger=None):
@@ -132,21 +130,16 @@ def judge(chat_id, session_id, logger=None):
 
     winner = None
     if answers:
-        scored = []
-        for uid in session["order"]:
-            a = answers[uid]
-            score, norm = _score(a["text"], session["keywords"])
-            scored.append((score, a["ts"], uid, a))
-        scored.sort(key=lambda x: (-x[0], x[1]))  # بالاترین امتیاز، اولین
-        best_score, best_ts, best_uid, best = scored[0]
-        if best_score > 0:
-            winner = {
-                "user_id": best_uid,
-                "name": best["name"],
-                "text": best["text"],
-                "score": best_score,
-                "session_id": session_id,
-            }
+        # پاسخ‌ها به ترتیب ثبت؛ تحلیل و انتخابِ بهترین پاسخِ معتبر
+        ordered = [
+            {"user_id": uid, "name": a["name"], "text": a["text"],
+             "ts": a["ts"]}
+            for uid, a in answers.items()
+        ]
+        picked = _pick_best(session["question"], session["keywords"], ordered)
+        if picked is not None:
+            picked["session_id"] = session_id
+            winner = picked
 
     closed = _STORE.close(chat_id, session_id)
     if closed is None:

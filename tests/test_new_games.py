@@ -208,16 +208,21 @@ async def _test_best_answer_flow():
     check("بهترین جواب: دور فعال است", best_answer.is_active(CHAT))
 
     sess = best_answer._STORE.get(CHAT)
-    kw = sess["keywords"]
-    strong = " ".join(kw)
-    await send(bot, Event(), CHAT, 2, strong, name="B")
-    await send(bot, Event(), CHAT, 3, "پاسخ خیلی کوتاه", name="C")
+    # پاسخِ واقعی و کامل (نمونهٔ مرجع سوال، به‌علاوهٔ توضیح)
+    good = sess["sample"]
+    await send(bot, Event(), CHAT, 2, good, name="B")
+    # پاسخِ چرت/بی‌ربط
+    await send(bot, Event(), CHAT, 3, "نمیدونم", name="C")
+    # پاسخِ خیلی کوتاهِ بی‌ربط
+    await send(bot, Event(), CHAT, 4, "آره", name="D")
 
     winner = best_answer.judge(CHAT, sess["session_id"], bot.logger)
     check("بهترین جواب: برنده تعیین شد", winner is not None, f"{winner}")
     if winner:
-        check("بهترین جواب: برنده همان پاسخ کامل است", winner["user_id"] == 2,
-              f"{winner}")
+        check("بهترین جواب: برنده پاسخِ کامل و مرتبط است",
+              winner["user_id"] == 2, f"{winner}")
+        check("بهترین جواب: برنده کیفیت بالایی دارد",
+              winner.get("quality", 0) >= 0.4, f"{winner}")
         paid = router._coins(
             bot, CHAT, winner["user_id"], winner["name"], best_answer.REWARD,
             bot.logger, reference=f"ba:{CHAT}:{winner['session_id']}",
@@ -226,6 +231,43 @@ async def _test_best_answer_flow():
         check("بهترین جواب: دقیقاً ۴ برنز", paid and bot.paid[0][1] == 4,
               f"{bot.paid}")
     check("بهترین جواب: دور بسته شد", not best_answer.is_active(CHAT))
+
+
+async def _test_best_answer_analysis_filters():
+    """پاسخ‌های چرت/اسپم/بی‌معنی/بی‌ربط امتیاز نمی‌گیرند."""
+    router.reset_all()
+    bot = Bot()
+    await send(bot, Event(), CHAT, 1, "بهترین جواب")
+    sess = best_answer._STORE.get(CHAT)
+    q = sess["question"]
+    kw = sess["keywords"]
+
+    from modules.fox_games import answer_analysis as _aa
+
+    # ۱) پاسخ‌های آشغال رد می‌شوند
+    for bad in ("", "هههههه", "😂😂😂😂", "نمیدونم", "ببخشید", "آره", "نمی‌دونم"):
+        r = _aa.analyze(q, kw, bad)
+        check(f"بهترین جواب: رد پاسخِ چرت {bad!r}", r["valid"] is False
+              and r["reason"] is not None, f"{r}")
+        check(f"بهترین جواب: پاسخِ چرت امتیاز صفر دارد", r["score"] == 0.0,
+              f"{r['score']}")
+
+    # ۲) پاسخِ خارج از موضوع (بدون ارتباط به سوال و بدون کلیدواژه)
+    off = _aa.analyze(q, kw, "امروز صبح خیلی دیر بیدار شدم و دیر به محل کارم رسیدم و کلی کار عقب افتاد")
+    check("بهترین جواب: پاسخِ خارج از موضوع رد می‌شود",
+          off["valid"] is False and off["reason"] == "off_topic", f"{off}")
+
+    # ۳) پاسخِ کامل و مرتبط معتبر است
+    good = _aa.analyze(q, kw, sess["sample"])
+    check("بهترین جواب: پاسخِ کامل مرتبط معتبر است", good["valid"] is True,
+          f"{good}")
+
+    # ۴) keyword stuffing (فقط کلیدواژه، بدون توضیح) امتیاز پایینی دارد
+    stuffing = _aa.analyze(q, kw, " ".join(kw))
+    check("بهترین جواب: keyword stuffing امتیاز پایین/صفر دارد",
+          stuffing["valid"] is True and stuffing["completeness"] <= 0.25,
+          f"{stuffing}")
+    router.reset_all()
 
 
 async def _test_best_answer_no_answer():
@@ -619,7 +661,7 @@ async def _test_bold_question_and_finish_messages():
     # بهترین جواب: پیام برنده Bold
     await send(bot, Event(), CHAT, 1, "بهترین جواب")
     sess = best_answer._STORE.get(CHAT)
-    best_answer.submit(CHAT, 2, "B", " ".join(sess["keywords"]), bot.logger)
+    best_answer.submit(CHAT, 2, "B", sess["sample"], bot.logger)
     winner = best_answer.judge(CHAT, sess["session_id"], bot.logger)
     head = f"🏆 بهترین پاسخ: {winner['name']}"
     quote = f"«{winner['text']}»"
@@ -693,6 +735,7 @@ def main():
         _test_maemma_dedup_and_bank()
 
         await _test_best_answer_flow()
+        await _test_best_answer_analysis_filters()
         await _test_best_answer_no_answer()
         _test_best_answer_bank()
         await _test_best_answer_chat_isolation()
