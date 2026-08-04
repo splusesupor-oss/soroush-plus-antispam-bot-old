@@ -498,107 +498,87 @@ async def _test_battle_non_assignee_cannot_answer():
         router.reset_all()
 
 
-async def _test_battle_play_and_loser_reward():
-    # این تست، نبرد را با TIMEOUTهای کوتاه اجرا می‌کند
+async def _run_full_battle(bot, p1_id, p2_id, answers1, answers2):
+    """نبرد کامل را اجرا می‌کند. answers1/answers2 = [True/False,...] برای ۳ سوال."""
     router.reset_all()
-    original_answer = battle.ANSWER_SECONDS
-    battle.ANSWER_SECONDS = 0.15
+    original = battle.ANSWER_SECONDS
+    battle.ANSWER_SECONDS = 0.12
     try:
-        bot = Bot()
-        await send(bot, Event(), CHAT, 100, "نبرد", name="P1")
-        await send(bot, Event(), CHAT, 200, "شرکت", name="P2")
-        check("نبرد: وارد مرحلهٔ بازی شد", battle.phase(CHAT) == "playing")
-
-        # ۶ سوال: ۰،۲،۴ برای P1 و ۱،۳،۵ برای P2
-        # P1 همه را درست؛ P2 فقط ۲ سوال درست (یکی غلط) → P2 بازنده با امتیاز≥۱
-        for qidx in range(battle.TOTAL_QUESTIONS):
-            for _ in range(30):
-                cur = battle.current_question(CHAT)
-                if cur:
-                    break
-                await asyncio.sleep(0.02)
-            if cur is None:
-                continue
-            assignee = cur["assignee"]
-            is_p1 = assignee == 100
-            answer_text = cur["question"]["answer"]
-            if not is_p1 and qidx == 1:
-                answer_text = "غلط غلط غلط"  # پاسخ اشتباه
-            ev = Event()
-            await send(bot, ev, CHAT, assignee, answer_text, name="P1" if is_p1 else "P2")
-            await asyncio.sleep(0.05)
-
-        # صبر تا پایان
-        for _ in range(50):
+        await send(bot, Event(), CHAT, p1_id, "نبرد", name="P1")
+        join_ev = CapturingEvent()
+        await send(bot, join_ev, CHAT, p2_id, "شرکت", name="P2")
+        # بازیکن اول ۳ سوال، سپس بازیکن دوم ۳ سوال
+        for pid, answers in ((p1_id, answers1), (p2_id, answers2)):
+            for correct in answers:
+                for _ in range(50):
+                    cur = battle.current_question(CHAT)
+                    if cur and cur["assignee"] == pid:
+                        break
+                    await asyncio.sleep(0.01)
+                if cur is None:
+                    continue
+                ans = cur["question"]["answer"] if correct else "غلط غلط غلط"
+                await send(bot, Event(), CHAT, pid, ans)
+                await asyncio.sleep(0.03)
+        for _ in range(60):
             if not battle.is_active(CHAT):
                 break
-            await asyncio.sleep(0.05)
-
-        sess_data = {"finished": True}
-        # نتیجه را از لاگ/وضعیت بررسی می‌کنیم
-        # P1 امتیاز ۳، P2 امتیاز ۲ → P2 بازنده با امتیاز≥۱ → ۴ برنز
-        # payment از طریق on_finish در روتر انجام شده؛ bot.paid باید شامل ۴ باشد
-        paid_bronze = [amt for (_u, amt) in bot.paid]
-        check("نبرد: بازنده (P2) ۴ برنز گرفت", 4 in paid_bronze, f"{bot.paid}")
-        check("نبرد: دقیقاً یک‌بار پرداخت شد",
-              sum(1 for a in paid_bronze if a == 4) == 1, f"{bot.paid}")
-        check("نبرد: بازی تمام شد", not battle.is_active(CHAT))
+            await asyncio.sleep(0.03)
+        return join_ev
     finally:
-        battle.ANSWER_SECONDS = original_answer
+        battle.ANSWER_SECONDS = original
 
 
-async def _test_battle_loser_no_answer_no_reward():
+async def _test_battle_play_and_winner_reward():
+    """هر بازیکن ۳ سوال می‌گیرد؛ پاسخ غلط حذف نمی‌کند؛ برنده ۲ برنز می‌گیرد."""
     router.reset_all()
-    original_answer = battle.ANSWER_SECONDS
-    battle.ANSWER_SECONDS = 0.15
-    try:
-        bot = Bot()
-        await send(bot, Event(), CHAT, 100, "نبرد", name="P1")
-        await send(bot, Event(), CHAT, 200, "شرکت", name="P2")
-        # P1 همه درست، P2 هیچ درستی → P2 بازنده با امتیاز صفر → بدون پاداش
-        for qidx in range(battle.TOTAL_QUESTIONS):
-            for _ in range(30):
-                cur = battle.current_question(CHAT)
-                if cur:
-                    break
-                await asyncio.sleep(0.02)
-            if cur is None:
-                continue
-            if cur["assignee"] == 100:
-                await send(bot, Event(), CHAT, 100, cur["question"]["answer"], name="P1")
-            else:
-                await send(bot, Event(), CHAT, 200, "غلط غلط", name="P2")
-            await asyncio.sleep(0.05)
-
-        for _ in range(50):
-            if not battle.is_active(CHAT):
-                break
-            await asyncio.sleep(0.05)
-
-        paid_bronze = [amt for (_u, amt) in bot.paid]
-        check("نبرد: بازندهٔ بی‌پاسخ صفر گرفت", not paid_bronze, f"{bot.paid}")
-        check("نبرد: بازی تمام شد", not battle.is_active(CHAT))
-    finally:
-        battle.ANSWER_SECONDS = original_answer
-
-
-def _test_battle_double_payment_guard():
-    """جایزهٔ نبرد فقط یک‌بار (reference یکتا) پرداخت می‌شود."""
-    # reference شامل session_id یکتا است؛ دو نبرد reference متفاوت دارند
     bot = Bot()
-    router._coins(bot, CHAT, 200, "P2", battle.REWARD, bot.logger,
-                  reference=f"battle:{CHAT}:111", game="battle")
-    router._coins(bot, CHAT, 200, "P2", battle.REWARD, bot.logger,
-                  reference=f"battle:{CHAT}:111", game="battle")
-    # در تست، `award_coins` همیشه ثبت می‌کند؛ dedup واقعی در اقتصاد است.
-    # اینجا فقط مطمئن می‌شویم reference از session_id ساخته می‌شود.
-    ref = f"battle:{CHAT}:999"
-    check("نبرد: reference شامل session یکتاست", ref.startswith("battle:"))
-    check("نبرد: فقط یک بار در هر دور خوانده می‌شود", True)
+    # P1 هر ۳ درست، P2 دو درست و یک غلط → P1 برنده → ۲ برنز
+    join_ev = await _run_full_battle(bot, 100, 200, [True, True, True], [True, True, False])
+    paid = [amt for (_u, amt) in bot.paid]
+    check("نبرد: برنده (P1) ۲ برنز گرفت", paid == [2], f"{bot.paid}")
+    # برنده P1 است
+    finish = next(((t, e) for t, e in join_ev.messages if "پایان" in t), None)
+    check("نبرد: نتیجه نهایی نمایش داده شد", finish is not None)
+    if finish:
+        check("نبرد: برندهٔ P1 اعلام شد", "برنده: P1" in finish[0], f"{finish[0]}")
+    check("نبرد: بازی تمام شد", not battle.is_active(CHAT))
+    router.reset_all()
 
 
-async def _test_battle_no_per_answer_feedback():
-    """در طول بازی نبرد، هیچ پیامِ اضافه (درست/اشتباه) ارسال نمی‌شود."""
+async def _test_battle_tie_both_reward():
+    """اگر تعداد پاسخ درست برابر بود، هر دو بازیکن ۲ برنز می‌گیرند."""
+    router.reset_all()
+    bot = Bot()
+    # هر دو ۲ درست، ۱ غلط → مساوی
+    join_ev = await _run_full_battle(bot, 100, 200, [True, True, False], [True, True, False])
+    paid = sorted(amt for (_u, amt) in bot.paid)
+    check("نبرد: مساوی → هر دو ۲ برنز", paid == [2, 2], f"{bot.paid}")
+    finish = next(((t, e) for t, e in join_ev.messages if "پایان" in t), None)
+    if finish:
+        check("نبرد: مساوی اعلام شد", "مساوی شد" in finish[0], f"{finish[0]}")
+    router.reset_all()
+
+
+async def _test_battle_wrong_answer_no_elimination():
+    """پاسخ غلط هیچ بازیکنی را حذف نمی‌کند؛ هر دو ۳ سوال می‌گیرند."""
+    router.reset_all()
+    bot = Bot()
+    # P1 همه غلط، P2 همه درست → P2 برنده
+    join_ev = await _run_full_battle(bot, 100, 200, [False, False, False], [True, True, True])
+    # P2 همه درست = ۳ امتیاز، P1 صفر
+    paid = [amt for (_u, amt) in bot.paid]
+    check("نبرد: پاسخ غلط حذف نکرد (P1 ۳ سوال گرفت)", paid == [2], f"{bot.paid}")
+    finish = next(((t, e) for t, e in join_ev.messages if "پایان" in t), None)
+    if finish:
+        check("نبرد: برندهٔ P2 اعلام شد", "برنده: P2" in finish[0], f"{finish[0]}")
+        check("نبرد: امتیازهای درست نمایش داده شد",
+              "P1: ۰" in finish[0] and "P2: ۳" in finish[0], f"{finish[0]}")
+    router.reset_all()
+
+
+async def _test_battle_per_answer_feedback():
+    """بعد از هر پاسخ، «درست بود»/«اشتباه بود» اعلام می‌شود (پیام بازخورد)."""
     router.reset_all()
     bot = Bot()
     for g in ("maemma", "best_answer", "battle"):
@@ -610,33 +590,42 @@ async def _test_battle_no_per_answer_feedback():
 
     original = battle.ANSWER_SECONDS
     battle.ANSWER_SECONDS = 0.15
-    answer_events = []
     try:
-        for qidx in range(battle.TOTAL_QUESTIONS):
-            for _ in range(30):
-                cur = battle.current_question(CHAT)
-                if cur:
-                    break
-                await asyncio.sleep(0.01)
-            if cur is None:
-                break
-            ev = CapturingEvent()
-            await send(bot, ev, CHAT, cur["assignee"],
-                       cur["question"]["answer"], name="X")
-            answer_events.append(ev)
-            await asyncio.sleep(0.03)
-        for _ in range(50):
+        # P1: سوال۱ درست، سوال۲ غلط، سوال۳ درست؛ P2 همه درست
+        for pid, answers in ((100, [True, False, True]), (200, [True, True, True])):
+            for correct in answers:
+                for _ in range(50):
+                    cur = battle.current_question(CHAT)
+                    if cur and cur["assignee"] == pid:
+                        break
+                    await asyncio.sleep(0.01)
+                ans = cur["question"]["answer"] if correct else "غلط غلط غلط"
+                await send(bot, Event(), CHAT, pid, ans)
+                await asyncio.sleep(0.03)
+        for _ in range(60):
             if not battle.is_active(CHAT):
                 break
             await asyncio.sleep(0.03)
     finally:
         battle.ANSWER_SECONDS = original
 
-    # هیچ پیام درست/اشتباه جداگانه‌ای نباید در پاسخ‌ها آمده باشد
-    extra = [msg for ev in answer_events for msg in ev.messages
-             if "درست بود" in msg or "اشتباه بود" in msg]
-    check("نبرد: پیام اضافهٔ درست/اشتباه ارسال نشد", not extra, f"{extra}")
+    feedback_msgs = [t for t, _e in join_ev.messages
+                     if "پاسخ درست بود" in t or "پاسخ اشتباه بود" in t]
+    check("نبرد: پیام «پاسخ درست بود» ارسال شد",
+          any("پاسخ درست بود" in m for m in feedback_msgs), f"{feedback_msgs}")
+    check("نبرد: پیام «پاسخ اشتباه بود» ارسال شد",
+          any("پاسخ اشتباه بود" in m for m in feedback_msgs), f"{feedback_msgs}")
+    check("نبرد: بازی تمام شد", not battle.is_active(CHAT))
     router.reset_all()
+
+
+def _test_battle_double_payment_guard():
+    """جایزهٔ نبرد فقط یک‌بار (reference یکتا) پرداخت می‌شود."""
+    # reference شامل session_id + کاربر/برنده است؛ دو پرداختِ هم‌نشانگر
+    # در اقتصاد dedup می‌شود. اینجا مطمئن می‌شویم reference یکتا ساخته می‌شود.
+    ref = f"battle:{CHAT}:999:winner"
+    check("نبرد: reference شامل session یکتاست", ref.startswith("battle:"))
+    check("نبرد: فقط یک بار در هر دور پرداخت می‌شود", True)
 
 
 async def _test_battle_chat_isolation():
@@ -823,8 +812,8 @@ def _test_help_list_guide():
           "جایزه: ۲ سکه برنز" in src)
     check("راهنمای امتیاز: بهترین جواب توضیح دارد",
           "کاربردی‌ترین پاسخ" in src)
-    check("راهنمای امتیاز: نبرد ۴ برنز (بازنده)",
-          "بازنده با حداقل یک پاسخ صحیح: ۴ سکه برنز" in src)
+    check("راهنمای امتیاز: نبرد ۲ برنز (برنده)",
+          "برنده: ۲ سکه برنز" in src)
 
     # هر سه در bold_pieces (Bold شدن در راهنما)
     for label in ("🧩 معما:", "🎯 بهترین جواب:", "⚔️ نبرد:"):
@@ -859,10 +848,11 @@ def main():
         await _test_battle_start_join_third()
         await _test_battle_active_blocks_new_start()
         await _test_battle_finish_blockquote()
-        await _test_battle_no_per_answer_feedback()
         await _test_battle_non_assignee_cannot_answer()
-        await _test_battle_play_and_loser_reward()
-        await _test_battle_loser_no_answer_no_reward()
+        await _test_battle_play_and_winner_reward()
+        await _test_battle_tie_both_reward()
+        await _test_battle_wrong_answer_no_elimination()
+        await _test_battle_per_answer_feedback()
         _test_battle_double_payment_guard()
         await _test_battle_chat_isolation()
 

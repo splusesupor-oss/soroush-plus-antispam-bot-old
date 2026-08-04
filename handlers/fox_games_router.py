@@ -698,8 +698,8 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
             return True
         p1, p2 = session["p1"], session["p2"]
 
-        async def on_question(num, q, assignee):
-            title = f"⚔️ سوال {to_persian_digits(num)}"
+        async def on_question(player_num, qnum, q, assignee):
+            title = f"⚔️ بازیکن {to_persian_digits(player_num)} — سوال {to_persian_digits(qnum)}"
             time_line = f"⏳ {to_persian_digits(battle.ANSWER_SECONDS)} ثانیه"
             for_line = f"برای: {p1['name'] if assignee == p1['user_id'] else p2['name']}"
             text = (
@@ -711,40 +711,67 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
             await _bold_reply(event, text,
                               [title, q['question'], time_line, for_line])
 
+        async def on_answer(result, assignee, player_num, qnum):
+            if result == "correct":
+                msg = "✅ پاسخ درست بود!"
+            elif result == "wrong":
+                msg = "❌ پاسخ اشتباه بود!"
+            else:
+                # بدون پاسخ در مهلت → بدون امتیاز، اما بازی ادامه می‌یابد
+                msg = "⏰ زمان تمام شد!"
+            await _bold_reply(event, msg, [msg])
+
         async def on_finish(result):
             header = "🏁 پایان نبرد!"
             score1 = f"{result['p1']['name']}: {to_persian_digits(result['score1'])}"
             score2 = f"{result['p2']['name']}: {to_persian_digits(result['score2'])}"
-            if result["winner"] is not None:
+            if result["tie"]:
+                outcome = "🤝 مساوی شد."
+            else:
                 w_name = (result["p1"]["name"]
                           if result["winner"] == result["p1"]["user_id"]
                           else result["p2"]["name"])
                 outcome = f"🏆 برنده: {w_name}"
-            else:
-                outcome = "🤝 مساوی شد."
-            reward_line = ""
-            if result["loser_eligible"]:
+
+            # جایزه: ۲ سکه برنز به برنده؛ اگر مساوی، به هر دو بازیکن ۲ سکه.
+            reward_lines = []
+            if result["tie"]:
+                for p in (result["p1"], result["p2"]):
+                    paid = _coins(
+                        bot, chat_id, p["user_id"], p["name"], battle.REWARD,
+                        logger,
+                        reference=f"battle:{chat_id}:{result['session_id']}:"
+                                  f"{p['user_id']}",
+                        game="battle",
+                    )
+                    if paid:
+                        reward_lines.append(
+                            f"🪙 {p['name']} +{to_persian_digits(battle.REWARD)} سکه برنز"
+                        )
+            elif result["winner"] is not None:
+                w = (result["p1"] if result["winner"] == result["p1"]["user_id"]
+                     else result["p2"])
                 paid = _coins(
-                    bot, chat_id, result["loser"],
-                    result["loser_info"]["name"], battle.REWARD, logger,
-                    reference=f"battle:{chat_id}:{result['session_id']}",
+                    bot, chat_id, w["user_id"], w["name"], battle.REWARD, logger,
+                    reference=f"battle:{chat_id}:{result['session_id']}:winner",
                     game="battle",
                 )
                 if paid:
-                    reward_line = (
-                        f"\n🪙 {result['loser_info']['name']} (بازنده) "
-                        f"+{to_persian_digits(battle.REWARD)} سکه برنز"
+                    reward_lines.append(
+                        f"🪙 {w['name']} +{to_persian_digits(battle.REWARD)} سکه برنز"
                     )
+
+            reward_text = ("\n" + "\n".join(reward_lines)) if reward_lines else ""
             text = (
                 f"{header}\n\n"
                 f"{score1}\n"
                 f"{score2}\n\n"
-                f"{outcome}{reward_line}"
+                f"{outcome}{reward_text}"
             )
             # نام و امتیاز هر بازیکن داخل «نقل قول شیشه‌ای» (Blockquote)
             await _quote_reply(event, text, [score1, score2])
 
-        battle.schedule_game(chat_id, on_question, on_finish, logger=logger)
+        battle.schedule_game(chat_id, on_question, on_answer, on_finish, logger=logger)
         return True
 
     if state == "playing":

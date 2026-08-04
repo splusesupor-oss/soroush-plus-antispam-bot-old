@@ -3,10 +3,15 @@
 - «نبرد» → بازیکن اول (فقط همان کاربر).
 - «شرکت» → دومین نفر وارد همان نبرد می‌شود؛ نفر سوم و خودِ بازیکن اول
   نمی‌توانند دوباره وارد شوند.
-- پس از تشکیل دو بازیکن، ۶ سوال سخت (۳ سوال به‌ازای هر بازیکن، متناوب)
-  نمایش داده می‌شود؛ هر سوال ۳۰ ثانیه و فقط بازیکنِ همان سوال پاسخ می‌دهد.
-- برنده: امتیاز بالاتر. بازنده‌ای که حداقل یک پاسخ صحیح ثبت کرده باشد،
-  ۴ سکه برنز می‌گیرد (یک‌بار، reference یکتا). بازندهٔ بی‌پاسخ صفر.
+- هر بازیکن در مجموع ۳ سوال می‌گیرد. بازیکن اول هر ۳ سوالش را پشت‌سرهم
+  می‌پرسد (بعد از هر پاسخ، نتیجه همان پاسخ اعلام می‌شود و سوال بعدی همان
+  بازیکن نمایش داده می‌شود)، سپس بازیکن دوم هر ۳ سوالش را.
+- پاسخِ درست → «✅ پاسخ درست بود!» + ۱ امتیاز. پاسخِ غلط → «❌ پاسخ اشتباه
+  بود!» بدون امتیاز. پاسخِ غلط هرگز بازیکن را حذف نمی‌کند؛ بازیکن تا پایان
+  ۳ سوال خودش ادامه می‌دهد چه درست چه غلط.
+- پس از پایان هر دو بازیکن، نتیجهٔ نهایی اعلام می‌شود: تعداد پاسخ‌های درست
+  هر بازیکن و برنده بر اساس تعداد پاسخ‌های درست. اگر مساوی → «🤝 مساوی شد.»
+- جایزه: برنده ۲ سکه برنز؛ اگر مساوی شود هر دو بازیکن ۲ سکه برنز.
 - اگر مهلت ثبت‌نام تمام شود و بازیکن دوم نیاید، نبرد بدون خطا بسته می‌شود.
 
 ساختار با ``SessionStore`` (کلید chat_id)؛ هر گروه مستقل است.
@@ -28,10 +33,11 @@ from modules.fox_games.session_core import (
 GAME = "battle"
 COMMAND = "نبرد"
 JOIN_WORD = "شرکت"
-TOTAL_QUESTIONS = 6
+QUESTIONS_PER_PLAYER = 3
+TOTAL_QUESTIONS = QUESTIONS_PER_PLAYER * 2  # ۶ سوال (۳ برای هر بازیکن)
 ANSWER_SECONDS = 30
 JOIN_SECONDS = 60
-REWARD = 4
+REWARD = 2
 RECENT_WINDOW = 30
 
 _STORE = SessionStore(GAME)
@@ -213,58 +219,70 @@ def abort_joining(chat_id, session_id, on_abort, logger=None):
         pass
 
 
-async def run_game(chat_id, on_question, on_finish, logger=None):
-    """حلقهٔ اصلی نبرد. بعد از تشکیل دو بازیکن اجرا می‌شود."""
+async def run_game(chat_id, on_question, on_answer, on_finish, logger=None):
+    """حلقهٔ اصلی نبرد. بعد از تشکیل دو بازیکن اجرا می‌شود.
+
+    ترتیب: بازیکن اول هر ۳ سوالش را پشت‌سرهم می‌پرسد (بعد از هر پاسخ نتیجه
+    همان پاسخ اعلام می‌شود)، سپس بازیکن دوم. پس از پایان هر دو، نتیجهٔ
+    نهایی اعلام می‌شود.
+    """
     session = _STORE.get(chat_id)
     if not session:
         return
     p1, p2 = session["p1"]["user_id"], session["p2"]["user_id"]
-    total = len(session["questions"])
+    # ۳ سوال اول برای بازیکن اول، ۳ سوال بعدی برای بازیکن دوم
+    player_1_questions = session["questions"][:QUESTIONS_PER_PLAYER]
+    player_2_questions = session["questions"][QUESTIONS_PER_PLAYER:]
 
-    for index in range(total):
-        session["index"] = index
-        assignee = p1 if index % 2 == 0 else p2
-        q = session["questions"][index]
-        fut = asyncio.get_running_loop().create_future()
-        session["current"] = {
-            "assignee": assignee,
-            "question": q,
-            "future": fut,
-            "index": index,
-        }
-        try:
-            await on_question(index + 1, q, assignee)
-        except Exception:
-            pass
+    for player_id, qs, player_num in (
+        (p1, player_1_questions, 1),
+        (p2, player_2_questions, 2),
+    ):
+        for qnum, q in enumerate(qs, start=1):
+            fut = asyncio.get_running_loop().create_future()
+            session["current"] = {
+                "assignee": player_id,
+                "question": q,
+                "future": fut,
+            }
+            try:
+                await on_question(player_num, qnum, q, player_id)
+            except Exception:
+                pass
 
-        try:
-            await asyncio.wait_for(fut, timeout=ANSWER_SECONDS)
-        except asyncio.TimeoutError:
-            log(logger, f"BATTLE TIMEOUT chat_id={chat_id} q={index + 1}")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            pass
+            result = "timeout"
+            try:
+                await asyncio.wait_for(fut, timeout=ANSWER_SECONDS)
+            except asyncio.TimeoutError:
+                log(logger, f"BATTLE TIMEOUT chat_id={chat_id} "
+                            f"player={player_id} q={qnum}")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            else:
+                result = fut.result() if fut.done() else "timeout"
 
-        session["current"] = None
+            session["current"] = None
+
+            # بعد از هر پاسخ، نتیجهٔ همان پاسخ اعلام می‌شود
+            try:
+                await on_answer(result, player_id, player_num, qnum)
+            except Exception:
+                pass
 
     # پایان بازی
     s1 = session["scores"].get(p1, 0)
     s2 = session["scores"].get(p2, 0)
-    winner = None
-    loser = None
     if s1 > s2:
-        winner, loser = p1, p2
+        winner = p1
+        tie = False
     elif s2 > s1:
-        winner, loser = p2, p1
-
-    # آیا بازنده مستحق جایزه است؟ (حداقل یک پاسخ صحیح «ثبت‌شده»)
-    loser_eligible = loser is not None \
-        and session["scores"].get(loser, 0) >= 1
-    loser_info = None
-    if loser_eligible:
-        loser_info = session["p1"] if session["p1"]["user_id"] == loser \
-            else session["p2"]
+        winner = p2
+        tie = False
+    else:
+        winner = None
+        tie = True
 
     session["finished"] = True
     session_id = session["session_id"]
@@ -279,9 +297,8 @@ async def run_game(chat_id, on_question, on_finish, logger=None):
     result = {
         "p1": session["p1"], "p2": session["p2"],
         "score1": s1, "score2": s2,
-        "winner": winner, "loser": loser,
-        "loser_eligible": loser_eligible,
-        "loser_info": loser_info,
+        "winner": winner,
+        "tie": tie,
         "answered_count": dict(session["answered_count"]),
         "session_id": session_id,
     }
@@ -291,9 +308,9 @@ async def run_game(chat_id, on_question, on_finish, logger=None):
         pass
 
 
-def schedule_game(chat_id, on_question, on_finish, logger=None):
+def schedule_game(chat_id, on_question, on_answer, on_finish, logger=None):
     return _STORE.schedule(chat_id, lambda: run_game(
-        chat_id, on_question, on_finish, logger))
+        chat_id, on_question, on_answer, on_finish, logger))
 
 
 def schedule_join_timeout(chat_id, session_id, on_abort, logger=None):

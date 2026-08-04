@@ -32,7 +32,7 @@ _REWARDS = {
     "lucky_box":       (0, BRONZE, "جعبه شانسی"),   # مقدار متغیر است
     "maemma":          (3, BRONZE, "معما"),
     "best_answer":     (2, BRONZE, "بهترین جواب"),
-    "battle":          (4, BRONZE, "نبرد"),
+    "battle":          (2, BRONZE, "نبرد"),
     # --- بازی‌های سخت → نقره --------------------------------------------
     "survival":        (8, SILVER, "بقا"),
     "survival_step":   (1, SILVER, "بقا — پاسخ صحیح"),
