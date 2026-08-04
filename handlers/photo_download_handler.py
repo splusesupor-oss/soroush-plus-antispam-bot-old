@@ -57,6 +57,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
 
     # ۲-الف) اگر هنوز عبارت داده نشده
     if s.get("query") is None:
+        _log(bot, f"PHOTO QUERY RECEIVED chat_id={chat_id} user_id={user_id} query={clean!r}")
         result, payload = photo_download.handle_query(chat_id, user_id, clean)
         if result == "no_session":
             return False
@@ -66,9 +67,11 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
             return True
         if result == "insufficient":
             await event.reply(payload)
+            _log(bot, f"PHOTO INSUFFICIENT chat_id={chat_id} user_id={user_id} query={clean!r}")
             return True
         if result == "ask_confirm":
             await event.reply(payload)
+            _log(bot, f"PHOTO ASK_CONFIRM chat_id={chat_id} user_id={user_id} query={clean!r}")
             return True
         return True
 
@@ -76,6 +79,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     result, payload = photo_download.handle_confirm(chat_id, user_id, clean)
     if result == "cancel":
         await event.reply(payload)
+        _log(bot, f"PHOTO CONFIRM CANCEL chat_id={chat_id} user_id={user_id}")
         return True
     if result == "invalid":
         await event.reply(payload)
@@ -84,6 +88,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         return False
     if result == "start":
         # تأیید شد: اجرای کامل، بدون بلاک کردن Event Loop
+        _log(bot, f"PHOTO CONFIRM START chat_id={chat_id} user_id={user_id} query={s.get('query')!r}")
         await event.reply("🔄 در حال جستجو و ارسال تصاویر...")
         outcome, message = await photo_download.process(chat_id, user_id, bot)
         if outcome in {"done", "no_results", "error"}:

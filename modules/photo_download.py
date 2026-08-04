@@ -415,21 +415,23 @@ async def _send_image(bot, chat_id, url):
          (fallback؛ فقط در محیط‌هایی که media-DC کار کند موفق می‌شود).
     هزینه فقط بابت عکس‌هایی که واقعاً در چت ارسال شدند کسر می‌شود.
     """
-    _log(bot, f"PHOTO SEND START chat_id={chat_id} url={url}")
+    _log(bot, f"PHOTO LINK SELECTED url={url}")
 
     # ۱) دانلود + اعتبارسنجی — فقط عکسِ واقعی. اگر دانلود نشد، این عکس
     #    ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود. جزئیاتِ دانلود
     #    (status/type/bytes/magic) در داخل _fetch_image_bytes لاگ می‌شود.
+    _log(bot, f"PHOTO DOWNLOAD START url={url}")
     try:
         data = await asyncio.to_thread(
             _fetch_image_bytes, url,
             log_func=lambda m: _log(bot, m))
     except Exception:
-        _log_exception(bot, f"PHOTO DOWNLOAD EXCEPTION url={url}")
+        _log_exception(bot, f"PHOTO DOWNLOAD ERROR url={url}")
         data = None
     if not data:
-        _log(bot, "PHOTO SEND result=SKIP reason=download_invalid")
+        _log(bot, f"PHOTO DOWNLOAD FAILED url={url} reason=download_invalid")
         return False
+    _log(bot, f"PHOTO DOWNLOAD OK url={url} bytes={len(data)}")
 
     # ۲) ارسال با URL (InputMediaPhotoExternal) — سرورِ سروش خودش تصویر را
     #    می‌گیرد؛ بدونِ آپلود، بدونِ خطای SaveFilePart. این روشِ مطمئنِ اصلی
@@ -437,19 +439,19 @@ async def _send_image(bot, chat_id, url):
     #    کار نمی‌کند.
     try:
         await _send_by_url(bot, chat_id, url)
-        _log(bot, "PHOTO SEND method=external_url result=OK")
+        _log(bot, f"PHOTO SEND OK method=external_url url={url}")
         return True
     except Exception:
-        _log_exception(bot, f"PHOTO SEND method=external_url EXCEPTION url={url}")
+        _log_exception(bot, f"PHOTO SEND ERROR method=external_url url={url}")
 
     # ۳) fallback: آپلود با send_file (فقط در محیط‌هایی که media-DC کار کند).
     stream = _make_image_stream(data, 0)
     try:
         await bot.client.send_file(chat_id, stream)
-        _log(bot, "PHOTO SEND method=upload result=OK")
+        _log(bot, f"PHOTO SEND OK method=upload url={url}")
         return True
     except Exception:
-        _log_exception(bot, f"PHOTO SEND method=upload EXCEPTION url={url}")
+        _log_exception(bot, f"PHOTO SEND ERROR method=upload url={url}")
         return False
 
 
@@ -546,12 +548,13 @@ async def process(chat_id, user_id, bot):
     _BUSY_USERS.add(key)
     try:
         # ۱) جستجو (خارج از حلقه)
+        _log(bot, f"PHOTO SEARCH START chat_id={chat_id} user_id={user_id} query={query!r}")
         try:
             urls = await asyncio.to_thread(_search_image_urls, query, SEARCH_CANDIDATES)
         except Exception:
-            _log_exception(bot, f"SEARCH EXCEPTION query={query!r}")
+            _log_exception(bot, f"PHOTO SEARCH EXCEPTION query={query!r}")
             urls = []
-        _log(bot, f"PHOTO SEARCH query={query!r} candidates={len(urls)}")
+        _log(bot, f"PHOTO URL FOUND count={len(urls)} query={query!r}")
         if not urls:
             close_session(chat_id, user_id)
             return "no_results", NO_RESULTS
@@ -576,6 +579,8 @@ async def process(chat_id, user_id, bot):
             await asyncio.sleep(0.3)
 
         if sent == 0:
+            _log(bot, f"PHOTO DOWNLOAD FAILED chat_id={chat_id} user_id={user_id} "
+                      f"query={query!r} sent=0 (all links failed)")
             close_session(chat_id, user_id)
             return "error", ERROR_MSG
 
@@ -589,7 +594,7 @@ async def process(chat_id, user_id, bot):
                 note=f"دانلود عکس ({sent} تصویر)",
             )
         except Exception:
-            _log_exception(bot, f"ECONOMY SPEND EXCEPTION chat_id={chat_id} "
+            _log_exception(bot, f"PHOTO DOWNLOAD FAILED (spend) chat_id={chat_id} "
                                 f"user_id={user_id} cost={cost}")
             close_session(chat_id, user_id)
             return "error", ERROR_MSG
@@ -600,7 +605,7 @@ async def process(chat_id, user_id, bot):
         # لایهٔ نهایی: هر خطایِ پیش‌بینی‌نشده را با traceback ثبت کن و به‌جایِ
         # پیامِ عمومیِ خام، علت را در لاگ نگه دار (بدون این لاگ نمی‌شود فهمید
         # مشکل از جستجو/لینک/دانلود/ارسال است).
-        _log_exception(bot, f"PHOTO PROCESS UNEXPECTED EXCEPTION "
+        _log_exception(bot, f"PHOTO DOWNLOAD FAILED (unexpected) "
                             f"chat_id={chat_id} user_id={user_id} query={query!r}")
         close_session(chat_id, user_id)
         return "error", ERROR_MSG
