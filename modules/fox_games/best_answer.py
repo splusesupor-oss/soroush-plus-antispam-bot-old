@@ -35,7 +35,7 @@ from modules.fox_games.session_core import (
 GAME = "best_answer"
 COMMAND = "بهترین جواب"
 ANSWER_SECONDS = 40
-REWARD = 4
+REWARD = 2
 RECENT_WINDOW = 20
 
 _STORE = SessionStore(GAME)

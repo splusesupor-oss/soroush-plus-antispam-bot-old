@@ -512,7 +512,13 @@ async def _show_maemma_question(event, question, logger=None):
 
 
 async def _show_maemma_result(event, correct, total, logger=None):
-    """نتیجهٔ نهایی بازی معما را نمایش می‌دهد."""
+    """نتیجهٔ نهایی بازی معما را نمایش می‌دهد.
+
+    فقط زمانی که حداقل یک پاسخ صحیح ثبت شده باشد، پیام پایان و جایزه نشان
+    داده می‌شود؛ با پاسخِ صفر هیچ پیامِ پایان/جایزه‌ای ارسال نمی‌شود.
+    """
+    if not correct:
+        return
     title = "🧩 پایان بازی معما"
     result_line = (f"پاسخ‌های صحیح: {to_persian_digits(correct)} "
                    f"از {to_persian_digits(total)}")

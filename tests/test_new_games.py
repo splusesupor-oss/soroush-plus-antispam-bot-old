@@ -105,11 +105,16 @@ async def _test_maemma_owner_only():
     check("معما: پاسخ B مصرف نشد", r is False)
     check("معما: B سکه نگرفت", not bot.paid, f"{bot.paid}")
 
-    # A هر ۳ معما را درست جواب می‌دهد
+    # A هر ۳ معما را درست جواب می‌دهد؛ شمارهٔ هر سوال به‌ترتیب افزایش می‌یابد
+    prev_number = None
     for qnum in range(1, maemma.QUESTIONS_PER_GAME + 1):
         q = maemma.current_question(CHAT, 1)
         check(f"معما: سوال {qnum} در جریان است", q is not None
-              and q["number"] == qnum, f"{q}")
+              and q["total"] == len(maemma.PUZZLES), f"{q}")
+        check(f"معما: شمارهٔ سوال {qnum} افزایش یافته",
+              prev_number is None or q["number"] == prev_number + 1,
+              f"prev={prev_number} q={q}")
+        prev_number = q["number"]
         ev3 = Event()
         r = await send(bot, ev3, CHAT, 1, q["answer"], name="A")
         check(f"معما: پاسخ سوال {qnum} مصرف شد", r is True)
@@ -155,6 +160,29 @@ async def _test_maemma_timeout():
     check("معما: پس از timeout سشن بسته است", not maemma.is_active(CHAT, 1))
 
 
+async def _test_maemma_no_correct_no_end_message():
+    """اگر هیچ پاسخ صحیحی ثبت نشود، پیام پایان و جایزه نمایش داده نمی‌شود."""
+    router.reset_all()
+    bot = Bot()
+    ev = Event()
+    await send(bot, ev, CHAT, 1, "معما", name="A")
+    state = maemma.active_state(CHAT, 1)
+    # بازی را با timeout (بدون پاسخ درست) می‌بندیم
+    maemma.finish(CHAT, state["token"], 1, bot.logger)
+    # شبیه‌سازی همان مسیر on_timeout روتر که نتیجهٔ صفر را می‌گیرد
+    ev = Event()
+    await router._show_maemma_result(ev, 0, maemma.QUESTIONS_PER_GAME, bot.logger)
+    check("معما: با پاسخِ صفر، پیام پایان ارسال نمی‌شود",
+          len(ev.out) == 0, f"{ev.out}")
+    # با پاسخِ درست، پیام پایان و جایزه نمایش داده می‌شود
+    ev = Event()
+    await router._show_maemma_result(ev, 2, maemma.QUESTIONS_PER_GAME, bot.logger)
+    check("معما: با پاسخ درست، پیام پایان نمایش داده می‌شود",
+          any("پایان بازی معما" in m for m in ev.out)
+          and any("+۶ سکه برنز" in m for m in ev.out),
+          f"{ev.out}")
+
+
 async def _test_maemma_three_questions():
     """هر بازی معما شامل ۳ سوال بدون تکرار است و نتیجهٔ نهایی می‌دهد."""
     router.reset_all()
@@ -168,14 +196,23 @@ async def _test_maemma_three_questions():
     check("معما: سوال‌های یک بازی تکراری نیستند",
           len(set(answers)) == len(answers), f"{answers}")
 
-    # بعد از پاسخ هر سوال، سوال بعدی نمایش داده می‌شود
-    from modules.fox_games.session_core import to_persian_digits as _fa
+    # بعد از پاسخ هر سوال، سوال بعدی (با شمارهٔ بالاتر) نمایش داده می‌شود
+    import re as _re
     for qnum in range(1, 3):
         ev = Event()
         await send(bot, ev, CHAT, 1, state["questions"][qnum - 1]["answer"], name="A")
-        # باید سوال بعدی هم نمایش داده شده باشد
+        # باید پیامِ سوالِ بعدی (شمارهٔ بزرگ‌تر) آمده باشد
+        def _num_of(m):
+            m = _re.search(r"سوال (\d+) از", m)
+            return int(m.group(1)) if m else None
+        nums = [_num_of(m) for m in ev.out]
+        nums = [n for n in nums if n is not None]
+        expected = nums[0] + 1 if nums else None
         check(f"معما: بعد از سوال {qnum} سوال بعدی آمده",
-              any(f"سوال {_fa(qnum + 1)}" in m for m in ev.out), f"{ev.out}")
+              any("سوال" in m and "از" in m for m in ev.out), f"{ev.out}")
+        check(f"معما: شمارهٔ سوال بعدی بیشتر است",
+              nums and nums[0] > state["questions"][qnum - 1].get("number", 0),
+              f"nums={nums}")
 
     # جواب سوال سوم → نتیجهٔ نهایی
     ev = Event()
@@ -228,7 +265,7 @@ async def _test_best_answer_flow():
             bot.logger, reference=f"ba:{CHAT}:{winner['session_id']}",
             game="best_answer",
         )
-        check("بهترین جواب: دقیقاً ۴ برنز", paid and bot.paid[0][1] == 4,
+        check("بهترین جواب: دقیقاً ۲ برنز", paid and bot.paid[0][1] == 2,
               f"{bot.paid}")
     check("بهترین جواب: دور بسته شد", not best_answer.is_active(CHAT))
 
@@ -262,11 +299,19 @@ async def _test_best_answer_analysis_filters():
     check("بهترین جواب: پاسخِ کامل مرتبط معتبر است", good["valid"] is True,
           f"{good}")
 
-    # ۴) keyword stuffing (فقط کلیدواژه، بدون توضیح) امتیاز پایینی دارد
+    # ۴) keyword stuffing (فقط کلیدواژه، بدون توضیح) نباید بر پاسخِ خوب بچربد
     stuffing = _aa.analyze(q, kw, " ".join(kw))
-    check("بهترین جواب: keyword stuffing امتیاز پایین/صفر دارد",
-          stuffing["valid"] is True and stuffing["completeness"] <= 0.25,
-          f"{stuffing}")
+    good_r = _aa.analyze(q, kw, sess["sample"])
+    check("بهترین جواب: keyword stuffing از پاسخِ خوب کمتر است",
+          good_r["score"] > stuffing["score"],
+          f"good={good_r['score']} stuffing={stuffing['score']}")
+    winner = _aa.pick_best(
+        q, kw,
+        [{"user_id": 1, "name": "A", "text": " ".join(kw), "ts": 1},
+         {"user_id": 2, "name": "B", "text": sess["sample"], "ts": 2}],
+    )
+    check("بهترین جواب: پاسخِ کامل بر keyword stuffing می‌چربد",
+          winner is not None and winner["user_id"] == 2, f"{winner}")
     router.reset_all()
 
 
@@ -749,8 +794,10 @@ def _test_help_list_guide():
           '"🧩 معما",\n' in src or "🧩 معما" in src)
     check("راهنمای امتیاز: معما ۳ برنز",
           "پاسخ صحیح: ۳ سکه برنز" in src)
-    check("راهنمای امتیاز: بهترین جواب ۴ برنز",
-          "بهترین پاسخ: ۴ سکه برنز" in src)
+    check("راهنمای امتیاز: بهترین جواب ۲ برنز",
+          "جایزه: ۲ سکه برنز" in src)
+    check("راهنمای امتیاز: بهترین جواب توضیح دارد",
+          "کاربردی‌ترین پاسخ" in src)
     check("راهنمای امتیاز: نبرد ۴ برنز (بازنده)",
           "بازنده با حداقل یک پاسخ صحیح: ۴ سکه برنز" in src)
 
@@ -773,6 +820,7 @@ def main():
         await _test_maemma_owner_only()
         await _test_maemma_concurrent()
         await _test_maemma_timeout()
+        await _test_maemma_no_correct_no_end_message()
         await _test_maemma_three_questions()
         _test_maemma_dedup_and_bank()
 

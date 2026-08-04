@@ -109,8 +109,12 @@ def start(chat_id, user_id, logger=None):
         seen = _gp.seen(chat_id, user_id, GAME)
 
     used = set(seen)
+    # شمارهٔ سوال در این بازی از «تعداد معماهایی که این کاربر تاکنون دیده»
+    # شروع می‌شود تا با هر معمای جدیدِ کاربر افزایش یابد (سوال ۱ از ۲۲۲،
+    # سوال ۲ از ۲۲۲، ...).
+    base = len(used)
     questions = []
-    for _ in range(QUESTIONS_PER_GAME):
+    for i in range(QUESTIONS_PER_GAME):
         pool = _pick_bank(chat_id, used)
         picked = _RANDOM.choice(pool)
         used.add(picked[1])
@@ -119,6 +123,7 @@ def start(chat_id, user_id, logger=None):
             "emoji": picked[0],
             "answer": picked[1],
             "aliases": tuple(picked[2]),
+            "number": base + i + 1,
         })
 
     state = {
@@ -149,8 +154,8 @@ def current_question(chat_id, user_id):
         "emoji": q["emoji"],
         "answer": q["answer"],
         "aliases": q["aliases"],
-        "number": state["index"] + 1,
-        "total": len(state["questions"]),
+        "number": q.get("number", state["index"] + 1),
+        "total": len(PUZZLES),
     }
 
 
@@ -184,8 +189,8 @@ def answer(chat_id, user_id, name, text, logger=None):
             "emoji": nq["emoji"],
             "answer": nq["answer"],
             "aliases": nq["aliases"],
-            "number": state["index"] + 1,
-            "total": len(state["questions"]),
+            "number": nq.get("number", state["index"] + 1),
+            "total": len(PUZZLES),
         }
 
     # تایمر معمای قبلی را کنار بگذار تا سرِ معمای بعدی شلیک نکند
