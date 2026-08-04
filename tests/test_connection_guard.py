@@ -773,6 +773,142 @@ def test_supervisor_no_false_positive_while_reconnecting():
           f"-> {supervisor.diagnose()}")
 
 
+# ===========================================================================
+#  ۶) گیر کردنِ مسیر ارسال (send-side stall)
+# ===========================================================================
+class FakeSenderDeadSend(FakeSender):
+    """سِندری که حلقهٔ ارسالش تمام شده ولی هنوز «متصل» است (Receive سالم)."""
+
+    def __init__(self, send_done=True, reconnecting=False,
+                 conn_send_done=False):
+        super().__init__()
+        self._user_connected = True
+        self._reconnecting = reconnecting
+        # Receive زنده است
+        self._recv_loop_handle = _PendingHandle()
+        # Send loopِ mtprotosender
+        self._send_loop_handle = _DoneHandle() if send_done else _PendingHandle()
+        # Connection-level send task (جایی که drain/send_bytes است)
+        self._connection = FakeConn(send_done=conn_send_done)
+
+
+class FakeConn:
+    def __init__(self, send_done=False):
+        self._send_task = _DoneHandle() if send_done else _PendingHandle()
+
+
+def test_supervisor_detects_dead_send_loop():
+    """هندلِ تمام‌شدهٔ ارسال در حالی که Receive زنده است → بازسازی."""
+    client = FakeClient()
+    client._sender = FakeSenderDeadSend(send_done=True, conn_send_done=False)
+    client.connected = True
+    supervisor = connection_guard.ConnectionSupervisor(client)
+    reason = supervisor.diagnose()
+    check("مرگِ حلقهٔ ارسال تشخیص داده می‌شود",
+          reason is not None and "send loop" in reason, f"-> {reason}")
+
+
+def test_supervisor_detects_dead_connection_send_task():
+    """Connection send_task (drain/send_bytes) تمام شده ولی Receive زنده."""
+    client = FakeClient()
+    client._sender = FakeSenderDeadSend(send_done=False, conn_send_done=True)
+    client.connected = True
+    supervisor = connection_guard.ConnectionSupervisor(client)
+    reason = supervisor.diagnose()
+    check("مرگِ Connection send task تشخیص داده می‌شود",
+          reason is not None and "send task" in reason, f"-> {reason}")
+
+
+def test_supervisor_detects_send_stalls():
+    """ثبت گیر کردنِ ارسال (send_stalls) باید بازسازی را تحریک کند."""
+    client = FakeClient()
+    supervisor = connection_guard.ConnectionSupervisor(
+        client, timeout_threshold=2
+    )
+    supervisor.note_send_stall()
+    below = supervisor.diagnose()
+    supervisor.note_send_stall()
+    above = supervisor.diagnose()
+    check("زیر آستانهٔ ارسال، خطا تشخیص داده نمی‌شود", below is None)
+    check("بالای آستانهٔ ارسال، تشخیص داده می‌شود",
+          above is not None and "send stalls" in above, f"-> {above}")
+
+
+def test_supervisor_no_false_positive_when_send_healthy():
+    """وقتی Receive و Send هر دو سالم‌اند، هیچ تشخیص خطایی نیست."""
+    client = FakeClient()
+    client._sender = FakeSenderDeadSend(send_done=False, conn_send_done=False)
+    client.connected = True
+    supervisor = connection_guard.ConnectionSupervisor(client)
+    check("اتصال سالم تشخیصِ خطا نمی‌دهد", supervisor.diagnose() is None,
+          f"-> {supervisor.diagnose()}")
+
+
+def test_send_timeout_patch_notifies_and_raises():
+    """وصلهٔ send-timeout: روی stall، به ناظر خبر می‌دهد و TimeoutError می‌دهد."""
+    stalls = []
+
+    class FakeWS:
+        def __init__(self):
+            self.calls = 0
+
+        async def send_bytes(self, data):
+            self.calls += 1
+            await asyncio.sleep(3600)  # معلق (شبیه send stall)
+
+    class FakeWriter:
+        def __init__(self):
+            self._pending = bytearray(b"data")
+            self._ws = FakeWS()
+
+        async def drain(self):
+            # شبیهٔ WebSocketWriter اصلی
+            if not getattr(self, "_pending", None):
+                return
+            data = bytes(self._pending)
+            self._pending.clear()
+            await self._ws.send_bytes(data)
+
+    logger = RecordingLogger()
+    installed = connection_guard.install_send_timeout(
+        FakeWriter, timeout=0.1, on_stall=lambda: stalls.append(1),
+        logger=logger,
+    )
+    check("وصلهٔ send-timeout نصب شد", installed is True)
+    raised = None
+    writer = FakeWriter()
+    result = asyncio.run(_run_drain(writer, raised_holder={}))
+    # asyncio.TimeoutError
+    check("روی stall، TimeoutError بالا می‌آید",
+          result is not None and isinstance(result, asyncio.TimeoutError),
+          f"-> {result}")
+    check("ناظر خبردار شد", len(stalls) >= 1, f"-> {stalls}")
+    check("لاگ ثبت شد", any("send timeout" in m for m in logger.errors))
+
+
+async def _run_drain(writer, raised_holder):
+    try:
+        await writer.drain()
+        return None
+    except asyncio.TimeoutError as e:
+        return e
+    except Exception as e:
+        return e
+
+
+def test_install_wires_send_timeout():
+    """install باید وصلهٔ send-timeout را روی WebSocketWriter نصب کند."""
+    client = FakeClient()
+    supervisor = connection_guard.install(client, rpc_timeout=30.0)
+    check("supervisor برگشت", isinstance(
+        supervisor, connection_guard.ConnectionSupervisor))
+    # WebSocketWriter.drain باید وصله‌خورده باشد
+    from splusthon.network.connection.websocket import WebSocketWriter
+    check("drain وصله خورده",
+          getattr(WebSocketWriter.drain,
+                  connection_guard._SEND_TIMEOUT_MARKER, False) is True)
+
+
 def test_supervisor_recovers_on_silence():
     """حلقه‌ی ناظر، مرگِ بی‌صدا را خودش می‌بیند و بازسازی را اجرا می‌کند."""
 
@@ -914,6 +1050,13 @@ def main():
     test_supervisor_no_false_positive_while_reconnecting()
     test_supervisor_recovers_on_silence()
     test_stale_frame_still_counts_as_liveness()
+
+    test_supervisor_detects_dead_send_loop()
+    test_supervisor_detects_dead_connection_send_task()
+    test_supervisor_detects_send_stalls()
+    test_supervisor_no_false_positive_when_send_healthy()
+    test_send_timeout_patch_notifies_and_raises()
+    test_install_wires_send_timeout()
 
     test_rebuild_keeps_handlers_and_auth_key()
     test_install_returns_supervisor()

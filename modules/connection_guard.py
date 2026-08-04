@@ -393,7 +393,65 @@ def install_rpc_timeout(client, timeout=60.0, on_timeout=None, logger=None):
 
 
 # ==========================================================================
-#  ۴) بازسازی کامل کلاینت بدون ری‌استارت
+#  ۵) سقف زمانی روی مسیر ارسال (send_bytes/drain)
+# ==========================================================================
+_SEND_TIMEOUT_MARKER = "_connection_guard_send_timeout"
+
+# پیش‌فرض مهلتِ مسیر ارسال: اگر `send_bytes` بیشتر از این مدت جواب ندهد،
+# به‌معنای گیر کردنِ جهتِ خروجی WebSocket است (send-side stall).
+SEND_TIMEOUT_SECONDS = 20.0
+
+
+def install_send_timeout(writer_class, timeout=SEND_TIMEOUT_SECONDS,
+                         on_stall=None, logger=None):
+    """``WebSocketWriter.drain`` را با سقف زمانی می‌پیچد.
+
+    مسیر ارسال در SPlusthon هیچ timeout ندارد: ``Connection._send_loop``
+    فقط ``await self._writer.drain()`` را صدا می‌زند و ``drain()`` هم
+    ``await self._ws.send_bytes(data)`` را. اگر جهتِ خروجی سوکت (TCP
+    half-open) از کار افتاده باشد، این ``await`` برای همیشه معلق می‌ماند —
+    در حالی که جهتِ Receive همچنان زنده است و ربات «متصل» دیده می‌شود.
+
+    این وصله `send_bytes` را با `asyncio.wait_for` می‌پوشاند. اگر بیش از
+    مهلت جواب ندهد:
+      * به supervisor خبر می‌دهد (``on_stall``) تا بازسازی/rebuild اجرا شود،
+      * و یک ``TimeoutError`` بالا می‌اندازد تا ``_send_loop`` خروج بگیرد و
+        اتصال بسته شود — پس supervisor می‌تواند کلاینتِ تازه بسازد.
+    """
+    original = getattr(writer_class, "drain", None)
+    if original is None or getattr(original, _SEND_TIMEOUT_MARKER, False):
+        return False
+
+    async def drain(self):
+        if not getattr(self, "_pending", None):
+            return
+        data = bytes(self._pending)
+        self._pending.clear()
+        try:
+            await asyncio.wait_for(
+                self._ws.send_bytes(data), timeout=timeout)
+        except asyncio.TimeoutError:
+            if logger is not None:
+                logger.log_error(
+                    "CONNECTION GUARD send timeout: "
+                    f"send_bytes did not complete within {timeout}s"
+                )
+            if on_stall is not None:
+                try:
+                    on_stall()
+                except Exception:
+                    pass
+            raise
+        except asyncio.CancelledError:
+            raise
+
+    setattr(drain, _SEND_TIMEOUT_MARKER, True)
+    writer_class.drain = drain
+    return True
+
+
+# ==========================================================================
+#  بازسازی کامل کلاینت بدون ری‌استارت
 # ==========================================================================
 def cancel_pending_requests(client, reason=None):
     """همهٔ futureهای معلق سِندر را لغو می‌کند و تعدادشان را برمی‌گرداند."""
@@ -451,6 +509,7 @@ class ConnectionSupervisor:
         self.check_interval = check_interval
         self.receive_dead_threshold = receive_dead_threshold
         self.timeouts = EventWindow(window)
+        self.send_stalls = EventWindow(window)
         self.rebuilds = 0
         self.last_reason = None
         self._rebuilding = False
@@ -467,6 +526,10 @@ class ConnectionSupervisor:
         """ثبت دریافت یک قابِ سالم؛ به‌صورت دستی از بیرون هم قابل صدا زدن است."""
         if self.tracker is not None:
             self.tracker.note_received()
+
+    def note_send_stall(self):
+        """ثبت گیر کردنِ مسیر ارسال (send_bytes/drain timeout)."""
+        self.send_stalls.record()
 
     # -- تصمیم -----------------------------------------------------------
     def diagnose(self):
@@ -511,6 +574,40 @@ class ConnectionSupervisor:
                 if idle > self.receive_dead_threshold:
                     return f"no data received for {idle:.0f}s"
 
+        # گیر کردنِ مسیر ارسال (send-side stall): اگر send_bytes/drain
+        # تایم‌اوت خورده باشد، جهتِ خروجی خراب است حتی اگر Receive زنده باشد.
+        if self.send_stalls.count() >= self.timeout_threshold:
+            return f"send stalls={self.send_stalls.count()} in window"
+
+        # مرگِ حلقهٔ ارسال: هندلِ `_send_loop` تمام شده (یا Connection
+        # send_task تمام شده) ولی سِندر هنوز خودش را متصل می‌داند و reconnectی
+        # در جریان نیست. این یعنی directionِ خروجی مرده ولی ورودی زنده است.
+        sender = getattr(self.client, "_sender", None)
+        if sender is not None:
+            user_connected = getattr(sender, "_user_connected", False)
+            reconnecting = getattr(sender, "_reconnecting", False)
+            send_handle = getattr(sender, "_send_loop_handle", None)
+            if (
+                send_handle is not None
+                and send_handle.done()
+                and not send_handle.cancelled()
+                and user_connected
+                and not reconnecting
+            ):
+                return "send loop exited unexpectedly"
+            # Connection-level send task: جایی که drain/send_bytes اجرا می‌شود
+            conn = getattr(sender, "_connection", None)
+            if conn is not None:
+                send_task = getattr(conn, "_send_task", None)
+                if (
+                    send_task is not None
+                    and send_task.done()
+                    and not send_task.cancelled()
+                    and user_connected
+                    and not reconnecting
+                ):
+                    return "connection send task exited unexpectedly"
+
         return None
 
     # -- اجرا -------------------------------------------------------------
@@ -549,6 +646,24 @@ class ConnectionSupervisor:
                     "CONNECTION GUARD verify: receive loop not running"
                 )
                 return False
+
+            # ۳) حلقهٔ ارسال هم زنده باشد (جهتِ خروجی سالم).
+            send_handle = getattr(sender, "_send_loop_handle", None)
+            if send_handle is not None and send_handle.done():
+                self._log_error(
+                    "CONNECTION GUARD verify: send loop not running"
+                )
+                return False
+            # Connection-level send task (جایی که drain/send_bytes است)
+            conn = getattr(sender, "_connection", None)
+            if conn is not None:
+                send_task = getattr(conn, "_send_task", None)
+                if send_task is not None and send_task.done():
+                    self._log_error(
+                        "CONNECTION GUARD verify: connection send task "
+                        "not running"
+                    )
+                    return False
 
         self._log_info("CONNECTION GUARD verify: OK")
         return True
@@ -659,7 +774,10 @@ def install(client, logger=None, rpc_timeout=60.0, **supervisor_options):
     """
     from splusthon import helpers
     from splusthon.network.mtprotostate import MTProtoState
-    from splusthon.network.connection.websocket import ConnectionWebSocket
+    from splusthon.network.connection.websocket import (
+        ConnectionWebSocket,
+        WebSocketWriter,
+    )
 
     tracker = StaleSessionTracker(supervisor_options.get("window", 120.0))
     supervisor = ConnectionSupervisor(
@@ -672,6 +790,14 @@ def install(client, logger=None, rpc_timeout=60.0, **supervisor_options):
         client,
         timeout=rpc_timeout,
         on_timeout=supervisor.note_rpc_timeout,
+        logger=logger,
+    )
+    # سقف زمانی روی مسیر ارسال تا «send-side stall» دیگر ربات را بی‌صدا نکند.
+    send_timeout = supervisor_options.get("send_timeout", SEND_TIMEOUT_SECONDS)
+    install_send_timeout(
+        WebSocketWriter,
+        timeout=send_timeout,
+        on_stall=supervisor.note_send_stall,
         logger=logger,
     )
     return supervisor

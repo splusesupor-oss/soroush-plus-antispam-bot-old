@@ -381,15 +381,180 @@ def test_active_message_gated_on_verify():
 
 
 
+
+
+# ===========================================================================
+#  سناریوی real: گیر کردنِ مسیر ارسال (send_bytes stall) → بازیابی خودکار
+# ===========================================================================
+def test_send_stall_triggers_rebuild_and_recovers():
+    """گیر کردن send_bytes → supervisor تشخیص و کلاینت تازه می‌سازد →
+    بعد از آن ارسال دوباره موفق می‌شود."""
+    # یک WebSocketWriter واقعی را با send_bytesِ معلق وصله می‌کنیم
+    import splusthon.network.connection.websocket as ws_module
+    from splusthon.network.connection.websocket import WebSocketWriter
+    import modules.connection_guard as cg
+
+    class StalledWS:
+        def __init__(self):
+            self.calls = 0
+
+        async def send_bytes(self, data):
+            self.calls += 1
+            await asyncio.sleep(3600)  # معلق — شبیه send stall
+
+    class WriterHost:
+        """جایگزینِ WebSocketWriter برای شبیه‌سازی بدون دست‌زدن به اصل."""
+        def __init__(self, stalled):
+            self._pending = bytearray(b"x")
+            self._ws = stalled if stalled else _FakeOkWS()
+
+    class _FakeOkWS:
+        async def send_bytes(self, data):
+            return None
+
+    # ساخت supervisor با یک کارخانهٔ کلاینتِ تازه
+    class Logger:
+        def __init__(self):
+            self.info = []
+            self.errors = []
+        def log_info(self, m):
+            self.info.append(m)
+        def log_error(self, m):
+            self.errors.append(m)
+
+    logger = Logger()
+    build_log = []
+
+    async def client_factory(old, reason):
+        build_log.append(reason)
+        return {"fresh": True, "old": old}
+
+    sup = cg.ConnectionSupervisor(
+        object(), logger=logger, client_factory=client_factory,
+        timeout_threshold=1,
+    )
+
+    # شبیه‌سازی stall: ناظر را خبردار می‌کنیم و سپس send_stalls بالا می‌رود
+    sup.note_send_stall()
+    reason = sup.diagnose()
+    check("گیر کردنِ ارسال در diagnose دیده می‌شود",
+          reason is not None and "send stalls" in reason, f"-> {reason}")
+
+    # سپس با verify روی یک کلاینت واقعی‌نما که send loop مرده دارد
+    class RealSender:
+        def __init__(self):
+            self._user_connected = True
+            self._reconnecting = False
+            self._recv_loop_handle = _Pending()
+            self._send_loop_handle = _Done()
+            self._connection = _Conn(send_task_done=True)
+    class _Pending:
+        def done(self): return False
+        def cancelled(self): return False
+    class _Done:
+        def done(self): return True
+        def cancelled(self): return False
+    class _Conn:
+        def __init__(self, send_task_done):
+            self._send_task = _Done() if send_task_done else _Pending()
+    class _MinClient:
+        def is_connected(self):
+            return True
+    client = _MinClient()
+    client._sender = RealSender()
+    sup2 = cg.ConnectionSupervisor(client)
+    reason2 = sup2.diagnose()
+    check("مرگِ مسیرِ ارسال در diagnose دیده می‌شود",
+          reason2 is not None and ("send task" in reason2
+                                   or "send loop" in reason2),
+          f"-> {reason2}")
+
+
+def test_send_stall_supervisor_rebuilds():
+    """حلقهٔ ناظر، گیر کردنِ ارسال را خودش می‌بیند و rebuild می‌کند."""
+    import modules.connection_guard as cg
+
+    class Logger:
+        def __init__(self):
+            self.info = []
+            self.errors = []
+        def log_info(self, m):
+            self.info.append(m)
+        def log_error(self, m):
+            self.errors.append(m)
+
+    logger = Logger()
+    builds = []
+
+    async def client_factory(old, reason):
+        builds.append(reason)
+        new = _MinClient()
+        new._sender = _LiveSender()
+        return new
+
+    class _MinClient:
+        def __init__(self):
+            self._sender = _LiveSender()
+            self.connected = True
+        def is_connected(self):
+            return self.connected
+        async def get_me(self):
+            return {"id": 1}
+        async def disconnect(self):
+            self.connected = False
+        async def connect(self):
+            self.connected = True
+
+    class _LiveSender:
+        def __init__(self):
+            self._user_connected = True
+            self._reconnecting = False
+            self._recv_loop_handle = _PendingHandle()
+            self._send_loop_handle = _PendingHandle()
+            self._connection = _LiveConn()
+            self._pending_state = {}
+    class _LiveConn:
+        def __init__(self):
+            self._send_task = _PendingHandle()
+
+    async def scenario():
+        sup = cg.ConnectionSupervisor(
+            _MinClient(), logger=logger, client_factory=client_factory,
+            timeout_threshold=1, check_interval=0.02,
+        )
+        # شبیه‌سازی stall
+        sup.note_send_stall()
+        task = asyncio.ensure_future(sup.run())
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if sup.rebuilds:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return sup
+
+    sup = asyncio.run(scenario())
+    check("ناظر روی stall بازسازی کرد", sup.rebuilds >= 1,
+          f"-> {sup.rebuilds}")
+    check("کارخانهٔ کلاینتِ تازه فراخوانی شد", len(builds) >= 1,
+          f"-> {builds}")
+
+
 def main():
     test_rpc_timeout_triggers_full_rebuild()
     test_message_received_after_rebuild()
     test_no_busy_loop_when_rebuilding()
     test_rpc_stuck_then_full_recovery_keeps_receiving()
     test_active_message_gated_on_verify()
+    test_send_stall_triggers_rebuild_and_recovers()
+    test_send_stall_supervisor_rebuilds()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
