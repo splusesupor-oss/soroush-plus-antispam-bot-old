@@ -499,7 +499,11 @@ async def _test_battle_non_assignee_cannot_answer():
 
 
 async def _run_full_battle(bot, p1_id, p2_id, answers1, answers2):
-    """نبرد کامل را اجرا می‌کند. answers1/answers2 = [True/False,...] برای ۳ سوال."""
+    """نبرد کامل را اجرا می‌کند. answers1/answers2 = [True/False,...] برای ۳ سوال.
+
+    ترتیبِ نوبتی (متناوب): در هر دور ابتدا بازیکن اول و سپس بازیکن دوم
+    پاسخِ سوال خودشان را می‌دهند.
+    """
     router.reset_all()
     original = battle.ANSWER_SECONDS
     battle.ANSWER_SECONDS = 0.12
@@ -507,9 +511,10 @@ async def _run_full_battle(bot, p1_id, p2_id, answers1, answers2):
         await send(bot, Event(), CHAT, p1_id, "نبرد", name="P1")
         join_ev = CapturingEvent()
         await send(bot, join_ev, CHAT, p2_id, "شرکت", name="P2")
-        # بازیکن اول ۳ سوال، سپس بازیکن دوم ۳ سوال
-        for pid, answers in ((p1_id, answers1), (p2_id, answers2)):
-            for correct in answers:
+        # در هر دور (۱ تا ۳): اول P1، بعد P2 — نوبتی
+        for round_no in range(3):
+            for pid, answers in ((p1_id, answers1), (p2_id, answers2)):
+                correct = answers[round_no]
                 for _ in range(50):
                     cur = battle.current_question(CHAT)
                     if cur and cur["assignee"] == pid:
@@ -577,6 +582,49 @@ async def _test_battle_wrong_answer_no_elimination():
     router.reset_all()
 
 
+async def _test_battle_turn_order_alternating():
+    """ترتیبِ سوال‌ها باید نوبتی (متناوب) باشد: P1, P2, P1, P2, P1, P2."""
+    router.reset_all()
+    bot = Bot()
+    for g in ("maemma", "best_answer", "battle"):
+        import economy.game_progress as gp
+        gp.clear_recent(CHAT, g)
+    await send(bot, Event(), CHAT, 100, "نبرد", name="P1")
+    await send(bot, Event(), CHAT, 200, "شرکت", name="P2")
+
+    original = battle.ANSWER_SECONDS
+    battle.ANSWER_SECONDS = 0.15
+    assignees = []
+    try:
+        # در هر نوبت فقط «پاسخ اشتباه» بدهیم تا نوبت سریع بگذرد ولی نوبت‌ها
+        # به ترتیب ثبت شوند؛ هر دو امتیاز صفر → مساوی، بدون جایزه.
+        for _ in range(6):
+            for _ in range(50):
+                cur = battle.current_question(CHAT)
+                if cur:
+                    break
+                await asyncio.sleep(0.01)
+            if cur is None:
+                break
+            assignees.append(cur["assignee"])
+            await send(bot, Event(), CHAT, cur["assignee"], "غلط غلط")
+            await asyncio.sleep(0.03)
+        for _ in range(60):
+            if not battle.is_active(CHAT):
+                break
+            await asyncio.sleep(0.03)
+    finally:
+        battle.ANSWER_SECONDS = original
+
+    expected = [100, 200, 100, 200, 100, 200]
+    check("ترتیبِ سوال‌ها نوبتی است",
+          assignees == expected, f"{assignees}")
+    check("هر بازیکن ۳ سوال گرفت",
+          assignees.count(100) == 3 and assignees.count(200) == 3,
+          f"{assignees}")
+    router.reset_all()
+
+
 async def _test_battle_per_answer_feedback():
     """بعد از هر پاسخ، «درست بود»/«اشتباه بود» اعلام می‌شود (پیام بازخورد)."""
     router.reset_all()
@@ -591,14 +639,18 @@ async def _test_battle_per_answer_feedback():
     original = battle.ANSWER_SECONDS
     battle.ANSWER_SECONDS = 0.15
     try:
-        # P1: سوال۱ درست، سوال۲ غلط، سوال۳ درست؛ P2 همه درست
-        for pid, answers in ((100, [True, False, True]), (200, [True, True, True])):
-            for correct in answers:
+        # P1: سوال۱ درست، سوال۲ غلط، سوال۳ درست؛ P2 همه درست — نوبتی
+        ans_map = {100: [True, False, True], 200: [True, True, True]}
+        for round_no in range(3):
+            for pid in (100, 200):
+                correct = ans_map[pid][round_no]
                 for _ in range(50):
                     cur = battle.current_question(CHAT)
                     if cur and cur["assignee"] == pid:
                         break
                     await asyncio.sleep(0.01)
+                if cur is None:
+                    continue
                 ans = cur["question"]["answer"] if correct else "غلط غلط غلط"
                 await send(bot, Event(), CHAT, pid, ans)
                 await asyncio.sleep(0.03)
@@ -852,6 +904,7 @@ def main():
         await _test_battle_play_and_winner_reward()
         await _test_battle_tie_both_reward()
         await _test_battle_wrong_answer_no_elimination()
+        await _test_battle_turn_order_alternating()
         await _test_battle_per_answer_feedback()
         _test_battle_double_payment_guard()
         await _test_battle_chat_isolation()

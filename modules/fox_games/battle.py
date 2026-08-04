@@ -222,23 +222,31 @@ def abort_joining(chat_id, session_id, on_abort, logger=None):
 async def run_game(chat_id, on_question, on_answer, on_finish, logger=None):
     """حلقهٔ اصلی نبرد. بعد از تشکیل دو بازیکن اجرا می‌شود.
 
-    ترتیب: بازیکن اول هر ۳ سوالش را پشت‌سرهم می‌پرسد (بعد از هر پاسخ نتیجه
-    همان پاسخ اعلام می‌شود)، سپس بازیکن دوم. پس از پایان هر دو، نتیجهٔ
-    نهایی اعلام می‌شود.
+    ترتیب: نوبتی (متناوب) بین دو بازیکن. برای هر «دور» (۱ تا ۳) ابتدا
+    بازیکن اول یک سوال می‌گیرد و بعد بازیکن دوم یک سوال — تا هر دو نفر به
+    سوال سوم برسند:
+
+        سوال ۱ → بازیکن اول
+        سوال ۱ → بازیکن دوم
+        سوال ۲ → بازیکن اول
+        سوال ۲ → بازیکن دوم
+        سوال ۳ → بازیکن اول
+        سوال ۳ → بازیکن دوم
+
+    بعد از پایان هر ۶ سوال، پاسخ‌های هر دو بررسی و نتیجهٔ نهایی اعلام می‌شود.
     """
     session = _STORE.get(chat_id)
     if not session:
         return
     p1, p2 = session["p1"]["user_id"], session["p2"]["user_id"]
-    # ۳ سوال اول برای بازیکن اول، ۳ سوال بعدی برای بازیکن دوم
-    player_1_questions = session["questions"][:QUESTIONS_PER_PLAYER]
-    player_2_questions = session["questions"][QUESTIONS_PER_PLAYER:]
+    qs = session["questions"]  # ۶ سوالِ مجزا (۳ سوال برای هر بازیکن)
 
-    for player_id, qs, player_num in (
-        (p1, player_1_questions, 1),
-        (p2, player_2_questions, 2),
-    ):
-        for qnum, q in enumerate(qs, start=1):
+    for round_no in range(1, QUESTIONS_PER_PLAYER + 1):
+        # در هر دور: ابتدا بازیکن اول، سپس بازیکن دوم
+        for player_num, player_id in ((1, p1), (2, p2)):
+            # سوالِ این بازیکن در این دور — هر بازیکن در هر دور یک سوالِ
+            # مجزا می‌گیرد؛ سوال برای همان بازیکن تکرار نمی‌شود.
+            q = qs[(round_no - 1) * 2 + (player_num - 1)]
             fut = asyncio.get_running_loop().create_future()
             session["current"] = {
                 "assignee": player_id,
@@ -246,7 +254,7 @@ async def run_game(chat_id, on_question, on_answer, on_finish, logger=None):
                 "future": fut,
             }
             try:
-                await on_question(player_num, qnum, q, player_id)
+                await on_question(player_num, round_no, q, player_id)
             except Exception:
                 pass
 
@@ -255,7 +263,7 @@ async def run_game(chat_id, on_question, on_answer, on_finish, logger=None):
                 await asyncio.wait_for(fut, timeout=ANSWER_SECONDS)
             except asyncio.TimeoutError:
                 log(logger, f"BATTLE TIMEOUT chat_id={chat_id} "
-                            f"player={player_id} q={qnum}")
+                            f"player={player_id} round={round_no}")
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -267,9 +275,10 @@ async def run_game(chat_id, on_question, on_answer, on_finish, logger=None):
 
             # بعد از هر پاسخ، نتیجهٔ همان پاسخ اعلام می‌شود
             try:
-                await on_answer(result, player_id, player_num, qnum)
+                await on_answer(result, player_id, player_num, round_no)
             except Exception:
                 pass
+
 
     # پایان بازی
     s1 = session["scores"].get(p1, 0)
