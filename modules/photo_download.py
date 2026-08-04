@@ -29,8 +29,10 @@
 """
 import asyncio
 import io
+import logging
 import re
 import time
+import traceback
 from urllib.parse import quote, urlparse
 
 import requests
@@ -306,7 +308,8 @@ def _fetch_image_bytes(url, timeout=NETWORK_TIMEOUT, log_func=None):
         resp = requests.get(url, headers=headers, timeout=timeout)
     except Exception as e:
         if log_func:
-            log_func(f"DOWNLOAD ERROR url={url} reason={type(e).__name__}: {e}")
+            log_func(f"DOWNLOAD ERROR url={url} reason={type(e).__name__}: {e}\n"
+                     f"{traceback.format_exc()}")
         return None
     content = resp.content
     magic = content[:20]
@@ -348,9 +351,38 @@ def _make_image_stream(data, index=0):
 
 
 def _log(bot, message):
-    """لاگِ امن روی logger ربات (در صورت وجود)."""
+    """لاگِ امن روی logger ربات (و logger استانداردِ پایتون).
+
+    اگر logger ربات در دسترس نبود، به loggerِ پایتون می‌رود تا چیزی
+    بی‌صدا از دست نرود.
+    """
+    logging.getLogger("photo_download").info(message)
     try:
         bot.logger.log_info(message)
+    except Exception:
+        pass
+
+
+def _log_exception(bot, context):
+    """لاگِ کاملِ استثناء با traceback — تا معلوم شود مشکل از کجاست.
+
+    از ``logger.exception`` استفاده می‌کند که خودش tracebackِ جاری را
+    می‌گیرد. اگر logger ربات در دسترس نبود، به loggerِ پایتون و
+    ``bot.logger.log_error`` برمی‌گردد.
+    """
+    tb = traceback.format_exc()
+    msg = f"{context}\n{tb}"
+    try:
+        underlying = getattr(bot.logger, "logger", None)
+        if underlying is not None and hasattr(underlying, "exception"):
+            underlying.exception(context)
+        else:
+            bot.logger.log_error(msg)
+    except Exception:
+        logging.getLogger("photo_download").exception(context)
+    # همیشه یک کپی در فایلِ لاگ ربات هم بنویس (اگر روش بالا جواب نداد)
+    try:
+        bot.logger.log_error(msg)
     except Exception:
         pass
 
@@ -386,14 +418,15 @@ async def _send_image(bot, chat_id, url):
     _log(bot, f"PHOTO SEND START chat_id={chat_id} url={url}")
 
     # ۱) دانلود + اعتبارسنجی — فقط عکسِ واقعی. اگر دانلود نشد، این عکس
-    #    ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود.
+    #    ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود. جزئیاتِ دانلود
+    #    (status/type/bytes/magic) در داخل _fetch_image_bytes لاگ می‌شود.
     try:
         data = await asyncio.to_thread(
             _fetch_image_bytes, url,
             log_func=lambda m: _log(bot, m))
-    except Exception as e:
+    except Exception:
+        _log_exception(bot, f"PHOTO DOWNLOAD EXCEPTION url={url}")
         data = None
-        _log(bot, f"PHOTO SEND result=SKIP reason=download_error {type(e).__name__}: {e}")
     if not data:
         _log(bot, "PHOTO SEND result=SKIP reason=download_invalid")
         return False
@@ -406,9 +439,8 @@ async def _send_image(bot, chat_id, url):
         await _send_by_url(bot, chat_id, url)
         _log(bot, "PHOTO SEND method=external_url result=OK")
         return True
-    except Exception as e:
-        _log(bot, f"PHOTO SEND method=external_url result=FAIL "
-                  f"reason={type(e).__name__}: {e}")
+    except Exception:
+        _log_exception(bot, f"PHOTO SEND method=external_url EXCEPTION url={url}")
 
     # ۳) fallback: آپلود با send_file (فقط در محیط‌هایی که media-DC کار کند).
     stream = _make_image_stream(data, 0)
@@ -416,9 +448,8 @@ async def _send_image(bot, chat_id, url):
         await bot.client.send_file(chat_id, stream)
         _log(bot, "PHOTO SEND method=upload result=OK")
         return True
-    except Exception as e:
-        _log(bot, f"PHOTO SEND method=upload result=FAIL "
-                  f"reason={type(e).__name__}: {e}")
+    except Exception:
+        _log_exception(bot, f"PHOTO SEND method=upload EXCEPTION url={url}")
         return False
 
 
@@ -518,7 +549,9 @@ async def process(chat_id, user_id, bot):
         try:
             urls = await asyncio.to_thread(_search_image_urls, query, SEARCH_CANDIDATES)
         except Exception:
+            _log_exception(bot, f"SEARCH EXCEPTION query={query!r}")
             urls = []
+        _log(bot, f"PHOTO SEARCH query={query!r} candidates={len(urls)}")
         if not urls:
             close_session(chat_id, user_id)
             return "no_results", NO_RESULTS
@@ -556,11 +589,21 @@ async def process(chat_id, user_id, bot):
                 note=f"دانلود عکس ({sent} تصویر)",
             )
         except Exception:
+            _log_exception(bot, f"ECONOMY SPEND EXCEPTION chat_id={chat_id} "
+                                f"user_id={user_id} cost={cost}")
             close_session(chat_id, user_id)
             return "error", ERROR_MSG
 
         close_session(chat_id, user_id)
         return "done", f"✅ {sent} تصویر ارسال شد. {cost} سکه برنز کسر شد."
+    except Exception:
+        # لایهٔ نهایی: هر خطایِ پیش‌بینی‌نشده را با traceback ثبت کن و به‌جایِ
+        # پیامِ عمومیِ خام، علت را در لاگ نگه دار (بدون این لاگ نمی‌شود فهمید
+        # مشکل از جستجو/لینک/دانلود/ارسال است).
+        _log_exception(bot, f"PHOTO PROCESS UNEXPECTED EXCEPTION "
+                            f"chat_id={chat_id} user_id={user_id} query={query!r}")
+        close_session(chat_id, user_id)
+        return "error", ERROR_MSG
     finally:
         _release_busy(chat_id, user_id)
 
