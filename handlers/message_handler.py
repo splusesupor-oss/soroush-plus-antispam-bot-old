@@ -722,6 +722,11 @@ def _can_manage_group_admins(bot, chat_id, user_id, username):
 
 
 DELETE_COMMAND_COOLDOWNS = {}
+# قفلِ گروه برای اجرای پاک: فقط یک عملیات حذف در هر گروه در لحظه اجرا می‌شود
+# تا چند ادمینِ هم‌زمان روی هم نیفتند و خطای RPC ندهند.
+_DELETE_GROUP_LOCKS = {}
+# سقفِ حافظهٔ cooldown تا بی‌نهایت رشد نکند.
+DELETE_COOLDOWN_MAX_ENTRIES = 2000
 ADMIN_PERMISSION_CACHE = {}
 ADMIN_PERMISSION_CACHE_TTL_SECONDS = 45
 
@@ -762,6 +767,56 @@ def _can_delete_messages(bot, chat_id, user_id, username):
     return _has_group_management_permission(
         bot, chat_id, user_id, username
     )
+
+
+def _delete_group_lock(chat_id):
+    """قفلِ per-group برای اجرای پاک (ایجاد lazy)."""
+    lock = _DELETE_GROUP_LOCKS.get(chat_id)
+    if lock is None:
+        lock = _asyncio.Lock()
+        _DELETE_GROUP_LOCKS[chat_id] = lock
+    return lock
+
+
+def _prune_delete_cooldowns():
+    """حافظهٔ cooldown را محدود نگه می‌دارد تا بی‌نهایت رشد نکند.
+
+    ورودی‌های قدیمی‌تر از پنجرهٔ ۶۰ ثانیه حذف می‌شوند و اگر همچنان بیش از
+    سقف باقی بماند، قدیمی‌ترین‌ها پاک می‌شوند.
+    """
+    now = _asyncio.get_running_loop().time()
+    cutoff = now - 60
+    stale = [k for k, ts in DELETE_COMMAND_COOLDOWNS.items() if ts < cutoff]
+    for k in stale:
+        DELETE_COMMAND_COOLDOWNS.pop(k, None)
+    while len(DELETE_COMMAND_COOLDOWNS) > DELETE_COOLDOWN_MAX_ENTRIES:
+        try:
+            oldest = min(DELETE_COMMAND_COOLDOWNS, key=DELETE_COMMAND_COOLDOWNS.get)
+            DELETE_COMMAND_COOLDOWNS.pop(oldest, None)
+        except (KeyError, ValueError):
+            break
+    # قفل‌های گروه‌هایی که cooldown آن‌ها دیگر در حافظه نیست هم پاک می‌شوند
+    # تا _DELETE_GROUP_LOCKS بی‌نهایت رشد نکند.
+    if len(_DELETE_GROUP_LOCKS) > DELETE_COOLDOWN_MAX_ENTRIES:
+        keys = list(_DELETE_GROUP_LOCKS.keys())
+        for k in keys[:len(keys) - DELETE_COOLDOWN_MAX_ENTRIES]:
+            _DELETE_GROUP_LOCKS.pop(k, None)
+
+
+def _delete_cooldown_allowed(chat_id):
+    """بررسی/ثبت cooldown برای کل گروه (نه هر کاربر).
+
+    اگر کمتر از ۵ ثانیه از آخرین پاکِ همین گروه گذشته باشد، False برمی‌گرداند
+    (یعنی باید پیام «صبر کنید» بدهیم). در غیر این صورت زمان را ثبت و True
+    برمی‌گرداند.
+    """
+    now = _asyncio.get_running_loop().time()
+    last_cleanup = DELETE_COMMAND_COOLDOWNS.get(chat_id)
+    if last_cleanup is not None and now - last_cleanup < 5:
+        return False
+    DELETE_COMMAND_COOLDOWNS[chat_id] = now
+    _prune_delete_cooldowns()
+    return True
 
 
 async def handle_new_message(bot, event):
@@ -2876,35 +2931,34 @@ async def handle_new_message(bot, event):
                     await event.reply("❌ تعداد پیام باید بین 1 تا 700 باشد")
                     return
 
-                cooldown_key = (chat_id, user_id)
-                now = _asyncio.get_running_loop().time()
-                last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
-                if last_cleanup is not None and now - last_cleanup < 5:
+                # cooldown و Lock برای کل گروه، نه فقط هر کاربر؛ تا چند
+                # ادمینِ هم‌زمان روی هم نیفتند و محدودیت ۵ ثانیه رعایت شود.
+                if not _delete_cooldown_allowed(chat_id):
                     await event.reply(
                         "لطفا ۵ ثانیه صبر کنید تا پاکسازی قبلی کامل شود ⏳"
                     )
                     return
-                DELETE_COMMAND_COOLDOWNS[cooldown_key] = now
-
-                messages = await bot.client.get_messages(
-                    chat_id,
-                    limit=requested_count,
-                )
-                message_ids = [
-                    message.id for message in messages
-                    if getattr(message, "id", None)
-                ]
-
-                deleted_count = 0
-                for start_index in range(0, len(message_ids), 100):
-                    batch = message_ids[start_index:start_index + 100]
-                    await bot.client.delete_messages(chat_id, batch)
-                    deleted_count += len(batch)
-
-                if deleted_count:
-                    add_deleted_count(
-                        chat_id, user_id, sender_username or "", deleted_count
+                lock = _delete_group_lock(chat_id)
+                async with lock:
+                    messages = await bot.client.get_messages(
+                        chat_id,
+                        limit=requested_count,
                     )
+                    message_ids = [
+                        message.id for message in messages
+                        if getattr(message, "id", None)
+                    ]
+
+                    deleted_count = 0
+                    for start_index in range(0, len(message_ids), 100):
+                        batch = message_ids[start_index:start_index + 100]
+                        await bot.client.delete_messages(chat_id, batch)
+                        deleted_count += len(batch)
+
+                    if deleted_count:
+                        add_deleted_count(
+                            chat_id, user_id, sender_username or "", deleted_count
+                        )
 
                 await event.reply(f"{deleted_count} پیام پاک شد 💣")
                 return
@@ -2923,24 +2977,23 @@ async def handle_new_message(bot, event):
                     await event.reply("❌ فقط مالک و ادمین‌ها اجازه حذف پیام دارند")
                     return
 
-                cooldown_key = (chat_id, user_id)
-                now = _asyncio.get_running_loop().time()
-                last_cleanup = DELETE_COMMAND_COOLDOWNS.get(cooldown_key)
-                if last_cleanup is not None and now - last_cleanup < 5:
+                # cooldown و Lock برای کل گروه (مشترک با «پاک عدد»).
+                if not _delete_cooldown_allowed(chat_id):
                     await event.reply(
                         "لطفا ۵ ثانیه صبر کنید تا پاکسازی قبلی کامل شود ⏳"
                     )
                     return
-                DELETE_COMMAND_COOLDOWNS[cooldown_key] = now
 
                 if not event.reply_to:
                     await event.reply("❌ باید روی پیام ریپلای کنید")
                     return
 
-                await bot.client.delete_messages(
-                    chat_id,
-                    event.reply_to.reply_to_msg_id
-                )
+                lock = _delete_group_lock(chat_id)
+                async with lock:
+                    await bot.client.delete_messages(
+                        chat_id,
+                        event.reply_to.reply_to_msg_id
+                    )
 
             except Exception as e:
                 await event.reply(f"❌ خطا: {e}")

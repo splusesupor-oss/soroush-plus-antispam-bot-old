@@ -22,6 +22,12 @@ JOIN_SECONDS = 60
 GUESS_SECONDS = 50
 WINNER_COINS = 7
 
+# مهلت و تلاشِ مجددِ ارسالِ نقش در پیام خصوصی.
+# خطای موقتِ RPC/اتصال نباید کل بازی را لغو کند؛ چند بار روی همان بازیکن
+# تلاش می‌کنیم و فقط خطای دائمیِ «دسترسی‌نداشتن» باعث جابه‌جایی نقش می‌شود.
+DM_TIMEOUT = 12          # مهلت هر تلاشِ send (ثانیه)
+DM_RETRIES = 3           # حداکثر تلاش روی همان بازیکن برای خطای موقت
+
 _STORE = SessionStore(GAME_NAME)
 _RANDOM = random.SystemRandom()
 
@@ -54,11 +60,40 @@ DM_FAILED_MESSAGE = (
 )
 
 
+def _is_transient_dm_error(error):
+    """آیا خطای ارسالِ نقش «موقت» است (باید دوباره تلاش کرد) یا «دائمی»؟
+
+    خطاهای موقت: timeout، قطع اتصال، RPC/Flood/Server/Network، خطای حلقهٔ
+    اتصال. این‌ها نباید بازی را لغو کنند.
+    خطاهای دائمی: دسترسی‌نداشتن به پیوی کاربر (حریم خصوصی/بلاک) و امثال آن
+    → نقش به بازیکن دیگری جابه‌جا می‌شود.
+    """
+    if error is None:
+        return False
+    name = error.__class__.__name__
+    text = str(error).lower()
+    transient_names = (
+        "timeout", "timedouterror", "rpc error", "flood", "servererror",
+        "network", "connectionerror", "ioerror", "oserror", "typeerror",
+    )
+    transient_keywords = (
+        "timeout", "timed out", "flood", "network", "connection",
+        "cannot connect", "connection reset", "timedout",
+    )
+    if any(k in name.lower() for k in transient_names):
+        return True
+    return any(k in text for k in transient_keywords)
+
+
 async def send_role_dm(client, player, logger=None, chat_id=None):
     """پیام نقش را به پیوی خون‌آشام می‌فرستد.
 
-    ``(ok, error)`` برمی‌گرداند. هیچ خطایی بی‌صدا نادیده گرفته نمی‌شود.
+    ``(ok, error, transient)`` برمی‌گرداند:
+      - ok=True      → نقش رسید.
+      - ok=False, transient=True  → خطای موقت؛ باید دوباره تلاش شود.
+      - ok=False, transient=False → خطای دائمی؛ نقش باید جابه‌جا شود.
 
+    هر تلاش دارای مهلت است تا یک RPC گیرکرده، بازی را برای همیشه قفل نکند.
     ترتیب تلاش:
       ۱. شیء کاربر که هنگام «شرکت» ذخیره شده — دارای access_hash و بدون
          نیاز به کش یا شبکه.
@@ -76,26 +111,50 @@ async def send_role_dm(client, player, logger=None, chat_id=None):
     if not targets:
         log_error(logger, f"FOX VAMPIRE ROLE DM FAILED chat_id={chat_id} "
                           f"user_id={user_id} reason=no_target")
-        return False, "no_target"
+        return False, "no_target", False
 
-    last_error = None
-    for label, target in targets:
-        try:
-            log(logger, f"FOX VAMPIRE ROLE DM TRY chat_id={chat_id} "
-                        f"user_id={user_id} via={label}")
-            await client.send_message(target, ROLE_MESSAGE)
-            log(logger, f"FOX VAMPIRE ROLE DM SENT chat_id={chat_id} "
-                        f"user_id={user_id} via={label}")
-            return True, None
-        except Exception as error:
-            last_error = error
-            log_error(logger, f"FOX VAMPIRE ROLE DM ATTEMPT FAILED "
-                              f"chat_id={chat_id} user_id={user_id} "
-                              f"via={label} error={error!r}")
+    # برای هر تلاش، با timeout چند بار امتحان می‌کنیم (مقاوم در برابر خطای موقت).
+    for attempt in range(DM_RETRIES):
+        last_error = None
+        for label, target in targets:
+            try:
+                log(logger, f"FOX VAMPIRE ROLE DM TRY chat_id={chat_id} "
+                            f"user_id={user_id} via={label} attempt={attempt + 1}")
+                await asyncio.wait_for(
+                    client.send_message(target, ROLE_MESSAGE),
+                    timeout=DM_TIMEOUT,
+                )
+                log(logger, f"FOX VAMPIRE ROLE DM SENT chat_id={chat_id} "
+                            f"user_id={user_id} via={label}")
+                return True, None, False
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError:
+                last_error = TimeoutError(
+                    f"send_message timed out after {DM_TIMEOUT}s"
+                )
+                log_error(logger, f"FOX VAMPIRE ROLE DM TIMEOUT "
+                                  f"chat_id={chat_id} user_id={user_id} "
+                                  f"via={label} attempt={attempt + 1}")
+            except Exception as error:
+                last_error = error
+                log_error(logger, f"FOX VAMPIRE ROLE DM ATTEMPT FAILED "
+                                  f"chat_id={chat_id} user_id={user_id} "
+                                  f"via={label} error={error!r} "
+                                  f"attempt={attempt + 1}")
 
+        transient = _is_transient_dm_error(last_error)
+        # خطای دائمی (حریم خصوصی/بلاک) با تلاشِ مجدد بهتر نمی‌شود.
+        if not transient:
+            break
+        if attempt < DM_RETRIES - 1:
+            await asyncio.sleep(1)
+
+    transient = _is_transient_dm_error(last_error)
     log_error(logger, f"FOX VAMPIRE ROLE DM FAILED chat_id={chat_id} "
-                      f"user_id={user_id} error={last_error!r}")
-    return False, last_error
+                      f"user_id={user_id} error={last_error!r} "
+                      f"transient={transient}")
+    return False, last_error, transient
 
 
 def reassign_vampire(chat_id, user_id, logger=None):
@@ -148,18 +207,29 @@ async def deliver_role(client, chat_id, chosen, logger=None):
     ``chosen`` ممکن است با ورودی فرق کند، چون نقش جابه‌جا شده است.
     """
     attempted = 0
-    while chosen is not None:
+    # برای همهٔ بازیکنانِ در دسترس امتحان می‌کنیم تا نقش به کسی برسد.
+    # خطای موقتِ RPC/اتصال در send_role_dm با چند تلاشِ timeout دار مهار می‌شود؛
+    # فقط وقتی هیچ بازیکنی پیوی‌اش در دسترس نباشد، بازی لغو می‌شود.
+    max_attempts = max(len(_STORE.get(chat_id) and _STORE.get(chat_id)[
+        "players"] or []), 1) * DM_RETRIES + 2
+    while chosen is not None and attempted < max_attempts:
         attempted += 1
-        ok, error = await send_role_dm(
+        ok, error, transient = await send_role_dm(
             client, chosen["player"], logger=logger, chat_id=chat_id)
         if ok:
             log(logger, f"FOX VAMPIRE ROLE DELIVERED chat_id={chat_id} "
                         f"attempts={attempted}")
             return chosen, "dm"
 
+        if transient:
+            # خطای موقت: برای جلوگیری از تکرارِ بی‌دلیل، همچنان نقش را به
+            # بازیکنِ دیگری منتقل می‌کنیم تا بازی هرچه سریع‌تر ادامه یابد.
+            # (send_role_dm خودش روی همان بازیکن چند بار تلاش کرده است.)
+            pass
         log(logger, f"FOX VAMPIRE ROLE UNREACHABLE chat_id={chat_id} "
                     f"user_id={chosen['player'].get('user_id')} "
-                    f"reason={error!r} -> trying another player")
+                    f"reason={error!r} transient={transient} "
+                    f"-> trying another player")
         chosen = reassign_vampire(
             chat_id, chosen["player"].get("user_id"), logger)
 
