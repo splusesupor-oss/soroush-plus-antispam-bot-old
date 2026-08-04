@@ -31,6 +31,7 @@ import asyncio
 import io
 import re
 import time
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -41,6 +42,35 @@ IMAGE_COUNT = 2       # حداکثر ۲ عکس در هر درخواست
 SEARCH_CANDIDATES = 8  # تعدادِ نامزدِ جستجو برای اینکه حداقل ۲ عکسِ معتبر پیدا شود
 SEND_RETRIES = 2      # تلاش مجدد برای ارسالِ هر عکس در صورت خطای گذرا
 NETWORK_TIMEOUT = (10, 20)
+
+# پسوندِ فایلِ تصویر — برای تشخیصِ آدرسِ مستقیمِ فایل
+_IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|gif|webp|avif|bmp)([?#;].*)?$", re.I)
+
+# میزبان‌هایِ پایدارِ CDN که دانلودِ مستقیمِ تصویر می‌دهند (نه لینکِ صفحه).
+# این منابع معمولاً فایلِ تصویر را مستقیم و بدونِ صفحه/HTML برمی‌گردانند.
+_RELIABLE_HOSTS = (
+    "pinimg.com",             # Pinterest — i.pinimg.com (مستقیم و پایدار)
+    "unsplash.com",           # images.unsplash.com
+    "pexels.com",             # images.pexels.com
+    "wikimedia.org",          # upload.wikimedia.org (ویکی‌انبار)
+    "flickr.com",             # live.staticflickr.com / farm*.staticflickr.com
+    "pixabay.com",            # cdn.pixabay.com
+    "istockphoto.com",        # media.istockphoto.com
+    "gettyimages.com",        # media.gettyimages.com
+    "googleusercontent.com",  # lh3.googleusercontent.com
+    "gstatic.com",            # www.gstatic.com
+    "ytimg.com",              # i.ytimg.com
+    "wixstatic.com",          # static.wixstatic.com
+    "amazonaws.com",          # *.s3.amazonaws.com
+    "cloudfront.net",         # *.cloudfront.net
+    "githubusercontent.com",
+    "imgur.com",              # i.imgur.com
+    "tenor.com",              # media.tenor.com (gif)
+    "giphy.com",              # media.giphy.com
+    "twimg.com",              # pbs.twimg.com
+    "wp.com",
+    "wordpress.com",
+)
 
 # زمان انقضای جریانِ تأیید (ثانیه). بعد از آن، کاربر باید دوباره شروع کند.
 CONFIRM_TIMEOUT = 120
@@ -152,6 +182,25 @@ def is_blocked(query):
 # ---------------------------------------------------------------------------
 #  جستجو و دانلود تصویر (خارج از Event Loop، با timeout)
 # ---------------------------------------------------------------------------
+def _is_direct_image_url(url):
+    """آیا این URL یک آدرسِ مستقیمِ قابلِ دانلودِ تصویر است؟
+
+    - از یک میزبانِ CDNِ شناخته‌شده باشد (که فایلِ تصویر را مستقیم می‌دهد)،
+      یا
+    - پسوندِ فایلِ تصویر داشته باشد (.jpg/.png/...).
+    لینکِ صفحه/مقاله (که فقط داخل مرورگر باز می‌شود و دانلودِ مستقیم نمی‌دهد)
+    رد می‌شود تا ربات سراغِ لینک‌های ناکارآمد نرود.
+    """
+    if not url:
+        return False
+    host = urlparse(url).netloc.lower()
+    if not host:
+        return False
+    if any(host == h or host.endswith("." + h) for h in _RELIABLE_HOSTS):
+        return True
+    return bool(_IMAGE_EXT_RE.search(url))
+
+
 def _search_image_urls(query, limit=IMAGE_COUNT):
     """عبارت را جستجو و آدرسِ مستقیمِ تصویر را برمی‌گرداند (همگام، داخل thread).
 
@@ -180,29 +229,27 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
                 u = u.replace("\\/", "/").strip()
                 if u and "http" in u and u not in seen:
                     seen.append(u)
-                if len(seen) >= limit:
-                    break
-            if seen:
-                return seen[:limit]
+            direct = [u for u in seen if _is_direct_image_url(u)]
+            if direct:
+                return direct[:limit]
     except Exception:
         pass
 
     # ۲) Openverse API
     try:
         url = ("https://api.openverse.org/v1/images/?q="
-               + quote(query) + "&page_size=15")
+               + quote(query) + "&page_size=20")
         resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
         if resp.status_code == 200:
             data = resp.json()
-            urls = []
+            seen = []
             for item in data.get("results", []):
                 u = (item.get("url") or "").strip()
-                if u and "http" in u and u not in urls:
-                    urls.append(u)
-                if len(urls) >= limit:
-                    break
-            if urls:
-                return urls[:limit]
+                if u and "http" in u and u not in seen:
+                    seen.append(u)
+            direct = [u for u in seen if _is_direct_image_url(u)]
+            if direct:
+                return direct[:limit]
     except Exception:
         pass
 

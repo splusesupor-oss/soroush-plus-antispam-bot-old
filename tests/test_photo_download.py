@@ -718,6 +718,30 @@ def test_fetch_accepts_after_logging():
         pd.reset_all()
 
 
+def test_is_direct_image_url():
+    """فیلترِ آدرسِ مستقیمِ تصویر: CDN معروف یا پسوندِ تصویر قبول، صفحه/HTML رد."""
+    ok = [
+        "https://i.pinimg.com/originals/aa/bb/cc.jpg",
+        "https://images.unsplash.com/photo-123.jpg?w=400",
+        "https://upload.wikimedia.org/wikipedia/commons/x/y/Pic.png",
+        "https://live.staticflickr.com/65535/123.jpg",
+        "https://example.com/photo.JPG",
+        "https://example.com/image.webp?q=1#frag",
+        "https://media.tenor.com/abc.gif",
+    ]
+    bad = [
+        "https://example.com/article/1234",          # صفحه، بدون پسوند
+        "https://example.com/gallery",               # صفحه
+        "https://example.com/download?id=5",         # بدون پسوندِ تصویر
+        "not-a-url",
+        "",
+    ]
+    for u in ok:
+        check(f"direct: {u[:50]}", pd._is_direct_image_url(u), u)
+    for u in bad:
+        check(f"reject: {u[:50]}", not pd._is_direct_image_url(u), u)
+
+
 def test_confirm_text_exact():
     """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
     pd.reset_all()
@@ -763,6 +787,7 @@ def main():
     test_send_by_url_uses_photo_external()
     test_is_valid_image_bytes()
     test_fetch_accepts_after_logging()
+    test_is_direct_image_url()
     test_confirm_text_exact()
 
     print(f"\npassed={PASSED} failed={FAILED}")
