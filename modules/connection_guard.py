@@ -441,6 +441,7 @@ class ConnectionSupervisor:
         check_interval=15.0,
         window=120.0,
         receive_dead_threshold=180.0,
+        client_factory=None,
     ):
         self.client = client
         self.logger = logger
@@ -453,6 +454,10 @@ class ConnectionSupervisor:
         self.rebuilds = 0
         self.last_reason = None
         self._rebuilding = False
+        # کارخانهٔ ساخت کلاینتِ کاملاً جدید. اگر تنظیم باشد، rebuild به‌جای
+        # connect روی همان کلاینت، یک SoroushClient تازه (سشنِ تازه، sender
+        # تازه، receive loop تازه) می‌سازد و client را عوض می‌کند.
+        self.client_factory = client_factory
 
     # -- ورودی‌های رویداد ------------------------------------------------
     def note_rpc_timeout(self, request=None):
@@ -509,34 +514,109 @@ class ConnectionSupervisor:
         return None
 
     # -- اجرا -------------------------------------------------------------
+    async def verify(self):
+        """بررسی می‌کند اتصال واقعاً سالم است یا نه.
+
+        سه شرط: کلاینت connected باشد، یک RPC آزمایشی جواب بدهد، و حلقهٔ
+        دریافت (receive loop) دوباره فعال باشد. True یعنی آمادهٔ دریافت.
+        """
+        is_connected = getattr(self.client, "is_connected", None)
+        if callable(is_connected) and not is_connected():
+            self._log_error("CONNECTION GUARD verify: client not connected")
+            return False
+
+        # ۱) RPC آزمایشی: چند درخواست ساده که پاسخ کوتاه می‌دهد.
+        # اگر کلاینت `get_me` نداشته باشد (مثل کلاینت قلابیِ تست‌ها)، از
+        # این مرحله رد می‌شویم؛ روی کلاینت واقعی SPlusthon موجود است.
+        get_me = getattr(self.client, "get_me", None)
+        if callable(get_me):
+            try:
+                await asyncio.wait_for(get_me(), timeout=15.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._log_error(
+                    f"CONNECTION GUARD verify: test RPC failed ({error!r})"
+                )
+                return False
+
+        # ۲) حلقهٔ دریافت زنده است.
+        sender = getattr(self.client, "_sender", None)
+        if sender is not None:
+            recv_handle = getattr(sender, "_recv_loop_handle", None)
+            if recv_handle is not None and recv_handle.done():
+                self._log_error(
+                    "CONNECTION GUARD verify: receive loop not running"
+                )
+                return False
+
+        self._log_info("CONNECTION GUARD verify: OK")
+        return True
+
     async def rebuild(self, reason):
-        """اتصال را از صفر می‌سازد: لغو معلق‌ها، قطع، وصل دوباره."""
+        """اتصال را از صفر می‌سازد.
+
+        اگر ``client_factory`` تنظیم باشد، به‌جای connect روی همان کلاینتِ
+        کهنه، یک ``SoroushClient`` کاملاً جدید (سشن تازه، sender تازه،
+        receive loop تازه) ساخته می‌شود و ``self.client`` عوض می‌شود. در
+        غیر این صورت (برای تست) روی همان کلاینت disconnect/connect انجام
+        می‌شود.
+
+        بعد از ساخت، با ``verify`` تأیید می‌شود که واقعاً آمادهٔ دریافت است.
+        """
         if self._rebuilding:
             return False
         self._rebuilding = True
         self.last_reason = reason
+        old_client = self.client
         try:
             self._log_error(f"CONNECTION GUARD rebuilding client: {reason}")
 
-            cancelled = cancel_pending_requests(self.client, reason)
+            cancelled = cancel_pending_requests(old_client, reason)
             if cancelled:
                 self._log_info(
                     f"CONNECTION GUARD cancelled {cancelled} pending request(s)"
                 )
 
+            # همیشه کلاینت کهنه را کامل می‌بندیم تا WebSocket/Sender/Receive
+            # Loop/Taskهای قدیمی متوقف شوند و Sessionِ خراب دوباره استفاده نشود.
             try:
-                await self.client.disconnect()
+                await old_client.disconnect()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                self._log_error(f"CONNECTION GUARD disconnect failed: {error!r}")
+                self._log_error(
+                    f"CONNECTION GUARD old client disconnect failed: {error!r}"
+                )
 
-            await self.client.connect()
+            new_client = old_client
+            if self.client_factory is not None:
+                new_client = await self.client_factory(old_client, reason)
+                if new_client is None:
+                    self._log_error(
+                        "CONNECTION GUARD rebuild: client_factory returned None"
+                    )
+                    return False
+                self.client = new_client
+            else:
+                # بدون factory (مثلاً در تست): روی همان کلاینت disconnect+connect
+                try:
+                    await old_client.connect()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    self._log_error(
+                        f"CONNECTION GUARD reconnect failed: {error!r}"
+                    )
+                    return False
+
+            # تأیید: فقط اگر اتصالِ جدید واقعاً سالم باشد بازسازی موفق است.
+            ok = await self.verify()
+            if not ok:
+                self._log_error("CONNECTION GUARD rebuild: verify FAILED")
+                return False
 
             self.tracker.reset()
-            # لایو-نس را تازه کن تا بلافاصله بعد از یک بازسازیِ موفق،
-            # ناظر دوباره «سکوت» تشخیص ندهد (سوکت تازه است و قاب اول
-            # به‌زودی از keepalive می‌رسد).
             self.tracker.note_received()
             self.timeouts.clear()
             self.rebuilds += 1

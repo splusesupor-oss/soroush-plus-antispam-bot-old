@@ -141,29 +141,35 @@ class SoroushAntiSpamBot:
         self.logger.log_info(
             f"🛡️ تعداد کاربران سفید: {len(self.config_manager.whitelisted_ids)}")
 
-    async def initialize_client(self):
-        """ساخت کلاینت سروش"""
-        if not SPLUSTHON_AVAILABLE:
-            raise RuntimeError("SPlusthon نصب نیست")
+    def _make_client(self):
+        """یک ``SoroushClient`` کاملاً جدید با سشنِ تازه می‌سازد.
 
-        # اولویت: SESSION_STRING از env یا config
+        روی سشنِ کهنهٔ خراب استفاده نمی‌شود؛ هر بار یک ``StringSession``
+        تازه از همان session string می‌سازد تا sender/state/receive loop
+        همگی از صفر باشند.
+        """
         session_str = os.getenv("SOROUSH_SESSION_STRING") or self.config_manager.get(
             "session_string", "")
         api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
         api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
 
-        # اگر session string وجود داشته باشد از آن استفاده کن
         if session_str:
             session = StringSession(session_str)
         else:
-            session = StringSession()  # جدید می‌سازد و بعد باید ذخیره کنی
+            session = StringSession()
 
-        # SPlusthon شامل api_id/hash پیش‌فرض برای سروش است، ولی اگر کاربر
-        # مقادیر شخصی دارد استفاده می‌کنیم
         if api_id and api_hash:
-            self.client = SoroushClient(session, api_id, api_hash)
+            client = SoroushClient(session, api_id, api_hash)
         else:
-            self.client = SoroushClient(session)
+            client = SoroushClient(session)
+        return client
+
+    async def initialize_client(self):
+        """ساخت کلاینت سروش"""
+        if not SPLUSTHON_AVAILABLE:
+            raise RuntimeError("SPlusthon نصب نیست")
+
+        self.client = self._make_client()
 
         self.spammer_messages = defaultdict(lambda: deque(maxlen=5000))
         instrument_client(self.client, self.logger)
@@ -180,8 +186,14 @@ class SoroushAntiSpamBot:
         #
         # باید *قبل از* connect() نصب شود تا اولین سوکت هم وصله‌خورده
         # ساخته شود.
+        #
+        # client_factory: وقتی supervisor تشخیص دهد RPCها یا سشن خراب است،
+        # به‌جای connect روی همان کلاینتِ کهنه، یک کلاینت کاملاً جدید با
+        # سشن تازه می‌سازد و client را عوض می‌کند.
         self.connection_supervisor = connection_guard.install(
-            self.client, logger=self.logger
+            self.client,
+            logger=self.logger,
+            client_factory=self._rebuild_client,
         )
 
         self.admin_actions = AdminActions(
@@ -190,6 +202,62 @@ class SoroushAntiSpamBot:
         self.group_actions = GroupActions(
             self.client, self.logger)
         return self.client
+
+    async def _rebuild_client(self, old_client, reason):
+        """کارخانهٔ ساخت کلاینتِ تازه برای supervisor.
+
+        یک ``SoroushClient`` کاملاً جدید (سشن تازه، sender تازه) می‌سازد،
+        هندلرهای رویدادِ کلاینتِ کهنه را به آن منتقل می‌کند، وصلهٔ RPC را
+        دوباره نصب می‌کند و وصلش می‌کند. در پایان ``self.client`` و
+        ``admin_actions``/``group_actions`` را به کلاینتِ جدید وصل می‌کند.
+
+        هندلرها (NewMessage, ChatAction, Raw) به‌صورت داینامیک از
+        ``self.client`` استفاده می‌کنند، پس همین که ``self.client`` عوض شود
+        روی کلاینتِ جدید هم درست کار می‌کنند؛ فقط باید در ``_event_builders``
+        کلاینتِ جدید ثبت شوند.
+        """
+        try:
+            self.logger.log_info(
+                "CLIENT REBUILD building fresh client "
+                f"reason={reason!r}"
+            )
+            new_client = self._make_client()
+
+            # انتقال هندلرها از کلاینت کهنه به کلاینت جدید
+            old_builders = getattr(old_client, "_event_builders", None)
+            if old_builders is not None:
+                new_client._event_builders = list(old_builders)
+
+            instrument_client(new_client, self.logger)
+
+            # وصلهٔ سقف زمانی RPC را روی کلاینت جدید هم نصب کن
+            # (فیلتر قاب کهنه و حلقهٔ reset کلاس‌محورند و یک‌بار نصب شده‌اند)
+            connection_guard.install_rpc_timeout(
+                new_client,
+                timeout=60.0,
+                on_timeout=self.connection_supervisor.note_rpc_timeout,
+                logger=self.logger,
+            )
+
+            await new_client.connect()
+            me = await new_client.get_me()
+            self.bot_account_id = getattr(me, "id", self.bot_account_id)
+
+            # سوئیچ مرجع‌های ربات به کلاینت جدید
+            self.client = new_client
+            self.admin_actions = AdminActions(
+                new_client, self.logger, self.config_manager)
+            self.group_actions = GroupActions(new_client, self.logger)
+
+            self.logger.log_info("CLIENT REBUILD new client connected")
+            return new_client
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self.logger.log_error(
+                f"CLIENT REBUILD FAILED: {error!r}"
+            )
+            return None
 
 
 
@@ -996,51 +1064,77 @@ class SoroushAntiSpamBot:
                 )
 
 
-        reconnect_delay = 1
+        # ⛑️ حلقهٔ اصلی: مالکِ بازسازی، supervisor است (با client_factory
+        # که یک SoroushClient کاملاً جدید با سشن تازه می‌سازد و self.client
+        # را عوض می‌کند). این حلقه فقط روی self.clientِ فعلی منتظر قطع شدن
+        # می‌ماند؛ بعد از بازسازی، self.client توسط supervisor عوض شده و
+        # حلقه روی کلاینتِ جدید ادامه می‌یابد.
         while True:
             try:
-                print("✅ ربات فعال شد و منتظر پیام است")
+                # فقط وقتی «ربات فعال شد» نمایش داده می‌شود که اتصالِ فعلی
+                # واقعاً سالم باشد: WebSocket وصل، یک RPC آزمایشی موفق، و
+                # Receive Loop فعال.
+                supervisor = getattr(self, "connection_supervisor", None)
+                if supervisor is not None and await supervisor.verify():
+                    print("✅ ربات فعال شد و منتظر پیام است")
+                elif supervisor is None:
+                    print("✅ ربات فعال شد و منتظر پیام است")
                 await self.client.run_until_disconnected()
                 raise ConnectionError("SPlusthon connection closed")
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 self.logger.log_error(
-                    "SPLUS RECONNECT "
-                    f"reason={error!r} retry_in={reconnect_delay}s"
+                    "SPLUS CONNECTION LOST "
+                    f"reason={error!r} waiting for supervisor rebuild"
                 )
-                # درخواست‌های معلق را آزاد کن، وگرنه تسک‌هایی که روی
-                # آن‌ها await کرده‌اند تا ابد منتظر پاسخی می‌مانند که
-                # هرگز نمی‌آید (سشن قبلی دیگر وجود ندارد).
+                # درخواست‌های معلق را آزاد کن تا تسک‌های در انتظار، برای
+                # همیشه بلاک نمانند.
                 try:
                     freed = connection_guard.cancel_pending_requests(
                         self.client, f"reconnect: {error!r}"
                     )
                     if freed:
                         self.logger.log_info(
-                            f"SPLUS RECONNECT freed {freed} pending request(s)"
+                            f"SPLUS CONNECTION LOST freed {freed} pending request(s)"
                         )
                 except Exception:
                     pass
-                try:
-                    await self.client.disconnect()
-                except Exception:
-                    pass
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2, 30)
-                try:
-                    await self.client.connect()
-                    self.bot_account_id = getattr(
-                        await self.client.get_me(), "id", self.bot_account_id
-                    )
-                    reconnect_delay = 1
-                    self.logger.log_info("SPLUS RECONNECT SUCCESS")
-                except asyncio.CancelledError:
-                    raise
-                except Exception as reconnect_error:
-                    self.logger.log_error(
-                        f"SPLUS RECONNECT FAILED: {reconnect_error!r}"
-                    )
+                # اگر supervisor هنوز بازسازی نکرده، اینجا خودمان rebuild را
+                # صدا می‌زنیم تا قطعیِ پیام و RPC همگی آزاد شوند و کلاینتِ
+                # تازه ساخته شود. rebuild خودش reentrancy-guard دارد.
+                supervisor = getattr(self, "connection_supervisor", None)
+                if supervisor is not None:
+                    try:
+                        ok = await supervisor.rebuild(
+                            f"run_loop: {error!r}"
+                        )
+                        if ok:
+                            self.logger.log_info(
+                                "SPLUS RECONNECT SUCCESS (full client rebuild)"
+                            )
+                            continue
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as rebuild_error:
+                        self.logger.log_error(
+                            f"SPLUS RECONNECT FAILED: {rebuild_error!r}"
+                        )
+                    # rebuild False یعنی supervisor همین حالا در حالِ بازسازی
+                    # است؛ منتظر می‌مانیم تا self.client به کلاینتِ جدیدِ
+                    # سالم تغییر کند یا مهلت تمام شود.
+                    old = self.client
+                    for _ in range(60):  # حداکثر ~۶۰ ثانیه
+                        await asyncio.sleep(1)
+                        if self.client is not old:
+                            break
+                        is_conn = getattr(self.client, "is_connected", None)
+                        if callable(is_conn) and is_conn():
+                            break
+                    continue
+                # در غیر این صورت (بدون supervisor) یک استراحت کوتاه و تلاش
+                # مجددِ ساده روی همان کلاینت.
+                await asyncio.sleep(10)
 
 
     # ---------- SPAM HISTORY STORAGE ----------
