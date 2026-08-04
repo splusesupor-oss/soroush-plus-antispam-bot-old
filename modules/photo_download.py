@@ -38,6 +38,7 @@ import economy
 
 COST_PER_IMAGE = 10   # هزینهٔ دقیقِ هر عکس (برنز)
 IMAGE_COUNT = 2       # حداکثر ۲ عکس در هر درخواست
+SEARCH_CANDIDATES = 8  # تعدادِ نامزدِ جستجو برای اینکه حداقل ۲ عکسِ معتبر پیدا شود
 SEND_RETRIES = 2      # تلاش مجدد برای ارسالِ هر عکس در صورت خطای گذرا
 NETWORK_TIMEOUT = (10, 20)
 
@@ -208,37 +209,80 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
     return []
 
 
-def _fetch_image_bytes(url, timeout=NETWORK_TIMEOUT):
+def _is_valid_image_bytes(content):
+    """بررسیِ magic bytes؛ صرفاً بر اساسِ محتوا، نه content-type.
+
+    اگر سایت content-type اشتباه بدهد ولی bytes واقعاً تصویرِ معتبر باشد،
+    اینجا رد نمی‌شود.
+    """
+    if not content:
+        return False
+    # JPEG — خانوادهٔ \xff\xd8\xff (اکثر عکس‌ها)
+    if content[:3] == b"\xff\xd8\xff":
+        return True
+    # PNG
+    if content[:8] == b"\x89PNG\r\n\x1a\n":
+        return True
+    # GIF
+    if content[:6] in (b"GIF87a", b"GIF89a"):
+        return True
+    # BMP
+    if content[:2] == b"BM":
+        return True
+    # WebP — RIFF....WEBP
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return True
+    # AVIF — 'ftypavif'/'ftypavis' در ابتدای فایل
+    if b"ftypavif" in content[:32] or b"ftypavis" in content[:32]:
+        return True
+    return False
+
+
+def _fetch_image_bytes(url, timeout=NETWORK_TIMEOUT, log_func=None):
     """تصویر را دانلود و به bytes تبدیل می‌کند (همگام، داخل thread).
 
-    از یک User-Agent شبیه مرورگر استفاده می‌شود؛ بعضی میزبان‌ها (مثل
-    flickr) درخواستِ bot/ساده را رد می‌کنند. فقط محتوایی برمی‌گردد که
-    شبیه فایلِ تصویر معتبر باشد.
+    هدرِ مرورگر + Accept برای تصویر فرستاده می‌شود تا سایت‌ها به‌جای صفحهٔ
+    HTML خودِ عکس را بدهند. فقط محتوایی برمی‌گردد که magic bytes معتبرِ
+    تصویر داشته باشد؛ دربارهٔ content-type تصمیم نمی‌گیرد.
     """
     headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/120.0 Safari/537.36"),
+        "Accept": ("image/avif,image/webp,image/apng,image/*,*/*;q=0.8"),
+        "Accept-Language": "en-US,en;q=0.9,fa;q=0.8",
+        "Referer": "https://www.bing.com/",
     }
-    resp = requests.get(url, headers=headers, timeout=timeout)
-    if resp.status_code != 200:
+    if log_func:
+        log_func(f"DOWNLOAD REQUEST url={url}")
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+    except Exception as e:
+        if log_func:
+            log_func(f"DOWNLOAD ERROR url={url} reason={type(e).__name__}: {e}")
         return None
     content = resp.content
-    if not content or len(content) < 100:
+    magic = content[:20]
+    if log_func:
+        log_func(
+            f"DOWNLOAD url={url} status={resp.status_code} "
+            f"type={resp.headers.get('Content-Type')} bytes={len(content)} "
+            f"magic={magic.hex()}")
+    if resp.status_code != 200:
+        if log_func:
+            log_func(f"DOWNLOAD reject reason=status_{resp.status_code}")
         return None
-    # بررسیِ magic bytes تا مطمئن شویم فایلِ تصویر واقعی است، نه HTML/مقاله
-    if content[:4] in (b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1",
-                       b"\xff\xd8\xff\xe8"):  # JPEG
-        return content
-    if content[:8] == b"\x89PNG\r\n\x1a\n":  # PNG
-        return content
-    if content[:6] in (b"GIF87a", b"GIF89a"):  # GIF
-        return content
-    if content[:2] == b"BM":  # BMP
-        return content
-    if content[:4] == b"RIFF":  # WEBP
-        return content
-    return None
+    if not content or len(content) < 100:
+        if log_func:
+            log_func("DOWNLOAD reject reason=size_too_small")
+        return None
+    if not _is_valid_image_bytes(content):
+        if log_func:
+            log_func("DOWNLOAD reject reason=bad_magic")
+        return None
+    if log_func:
+        log_func("DOWNLOAD accept")
+    return content
 
 
 def _make_image_stream(data, index=0):
@@ -297,9 +341,12 @@ async def _send_image(bot, chat_id, url):
     # ۱) دانلود + اعتبارسنجی — فقط عکسِ واقعی. اگر دانلود نشد، این عکس
     #    ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود.
     try:
-        data = await asyncio.to_thread(_fetch_image_bytes, url)
-    except Exception:
+        data = await asyncio.to_thread(
+            _fetch_image_bytes, url,
+            log_func=lambda m: _log(bot, m))
+    except Exception as e:
         data = None
+        _log(bot, f"PHOTO SEND result=SKIP reason=download_error {type(e).__name__}: {e}")
     if not data:
         _log(bot, "PHOTO SEND result=SKIP reason=download_invalid")
         return False
@@ -422,7 +469,7 @@ async def process(chat_id, user_id, bot):
     try:
         # ۱) جستجو (خارج از حلقه)
         try:
-            urls = await asyncio.to_thread(_search_image_urls, query)
+            urls = await asyncio.to_thread(_search_image_urls, query, SEARCH_CANDIDATES)
         except Exception:
             urls = []
         if not urls:
@@ -435,16 +482,17 @@ async def process(chat_id, user_id, bot):
             return "no_results", NO_RESULTS
 
         # ۳) ارسال حداکثر IMAGE_COUNT عکس در چت.
-        #    برای هر عکس: دانلود + آپلود، و در صورتِ شکستِ آپلود، fallback به
-        #    ارسال با URL. فقط عکس‌هایی که واقعاً با موفقیت در چت ارسال شوند
-        #    شمرده می‌شوند و بابتِ آن‌ها سکه کم می‌شود.
+        #    اگر یک URL خراب/نامعتبر باشد، کل درخواست شکست نمی‌خورد؛ از بین
+        #    نامزدهایِ جستجو یکی‌یکی جلو می‌رویم تا IMAGE_COUNT عکسِ معتبر
+        #    پیدا و ارسال شود. فقط عکس‌هایِ واقعاً ارسال‌شده شمرده و شارژ
+        #    می‌شوند.
         sent = 0
-        for url in urls[:IMAGE_COUNT]:
+        for url in urls:
+            if sent >= IMAGE_COUNT:
+                break
             ok = await _send_image(bot, chat_id, url)
             if ok:
                 sent += 1
-                if sent >= IMAGE_COUNT:
-                    break
             await asyncio.sleep(0.3)
 
         if sent == 0:

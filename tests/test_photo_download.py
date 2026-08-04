@@ -227,7 +227,7 @@ def test_release_on_network_error():
     orig_fetch = pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://example.com/1.jpg"])
     # fetch که همیشه خطا/None می‌دهد
-    def bad_fetch(url, timeout=pd.NETWORK_TIMEOUT):
+    def bad_fetch(url, timeout=pd.NETWORK_TIMEOUT, log_func=None):
         raise ConnectionError("network down")
     pd._fetch_image_bytes = bad_fetch
     try:
@@ -313,7 +313,7 @@ def test_two_step_full_flow_20_bronze():
     orig_fetch = pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://example.com/1.jpg",
                                             "http://example.com/2.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0fakejpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0fakejpeg"
     try:
         async def scenario():
             await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
@@ -342,7 +342,7 @@ def test_per_image_cost_1_image():
     orig_fetch = pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://example.com/1.jpg",
                                             "http://example.com/2.jpg"])
-    def fetch_ok(url, timeout=None):
+    def fetch_ok(url, timeout=None, log_func=None):
         # فقط تصویر اول دانلود می‌شود؛ دومی خطا
         if "2.jpg" in url:
             return None
@@ -372,7 +372,7 @@ def test_real_image_bytes_are_valid():
     for sig in (b"\xff\xd8\xff\xe0", b"\x89PNG\r\n\x1a\n", b"GIF89a"):
         data = sig + b"\x00" * 200
         orig_fetch = pd._fetch_image_bytes
-        pd._fetch_image_bytes = lambda url, timeout=None: data
+        pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: data
         try:
             # _fetch_image_bytes تست می‌شود
             pd._fetch_image_bytes = orig_fetch  # restore
@@ -394,7 +394,7 @@ def test_two_step_flow():
     orig_search = pd._search_image_urls
     orig_fetch = pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://example.com/1.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         async def scenario():
             # مرحله ۱: «دانلود عکس»
@@ -441,7 +441,7 @@ def test_2_images_success_20_bronze():
     bot = FakeBot()
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg", "http://e.com/2.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         sent = _run_flow(bot, chat, user, 2)
         bal = _economy.get_balance(chat, user)
@@ -462,7 +462,7 @@ def test_1_image_success_10_bronze():
     bot = FakeBot()
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg", "http://e.com/2.jpg"])
-    def fetch_only_first(url, timeout=None):
+    def fetch_only_first(url, timeout=None, log_func=None):
         return b"\xff\xd8\xff\xe0jpeg" if "1.jpg" in url else None
     pd._fetch_image_bytes = fetch_only_first
     try:
@@ -485,7 +485,7 @@ def test_no_result_0_bronze():
     bot = FakeBot()
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search([])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         sent = _run_flow(bot, chat, user, 0)
         bal = _economy.get_balance(chat, user)
@@ -505,7 +505,7 @@ def test_download_failure_0_bronze():
     bot = FakeBot()
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg", "http://e.com/2.jpg"])
-    def fetch_fail(url, timeout=None):
+    def fetch_fail(url, timeout=None, log_func=None):
         raise ConnectionError("download failed")
     pd._fetch_image_bytes = fetch_fail
     try:
@@ -529,7 +529,7 @@ def test_send_failure_0_bronze():
     bot = FakeBot(FakeClient(fail_upload=True, fail_url=True))
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         sent = _run_flow(bot, chat, user, 0)
         bal = _economy.get_balance(chat, user)
@@ -551,7 +551,7 @@ def test_url_fails_upload_fallback_10_bronze():
     bot = FakeBot(FakeClient(fail_url=True, fail_upload=False))
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         sent = _run_flow(bot, chat, user, 1)
         bal = _economy.get_balance(chat, user)
@@ -584,7 +584,7 @@ def test_no_confirm_0_bronze():
     bot = FakeBot()
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         sent = asyncio.run(scenario())
         bal = _economy.get_balance(chat, user)
@@ -605,7 +605,7 @@ def test_insufficient_balance_not_performed():
     bot = FakeBot()
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
-    pd._fetch_image_bytes = lambda url, timeout=None: b"\xff\xd8\xff\xe0jpeg"
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
     try:
         async def scenario():
             # دستورِ دقیق → ربات عبارت می‌خواهد
@@ -675,6 +675,49 @@ def test_send_by_url_uses_photo_external():
         pd.reset_all()
 
 
+def test_is_valid_image_bytes():
+    """magic bytes برای jpg/png/webp/avif قبول و HTML/نامعتبر رد شود."""
+    check("JPEG (خانواده ffd8ff) قبول",
+          pd._is_valid_image_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 200))
+    check("PNG قبول",
+          pd._is_valid_image_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200))
+    check("GIF قبول",
+          pd._is_valid_image_bytes(b"GIF89a" + b"\x00" * 200))
+    check("WebP (RIFF..WEBP) قبول",
+          pd._is_valid_image_bytes(b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 200))
+    check("AVIF (ftypavif) قبول",
+          pd._is_valid_image_bytes(b"\x00\x00\x00\x1cftypavif" + b"\x00" * 200))
+    check("HTML رد می‌شود",
+          not pd._is_valid_image_bytes(b"<!DOCTYPE html><html>...."))
+    check("فایلِ نامعتبر/خالی رد می‌شود", not pd._is_valid_image_bytes(b""))
+
+
+def test_fetch_accepts_after_logging():
+    """با content-type اشتباه ولی bytes معتبر رد نمی‌شود؛ و تشخیص log دارد."""
+    pd.reset_all()
+    logged = []
+    import requests
+    orig_get = requests.get
+    class FakeResp:
+        status_code = 200
+        headers = {"Content-Type": "application/octet-stream"}
+        content = b"\xff\xd8\xff\xe0" + b"\x00" * 200
+    def fake_get(url, *a, **k):
+        return FakeResp()
+    requests.get = fake_get
+    try:
+        data = pd._fetch_image_bytes("http://x.com/a", log_func=logged.append)
+        check("با content-type اشتباه ولی bytes معتبر، پذیرفته شد",
+              data is not None and data[:3] == b"\xff\xd8\xff")
+        check("تشخیصِ دانلود لاگ شد",
+              any("DOWNLOAD" in m for m in logged), f"{logged}")
+        check("جزئیات (status/type/bytes/magic) لاگ شد",
+              any("status=" in m and "magic=" in m for m in logged), f"{logged}")
+    finally:
+        requests.get = orig_get
+        pd.reset_all()
+
+
 def test_confirm_text_exact():
     """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
     pd.reset_all()
@@ -718,6 +761,8 @@ def main():
     test_insufficient_balance_not_performed()
     test_image_stream_is_photo()
     test_send_by_url_uses_photo_external()
+    test_is_valid_image_bytes()
+    test_fetch_accepts_after_logging()
     test_confirm_text_exact()
 
     print(f"\npassed={PASSED} failed={FAILED}")
