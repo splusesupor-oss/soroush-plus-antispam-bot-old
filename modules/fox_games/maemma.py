@@ -4,13 +4,17 @@
 تنها کسی که معما را شروع کرده می‌تواند به آن پاسخ دهد؛ پاسخ‌های دیگران
 نه امتیاز می‌دهد و نه معمای صاحبش را می‌بندد.
 
-هر بازی شامل ``QUESTIONS_PER_GAME`` معماست. بعد از هر پاسخِ درست، معمای
-بعدی نمایش داده می‌شود و بعد از پاسخ به همهٔ معماها نتیجهٔ نهایی اعلام
-می‌شود. اگر یک معما بی‌جواب timeout شود، همان دورِ بازی پایان می‌یابد.
+هر بار که کاربر دستور «معما» را ارسال کند، دقیقاً یک معما نمایش داده
+می‌شود. بعد از پاسخِ صحیح یا پایانِ زمان، همان بازی تمام می‌شود و برای
+معمای بعدی باید دوباره «معما» فرستاد.
+
+شمارهٔ سوال («سوال N از ۲۲۲») از تعداد معماهایی که این کاربر تاکنون در این
+گروه دیده ساخته می‌شود، پس با هر معمای جدید افزایش می‌یابد؛ عدد دوم همیشه
+تعداد کل بانک است.
 
 تکرار معما برای یک کاربر با ``economy/game_progress`` (به‌تفکیک گروه و
 کاربر) جلوگیری می‌شود؛ در سطح گروه هم چند معمای اخیر کنار گذاشته می‌شوند
-تا بقیه جواب را ندیده باشند. سوال‌های یک بازی تکراری نیستند.
+تا بقیه جواب را ندیده باشند.
 
 جایزه: ۳ سکه برنز برای هر پاسخِ درست (از جدول `economy.rewards`).
 reference یکتا و ماندگار تضمین می‌کند هر پاسخ فقط یک بار سکه بدهد.
@@ -30,7 +34,6 @@ from modules.fox_games.session_core import (
 
 GAME = "maemma"
 COMMAND = "معما"
-QUESTIONS_PER_GAME = 3
 TIMEOUT_SECONDS = 40
 REWARD = 3
 
@@ -81,8 +84,8 @@ def active_state(chat_id, user_id):
     return dict(state) if state else None
 
 
-def _pick_bank(chat_id, used):
-    """پنجره‌ی انتخاب با در نظر گرفتن معمای دیده‌شده و تازه‌استفادهٔ گروه."""
+def _pick(chat_id, used):
+    """یک معمای انتخاب‌شده (با در نظر گرفتن دیده‌شده و تازه‌استفادهٔ گروه)."""
     from economy import game_progress as _gp
     recent = set(_gp.recent(chat_id, GAME))
     remaining = [p for p in PUZZLES if p[1] not in used]
@@ -90,11 +93,12 @@ def _pick_bank(chat_id, used):
         # بانک تمام شده؛ برای اینکه بازی هرگز قفل نشود از کل بانک برمی‌گردیم
         remaining = list(PUZZLES)
     preferred = [p for p in remaining if p[1] not in recent]
-    return preferred or remaining
+    pool = preferred or remaining
+    return _RANDOM.choice(pool)
 
 
 def start(chat_id, user_id, logger=None):
-    """دورِ تازه‌ای از چند معما می‌دهد که این کاربر هنوز ندیده است.
+    """یک معما می‌دهد که این کاربر هنوز ندیده است.
 
     خروجی state یا None (اگر همین کاربر معما دارد / بانک خالی).
     """
@@ -109,27 +113,18 @@ def start(chat_id, user_id, logger=None):
         seen = _gp.seen(chat_id, user_id, GAME)
 
     used = set(seen)
-    # شمارهٔ سوال در این بازی از «تعداد معماهایی که این کاربر تاکنون دیده»
-    # شروع می‌شود تا با هر معمای جدیدِ کاربر افزایش یابد (سوال ۱ از ۲۲۲،
-    # سوال ۲ از ۲۲۲، ...).
-    base = len(used)
-    questions = []
-    for i in range(QUESTIONS_PER_GAME):
-        pool = _pick_bank(chat_id, used)
-        picked = _RANDOM.choice(pool)
-        used.add(picked[1])
-        _gp.mark_recent(chat_id, GAME, picked[1], RECENT_WINDOW)
-        questions.append({
-            "emoji": picked[0],
-            "answer": picked[1],
-            "aliases": tuple(picked[2]),
-            "number": base + i + 1,
-        })
+    # شمارهٔ سوال: تعداد معماهایی که این کاربر تاکنون دیده + ۱، تا با هر
+    # معمای جدید افزایش یابد («سوال ۱ از ۲۲۲»، «سوال ۲ از ۲۲۲»، ...).
+    number = len(seen) + 1
+
+    picked = _pick(chat_id, used)
+    _gp.mark_recent(chat_id, GAME, picked[1], RECENT_WINDOW)
 
     state = {
-        "questions": questions,
-        "index": 0,
-        "correct": 0,
+        "emoji": picked[0],
+        "answer": picked[1],
+        "aliases": tuple(picked[2]),
+        "number": number,
         "token": _next_token(),
         "user_id": user_id,
         "chat_id": chat_id,
@@ -137,8 +132,8 @@ def start(chat_id, user_id, logger=None):
     }
     _ACTIVE[key] = state
     log(logger, f"MAEMMA START chat_id={chat_id} user_id={user_id} "
-                f"session_id={state['token']} "
-                f"questions={[q['answer'] for q in questions]!r}")
+                f"session_id={state['token']} number={number} "
+                f"answer={picked[1]!r}")
     return dict(state)
 
 
@@ -147,20 +142,17 @@ def current_question(chat_id, user_id):
     state = _ACTIVE.get(_key(chat_id, user_id))
     if not state:
         return None
-    if state["index"] >= len(state["questions"]):
-        return None
-    q = state["questions"][state["index"]]
     return {
-        "emoji": q["emoji"],
-        "answer": q["answer"],
-        "aliases": q["aliases"],
-        "number": q.get("number", state["index"] + 1),
+        "emoji": state["emoji"],
+        "answer": state["answer"],
+        "aliases": state["aliases"],
+        "number": state["number"],
         "total": len(PUZZLES),
     }
 
 
 def answer(chat_id, user_id, name, text, logger=None):
-    """فقط صاحب معما پاسخ می‌دهد؛ در صورت درستی به معمای بعدی می‌رود.
+    """فقط صاحب معما پاسخ می‌دهد؛ در صورت درستی، همان بازی تمام می‌شود.
 
     خروجی: دیکشنری نتیجه یا None (پاسخ اشتباه/بی‌ربط).
     پرداخت توسط روتر (از راه `_coins`) انجام می‌شود.
@@ -169,69 +161,44 @@ def answer(chat_id, user_id, name, text, logger=None):
     state = _ACTIVE.get(key)
     if not state:
         return None
-    q = state["questions"][state["index"]]
-    if _norm(text) not in _accepted(q):
+    if _norm(text) not in _accepted(state):
         return None
 
-    answer_value = q["answer"]
-    state["correct"] += 1
-    state["index"] += 1
-    completed = state["index"] >= len(state["questions"])
+    answer_value = state["answer"]
+    token = state["token"]
+    number = state["number"]
 
     from economy import game_progress as _gp
     _gp.mark_seen(chat_id, user_id, GAME, answer_value)
 
-    token = state["token"]
-    next_q = None
-    if not completed:
-        nq = state["questions"][state["index"]]
-        next_q = {
-            "emoji": nq["emoji"],
-            "answer": nq["answer"],
-            "aliases": nq["aliases"],
-            "number": nq.get("number", state["index"] + 1),
-            "total": len(PUZZLES),
-        }
-
-    # تایمر معمای قبلی را کنار بگذار تا سرِ معمای بعدی شلیک نکند
+    # تایمر را کنار بگذار تا «زمان تمام شد» بعد از جوابِ درست شلیک نکند.
     _cancel_task(key)
-    if completed:
-        _ACTIVE.pop(key, None)
-        log(logger, f"MAEMMA COMPLETE chat_id={chat_id} user_id={user_id} "
-                    f"correct={state['correct']} total={len(state['questions'])}")
-    else:
-        log(logger, f"MAEMMA CORRECT chat_id={chat_id} user_id={user_id} "
-                    f"q={state['index']} answer={answer_value!r}")
-
+    _ACTIVE.pop(key, None)
+    log(logger, f"MAEMMA CORRECT chat_id={chat_id} user_id={user_id} "
+                f"answer={answer_value!r}")
     return {
         "answer": answer_value,
         "token": token,
         "user_id": user_id,
         "name": name,
-        "number": state["index"],
-        "correct": state["correct"],
-        "total": len(state["questions"]),
-        "completed": completed,
-        "next": next_q,
+        "number": number,
+        "total": len(PUZZLES),
+        "completed": True,
     }
 
 
 def finish(chat_id, token=None, user_id=None, logger=None):
-    """پایان زمان یک معما: دورِ بازی برای این کاربر می‌بندد.
+    """پایان زمان: همان بازی را برای این کاربر می‌بندد.
 
-    خروجی دیکشنری نتیجه (شامل پاسخِ معمایِ بی‌جواب برای اعلام) یا None.
+    خروجی دیکشنری نتیجه (شامل پاسخِ معما برای اعلام) یا None.
     اگر از درونِ خودِ تایمر فراخوانی شود، تسکِ جاری را cancel نمی‌کند.
     """
     key = _key(chat_id, user_id)
     state = _ACTIVE.get(key)
     if not state or (token is not None and state["token"] != token):
         return None
-    current_q = state["questions"][state["index"]] if state["index"] < len(
-        state["questions"]) else None
-    answer_value = current_q["answer"] if current_q else None
-
-    correct = state["correct"]
-    total = len(state["questions"])
+    answer_value = state["answer"]
+    number = state["number"]
 
     task = _TASKS.get(key)
     current = asyncio.current_task()
@@ -239,12 +206,11 @@ def finish(chat_id, token=None, user_id=None, logger=None):
         task.cancel()
     _TASKS.pop(key, None)
     _ACTIVE.pop(key, None)
-    log(logger, f"MAEMMA TIMEOUT chat_id={chat_id} user_id={user_id} "
-                f"correct={correct} total={total}")
+    log(logger, f"MAEMMA TIMEOUT chat_id={chat_id} user_id={user_id}")
     return {
         "answer": answer_value,
-        "correct": correct,
-        "total": total,
+        "number": number,
+        "total": len(PUZZLES),
         "completed": False,
     }
 

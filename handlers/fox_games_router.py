@@ -518,23 +518,6 @@ async def _show_maemma_question(event, question, logger=None):
     await _bold_reply(event, text, [title, question['emoji'], time_line])
 
 
-async def _show_maemma_result(event, correct, total, logger=None):
-    """نتیجهٔ نهایی بازی معما را نمایش می‌دهد.
-
-    فقط زمانی که حداقل یک پاسخ صحیح ثبت شده باشد، پیام پایان و جایزه نشان
-    داده می‌شود؛ با پاسخِ صفر هیچ پیامِ پایان/جایزه‌ای ارسال نمی‌شود.
-    """
-    if not correct:
-        return
-    title = "🧩 پایان بازی معما"
-    result_line = (f"پاسخ‌های صحیح: {to_persian_digits(correct)} "
-                   f"از {to_persian_digits(total)}")
-    coins = correct * maemma.REWARD
-    reward_line = f"🪙 +{to_persian_digits(coins)} سکه برنز"
-    text = f"{title}\n\n{result_line}\n\n{reward_line}"
-    await _bold_reply(event, text, [title, result_line, reward_line])
-
-
 async def _start_maemma(bot, event, chat_id, user_id, sender, logger):
     if maemma.is_active(chat_id, user_id):
         await _bold_reply(event, "⏳ شما یک معما دارید؛ اول همان را پاسخ دهید.",
@@ -547,14 +530,13 @@ async def _start_maemma(bot, event, chat_id, user_id, sender, logger):
         return True
 
     async def on_timeout(result):
+        # فقط وقتی زمان تمام شود و کسی درست جواب نداده باشد، «پاسخ درست»
+        # نمایش داده می‌شود؛ بعد از جوابِ درست این تایمر لغو می‌شود.
         t = "⏰ زمان تمام شد!"
         a = "✅ پاسخ درست:"
         text = f"{t}\n\n{a}\n{result['answer']}"
         await _bold_reply(event, text, [t, a, result["answer"]])
-        # پایانِ زودهنگام: نتیجهٔ همان چیزهایی که پاسخ داده شده
-        await _show_maemma_result(event, result["correct"], result["total"], logger)
 
-    # معمای اول
     first = maemma.current_question(chat_id, user_id)
     await _show_maemma_question(event, first, logger)
     maemma.schedule(
@@ -575,31 +557,12 @@ async def _maemma_message(bot, event, chat_id, user_id, sender, text, logger):
                   reference=f"maemma:{chat_id}:{user_id}:{result['token']}:"
                             f"{result['number']}",
                   game="maemma")
+    # بعد از جوابِ درست فقط پیام موفقیت و جایزه نمایش داده می‌شود؛ هیچ
+    # سوالِ بعدی یا پیامِ «زمان تمام شد» ارسال نمی‌شود.
     title = "🎉 پاسخ صحیح بود!"
     reward = (f"\n\n🪙 +{to_persian_digits(maemma.REWARD)} سکه برنز"
               if paid else "")
     await _bold_reply(event, f"{title}{reward}", [title, reward.strip()])
-
-    if result["completed"]:
-        # هر سه معما پاسخ داده شد → نتیجهٔ نهایی
-        await _show_maemma_result(event, result["correct"], result["total"], logger)
-        return True
-
-    # معمای بعدی
-    next_q = result["next"]
-    await _show_maemma_question(event, next_q, logger)
-
-    async def on_timeout(timeout_result):
-        t = "⏰ زمان تمام شد!"
-        a = "✅ پاسخ درست:"
-        text = f"{t}\n\n{a}\n{timeout_result['answer']}"
-        await _bold_reply(event, text, [t, a, timeout_result["answer"]])
-        await _show_maemma_result(event, timeout_result["correct"],
-                                  timeout_result["total"], logger)
-
-    maemma.schedule(
-        chat_id, user_id, result["token"], on_timeout, logger=logger,
-    )
     return True
 
 

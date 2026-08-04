@@ -132,23 +132,22 @@ async def _test_maemma_owner_only():
     check("معما: پاسخ B مصرف نشد", r is False)
     check("معما: B سکه نگرفت", not bot.paid, f"{bot.paid}")
 
-    # A هر ۳ معما را درست جواب می‌دهد؛ شمارهٔ هر سوال به‌ترتیب افزایش می‌یابد
-    prev_number = None
-    for qnum in range(1, maemma.QUESTIONS_PER_GAME + 1):
-        q = maemma.current_question(CHAT, 1)
-        check(f"معما: سوال {qnum} در جریان است", q is not None
-              and q["total"] == len(maemma.PUZZLES), f"{q}")
-        check(f"معما: شمارهٔ سوال {qnum} افزایش یافته",
-              prev_number is None or q["number"] == prev_number + 1,
-              f"prev={prev_number} q={q}")
-        prev_number = q["number"]
-        ev3 = Event()
-        r = await send(bot, ev3, CHAT, 1, q["answer"], name="A")
-        check(f"معما: پاسخ سوال {qnum} مصرف شد", r is True)
-    check("معما: A دقیقاً ۳ بار برنز گرفت (هر پاسخ ۳)",
-          len(bot.paid) == 3 and all(p == (1, maemma.REWARD) for p in bot.paid),
-          f"{bot.paid}")
-    check("معما: سشن A پس از ۳ سوال بسته شد", not maemma.is_active(CHAT, 1))
+    # A جواب درست می‌دهد → فقط موفقیت+جایزه، بازی تمام می‌شود
+    q = maemma.current_question(CHAT, 1)
+    check("معما: سوال با شماره و کل بانک است", q is not None
+          and q["total"] == len(maemma.PUZZLES), f"{q}")
+    ev3 = Event()
+    r = await send(bot, ev3, CHAT, 1, q["answer"], name="A")
+    check("معما: پاسخ A مصرف شد", r is True)
+    check("معما: فقط پیام موفقیت نمایش داده شد",
+          any("پاسخ صحیح بود" in m for m in ev3.out), f"{ev3.out}")
+    check("معما: سوال بعدی خودکار ارسال نشد",
+          not any("سوال" in m and "از" in m for m in ev3.out), f"{ev3.out}")
+    check("معما: پیام «زمان تمام شد» بعد از جواب درست نیامد",
+          not any("زمان تمام شد" in m for m in ev3.out), f"{ev3.out}")
+    check("معما: A دقیقاً ۳ برنز گرفت",
+          len(bot.paid) == 1 and bot.paid[0] == (1, maemma.REWARD), f"{bot.paid}")
+    check("معما: سشن A بسته شد", not maemma.is_active(CHAT, 1))
 
 
 async def _test_maemma_concurrent():
@@ -161,7 +160,6 @@ async def _test_maemma_concurrent():
     sx = maemma.active_state(CHAT, 10)
     sy = maemma.active_state(CHAT, 20)
     check("معما: توکن‌های متفاوت", sx["token"] != sy["token"])
-    # سوال‌های دو کاربر مستقل‌اند
     qx = maemma.current_question(CHAT, 10)
     qy = maemma.current_question(CHAT, 20)
     check("معما: سوال‌های دو کاربر جدا", qx["answer"] != qy["answer"]
@@ -169,8 +167,7 @@ async def _test_maemma_concurrent():
     # پاسخ X سشن Y را نمی‌بندد
     ev = Event()
     await send(bot, ev, CHAT, 10, qx["answer"], name="X")
-    check("معما: X هنوز باز است (فقط یک سوال جواب داد)",
-          maemma.is_active(CHAT, 10))
+    check("معما: X بسته شد (بازی یک سوالی)", not maemma.is_active(CHAT, 10))
     check("معما: Y هنوز باز است", maemma.is_active(CHAT, 20))
 
 
@@ -180,74 +177,40 @@ async def _test_maemma_timeout():
     ev = Event()
     await send(bot, ev, CHAT, 1, "معما", name="A")
     state = maemma.active_state(CHAT, 1)
-    # شبیه‌سازی timeout
     result = maemma.finish(CHAT, state["token"], 1, bot.logger)
     check("معما: timeout بدون خطا بسته شد",
           result is not None and "answer" in result, f"{result}")
     check("معما: پس از timeout سشن بسته است", not maemma.is_active(CHAT, 1))
 
 
-async def _test_maemma_no_correct_no_end_message():
-    """اگر هیچ پاسخ صحیحی ثبت نشود، پیام پایان و جایزه نمایش داده نمی‌شود."""
+async def _test_maemma_no_auto_next_and_requires_command():
+    """بعد از پاسخ، سوال بعدی خودکار نمی‌آید؛ برای معما باید دوباره «معما» زد."""
     router.reset_all()
     bot = Bot()
+    await send(bot, Event(), CHAT, 1, "معما", name="A")
+    q = maemma.current_question(CHAT, 1)
     ev = Event()
-    await send(bot, ev, CHAT, 1, "معما", name="A")
-    state = maemma.active_state(CHAT, 1)
-    # بازی را با timeout (بدون پاسخ درست) می‌بندیم
-    maemma.finish(CHAT, state["token"], 1, bot.logger)
-    # شبیه‌سازی همان مسیر on_timeout روتر که نتیجهٔ صفر را می‌گیرد
-    ev = Event()
-    await router._show_maemma_result(ev, 0, maemma.QUESTIONS_PER_GAME, bot.logger)
-    check("معما: با پاسخِ صفر، پیام پایان ارسال نمی‌شود",
-          len(ev.out) == 0, f"{ev.out}")
-    # با پاسخِ درست، پیام پایان و جایزه نمایش داده می‌شود
-    ev = Event()
-    await router._show_maemma_result(ev, 2, maemma.QUESTIONS_PER_GAME, bot.logger)
-    check("معما: با پاسخ درست، پیام پایان نمایش داده می‌شود",
-          any("پایان بازی معما" in m for m in ev.out)
-          and any("+۶ سکه برنز" in m for m in ev.out),
-          f"{ev.out}")
+    await send(bot, ev, CHAT, 1, q["answer"], name="A")
+    # بعد از پاسخ: سشن بسته، هیچ سوالی خودکار نیامده
+    check("معما: بعد از پاسخ، بازی تمام شد", not maemma.is_active(CHAT, 1))
+    check("معما: سوال بعدی خودکار ارسال نشد",
+          not any("سوال" in m and "از" in m for m in ev.out), f"{ev.out}")
 
+    # بدون ارسال «معما»، پیامِ بعدی بازیِ تازه شروع نمی‌کند
+    ev2 = Event()
+    r = await send(bot, ev2, CHAT, 1, "چیزی", name="A")
+    check("معما: بدون دستور، بازیِ تازه شروع نشد",
+          r is False and not maemma.is_active(CHAT, 1), f"{r}")
 
-async def _test_maemma_three_questions():
-    """هر بازی معما شامل ۳ سوال بدون تکرار است و نتیجهٔ نهایی می‌دهد."""
-    router.reset_all()
-    bot = Bot()
-    ev = Event()
-    await send(bot, ev, CHAT, 1, "معما", name="A")
-    state = maemma.active_state(CHAT, 1)
-    check("معما: هر بازی ۳ سوال دارد",
-          len(state["questions"]) == 3, f"{len(state['questions'])}")
-    answers = [q["answer"] for q in state["questions"]]
-    check("معما: سوال‌های یک بازی تکراری نیستند",
-          len(set(answers)) == len(answers), f"{answers}")
-
-    # بعد از پاسخ هر سوال، سوال بعدی (با شمارهٔ بالاتر) نمایش داده می‌شود
-    import re as _re
-    for qnum in range(1, 3):
-        ev = Event()
-        await send(bot, ev, CHAT, 1, state["questions"][qnum - 1]["answer"], name="A")
-        # باید پیامِ سوالِ بعدی (شمارهٔ بزرگ‌تر) آمده باشد
-        def _num_of(m):
-            m = _re.search(r"سوال (\d+) از", m)
-            return int(m.group(1)) if m else None
-        nums = [_num_of(m) for m in ev.out]
-        nums = [n for n in nums if n is not None]
-        expected = nums[0] + 1 if nums else None
-        check(f"معما: بعد از سوال {qnum} سوال بعدی آمده",
-              any("سوال" in m and "از" in m for m in ev.out), f"{ev.out}")
-        check(f"معما: شمارهٔ سوال بعدی بیشتر است",
-              nums and nums[0] > state["questions"][qnum - 1].get("number", 0),
-              f"nums={nums}")
-
-    # جواب سوال سوم → نتیجهٔ نهایی
-    ev = Event()
-    await send(bot, ev, CHAT, 1, state["questions"][2]["answer"], name="A")
-    check("معما: نتیجهٔ نهایی نمایش داده شد",
-          any("پایان بازی معما" in m or "پاسخ" in m for m in ev.out),
-          f"{ev.out}")
-    check("معما: بعد از ۳ سوال سشن بسته شد", not maemma.is_active(CHAT, 1))
+    # با ارسال دوبارهٔ «معما» بازیِ جدید شروع می‌شود و شماره بالا می‌رود
+    ev3 = Event()
+    await send(bot, ev3, CHAT, 1, "معما", name="A")
+    q2 = maemma.current_question(CHAT, 1)
+    check("معما: با دستور دوباره، معما شروع شد", q2 is not None, f"{q2}")
+    check("معما: شمارهٔ سوال جدید افزایش یافت", q2["number"] > q["number"],
+          f"{q['number']} -> {q2['number']}")
+    check("معما: سوال جدید با سوال قبلی فرق دارد", q2["answer"] != q["answer"],
+          f"{q['answer']} vs {q2['answer']}")
 
 
 def _test_maemma_dedup_and_bank():
@@ -882,8 +845,7 @@ def main():
         await _test_maemma_owner_only()
         await _test_maemma_concurrent()
         await _test_maemma_timeout()
-        await _test_maemma_no_correct_no_end_message()
-        await _test_maemma_three_questions()
+        await _test_maemma_no_auto_next_and_requires_command()
         _test_maemma_dedup_and_bank()
 
         await _test_best_answer_flow()
