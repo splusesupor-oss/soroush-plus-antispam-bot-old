@@ -8,6 +8,7 @@
 """
 from economy import award_game as economy_award_game
 from economy import rewards as economy_rewards
+from splusthon.tl.types import MessageEntityBold
 from modules.fox_games import (
     battle,
     best_answer,
@@ -87,6 +88,42 @@ def _coins(bot, chat_id, user_id, name, amount, logger=None,
 def coin_word(game):
     """نام سکهٔ این بازی، برای متن پیام برنده."""
     return economy_rewards.coin_name(economy_rewards.coin_for(game))
+
+
+def _u16(text):
+    """طول یک رشته به واحد UTF-16 (همان واحدی که MessageEntityها استفاده می‌کنند)."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+async def _bold_reply(event, text, parts=()):
+    """پیام را با بخش‌های مشخص‌شده Bold می‌فرستد.
+
+    ``parts`` لیستی از زیررشته‌هایی است که باید Bold شوند؛ هر کجا در متن
+    بیایند Bold می‌شوند. اگر سرور entityها را نپذیرد (که روی برخی نسخهٔ
+    Soroush Plus رخ می‌دهد)، همان متن بدون قالب‌بندی فرستاده می‌شود تا
+    کاربر هیچ‌وقت «خروجی خالی» نبیند.
+    """
+    entities = []
+    for part in parts:
+        if not part:
+            continue
+        search = 0
+        while True:
+            pos = text.find(part, search)
+            if pos == -1:
+                break
+            entities.append(MessageEntityBold(
+                offset=_u16(text[:pos]),
+                length=_u16(part),
+            ))
+            search = pos + len(part)
+    try:
+        await event.reply(text, formatting_entities=entities or None)
+    except Exception:
+        try:
+            await event.reply(text)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -433,22 +470,28 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
 # ---------------------------------------------------------------------------
 async def _start_maemma(bot, event, chat_id, user_id, sender, logger):
     if maemma.is_active(chat_id, user_id):
-        await event.reply("⏳ شما یک معما دارید؛ اول همان را پاسخ دهید.")
+        await _bold_reply(event, "⏳ شما یک معما دارید؛ اول همان را پاسخ دهید.",
+                          ["⏳ شما یک معما دارید؛ اول همان را پاسخ دهید."])
         return True
     state = maemma.start(chat_id, user_id, logger)
     if state is None:
-        await event.reply("⏳ امکان شروع معما نیست؛ کمی بعد دوباره تلاش کنید.")
+        await _bold_reply(event, "⏳ امکان شروع معما نیست؛ کمی بعد دوباره تلاش کنید.",
+                          ["⏳ امکان شروع معما نیست؛ کمی بعد دوباره تلاش کنید."])
         return True
-    await event.reply(
-        "🧩 معما\\n\\n"
-        f"{state['emoji']}\\n\\n"
-        f"⏳ {to_persian_digits(maemma.TIMEOUT_SECONDS)} ثانیه فرصت دارید"
+    title = "🧩 معما"
+    time_line = f"⏳ {to_persian_digits(maemma.TIMEOUT_SECONDS)} ثانیه فرصت دارید"
+    text = (
+        f"{title}\n\n"
+        f"{state['emoji']}\n\n"
+        f"{time_line}"
     )
+    await _bold_reply(event, text, [title, time_line])
 
     async def on_timeout(answer_value):
-        await event.reply(
-            f"⏰ زمان تمام شد!\\n\\n✅ پاسخ درست:\\n{answer_value}"
-        )
+        t = "⏰ زمان تمام شد!"
+        a = "✅ پاسخ درست:"
+        text = f"{t}\n\n{a}\n{answer_value}"
+        await _bold_reply(event, text, [t, a, answer_value])
 
     maemma.schedule(
         chat_id, user_id, state["token"], on_timeout, logger=logger,
@@ -466,9 +509,10 @@ async def _maemma_message(bot, event, chat_id, user_id, sender, text, logger):
     paid = _coins(bot, chat_id, user_id, result["name"], maemma.REWARD,
                   logger, reference=f"maemma:{chat_id}:{user_id}:{result['token']}",
                   game="maemma")
-    reward = (f"\\n\\n🪙 +{to_persian_digits(maemma.REWARD)} سکه برنز"
+    title = "🎉 پاسخ صحیح بود!"
+    reward = (f"\n\n🪙 +{to_persian_digits(maemma.REWARD)} سکه برنز"
               if paid else "")
-    await event.reply(f"🎉 پاسخ صحیح بود!{reward}")
+    await _bold_reply(event, f"{title}{reward}", [title, reward.strip()])
     return True
 
 
@@ -476,23 +520,30 @@ async def _maemma_message(bot, event, chat_id, user_id, sender, text, logger):
 # 🎯 بهترین جواب
 # ---------------------------------------------------------------------------
 async def _start_best_answer(bot, event, chat_id, logger):
+    busy = "🎯 یک بازی «بهترین جواب» همین حالا در جریان است."
     if best_answer.is_active(chat_id):
-        await event.reply("🎯 یک بازی «بهترین جواب» همین حالا در جریان است.")
+        await _bold_reply(event, busy, [busy])
         return True
     session = best_answer.start(chat_id, logger)
     if session is None:
-        await event.reply("🎯 یک بازی «بهترین جواب» همین حالا در جریان است.")
+        await _bold_reply(event, busy, [busy])
         return True
-    await event.reply(
-        "🎯 بهترین جواب\\n\\n"
-        f"{session['question']}\\n\\n"
-        "پاسخ خود را بنویسید و بفرستید.\\n"
-        f"⏳ {to_persian_digits(best_answer.ANSWER_SECONDS)} ثانیه"
+    title = "🎯 بهترین جواب"
+    prompt = "پاسخ خود را بنویسید و بفرستید."
+    time_line = f"⏳ {to_persian_digits(best_answer.ANSWER_SECONDS)} ثانیه"
+    text = (
+        f"{title}\n\n"
+        f"{session['question']}\n\n"
+        f"{prompt}\n\n"
+        f"{time_line}"
     )
+    await _bold_reply(event, text,
+                      [title, session['question'], prompt, time_line])
 
     async def on_finish(winner):
         if winner is None:
-            await event.reply("🎯 هیچ پاسخ درستی ثبت نشد.")
+            msg = "🎯 هیچ پاسخ درستی ثبت نشد."
+            await _bold_reply(event, msg, [msg])
             return
         paid = _coins(
             bot, chat_id, winner["user_id"], winner["name"],
@@ -500,12 +551,12 @@ async def _start_best_answer(bot, event, chat_id, logger):
             reference=f"best_answer:{chat_id}:{winner['session_id']}",
             game="best_answer",
         )
-        reward = (f"\\n\\n🪙 +{to_persian_digits(best_answer.REWARD)} سکه برنز"
+        head = f"🏆 بهترین پاسخ: {winner['name']}"
+        quote = f"«{winner['text']}»"
+        reward = (f"\n\n🪙 +{to_persian_digits(best_answer.REWARD)} سکه برنز"
                   if paid else "")
-        await event.reply(
-            f"🏆 بهترین پاسخ: {winner['name']}\\n\\n"
-            f"«{winner['text']}»{reward}"
-        )
+        text = f"{head}\n\n{quote}{reward}"
+        await _bold_reply(event, text, [head, quote, reward.strip()])
 
     best_answer.schedule(
         chat_id, session["session_id"], on_finish, logger=logger,
@@ -522,7 +573,8 @@ async def _best_answer_message(bot, event, chat_id, user_id, sender, text, logge
         return False
     if result == "already":
         return True  # پاسخ قبلاً ثبت شده؛ ساکت
-    await event.reply("✅ پاسخ شما ثبت شد!")
+    msg = "✅ پاسخ شما ثبت شد!"
+    await _bold_reply(event, msg, [msg])
     return True
 
 
@@ -531,22 +583,28 @@ async def _best_answer_message(bot, event, chat_id, user_id, sender, text, logge
 # ---------------------------------------------------------------------------
 async def _start_battle(bot, event, chat_id, user_id, sender, logger):
     if battle.is_active(chat_id):
-        await event.reply(battle.ALREADY_RUNNING)
+        await _bold_reply(event, battle.ALREADY_RUNNING, [battle.ALREADY_RUNNING])
         return True
     session = battle.start(chat_id, user_id, display_name(sender), logger)
     if session is None:
-        await event.reply(battle.ALREADY_RUNNING)
+        await _bold_reply(event, battle.ALREADY_RUNNING, [battle.ALREADY_RUNNING])
         return True
-    await event.reply(
-        "⚔️ نبرد شروع شد!\\n\\n"
-        "شما بازیکن اول هستید.\\n"
-        "برای پیوستن بازیکن دوم بنویسید:\\n"
-        "شرکت\\n\\n"
-        f"⏳ مهلت ثبت‌نام: {to_persian_digits(battle.JOIN_SECONDS)} ثانیه"
+    title = "⚔️ نبرد شروع شد!"
+    you = "شما بازیکن اول هستید."
+    join_prompt = "برای پیوستن بازیکن دوم بنویسید:"
+    join_word = "شرکت"
+    time_line = f"⏳ مهلت ثبت‌نام: {to_persian_digits(battle.JOIN_SECONDS)} ثانیه"
+    text = (
+        f"{title}\n\n"
+        f"{you}\n"
+        f"{join_prompt}\n"
+        f"{join_word}\n\n"
+        f"{time_line}"
     )
+    await _bold_reply(event, text, [title, you, join_prompt, join_word, time_line])
 
     async def on_abort():
-        await event.reply(battle.NOT_ENOUGH)
+        await _bold_reply(event, battle.NOT_ENOUGH, [battle.NOT_ENOUGH])
 
     battle.schedule_join_timeout(
         chat_id, session["session_id"], on_abort, logger=logger,
@@ -565,34 +623,41 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
         result, players = battle.join(
             chat_id, user_id, display_name(sender), logger)
         if result == "duplicate":
-            await event.reply("⚠️ شما بازیکن اول هستید؛ نمی‌توانید دوباره وارد شوید.")
+            msg = "⚠️ شما بازیکن اول هستید؛ نمی‌توانید دوباره وارد شوید."
+            await _bold_reply(event, msg, [msg])
             return True
         if result == "full":
-            await event.reply("⚠️ نبرد همین حالا پر است.")
+            msg = "⚠️ نبرد همین حالا پر است."
+            await _bold_reply(event, msg, [msg])
             return True
         if result == "not_open":
             return False
-        await event.reply("⚔️ بازیکن دوم پیوست! نبرد شروع می‌شود...")
+        joined = "⚔️ بازیکن دوم پیوست! نبرد شروع می‌شود..."
+        await _bold_reply(event, joined, [joined])
         session = battle.begin(chat_id, logger)
         if session is None:
             return True
         p1, p2 = session["p1"], session["p2"]
 
         async def on_question(num, q, assignee):
-            name = p1["name"] if assignee == p1["user_id"] else p2["name"]
-            await event.reply(
-                f"⚔️ سوال {to_persian_digits(num)}\\n\\n"
-                f"{q['question']}\\n\\n"
-                f"⏳ {to_persian_digits(battle.ANSWER_SECONDS)} ثانیه\\n"
-                f"برای: {name}"
+            title = f"⚔️ سوال {to_persian_digits(num)}"
+            time_line = f"⏳ {to_persian_digits(battle.ANSWER_SECONDS)} ثانیه"
+            for_line = f"برای: {p1['name'] if assignee == p1['user_id'] else p2['name']}"
+            text = (
+                f"{title}\n\n"
+                f"{q['question']}\n\n"
+                f"{time_line}\n"
+                f"{for_line}"
             )
+            await _bold_reply(event, text,
+                              [title, q['question'], time_line, for_line])
 
         async def on_finish(result):
-            lines = [
-                "🏁 پایان نبرد!",
-                f"{result['p1']['name']}: {to_persian_digits(result['score1'])}",
-                f"{result['p2']['name']}: {to_persian_digits(result['score2'])}",
-            ]
+            lines = ["🏁 پایان نبرد!"]
+            score1 = f"{result['p1']['name']}: {to_persian_digits(result['score1'])}"
+            score2 = f"{result['p2']['name']}: {to_persian_digits(result['score2'])}"
+            lines.append(score1)
+            lines.append(score2)
             if result["winner"] is not None:
                 w_name = (result["p1"]["name"]
                           if result["winner"] == result["p1"]["user_id"]
@@ -612,7 +677,8 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
                         f"🪙 {result['loser_info']['name']} (بازنده) "
                         f"+{to_persian_digits(battle.REWARD)} سکه برنز"
                     )
-            await event.reply("\\n".join(lines))
+            parts = list(lines)
+            await _bold_reply(event, "\n".join(lines), parts)
 
         battle.schedule_game(chat_id, on_question, on_finish, logger=logger)
         return True
@@ -623,7 +689,8 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
             p1 = battle.players(chat_id)
             uids = {p["user_id"] for p in p1 if p}
             if user_id not in uids:
-                await event.reply("⚠️ نبرد همین حالا در جریان است؛ نمی‌توانید وارد شوید.")
+                msg = "⚠️ نبرد همین حالا در جریان است؛ نمی‌توانید وارد شوید."
+                await _bold_reply(event, msg, [msg])
                 return True
         result, _info = battle.answer(chat_id, user_id, text, logger)
         if result in {"no_game", "no_question"}:
@@ -633,10 +700,12 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
         if result == "already":
             return True
         if result == "correct":
-            await event.reply("✅ درست بود!")
+            msg = "✅ درست بود!"
+            await _bold_reply(event, msg, [msg])
             return True
         if result == "wrong":
-            await event.reply("❌ پاسخ اشتباه بود.")
+            msg = "❌ پاسخ اشتباه بود."
+            await _bold_reply(event, msg, [msg])
             return True
     return False
 

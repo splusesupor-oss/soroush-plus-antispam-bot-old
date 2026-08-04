@@ -438,6 +438,113 @@ async def _test_restart_isolation():
 
 
 # ===========================================================================
+#  قالب‌بندی (Bold) پیام بازی‌ها
+# ===========================================================================
+class CapturingEvent:
+    """رویدادی که text و formatting_entities را برای بررسی می‌گیرد."""
+
+    def __init__(self):
+        self.messages = []
+
+    async def reply(self, text, **kwargs):
+        self.messages.append((text, kwargs.get("formatting_entities")))
+        return None
+
+
+def _bold_words(text, entities):
+    encoded = text.encode("utf-16-le")
+    words = []
+    for e in (entities or []):
+        words.append(
+            encoded[e.offset * 2:(e.offset + e.length) * 2].decode("utf-16-le")
+        )
+    return words
+
+
+async def _test_bold_start_messages():
+    """هر سه بازی پیام شروع را با خطوط واقعی و Bold می‌فرستند."""
+    router.reset_all()
+    bot = Bot()
+
+    # معما
+    ev = CapturingEvent()
+    await send(bot, ev, CHAT, 1, "معما", name="A")
+    text, ents = ev.messages[0]
+    check("معما: بدون کاراکتر \n\u200cلیترال", "\\n" not in text, f"{text!r}")
+    bw = _bold_words(text, ents)
+    check("معما: عنوان Bold", "🧩 معما" in bw, f"{bw}")
+    check("معما: زمان Bold", "⏳ ۴۰ ثانیه فرصت دارید" in bw, f"{bw}")
+    router.reset_all()
+
+    # بهترین جواب
+    ev = CapturingEvent()
+    await send(bot, ev, CHAT, 1, "بهترین جواب")
+    text, ents = ev.messages[0]
+    check("بهترین جواب: بدون \n\u200cلیترال", "\\n" not in text, f"{text!r}")
+    bw = _bold_words(text, ents)
+    check("بهترین جواب: عنوان Bold", "🎯 بهترین جواب" in bw, f"{bw}")
+    check("بهترین جواب: سوال Bold", any(
+        "چرا" in w or "؟" in w for w in bw), f"{bw}")
+    check("بهترین جواب: زمان Bold", "⏳ ۴۰ ثانیه" in bw, f"{bw}")
+    router.reset_all()
+
+    # نبرد
+    ev = CapturingEvent()
+    await send(bot, ev, CHAT, 100, "نبرد", name="P1")
+    text, ents = ev.messages[0]
+    check("نبرد: بدون \n\u200cلیترال", "\\n" not in text, f"{text!r}")
+    bw = _bold_words(text, ents)
+    check("نبرد: عنوان Bold", "⚔️ نبرد شروع شد!" in bw, f"{bw}")
+    check("نبرد: دستور «شرکت» Bold", "شرکت" in bw, f"{bw}")
+    check("نبرد: زمان ثبت‌نام Bold", any("۶۰ ثانیه" in w for w in bw), f"{bw}")
+    router.reset_all()
+
+
+async def _test_bold_question_and_finish_messages():
+    """پیام سوال، پاسخ و پایان نبرد هم Bold هستند."""
+    router.reset_all()
+    bot = Bot()
+    for g in ("maemma", "best_answer", "battle"):
+        import economy.game_progress as gp
+        gp.clear_recent(CHAT, g)
+
+    # بهترین جواب: پیام برنده Bold
+    await send(bot, Event(), CHAT, 1, "بهترین جواب")
+    sess = best_answer._STORE.get(CHAT)
+    best_answer.submit(CHAT, 2, "B", " ".join(sess["keywords"]), bot.logger)
+    winner = best_answer.judge(CHAT, sess["session_id"], bot.logger)
+    head = f"🏆 بهترین پاسخ: {winner['name']}"
+    quote = f"«{winner['text']}»"
+    txt = f"{head}\n\n{quote}"
+    ev = CapturingEvent()
+    await router._bold_reply(ev, txt, [head, quote])
+    text, ents = ev.messages[0]
+    bw = _bold_words(text, ents)
+    check("بهترین جواب: برنده Bold", head in bw and quote in bw, f"{bw}")
+    router.reset_all()
+
+    # نبرد: سوال و پایان Bold
+    ev = CapturingEvent()
+    await send(bot, ev, CHAT, 100, "نبرد", name="P1")
+    join_ev = CapturingEvent()
+    await send(bot, join_ev, CHAT, 200, "شرکت", name="P2")
+    for _ in range(50):
+        cur = battle.current_question(CHAT)
+        if cur:
+            break
+        await asyncio.sleep(0.01)
+    q_msg = next(((t, e) for t, e in join_ev.messages if "سوال" in t), None)
+    check("نبرد: سوال ارسال شد", q_msg is not None)
+    if q_msg:
+        text, ents = q_msg
+        check("نبرد: سوال بدون \n\u200cلیترال", "\\n" not in text, f"{text!r}")
+        bw = _bold_words(text, ents)
+        check("نبرد: عنوان سوال Bold", any("سوال" in w for w in bw), f"{bw}")
+        check("نبرد: زمان سوال Bold", "⏳ ۳۰ ثانیه" in bw, f"{bw}")
+    router.reset_all()
+
+
+# ===========================================================================
 #  راهنما / لیست / راهنمای امتیاز
 # ===========================================================================
 def _test_help_list_guide():
@@ -490,6 +597,9 @@ def main():
         await _test_battle_chat_isolation()
 
         await _test_restart_isolation()
+
+        await _test_bold_start_messages()
+        await _test_bold_question_and_finish_messages()
 
         _test_help_list_guide()
 
