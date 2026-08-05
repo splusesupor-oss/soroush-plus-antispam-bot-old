@@ -101,7 +101,7 @@ BUSY_GROUP = "⏳ یک دانلود عکس در همین گروه در حال پ
 BUSY_USER = "⏳ شما درخواستِ دانلود عکسِ در حال پردازش دارید؛ لطفاً صبر کنید."
 ASK_QUERY = "🖼️ چه تصویری می‌خواهید؟ عبارت موردنظر خود را بنویسید."
 ERROR_MSG = "❌ مشکلی در جستجو/دانلود پیش آمد؛ دوباره تلاش کنید. هیچ سکه‌ای کم نشد."
-NO_RESULTS = "🔍 نتیجه‌ای برای این عبارت پیدا نشد؛ هیچ سکه‌ای کم نشد."
+NO_RESULTS = "❌ تصویر مرتبطی پیدا نشد، دوباره تلاش کنید. هیچ سکه‌ای کم نشد."
 
 # ---------------------------------------------------------------------------
 #  کلمات/عبارت‌های ممنوع — فارسی و انگلیسی
@@ -267,8 +267,79 @@ def _is_direct_image_url(url):
     return bool(_IMAGE_EXT_RE.search(url))
 
 
+# کلماتِ پرتکرار/غیر معنادار که برایِ سنجشِ ارتباط نباید شمرده شوند.
+_STOPWORDS = {"عکس", "تصویر", "تصاویر", "های", "و", "با", "به", "از", "یک",
+              "برای", "تصویر", "عکسی", "لاکپشت", "photo", "image", "pic",
+              "the", "a", "an", "of", "for", "and"}
+
+# نگاشتِ کوچکِ فارسی → انگلیسی برایِ کلماتِ پرکاربرد، تا جستجویِ انگلیسیِ
+# مرتبط هم انجام شود (مثل «لاکپشت» → turtle / «نینجا» → ninja).
+_FA_EN_HINTS = {
+    "لاکپشت": "turtle", "لاک پشت": "turtle", "لاکپشتی": "tortoise",
+    "نینجا": "ninja", "سگ": "dog", "گربه": "cat", "گل": "flower",
+    "لاکپشت های نینجا": "ninja turtle", "لاک پشت های نینجا": "ninja turtle",
+    "نینجا لاکپشت": "ninja turtle", "کریستیانو": "cristiano ronaldo",
+    "رونالدو": "ronaldo",
+    "گل رز": "rose", "کوه": "mountain", "منظره": "landscape",
+    "ماشین": "car", "ماشین مسابقه": "race car", "طبیعت": "nature",
+    "آسمان": "sky", "دریا": "sea", "جنگل": "forest", "پرنده": "bird",
+    "ماهی": "fish", "اسب": "horse", "ببر": "tiger", "شیر": "lion",
+    "خرس": "bear", "گرگ": "wolf", "روباه": "fox", "پاندا": "panda",
+    "سنجاب": "squirrel", "خرگوش": "rabbit", "فیل": "elephant",
+    "زرافه": "giraffe", "کانگورو": "kangaroo", "پنگوئن": "penguin",
+    "خورشید": "sun", "ماه": "moon", "ستاره": "star", "باران": "rain",
+    "برف": "snow", "غروب": "sunset", "طلوع": "sunrise",
+}
+
+
+def _search_keywords(query):
+    """کلیدواژه‌هایِ جستجو را می‌سازد (عبارت + نویسه‌گردانی + انگلیسی).
+
+    برایِ سنجشِ ارتباط استفاده می‌شود: اگر این کلیدواژه‌ها در عنوان/برچسبِ
+    تصویر یا URL باشد، تصویر «مرتبط» تلقی می‌شود.
+    """
+    kws = set()
+    q = query.strip()
+    if not q:
+        return kws, []
+    # کلیدواژه‌هایِ خودِ عبارت
+    for tok in q.split():
+        if tok and tok not in _STOPWORDS:
+            kws.add(tok.lower())
+    # نویسه‌گردانیِ لاتین
+    latin = _transliterate_fa(q)
+    for tok in latin.split():
+        tok = tok.lower()
+        if tok and len(tok) >= 2:
+            kws.add(tok)
+    # عباراتِ انگلیسیِ جایگزین (از نگاشتِ کوچک).
+    # مرتبهٔ «مشخص‌ترین» عبارت اول انتخاب می‌شود (مثلاً «لاکپشت های نینجا»
+    # قبل از «لاکپشت») تا جستجویِ دقیق‌تری انجام شود.
+    search_queries = [q]
+    matched = [en for fa, en in _FA_EN_HINTS.items() if fa in q]
+    if matched:
+        english_hint = max(matched, key=len)  # مشخص‌ترین (طولانی‌ترین) نگاشت
+        search_queries.append(english_hint)
+        for tok in english_hint.split():
+            kws.add(tok.lower())
+    kws.discard("")
+    return kws, search_queries
+
+
+def _relevance_score(title, tags, url, keywords):
+    """امتیازِ ارتباطِ یک تصویر با کلیدواژه‌هایِ جستجو."""
+    if not keywords:
+        return 0
+    text = (" ".join([title or "", " ".join(tags or []), url or ""])).lower()
+    score = 0
+    for kw in keywords:
+        if kw and kw in text:
+            score += 1
+    return score
+
+
 def _search_openverse(query, limit):
-    """جستجو در Openverse (واقعی و مرتبط‌تر، مخصوصاً برای فارسی)."""
+    """جستجو در Openverse؛ برمی‌گرداند لیستِ (url, title, tags)."""
     from urllib.parse import quote
     headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -281,82 +352,59 @@ def _search_openverse(query, limit):
     if resp.status_code != 200:
         return []
     data = resp.json()
-    seen = []
+    out = []
+    seen = set()
     for item in data.get("results", []):
         u = (item.get("url") or "").strip()
-        if u and "http" in u and u not in seen:
-            seen.append(u)
-    return [u for u in seen if _is_direct_image_url(u)][:limit]
-
-
-def _search_bing(query, limit):
-    """جستجو در Bing Image (مکمل)."""
-    from urllib.parse import quote
-    headers = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/120.0 Safari/537.36"),
-    }
-    url = "https://www.bing.com/images/search?q=" + quote(query)
-    resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
-    if resp.status_code != 200:
-        return []
-    html = resp.text
-    urls = re.findall(r'murl&quot;:&quot;([^&]+)&quot;', html)
-    urls += re.findall(r'"murl":"([^"]+)"', html)
-    seen = []
-    for u in urls:
-        u = u.replace("\\/", "/").strip()
-        if u and "http" in u and u not in seen:
-            seen.append(u)
-    return [u for u in seen if _is_direct_image_url(u)][:limit]
+        if not (u and "http" in u and u not in seen):
+            continue
+        if not _is_direct_image_url(u):
+            continue
+        seen.add(u)
+        title = item.get("title") or ""
+        tags = [t.get("name") for t in (item.get("tags") or []) if t.get("name")]
+        out.append((u, title, tags))
+        if len(out) >= limit * 3:  # جمع‌آوریِ بیشتر برایِ انتخابِ مرتبط‌ترین
+            break
+    return out
 
 
 def _search_image_urls(query, limit=IMAGE_COUNT):
-    """عبارت را جستجو و آدرسِ مستقیمِ تصویرِ مرتبط را برمی‌گرداند (همگام).
+    """جستجویِ مرتبط: فقط عکس‌هایی که با query ارتباط دارند برمی‌گرداند.
 
-    استراتژیِ بهتر برای فارسی:
-      ۱) Openverse — نتایجِ مرتبط و پایدار (پاسخِ خوب برای فارسی).
-      ۲) اگر عبارت فارسی بود، با نویسه‌گردانیِ لاتین (مثل «رونالدو» → ronaldo)
-         هم جستجو می‌شود تا نتایجِ انگلیسیِ مرتبط هم بیاید.
-      ۳) Bing به‌عنوان مکمل.
-    خروجی فقط «آدرسِ فایلِ تصویر» است (لینکِ صفحه/مقاله نه) و لینک‌هایِ
-    اسپم/فروشگاهی/نامرتبط حذف شده‌اند.
+    استراتژی:
+      ۱) فقط منبعِ Openverse (مطمئن و مرتبط). Bing حذف شد چون برایِ فارسی
+         نتایجِ تصادفی/اسپم می‌دهد.
+      ۲) جستجو با عبارت + نویسه‌گردانیِ لاتین + عبارتِ انگلیسیِ نگاشت‌شده.
+      ۳) برایِ هر نتیجه، «امتیازِ ارتباط» با کلیدواژه‌هایِ جستجو سنجیده می‌شود.
+      ۴) فقط نتایجِ مرتبط (score>=۱) برگردانده می‌شوند؛ اگر هیچ‌کدام مرتبط
+         نبود، لیستِ خالی (برایِ نمایشِ پیامِ «تصویرِ مرتبط پیدا نشد»).
     """
-    combined = []
+    keywords, search_queries = _search_keywords(query)
+    if not keywords:
+        return []
 
-    # ۱) Openverse با خودِ عبارت
-    try:
-        combined += _search_openverse(query, limit)
-    except Exception:
-        pass
-
-    # ۲) اگر عبارت فارسی بود، با نویسهٔ لاتینِ آن هم جستجو کن
-    latin = _transliterate_fa(query)
-    if latin and latin.lower() != query.lower():
+    candidates = []  # (url, title, tags)
+    for sq in search_queries:
         try:
-            combined += _search_openverse(latin, limit)
+            candidates += _search_openverse(sq, limit)
         except Exception:
             pass
 
-    # ۳) Bing (هم با عبارت و هم لاتین)
-    for q in (query, latin):
-        if not q:
+    # امتیازِ ارتباط و مرتب‌سازی
+    scored = []
+    seen_urls = set()
+    for url, title, tags in candidates:
+        if url in seen_urls:
             continue
-        try:
-            combined += _search_bing(q, limit)
-        except Exception:
-            pass
+        seen_urls.add(url)
+        score = _relevance_score(title, tags, url, keywords)
+        if score >= 1:
+            scored.append((score, url))
 
-    # حذفِ تکراری و قطع روی limit
-    seen, out = set(), []
-    for u in combined:
-        if u and u not in seen:
-            seen.add(u)
-            out.append(u)
-        if len(out) >= limit:
-            break
-    return out[:limit]
+    # مرتب از مرتبط‌ترین به کم‌مرتبط‌ترین
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [url for _score, url in scored[:limit]]
 
 
 def _is_valid_image_bytes(content):
@@ -661,6 +709,15 @@ def close_session(chat_id, user_id):
     _SESSIONS.pop((chat_id, user_id), None)
 
 
+def _is_main_owner(user_id):
+    """فقط مالکِ اصلیِ ربات (osine1) برایِ تست، بدونِ سکه استفاده می‌کند."""
+    try:
+        from modules.owner_check import is_global_owner
+        return is_global_owner(user_id)
+    except Exception:
+        return False
+
+
 def handle_query(chat_id, user_id, query):
     """بعد از دریافت عبارت، عبارت را ذخیره و پیام تأیید برمی‌گرداند.
 
@@ -676,10 +733,13 @@ def handle_query(chat_id, user_id, query):
         close_session(chat_id, user_id)
         return "blocked", BLOCKED_CONTENT
 
-    balance = economy.get_balance(chat_id, user_id)
-    if balance.get(economy.BRONZE, 0) < COST_PER_IMAGE:
-        close_session(chat_id, user_id)
-        return "insufficient", INSUFFICIENT
+    # فقط مالکِ اصلی (osine1) برایِ تست، بدونِ نیاز به سکه است؛
+    # سایرِ مالکان/ادمین‌ها همچنان باید سکه داشته باشند.
+    if not _is_main_owner(user_id):
+        balance = economy.get_balance(chat_id, user_id)
+        if balance.get(economy.BRONZE, 0) < COST_PER_IMAGE:
+            close_session(chat_id, user_id)
+            return "insufficient", INSUFFICIENT
 
     s["query"] = query
     s["ts"] = time.monotonic()
@@ -787,18 +847,24 @@ async def process(chat_id, user_id, bot):
 
         # ۵) کسرِ سکه — فقط بعد از موفقیتِ واقعیِ ارسال.
         #    هزینه = ۱۰ برنز به‌ازای هر عکسِ ارسال‌شده (۱ عکس = ۱۰، ۲ عکس = ۲۰).
-        cost = COST_PER_IMAGE * delivered
-        try:
-            economy.spend(
-                chat_id, user_id, cost, economy.BRONZE,
-                reference=f"photo_download:{chat_id}:{user_id}:{int(time.time())}",
-                note=f"دانلود عکس ({delivered} تصویر)",
-            )
-        except Exception:
-            _log_exception(bot, f"PHOTO DOWNLOAD FAILED (spend) chat_id={chat_id} "
-                                f"user_id={user_id} cost={cost}")
-            close_session(chat_id, user_id)
-            return "error", ERROR_MSG
+        #    مالکِ اصلی (osine1) برایِ تست بدونِ کسرِ سکه استفاده می‌کند.
+        cost = 0
+        if _is_main_owner(user_id):
+            _log(bot, f"PHOTO OWNER TEST chat_id={chat_id} user_id={user_id} "
+                      f"delivered={delivered} (no charge)")
+        else:
+            cost = COST_PER_IMAGE * delivered
+            try:
+                economy.spend(
+                    chat_id, user_id, cost, economy.BRONZE,
+                    reference=f"photo_download:{chat_id}:{user_id}:{int(time.time())}",
+                    note=f"دانلود عکس ({delivered} تصویر)",
+                )
+            except Exception:
+                _log_exception(bot, f"PHOTO DOWNLOAD FAILED (spend) chat_id={chat_id} "
+                                    f"user_id={user_id} cost={cost}")
+                close_session(chat_id, user_id)
+                return "error", ERROR_MSG
 
         close_session(chat_id, user_id)
         return "done", f"✅ {delivered} تصویر ارسال شد. {cost} سکه برنز کسر شد."

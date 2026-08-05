@@ -206,7 +206,7 @@ def test_charge_only_after_images_ready():
             await asyncio.sleep(0)
             return ev.out
         out = asyncio.run(scenario())
-        outcome = "no_results" if any("نتیجه" in m for m in out) else "done"
+        outcome = "no_results" if any("مرتبط" in m for m in out) else "done"
         check("بدون نتیجه → no_results", outcome == "no_results", f"{outcome} {out}")
         check("هیچ تصویری ارسال نشد", bot.client.sent == 0, f"{bot.client.sent}")
         check("قفل گروه آزاد شد", chat not in pd._BUSY_GROUPS)
@@ -877,6 +877,40 @@ def test_links_message_numbered_and_blockquote():
           all(isinstance(e, MessageEntityBlockquote) for e in entities))
 
 
+def test_relevance_filter():
+    """فقط تصاویری که با query مرتبط‌اند (عنوان/برچسب) قبول می‌شوند."""
+    kw, _ = pd._search_keywords("گربه")
+    # مرتبط
+    check("عنوانِ حاوی «گربه» مرتبط است",
+          pd._relevance_score("یک گربه زیبا", [], "http://x", kw) >= 1)
+    check("برچسبِ cat مرتبط است",
+          pd._relevance_score("", ["cat"], "http://x", kw) >= 1)
+    # نامرتبط (عنوانِ کاملاً بی‌ربط)
+    check("عنوانِ بی‌ربط رد می‌شود",
+          pd._relevance_score("ماشین مسابقه هوندا", [], "http://x", kw) == 0)
+
+
+def test_owner_bypass_insufficient():
+    """مالکِ اصلی (osine1) بدونِ سکه هم ادامه می‌دهد؛ سایرین خیر."""
+    from modules.owner_check import get_owner
+    owner_id = get_owner()["user_id"]
+    pd.reset_all()
+    _economy.reset_all()
+    # مالک اصلی → بدون سکه باید ask_confirm شود
+    pd.start_session(-6001, owner_id)
+    result, _ = pd.handle_query(-6001, owner_id, "گربه")
+    check("مالکِ اصلی بدونِ سکه → ask_confirm",
+          result == "ask_confirm", f"{result}")
+    pd.reset_all()
+    # کاربرِ عادی بدونِ سکه → insufficient
+    _economy.reset_all()
+    pd.start_session(-6002, 999999)
+    result2, _ = pd.handle_query(-6002, 999999, "گربه")
+    check("کاربرِ عادی بدونِ سکه → insufficient",
+          result2 == "insufficient", f"{result2}")
+    pd.reset_all()
+
+
 def test_confirm_text_exact():
     """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
     pd.reset_all()
@@ -928,6 +962,8 @@ def main():
     test_is_direct_image_url()
     test_spam_url_filter()
     test_links_message_numbered_and_blockquote()
+    test_relevance_filter()
+    test_owner_bypass_insufficient()
     test_confirm_text_exact()
 
     print(f"\npassed={PASSED} failed={FAILED}")
