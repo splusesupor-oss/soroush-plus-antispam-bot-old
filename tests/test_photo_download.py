@@ -954,10 +954,26 @@ def test_general_hints():
         "برج ایفل": "eiffel tower",
         "کوه دماوند": "damavand",
         "لباس": "clothing",
+        "پرفایل دخترونه": "girl portrait",
+        "دختر": "girl",
+        "پروفایل": "profile",
     }
     for fa, en in cases.items():
         _, _, hint = pd._search_keywords(fa)
         check(f"{fa} → {en}", hint == en, f"got {hint!r}")
+
+
+def test_wikimedia_source():
+    """Wikimedia Commons باید نامزد برمی‌گرداند (منبعِ دوم/فارسی)."""
+    # در صورتِ قطعِ موقتِ شبکه، یک بار تلاشِ مجدد می‌کند
+    res = []
+    for _ in range(2):
+        res = pd._search_wikimedia("پروفایل", 3)
+        if res:
+            break
+    check("ویکی‌انبار نامزد دارد", len(res) >= 1, f"{len(res)}")
+    for url, title, _ in res[:1]:
+        check("URL معتبر است", url.startswith("http"), url)
 
 
 def test_normal_queries_not_blocked():
@@ -1059,6 +1075,7 @@ def main():
     test_strong_relevance_requires_all_hint_words()
     test_celebrity_hints()
     test_general_hints()
+    test_wikimedia_source()
     test_normal_queries_not_blocked()
     test_search_cache()
     test_owner_bypass_insufficient()

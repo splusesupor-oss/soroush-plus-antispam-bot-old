@@ -312,6 +312,11 @@ _FA_EN_HINTS = {
     "دستکش": "gloves", "جوراب": "socks", "لباس ورزشی": "sportswear",
     "ساعت": "watch", "عینک": "glasses", "کیف": "bag", "کوله‌پشتی": "backpack",
     "عینک آفتابی": "sunglasses", "جواهرات": "jewelry", "انگشتر": "ring",
+    "پروفایل": "profile", "پرفایل": "profile", "عکس پروفایل": "profile picture",
+    "دختر": "girl", "دخترونه": "girl", "دختران": "girls", "دختر زیبا": "beautiful girl",
+    "پسر": "boy", "پسرونه": "boy", "زن": "woman", "مرد": "man",
+    "پرفایل دخترونه": "girl portrait", "پروفایل دخترانه": "girl portrait",
+    "پروفایل دخترونه": "girl portrait", "پرفایل پسرونه": "boy portrait",
     "غذا": "food", "میوه": "fruit", "سیب": "apple", "موز": "banana",
     "پرتقال": "orange", "گوجه": "tomato", "هویج": "carrot", "گلابی": "pear",
     "انگور": "grape", "هندوانه": "watermelon", "توت": "berry",
@@ -484,6 +489,42 @@ def _search_openverse(query, limit):
     return out
 
 
+def _search_wikimedia(query, limit):
+    """جستجو در Wikimedia Commons — محتوای فارسیِ خوبی دارد.
+
+    برایِ عبارت‌هایِ فارسی که Openverse نتیجه نمی‌دهد، منبعِ دوم است.
+    برمی‌گرداند لیستِ (url, title, []).
+    """
+    from urllib.parse import quote
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0 Safari/537.36"),
+    }
+    try:
+        url = ("https://commons.wikimedia.org/w/api.php?action=query"
+               "&generator=search&gsrsearch=" + quote(query) +
+               "&gsrnamespace=6&gsrlimit=" + str(limit * 3) +
+               "&prop=imageinfo&iiprop=url&iiurlwidth=800&format=json")
+        data = _HTTP.get(url, headers=headers, timeout=NETWORK_TIMEOUT).json()
+    except Exception:
+        return []
+    out = []
+    seen = set()
+    for p in (data.get("query", {}).get("pages", {}) or {}).values():
+        ii = (p.get("imageinfo") or [{}])[0]
+        u = (ii.get("thumburl") or ii.get("url") or "").strip()
+        if not (u and "http" in u and u not in seen):
+            continue
+        if not _is_direct_image_url(u):
+            continue
+        seen.add(u)
+        out.append((u, p.get("title") or "", []))
+        if len(out) >= limit * 3:
+            break
+    return out
+
+
 def _search_image_urls(query, limit=IMAGE_COUNT):
     """جستجویِ مرتبط: فقط عکس‌هایی که با query ارتباط دارند برمی‌گرداند.
 
@@ -511,10 +552,16 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
     if english_hint and english_hint in _FA_PEOPLE_HINTS.values():
         search_queries_used = [english_hint]
 
+    # جمع‌آوریِ نامزدها از چند منبع (fallback): اول Openverse، بعد Wikimedia
+    # (که محتوایِ فارسیِ خوبی دارد)، تا مثلِ موتورِ جستجو عمل کند.
     candidates = []  # (url, title, tags)
     for sq in search_queries_used:
         try:
             candidates += _search_openverse(sq, limit)
+        except Exception:
+            pass
+        try:
+            candidates += _search_wikimedia(sq, limit)
         except Exception:
             pass
 
