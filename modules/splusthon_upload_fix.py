@@ -133,23 +133,22 @@ def _sender_alive(sender):
 async def _get_media_sender(client):
     """sender مخصوصِ آپلود را برای این کلاینت می‌سازد/برمی‌گرداند (یا None).
 
-    اگر ساخت قبلاً شکست خورده باشد (``_media_sender_failed``)، برای جلوگیری
-    از تلاشِ تکراریِ بی‌نتیجه سریعاً None برمی‌گرداند.
+    - اگر sender موجود و زنده است → همان.
+    - اگر قبلاً قطع شده/ساخته نشده → دوباره می‌سازد (rebuild). یک شکستِ
+      موقت باعث نمی‌شود برای همیشه بلاک بماند.
+    - اگر ساخت در این لحظه شکست خورد → None (هرگز به main sender برنمی‌گردد).
     """
     sender = getattr(client, "_media_sender", None)
     if sender is not None and _sender_alive(sender):
         return sender
-    if getattr(client, "_media_sender_failed", False):
-        return None
 
     if not await _ensure_config(client):
         _log.error("MEDIA SENDER unavailable: client._config is None")
-        client._media_sender_failed = True
         return None
 
     dc = _find_media_dc(client) or _fallback_dc(client)
     _log.info(
-        "MEDIA SENDER selected dc=%s ip=%s port=%s media_only=%s",
+        "MEDIA SENDER (re)build dc=%s ip=%s port=%s media_only=%s",
         getattr(dc, "id", None),
         getattr(dc, "ip_address", None),
         getattr(dc, "port", None),
@@ -166,7 +165,6 @@ async def _get_media_sender(client):
             type(e).__name__,
             e,
         )
-        client._media_sender_failed = True
         return None
     client._media_sender = sender
     return sender

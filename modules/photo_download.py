@@ -44,6 +44,9 @@ IMAGE_COUNT = 2       # حداکثر ۲ عکس در هر درخواست
 SEARCH_CANDIDATES = 8  # تعدادِ نامزدِ جستجو برای اینکه حداقل ۲ عکسِ معتبر پیدا شود
 SEND_RETRIES = 2      # تلاش مجدد برای ارسالِ هر عکس در صورت خطای گذرا
 NETWORK_TIMEOUT = (10, 20)
+# حداکثرِ زمانِ کلِ یک لینک (دانلود + ارسال). اگر لینکی بیشتر از این طول کشید،
+# رد می‌شود و سراغِ لینکِ بعدی می‌رویم تا کل عملیات مدت‌ها درگیر یک لینک نشود.
+LINK_TIMEOUT = 15
 
 # پسوندِ فایلِ تصویر — برای تشخیصِ آدرسِ مستقیمِ فایل
 _IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|gif|webp|avif|bmp)([?#;].*)?$", re.I)
@@ -406,25 +409,27 @@ async def _send_by_url(bot, chat_id, url):
 async def _send_image(bot, chat_id, url):
     """ارسالِ یک عکس به چت؛ برمی‌گرداند True اگر موفق.
 
-    ترتیبِ روشِ ارسال (با لاگ):
-      ۱) ارسال با URL (InputMediaPhotoExternal) — سرورِ سروش خودش تصویر را
-         می‌گیرد؛ **بدونِ آپلود**، بدونِ خطای SaveFilePart. این روشِ مطمئنِ
-         اصلی است چون آپلودِ فایل در این محیطِ سروش روی connection server
-         کار نمی‌کند.
-      ۲) در صورتِ شکستِ روشِ بالا: دانلودِ bytes + آپلود با ``send_file``
-         (fallback؛ فقط در محیط‌هایی که media-DC کار کند موفق می‌شود).
-    هزینه فقط بابت عکس‌هایی که واقعاً در چت ارسال شدند کسر می‌شود.
+    ترتیبِ روشِ ارسال (با لاگِ جدا برای هر مرحله):
+      ۱) دانلود + اعتبارسنجی (PHOTO DOWNLOAD ...)
+      ۲) ارسال با URL (PHOTO SEND method=external_url) — بدونِ آپلود.
+      ۳) در صورتِ شکست: آپلود با send_file (PHOTO SEND method=upload).
+    هر مرحله سقفِ زمانیِ کوتاه دارد (LINK_TIMEOUT) تا یک لینکِ مشکل‌دار، کل
+    عملیات را مدت‌ها درگیر نکند. اگر این لینک خراب بود، فقط Skip می‌شود و
+    لینکِ بعدی امتحان می‌شود.
     """
     _log(bot, f"PHOTO LINK SELECTED url={url}")
 
-    # ۱) دانلود + اعتبارسنجی — فقط عکسِ واقعی. اگر دانلود نشد، این عکس
-    #    ارسال نمی‌شود و هیچ سکه‌ای برایش کسر نمی‌شود. جزئیاتِ دانلود
-    #    (status/type/bytes/magic) در داخل _fetch_image_bytes لاگ می‌شود.
+    # ۱) دانلود + اعتبارسنجی — فقط عکسِ واقعی.
     _log(bot, f"PHOTO DOWNLOAD START url={url}")
     try:
-        data = await asyncio.to_thread(
-            _fetch_image_bytes, url,
-            log_func=lambda m: _log(bot, m))
+        data = await asyncio.wait_for(
+            asyncio.to_thread(
+                _fetch_image_bytes, url,
+                log_func=lambda m: _log(bot, m)),
+            timeout=LINK_TIMEOUT)
+    except asyncio.TimeoutError:
+        _log(bot, f"PHOTO DOWNLOAD TIMEOUT url={url} timeout={LINK_TIMEOUT}s")
+        data = None
     except Exception:
         _log_exception(bot, f"PHOTO DOWNLOAD ERROR url={url}")
         data = None
@@ -433,23 +438,28 @@ async def _send_image(bot, chat_id, url):
         return False
     _log(bot, f"PHOTO DOWNLOAD OK url={url} bytes={len(data)}")
 
-    # ۲) ارسال با URL (InputMediaPhotoExternal) — سرورِ سروش خودش تصویر را
-    #    می‌گیرد؛ بدونِ آپلود، بدونِ خطای SaveFilePart. این روشِ مطمئنِ اصلی
-    #    است چون آپلودِ فایل در این محیطِ سروش روی connection server
-    #    کار نمی‌کند.
+    # ۲) ارسال با URL (InputMediaPhotoExternal) — بدونِ آپلود.
     try:
-        await _send_by_url(bot, chat_id, url)
+        await asyncio.wait_for(_send_by_url(bot, chat_id, url), timeout=LINK_TIMEOUT)
         _log(bot, f"PHOTO SEND OK method=external_url url={url}")
         return True
+    except asyncio.TimeoutError:
+        _log(bot, f"PHOTO SEND TIMEOUT method=external_url url={url} "
+                  f"timeout={LINK_TIMEOUT}s")
     except Exception:
         _log_exception(bot, f"PHOTO SEND ERROR method=external_url url={url}")
 
-    # ۳) fallback: آپلود با send_file (فقط در محیط‌هایی که media-DC کار کند).
+    # ۳) fallback: آپلود با send_file (با سقفِ زمانی تا media-sender/آپلود
+    #    مدت‌ها درگیر نشود).
     stream = _make_image_stream(data, 0)
     try:
-        await bot.client.send_file(chat_id, stream)
+        await asyncio.wait_for(
+            bot.client.send_file(chat_id, stream), timeout=LINK_TIMEOUT)
         _log(bot, f"PHOTO SEND OK method=upload url={url}")
         return True
+    except asyncio.TimeoutError:
+        _log(bot, f"PHOTO SEND TIMEOUT method=upload url={url} "
+                  f"timeout={LINK_TIMEOUT}s")
     except Exception:
         _log_exception(bot, f"PHOTO SEND ERROR method=upload url={url}")
         return False
