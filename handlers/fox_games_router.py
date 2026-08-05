@@ -427,10 +427,6 @@ async def _start_vampire(bot, event, chat_id, logger):
             bot.client, chat_id, chosen, logger=logger,
         )
 
-    async def on_dm_failed():
-        # هیچ نامی برده نمی‌شود و از کسی خواسته نمی‌شود دستی پیوی بدهد.
-        await event.reply(vampire.DM_FAILED_MESSAGE)
-
     async def on_roster(chosen):
         # اعلام عمومی: بدون هیچ اشاره‌ای به اینکه نقش برای چه کسی رفت.
         await event.reply(vampire.CHOSEN_MESSAGE)
@@ -442,7 +438,6 @@ async def _start_vampire(bot, event, chat_id, logger):
     vampire.schedule(chat_id, session["session_id"], {
         "on_abort": on_abort,
         "on_roles": on_roles,
-        "on_dm_failed": on_dm_failed,
         "on_roster": on_roster,
         "on_timeout": on_timeout,
     }, logger=logger)

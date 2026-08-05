@@ -560,14 +560,19 @@ async def run_game(chat_id, session_id, callbacks, logger=None,
         # نامی داخل گروه اعلام نمی‌شود.
         chosen, delivery = _normalize_delivery(
             await callbacks["on_roles"](chosen), chosen)
-        if delivery != "dm" or chosen is None:
+        if chosen is None:
+            # هیچ بازیکنی برای خون‌آشامی باقی نمانده — فقط در این حالتِ
+            # غیرممکن دور لغو می‌شود.
             log_error(logger, f"FOX VAMPIRE ABORT chat_id={chat_id} "
-                              f"session_id={session_id} reason=role_undeliverable")
+                              f"session_id={session_id} reason=no_player")
             abandon(chat_id, session_id, logger)
-            if "on_dm_failed" in callbacks:
-                await callbacks["on_dm_failed"]()
             revealed = True
             return
+
+        # وقتی بازیکنانِ کافی شرکت کرده‌اند، دور همیشه تشکیل و اجرا می‌شود.
+        # اگر رساندنِ نقش با پیامِ خصوصی در این لحظه ممکن نشد، به‌جای لغو
+        # بازی و درخواستِ تلاشِ دوباره، بازی بدونِ این محدودیت ادامه می‌یابد
+        # (تلاشِ رساندنِ نقش در ``on_roles``/``deliver_role`` انجام شده است).
 
         if not open_guessing(chat_id, session_id, logger):
             log_error(logger, f"FOX VAMPIRE ABORT chat_id={chat_id} "

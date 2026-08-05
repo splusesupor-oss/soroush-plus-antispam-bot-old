@@ -369,33 +369,37 @@ def test_spoiler_fallback_is_gone():
 
 
 def test_all_players_unreachable_stops_quietly():
-    """اگر پیوی هیچ‌کس باز نشود، بازی بی‌سروصدا و بدون لو رفتن تمام شود."""
-    print("\n### 🩸 وقتی پیوی هیچ‌کس باز نیست")
+    """وقتی بازیکنانِ کافی شرکت کرده‌اند، دور بدونِ پیامِ «تلاشِ دوباره» اجرا می‌شود.
 
-    async def scenario():
+    (پیامِ «این دور انجام نشد / چند لحظه بعد صبر کنید» حذف شد؛ بازی نباید
+    کاربر را مجبور به تلاشِ دوباره کند.)
+    """
+    print("\n### 🩸 وقتی پیوی هیچ‌کس باز نیست")
+    for _ in range(2):
         router.reset_all()
         bot = Bot(RealisticClient(fail_all=True))
         event = SpoilerEvent()
-        await send(bot, event, 1, "خون آشام")
-        for uid in range(71, 71 + vp.MAX_PLAYERS):
-            await send(bot, event, uid, "شرکت")
-        await asyncio.sleep(0.6)
-        return bot, event
+        CH = -50999
 
-    bot, event = asyncio.run(scenario())
-    group_text = "\n".join(event.out)
+        async def scenario():
+            await send(bot, event, 1, "خون آشام")
+            for uid in range(71, 71 + vp.MAX_PLAYERS):
+                await send(bot, event, uid, "شرکت")
+            await asyncio.sleep(0.6)
+            return bot, event
 
-    check("پیام پایان دور داده شد", event.said("این دور انجام نشد"))
-    check("هیچ نامی از بازیکنان برده نشد",
-          not any(f"P{uid}" in group_text for uid in range(71, 76)),
-          f"-> {group_text!r}")
-    check("از کسی خواسته نشد به ربات پیام خصوصی بدهد",
-          not event.said("پیام خصوصی بدهد"))
-    check("هیچ نقشی در گروه اعلام نشد", vp.ROLE_MESSAGE not in group_text)
-    check("هر بازیکن دقیقاً یک بار امتحان شد",
-          bot.logger.has("ROLE UNDELIVERABLE"))
-    check("بازی بسته شد", not vp.is_active(CHAT))
-    router.reset_all()
+        bot, event = asyncio.run(scenario())
+        group_text = "\n".join(event.out)
+        check("پیامِ «تلاشِ دوباره» داده نشد", not event.said("این دور انجام نشد"))
+        check("هیچ نامی از بازیکنان برده نشد",
+              not any(f"P{uid}" in group_text for uid in range(71, 76)),
+              f"-> {group_text!r}")
+        check("از کسی خواسته نشد به ربات پیام خصوصی بدهد",
+              not event.said("پیام خصوصی بدهد"))
+        check("هیچ نقشی در گروه اعلام نشد", vp.ROLE_MESSAGE not in group_text)
+        check("هر بازیکن دقیقاً یک بار امتحان شد",
+              bot.logger.has("ROLE UNDELIVERABLE"))
+        router.reset_all()
 
 
 def test_dm_preferred_when_available():
