@@ -190,6 +190,41 @@ def is_blocked(query):
 # ---------------------------------------------------------------------------
 #  جستجو و دانلود تصویر (خارج از Event Loop، با timeout)
 # ---------------------------------------------------------------------------
+# دامنه‌های اسپم/تبلیغاتی/کازینو/نامرتبط که نباید عکس از آن‌ها گرفته شود.
+_SPAM_KEYWORDS = (
+    "casino", "bet", "betting", "slot", "poker", "gambling", "bonus",
+    "offer", "deal", "discount", "coupon", "promo", "advert", "click",
+    "track", "redirect", "shortener", "bit.ly", "t.ly", "cutt.ly",
+)
+_SPAM_TLDS = (
+    ".click", ".loan", ".cash", ".buzz", ".xyz", ".top", ".icu", ".gq",
+    ".ml", ".ga", ".cf", ".tk", ".men", ".win", ".bid", ".trade", ".review",
+    ".cam", ".rest", ".mom", ".lol",
+)
+
+
+def _is_spam_url(url):
+    """آیا این URL یک دامنهٔ اسپم/تبلیغاتی/کازینو یا نامرتبط است؟"""
+    if not url:
+        return True
+    host = (urlparse(url).netloc or "").lower()
+    if not host:
+        return True
+    # دامنهٔ ناقص/محلی
+    if host.startswith(("localhost", "127.", "0.")):
+        return True
+    # TLD اسپم
+    for tld in _SPAM_TLDS:
+        if host.endswith(tld):
+            return True
+    # کلمهٔ اسپم در دامنه یا مسیر
+    full = (host + " " + urlparse(url).path).lower()
+    for kw in _SPAM_KEYWORDS:
+        if kw in full:
+            return True
+    return False
+
+
 def _is_direct_image_url(url):
     """آیا این URL یک آدرسِ مستقیمِ قابلِ دانلودِ تصویر است؟
 
@@ -197,9 +232,12 @@ def _is_direct_image_url(url):
       یا
     - پسوندِ فایلِ تصویر داشته باشد (.jpg/.png/...).
     لینکِ صفحه/مقاله (که فقط داخل مرورگر باز می‌شود و دانلودِ مستقیم نمی‌دهد)
-    رد می‌شود تا ربات سراغِ لینک‌های ناکارآمد نرود.
+    و دامنه‌هایِ اسپم/تبلیغاتی/کازینو رد می‌شوند تا ربات سراغِ لینک‌هایِ
+    ناکارآمد یا نامرتبط نرود.
     """
     if not url:
+        return False
+    if _is_spam_url(url):
         return False
     host = urlparse(url).netloc.lower()
     if not host:

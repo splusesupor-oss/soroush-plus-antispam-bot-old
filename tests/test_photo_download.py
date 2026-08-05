@@ -198,6 +198,8 @@ def test_charge_only_after_images_ready():
             # تأیید → اجرای کامل از طریق هندلر (که process را صدا می‌زند)
             ev = Event()
             await hdl.handle(bot, ev, chat, user, None, "بله", None)
+            await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()], return_exceptions=True)
+            await asyncio.sleep(0)
             return ev.out
         out = asyncio.run(scenario())
         outcome = "no_results" if any("نتیجه" in m for m in out) else "done"
@@ -328,6 +330,8 @@ def test_two_step_full_flow_20_bronze():
             await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
             await hdl.handle(bot, Event(), chat, user, None, "گربه", None)
             await hdl.handle(bot, Event(), chat, user, None, "بله", None)
+            await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()], return_exceptions=True)
+            await asyncio.sleep(0)
             return bot.client.sent
         sent = asyncio.run(scenario())
         bal = _economy.get_balance(chat, user)
@@ -362,6 +366,8 @@ def test_per_image_cost_1_image():
             await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
             await hdl.handle(bot, Event(), chat, user, None, "گربه", None)
             await hdl.handle(bot, Event(), chat, user, None, "بله", None)
+            await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()], return_exceptions=True)
+            await asyncio.sleep(0)
             return bot.client.sent
         sent = asyncio.run(scenario())
         bal = _economy.get_balance(chat, user)
@@ -415,6 +421,8 @@ def test_two_step_flow():
             # مرحله ۳: تأیید
             ev3 = Event()
             await hdl.handle(bot, ev3, chat, user, None, "بله", None)
+            await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()], return_exceptions=True)
+            await asyncio.sleep(0)
             return ev1.out, ev2.out, ev3.out, bot.client.sent
         o1, o2, o3, sent = asyncio.run(scenario())
         check("دو مرحله‌ای: مرحله ۱ درخواستِ عبارت می‌کند",
@@ -431,12 +439,35 @@ def test_two_step_flow():
 # ===========================================================================
 #  سناریوهای هزینه — دقیقاً مطابق درخواست کاربر
 # ===========================================================================
+def _drain_tasks(loop=None):
+    """اجرایِ کاملِ تسک‌هایِ پس‌زمینه (create_task) را منتظر می‌ماند."""
+    async def _drain():
+        current = asyncio.current_task()
+        for _ in range(20):
+            pending = [t for t in asyncio.all_tasks()
+                       if t is not current and not t.done()]
+            if not pending:
+                break
+            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.sleep(0)
+    asyncio.run(_drain())
+
+
 def _run_flow(bot, chat, user, images=None):
     """اجرای کاملِ دو مرحله‌ای: «دانلود عکس» → «گربه» → «بله»؛ خروجی sent."""
     async def scenario():
         await hdl.handle(bot, Event(), chat, user, None, "دانلود عکس", None)
         await hdl.handle(bot, Event(), chat, user, None, "گربه", None)
         await hdl.handle(bot, Event(), chat, user, None, "بله", None)
+        # منتظرِ کاملِ شدنِ تسکِ پس‌زمینهٔ دانلود/ارسال
+        current = asyncio.current_task()
+        for _ in range(30):
+            pending = [t for t in asyncio.all_tasks()
+                       if t is not current and not t.done()]
+            if not pending:
+                break
+            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.sleep(0)
         return bot.client.sent
     return asyncio.run(scenario())
 
@@ -775,6 +806,27 @@ def test_is_direct_image_url():
         check(f"reject: {u[:50]}", not pd._is_direct_image_url(u), u)
 
 
+def test_spam_url_filter():
+    """دامنه‌های اسپم/کازینو/تبلیغاتی/نامرتبط رد شوند."""
+    ok = [
+        "https://i.pinimg.com/originals/aa/bb/cc.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/x/y/Pic.png",
+        "https://images.unsplash.com/photo-123.jpg?w=400",
+    ]
+    bad = [
+        "https://casino-bonus-777.xyz/img.jpg",       # کازینو + tld اسپم
+        "https://bestbetting-slot.top/x.jpg",          # bet + tld
+        "https://super-offer-deal.click/img.png",      # تبلیغاتی
+        "https://bonus-track.click/img.jpg",           # bonus + click
+        "https://shortener.example/click?id=1",        # click/redirect
+        "https://example.com/casino-promo.png",        # کلمهٔ اسپم در مسیر
+    ]
+    for u in ok:
+        check(f"اسپم-قبول: {u[:40]}", pd._is_direct_image_url(u), u)
+    for u in bad:
+        check(f"اسپم-رد: {u[:40]}", not pd._is_direct_image_url(u), u)
+
+
 def test_confirm_text_exact():
     """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
     pd.reset_all()
@@ -822,6 +874,7 @@ def main():
     test_is_valid_image_bytes()
     test_fetch_accepts_after_logging()
     test_is_direct_image_url()
+    test_spam_url_filter()
     test_confirm_text_exact()
 
     print(f"\npassed={PASSED} failed={FAILED}")

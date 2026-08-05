@@ -87,13 +87,20 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     if result == "no_session":
         return False
     if result == "start":
-        # تأیید شد: اجرای کامل، بدون بلاک کردن Event Loop
+        # تأیید شد: اجرای کامل بدون بلاک کردن Event Loop.
+        # دانلود/جستجو/ارسال عملیاتِ سنگین هستند؛ اجرای آن‌ها داخلِ
+        # create_task باعث نمی‌شود دریافتِ پیام‌ها/WebSocket قفل شود
+        # (رفعِ «WebSocket closed while reading» / PingRequest).
         _log(bot, f"PHOTO CONFIRM START chat_id={chat_id} user_id={user_id} query={s.get('query')!r}")
         await event.reply("🔄 در حال جستجو و ارسال تصاویر...")
-        outcome, message = await photo_download.process(chat_id, user_id, bot)
-        if outcome in {"done", "no_results", "error"}:
-            await event.reply(message)
-            _log(bot, f"PHOTO DOWNLOAD {outcome.upper()} chat_id={chat_id} user_id={user_id}")
+
+        async def _run_and_reply():
+            outcome, message = await photo_download.process(chat_id, user_id, bot)
+            if outcome in {"done", "no_results", "error"}:
+                await event.reply(message)
+                _log(bot, f"PHOTO DOWNLOAD {outcome.upper()} chat_id={chat_id} user_id={user_id}")
+
+        asyncio.create_task(_run_and_reply())
         return True
 
     return False
