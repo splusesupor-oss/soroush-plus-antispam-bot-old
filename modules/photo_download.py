@@ -291,6 +291,14 @@ _FA_EN_HINTS = {
     "رونالدو": "ronaldo",
     "گل رز": "rose", "کوه": "mountain", "منظره": "landscape",
     "ماشین": "car", "ماشین مسابقه": "race car", "طبیعت": "nature",
+    "دوج": "dodge", "ماشین دوج": "dodge car", "خودرو دوج": "dodge car",
+    "دوج چلنجر": "dodge challenger", "دوج چارجر": "dodge charger",
+    "دوج رام": "dodge ram", "بی‌ام‌و": "bmw", "مرسدس": "mercedes",
+    "پورشه": "porsche", "فراری": "ferrari", "لامبورگینی": "lamborghini",
+    "تویوتا": "toyota", "هیوندای": "hyundai", "کره‌ای": "kia",
+    "شورولت": "chevrolet", "فورد": "ford", "مازراتی": "maserati",
+    "آئودی": "audi", "فولکس": "volkswagen", "جیپ": "jeep",
+    "اتوبوس": "bus", "کامیون": "truck", "وانت": "pickup truck",
     "موتور": "motorcycle", "موتورسیکلت": "motorcycle", "موتور هوندا": "honda motorcycle",
     "هوندا": "honda", "موتور سیکلت": "motorcycle", "دوچرخه": "bicycle",
     "قطار": "train", "هواپیما": "airplane", "کشتی": "ship", "قایق": "boat",
@@ -525,6 +533,56 @@ def _search_wikimedia(query, limit):
     return out
 
 
+def _search_wikipedia_topic(query):
+    """جستجویِ ویکی‌پدیا (فارسی): تشخیصِ موضوع + گرفتنِ تصویرِ اصلیِ صفحه.
+
+    برمی‌گرداند لیستِ (url, title, []). اگر صفحه‌ای با تصویرِ اصلی پیدا
+    نشد (یا ویکی در دسترس نبود/rate-limit شد)، لیستِ خالی برمی‌گردد تا
+    fallback به منابعِ دیگر انجام شود.
+    """
+    from urllib.parse import quote
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0 Safari/537.36"),
+    }
+    # اول ویکیِ فارسی، بعد (اگر نتیجه نبود) ویکیِ انگلیسی (پوششِ بهتر برایِ
+    # برند/مدل مثل «dodge»).
+    for lang in ("fa", "en"):
+        try:
+            # ۱) جستجویِ صفحه در ویکی‌پدیا
+            search = (f"https://{lang}.wikipedia.org/w/api.php?action=query"
+                      "&list=search&srsearch=" + quote(query) +
+                      "&srlimit=1&format=json")
+            data = _HTTP.get(search, headers=headers, timeout=NETWORK_TIMEOUT)
+            if data.status_code != 200:
+                continue
+            hits = data.json().get("query", {}).get("search", [])
+            if not hits:
+                continue
+            title = hits[0].get("title") or ""
+            if not title:
+                continue
+
+            # ۲) گرفتنِ تصویرِ اصلیِ همان صفحه (pageimages)
+            page = (f"https://{lang}.wikipedia.org/w/api.php?action=query"
+                    "&titles=" + quote(title) +
+                    "&prop=pageimages&piprop=thumbnail|original"
+                    "&pithumbsize=800&format=json")
+            data2 = _HTTP.get(page, headers=headers, timeout=NETWORK_TIMEOUT)
+            if data2.status_code != 200:
+                continue
+            pages = data2.json().get("query", {}).get("pages", {}) or {}
+            for p in pages.values():
+                pi = p.get("thumbnail") or {}
+                u = (pi.get("source") or "").strip()
+                if u and "http" in u and _is_direct_image_url(u):
+                    return [(u, title, [])]
+        except Exception:
+            pass
+    return []
+
+
 def _search_image_urls(query, limit=IMAGE_COUNT):
     """جستجویِ مرتبط: فقط عکس‌هایی که با query ارتباط دارند برمی‌گرداند.
 
@@ -552,9 +610,18 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
     if english_hint and english_hint in _FA_PEOPLE_HINTS.values():
         search_queries_used = [english_hint]
 
-    # جمع‌آوریِ نامزدها از چند منبع (fallback): اول Openverse، بعد Wikimedia
-    # (که محتوایِ فارسیِ خوبی دارد)، تا مثلِ موتورِ جستجو عمل کند.
+    # جمع‌آوریِ نامزدها از چند منبع (fallback) مثلِ موتورِ جستجو:
+    #   ۱) ویکی‌پدیا (تشخیصِ موضوع + تصویرِ اصلیِ صفحه) — اولویتِ اول
+    #   ۲) Openverse
+    #   ۳) Wikimedia Commons (محتوایِ فارسی)
     candidates = []  # (url, title, tags)
+    # ۱) ویکی‌پدیا
+    for sq in search_queries_used:
+        try:
+            candidates += _search_wikipedia_topic(sq)
+        except Exception:
+            pass
+    # ۲) Openverse + ۳) Wikimedia
     for sq in search_queries_used:
         try:
             candidates += _search_openverse(sq, limit)
