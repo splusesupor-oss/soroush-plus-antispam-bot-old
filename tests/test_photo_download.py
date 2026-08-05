@@ -890,6 +890,24 @@ def test_relevance_filter():
           pd._relevance_score("ماشین مسابقه هوندا", [], "http://x", kw) == 0)
 
 
+def test_no_translit_false_positive():
+    """نویسه‌گردانیِ بی‌معنا نباید باعثِ تطابقِ اتفاقی شود.
+
+    برایِ «لاکپشت های نینجا»، تصویری با عنوانِ «hay» (که از نویسهٔ «های»
+    می‌آمد) نباید مرتبط تلقی شود.
+    """
+    kw, _ = pd._search_keywords("لاکپشت های نینجا")
+    check("کلیدواژهٔ بی‌معنای hay نباید در کلیدواژه‌ها باشد", "hay" not in kw, f"{kw}")
+    check("کلیدواژهٔ ninja هست", "ninja" in kw, f"{kw}")
+    check("کلیدواژهٔ turtle هست", "turtle" in kw, f"{kw}")
+    # تصویرِ «hay» (منبعِ قبلیِ خطا) نامرتبط است
+    check("تصویرِ hay نامرتبط است",
+          pd._relevance_score("Hay bales in a field", [], "http://x", kw) == 0)
+    # تصویرِ واقعیِ نینجا مرتبط است
+    check("Teenage Mutant Ninja Turtles مرتبط است",
+          pd._relevance_score("Teenage Mutant Ninja Turtles", [], "http://x", kw) >= 1)
+
+
 def test_owner_bypass_insufficient():
     """مالکِ اصلی (osine1) بدونِ سکه هم ادامه می‌دهد؛ سایرین خیر."""
     from modules.owner_check import get_owner
@@ -963,6 +981,7 @@ def main():
     test_spam_url_filter()
     test_links_message_numbered_and_blockquote()
     test_relevance_filter()
+    test_no_translit_false_positive()
     test_owner_bypass_insufficient()
     test_confirm_text_exact()
 

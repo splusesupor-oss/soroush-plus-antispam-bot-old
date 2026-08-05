@@ -293,32 +293,30 @@ _FA_EN_HINTS = {
 
 
 def _search_keywords(query):
-    """کلیدواژه‌هایِ جستجو را می‌سازد (عبارت + نویسه‌گردانی + انگلیسی).
+    """کلیدواژه‌هایِ جستجو را می‌سازد (عبارت + نگاشتِ انگلیسیِ مشخص).
 
-    برایِ سنجشِ ارتباط استفاده می‌شود: اگر این کلیدواژه‌ها در عنوان/برچسبِ
-    تصویر یا URL باشد، تصویر «مرتبط» تلقی می‌شود.
+    برایِ سنجشِ ارتباط استفاده می‌شود. **نویسه‌گردانیِ سادهٔ فارسی→لاتین
+    استفاده نمی‌شود** چون خروجیِ بی‌معنا می‌دهد (مثل «لاکپشت های نینجا» →
+    «lakpsht hay nynja») که باعثِ تطابقِ اتفاقی با تصاویرِ نامرتبط می‌شود.
+    به‌جایِ آن فقط:
+      - کلماتِ معنادارِ خودِ عبارت (فارسی)، و
+      - عبارتِ انگلیسیِ مشخص از نگاشتِ کوچک (مثل «لاکپشت های نینجا» →
+        «ninja turtle») در نظر گرفته می‌شوند.
     """
     kws = set()
     q = query.strip()
     if not q:
         return kws, []
-    # کلیدواژه‌هایِ خودِ عبارت
+    # کلماتِ معنادارِ خودِ عبارت (فارسی) — بدونِ کلماتِ توقف
     for tok in q.split():
-        if tok and tok not in _STOPWORDS:
-            kws.add(tok.lower())
-    # نویسه‌گردانیِ لاتین
-    latin = _transliterate_fa(q)
-    for tok in latin.split():
         tok = tok.lower()
-        if tok and len(tok) >= 2:
+        if tok and tok not in _STOPWORDS:
             kws.add(tok)
-    # عباراتِ انگلیسیِ جایگزین (از نگاشتِ کوچک).
-    # مرتبهٔ «مشخص‌ترین» عبارت اول انتخاب می‌شود (مثلاً «لاکپشت های نینجا»
-    # قبل از «لاکپشت») تا جستجویِ دقیق‌تری انجام شود.
+    # عبارتِ انگلیسیِ مشخص (از نگاشتِ کوچک) — مشخص‌ترین اول
     search_queries = [q]
     matched = [en for fa, en in _FA_EN_HINTS.items() if fa in q]
     if matched:
-        english_hint = max(matched, key=len)  # مشخص‌ترین (طولانی‌ترین) نگاشت
+        english_hint = max(matched, key=len)
         search_queries.append(english_hint)
         for tok in english_hint.split():
             kws.add(tok.lower())
