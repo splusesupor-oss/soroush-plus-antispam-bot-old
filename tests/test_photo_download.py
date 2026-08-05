@@ -934,6 +934,30 @@ def test_strong_relevance_requires_all_hint_words():
           pd._strongly_relevant("Teenage Mutant Ninja Turtles", [], "http://x", kw, hint))
 
 
+def test_celebrity_hints():
+    """افرادِ مشهور باید به نامِ انگلیسیِ کامل نگاشت شوند."""
+    cases = {
+        "بروسلی": "bruce lee",
+        "رونالدو": "cristiano ronaldo",
+        "مسی": "lionel messi",
+    }
+    for fa, en in cases.items():
+        _, _, hint = pd._search_keywords(fa)
+        check(f"{fa} → {en}", hint == en, f"got {hint!r}")
+
+
+def test_search_cache():
+    """کشِ جستجو برایِ عبارتِ تکراری باید کار کند."""
+    pd.reset_all()
+    # هم‌انندِ جستجو، مقدار را مستقیماً در کش قرار می‌دهیم و می‌بینیم برمی‌گردد
+    key = pd._normalize_fa_text("بروسلی").strip().lower()
+    import time as _t
+    pd._SEARCH_CACHE[key] = (_t.monotonic(), ["http://cached/x.jpg"])
+    urls = pd._search_image_urls("بروسلی", limit=1)
+    check("کش برگردانده شد", urls == ["http://cached/x.jpg"], f"{urls}")
+    pd.reset_all()
+
+
 def test_owner_bypass_insufficient():
     """مالکِ اصلی (osine1) بدونِ سکه هم ادامه می‌دهد؛ سایرین خیر."""
     from modules.owner_check import get_owner
@@ -1010,6 +1034,8 @@ def main():
     test_no_translit_false_positive()
     test_normalize_fa_handles_zwnj()
     test_strong_relevance_requires_all_hint_words()
+    test_celebrity_hints()
+    test_search_cache()
     test_owner_bypass_insufficient()
     test_confirm_text_exact()
 

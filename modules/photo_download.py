@@ -137,6 +137,11 @@ _GROUP_LOCKS = {}    # chat_id -> asyncio.Lock
 _BUSY_GROUPS = set()  # chat_id هایی که در حال پردازش‌اند
 _BUSY_USERS = set()   # (chat_id, user_id) هایی که در حال پردازش‌اند
 
+# کشِ جستجو: normalized_query -> (timestamp, [urls]) برایِ پاسخِ سریع به
+# عبارت‌هایِ پرتکرار. بعد از _CACHE_TTL ثانیه منقضی می‌شود.
+_SEARCH_CACHE = {}
+_CACHE_TTL = 3600  # ۱ ساعت
+
 
 def reset_all():
     """پاک‌سازی کامل — برای تست/ری‌استارت."""
@@ -144,6 +149,7 @@ def reset_all():
     _GROUP_LOCKS.clear()
     _BUSY_GROUPS.clear()
     _BUSY_USERS.clear()
+    _SEARCH_CACHE.clear()
 
 
 def _group_lock(chat_id):
@@ -315,6 +321,29 @@ _FA_EN_HINTS = {
     "برف": "snow", "غروب": "sunset", "طلوع": "sunrise",
 }
 
+# نگاشتِ افراد/شخصیت‌هایِ مشهور فارسی → انگلیسی (برایِ جستجویِ دقیقِ تصویر).
+# این‌ها «حساس» هستند: باید عبارتِ انگلیسیِ کاملِ شخص را به‌عنوانِ anchor
+# بیاورند تا تصاویرِ واقعیِ همان شخص (نه فیلم/مکان/شباهت) انتخاب شوند.
+_FA_PEOPLE_HINTS = {
+    "بروسلی": "bruce lee", "بروس لی": "bruce lee", "بروسلی": "bruce lee",
+    "رونالدو": "cristiano ronaldo", "کریستیانو رونالدو": "cristiano ronaldo",
+    "مسی": "lionel messi", "لیونل مسی": "lionel messi",
+    "نیمار": "neymar", "پله": "pele", "مارادونا": "maradona",
+    "زیدان": "zidane", "رونالدینیو": "ronaldinho",
+    "مایکل جکسون": "michael jackson", "مایکل جردن": "michael jordan",
+    "لئوناردو دیکاپریو": "leonardo dicaprio", "برد پیت": "brad pitt",
+    "آلبرت انیشتین": "albert einstein", "نیوتن": "isaac newton",
+    "ناپلئون": "napoleon", "جنگجو": "warrior",
+    "گاندی": "gandhi", "چگوارا": "che guevara", "مونالیزا": "mona lisa",
+    "سوپرمن": "superman", "بتمن": "batman", "اسپایدرمن": "spiderman",
+    "هالک": "hulk", "ثور": "thor", "آیرونمن": "iron man",
+    "دزدان دریایی": "pirate", "دزد دریایی": "pirate", "دزدان دریایی کارائیب": "pirates of caribbean",
+    "جنگ ستارگان": "star wars", "ددپول": "deadpool", "ولورین": "wolverine",
+    "سامورایی": "samurai", "نینجا": "ninja", "کونگ‌فو": "kung fu",
+    "رزمی": "martial arts", "کاراته": "karate", "جودو": "judo", "تکواندو": "taekwondo",
+    "مشت‌زن": "boxer", "بوکس": "boxing", "کشتی‌گیر": "wrestler",
+}
+
 
 def _normalize_fa_text(value):
     """نرمال‌سازیِ متنِ فارسی: حذفِ نیم‌فاصله (ZWNJ)، یکسان‌سازیِ حروفِ عربی/فارسی.
@@ -354,10 +383,13 @@ def _search_keywords(query):
         if tok and tok not in _STOPWORDS:
             kws.add(tok)
 
-    # عبارتِ انگلیسیِ مشخص (از نگاشتِ کوچک) — مشخص‌ترین اول
+    # عبارتِ انگلیسیِ مشخص — از هر دو نگاشت (افرادِ مشهور + عمومی)،
+    # «طولانی‌ترین» و مشخص‌ترین تطابق انتخاب می‌شود.
+    # (مثلاً «لاکپشت های نینجا» → ninja turtle، نه فقط ninja)
     search_queries = [q]
     english_hint = None
-    matched = [en for fa, en in _FA_EN_HINTS.items() if fa in q]
+    matched = [en for fa, en in _FA_PEOPLE_HINTS.items() if fa in q]
+    matched += [en for fa, en in _FA_EN_HINTS.items() if fa in q]
     if matched:
         english_hint = max(matched, key=len)
         search_queries.append(english_hint)
@@ -445,8 +477,20 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
     if not keywords and not english_hint:
         return []
 
+    cache_key = _normalize_fa_text(query).strip().lower()
+    now = time.monotonic()
+    cached = _SEARCH_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _CACHE_TTL:
+        return cached[1][:limit]
+
+    # برایِ افرادِ مشهور، فقط با نامِ انگلیسیِ مشخص جستجو می‌شود (نه فارسی)،
+    # چون جستجویِ فارسیِ «بروسلی» نتایجِ بی‌ربط (افغانستان، پشتِ صحنه) می‌دهد.
+    search_queries_used = search_queries
+    if english_hint and english_hint in _FA_PEOPLE_HINTS.values():
+        search_queries_used = [english_hint]
+
     candidates = []  # (url, title, tags)
-    for sq in search_queries:
+    for sq in search_queries_used:
         try:
             candidates += _search_openverse(sq, limit)
         except Exception:
@@ -469,7 +513,11 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
 
     # مرتب از مرتبط‌ترین به کم‌مرتبط‌ترین
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [url for _score, url in scored[:limit]]
+    result = [url for _score, url in scored[:limit]]
+
+    # ذخیره در کش برایِ عبارت‌هایِ پرتکرار
+    _SEARCH_CACHE[cache_key] = (now, result)
+    return result
 
 
 def _is_valid_image_bytes(content):
