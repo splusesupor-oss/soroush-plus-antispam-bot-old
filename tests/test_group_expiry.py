@@ -115,12 +115,14 @@ def decode_span(text, offset, length):
 # تطبیق دستور
 # ===========================================================================
 def test_command_matching():
-    print("\n### 🎯 تطبیق دقیق سه دستور")
+    print("\n### 🎯 تطبیق دقیق چهار دستور")
+    check("«۵ روز» تطبیق می‌کند", ge.match_command("۵ روز") == "۵ روز")
     check("«یک هفته» تطبیق می‌کند", ge.match_command("یک هفته") == "یک هفته")
     check("«دو هفته» تطبیق می‌کند", ge.match_command("دو هفته") == "دو هفته")
     check("«یک ماه» تطبیق می‌کند", ge.match_command("یک ماه") == "یک ماه")
-    check("فقط همین سه دستور وجود دارد", len(ge.COMMANDS) == 3)
+    check("فقط همین چهار دستور وجود دارد", len(ge.COMMANDS) == 4)
 
+    check("مدت «۵ روز» ۵ روز است", ge.duration_days("۵ روز") == 5)
     check("مدت «یک هفته» ۷ روز است", ge.duration_days("یک هفته") == 7)
     check("مدت «دو هفته» ۱۴ روز است", ge.duration_days("دو هفته") == 14)
     check("مدت «یک ماه» ۲۹ روز است", ge.duration_days("یک ماه") == 29)

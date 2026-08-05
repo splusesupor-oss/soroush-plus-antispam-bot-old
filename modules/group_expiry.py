@@ -4,7 +4,8 @@
 سیستم دیگری ندارد. تنها فایل ذخیره‌سازی آن ``config/group_expiry.json``
 است و هیچ ماژول دیگری در آن نمی‌نویسد.
 
-سه دستور پشتیبانی‌شده و مدت دقیق آن‌ها:
+چهار دستور پشتیبانی‌شده و مدت دقیق آن‌ها:
+    «۵ روز»   =  ۵ روز
     «یک هفته» =  ۷ روز
     «دو هفته» = ۱۴ روز
     «یک ماه»  = ۲۹ روز
@@ -35,11 +36,13 @@ except ImportError:  # pragma: no cover
 FILE = Path(__file__).resolve().parent.parent / "config" / "group_expiry.json"
 
 # --- دستورها ------------------------------------------------------------
+FIVE_DAYS = "۵ روز"
 ONE_WEEK = "یک هفته"
 TWO_WEEKS = "دو هفته"
 ONE_MONTH = "یک ماه"
 
 DURATIONS = {
+    FIVE_DAYS: 5,
     ONE_WEEK: 7,
     TWO_WEEKS: 14,
     ONE_MONTH: 29,
