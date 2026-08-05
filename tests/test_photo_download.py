@@ -946,6 +946,29 @@ def test_celebrity_hints():
         check(f"{fa} → {en}", hint == en, f"got {hint!r}")
 
 
+def test_general_hints():
+    """جستجوهایِ عادی (لباس، مکان، غذا و...) باید hintِ انگلیسی داشته باشند."""
+    cases = {
+        "امیر تتلو": "amir tataloo",
+        "لباس ارتشی": "military uniform",
+        "برج ایفل": "eiffel tower",
+        "کوه دماوند": "damavand",
+        "لباس": "clothing",
+    }
+    for fa, en in cases.items():
+        _, _, hint = pd._search_keywords(fa)
+        check(f"{fa} → {en}", hint == en, f"got {hint!r}")
+
+
+def test_normal_queries_not_blocked():
+    """جستجوهایِ عادی نباید مسدود شوند؛ فقط محتوایِ صریحِ جنسی مسدود است."""
+    for q in ["امیر تتلو", "لباس ارتشی", "عکس بازیگر", "ماشین", "طبیعت",
+              "بروسلی", "سگ", "کوه", "آزادی", "تخت جمشید"]:
+        check(f"مسدود نیست: {q}", not pd.is_blocked(q))
+    for q in ["عکس سکسی", "پورن", "عکس برهنه", "sex", "nude", "سکس"]:
+        check(f"مسدود است: {q}", pd.is_blocked(q))
+
+
 def test_search_cache():
     """کشِ جستجو برایِ عبارتِ تکراری باید کار کند."""
     pd.reset_all()
@@ -1035,6 +1058,8 @@ def main():
     test_normalize_fa_handles_zwnj()
     test_strong_relevance_requires_all_hint_words()
     test_celebrity_hints()
+    test_general_hints()
+    test_normal_queries_not_blocked()
     test_search_cache()
     test_owner_bypass_insufficient()
     test_confirm_text_exact()

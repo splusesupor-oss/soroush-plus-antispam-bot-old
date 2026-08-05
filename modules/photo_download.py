@@ -295,7 +295,23 @@ _FA_EN_HINTS = {
     "هوندا": "honda", "موتور سیکلت": "motorcycle", "دوچرخه": "bicycle",
     "قطار": "train", "هواپیما": "airplane", "کشتی": "ship", "قایق": "boat",
     "شهر": "city", "ساحل": "beach", "صحرا": "desert", "جزیره": "island",
+    "برج ایفل": "eiffel tower", "ایفل": "eiffel tower",
+    "کوه دماوند": "damavand", "دماوند": "damavand",
+    "برج میلاد": "milad tower", "پل طبیعت": "nature bridge tehran",
+    "کعبه": "kaaba", "مسجد": "mosque", "کلیسا": "church",
+    "اهرام": "pyramid", "اهرام مصر": "pyramids of giza", "تاج محل": "taj mahal",
+    "نیویورک": "new york", "پاریس": "paris", "لندن": "london",
+    "تهران": "tehran", "دبی": "dubai", "توکیو": "tokyo", "رم": "rome",
+    "آزادی": "azadi tower", "تخت جمشید": "persepolis",
     "کتاب": "book", "خانه": "house", "ساختمان": "building", "برج": "tower",
+    "لباس": "clothing", "لباس ارتشی": "military uniform", "ارتشی": "military",
+    "لباس نظامی": "military uniform", "یونیفرم": "uniform",
+    "لباس مجلسی": "evening dress", "لباس عروس": "wedding dress",
+    "پیراهن": "shirt", "شلوار": "pants", "کت": "jacket", "کلاه": "hat",
+    "کفش": "shoes", "چکمه": "boots", "روسری": "scarf", "شال": "shawl",
+    "دستکش": "gloves", "جوراب": "socks", "لباس ورزشی": "sportswear",
+    "ساعت": "watch", "عینک": "glasses", "کیف": "bag", "کوله‌پشتی": "backpack",
+    "عینک آفتابی": "sunglasses", "جواهرات": "jewelry", "انگشتر": "ring",
     "غذا": "food", "میوه": "fruit", "سیب": "apple", "موز": "banana",
     "پرتقال": "orange", "گوجه": "tomato", "هویج": "carrot", "گلابی": "pear",
     "انگور": "grape", "هندوانه": "watermelon", "توت": "berry",
@@ -327,6 +343,8 @@ _FA_EN_HINTS = {
 _FA_PEOPLE_HINTS = {
     "بروسلی": "bruce lee", "بروس لی": "bruce lee", "بروسلی": "bruce lee",
     "رونالدو": "cristiano ronaldo", "کریستیانو رونالدو": "cristiano ronaldo",
+    "تتلو": "amir tataloo", "امیر تتلو": "amir tataloo",
+    "امیر تاتالو": "amir tataloo", "تاتالو": "amir tataloo",
     "مسی": "lionel messi", "لیونل مسی": "lionel messi",
     "نیمار": "neymar", "پله": "pele", "مارادونا": "maradona",
     "زیدان": "zidane", "رونالدینیو": "ronaldinho",
@@ -388,10 +406,14 @@ def _search_keywords(query):
     # (مثلاً «لاکپشت های نینجا» → ninja turtle، نه فقط ninja)
     search_queries = [q]
     english_hint = None
-    matched = [en for fa, en in _FA_PEOPLE_HINTS.items() if fa in q]
-    matched += [en for fa, en in _FA_EN_HINTS.items() if fa in q]
+    # طولانی‌ترین «کلیدِ فارسیِ» منطبق انتخاب می‌شود تا «کوه دماوند» به‌جایِ
+    # «کوه»→mountain به «دماوند»→damavand برسد.
+    matched = [fa for fa in _FA_PEOPLE_HINTS if fa in q]
+    matched += [fa for fa in _FA_EN_HINTS if fa in q]
     if matched:
-        english_hint = max(matched, key=len)
+        best_fa = max(matched, key=len)
+        english_hint = (_FA_PEOPLE_HINTS.get(best_fa)
+                        or _FA_EN_HINTS.get(best_fa))
         search_queries.append(english_hint)
         for tok in english_hint.split():
             kws.add(tok.lower())
@@ -496,15 +518,26 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
         except Exception:
             pass
 
-    # فیلترِ ارتباطِ قوی + امتیاز و مرتب‌سازی
+    # فیلترِ ارتباط + امتیاز و مرتب‌سازی
+    # - اگر hint انگلیسیِ مشخص داریم (مثل ninja turtle یا amir tataloo):
+    #   باید «همهٔ» کلماتِ آن در metadata باشد (تطابقِ قوی، ردِ تصاویرِ اتفاقی).
+    # - اگر hint نداریم (جستجویِ عمومی مثل «لباس» یا «ماشین»): مثلِ موتورِ
+    #   جستجو عمل می‌کنیم — نتایجِ Openverse (که خودش بر اساسِ relevance رتبه
+    #   می‌دهد و منبعِ امن است) را با فیلترِ اسپم/دامنه قبول می‌کنیم و مرتب
+    #   می‌کنیم، نه اینکه به‌خاطرِ عدمِ تطابقِ فارسی با عنوانِ انگلیسی رد کنیم.
     scored = []
     seen_urls = set()
     for url, title, tags in candidates:
         if url in seen_urls:
             continue
         seen_urls.add(url)
-        if not _strongly_relevant(title, tags, url, keywords, english_hint):
-            continue
+        if english_hint:
+            if not _strongly_relevant(title, tags, url, keywords, english_hint):
+                continue
+        else:
+            # بدونِ hint: امتیازِ ارتباط را محاسبه کن ولی ردِ سخت نکن؛
+            # نتایجِ Openverse از قبل relevance-شده‌اند.
+            pass
         score = _relevance_score(title, tags, url, keywords)
         scored.append((score, url))
 
