@@ -46,7 +46,10 @@ SEND_RETRIES = 2      # تلاش مجدد برای ارسالِ هر عکس در
 NETWORK_TIMEOUT = (10, 20)
 # حداکثرِ زمانِ کلِ یک لینک (دانلود + ارسال). اگر لینکی بیشتر از این طول کشید،
 # رد می‌شود و سراغِ لینکِ بعدی می‌رویم تا کل عملیات مدت‌ها درگیر یک لینک نشود.
-LINK_TIMEOUT = 15
+LINK_TIMEOUT = 10
+# سقفِ زمانیِ کلِ عملیاتِ یک درخواست (جستجو + تلاش روی چند لینک + ارسال).
+# بعد از این زمان، دیگر لینکِ جدیدی تست نمی‌شود تا عملیات چند دقیقه معطل نماند.
+PROCESS_TIMEOUT = 45
 
 # پسوندِ فایلِ تصویر — برای تشخیصِ آدرسِ مستقیمِ فایل
 _IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|gif|webp|avif|bmp)([?#;].*)?$", re.I)
@@ -411,11 +414,14 @@ async def _send_image(bot, chat_id, url):
 
     ترتیبِ روشِ ارسال (با لاگِ جدا برای هر مرحله):
       ۱) دانلود + اعتبارسنجی (PHOTO DOWNLOAD ...)
-      ۲) ارسال با URL (PHOTO SEND method=external_url) — بدونِ آپلود.
-      ۳) در صورتِ شکست: آپلود با send_file (PHOTO SEND method=upload).
+      ۲) ارسالِ واقعیِ عکس با آپلود (PHOTO SEND method=upload) — این روشِ
+         اصلی است؛ چون سروش‌پلاس ارسالِ با URL (SendMediaRequest) را پشتیبانی
+         نمی‌کند و 422 NOT_SUPPORTED می‌دهد.
+      ۳) در صورتِ شکستِ آپلود: ارسال با URL (external_url) به‌عنوان آخرین
+         گزینه (در محیط‌هایی که پشتیبانی شود).
     هر مرحله سقفِ زمانیِ کوتاه دارد (LINK_TIMEOUT) تا یک لینکِ مشکل‌دار، کل
-    عملیات را مدت‌ها درگیر نکند. اگر این لینک خراب بود، فقط Skip می‌شود و
-    لینکِ بعدی امتحان می‌شود.
+    عملیات را مدت‌ها درگیر نکند (رفعِ ۷۰ تا ۱۳۵ ثانیه). اگر این لینک خراب بود،
+    فقط Skip می‌شود و لینکِ بعدی امتحان می‌شود.
     """
     _log(bot, f"PHOTO LINK SELECTED url={url}")
 
@@ -438,19 +444,7 @@ async def _send_image(bot, chat_id, url):
         return False
     _log(bot, f"PHOTO DOWNLOAD OK url={url} bytes={len(data)}")
 
-    # ۲) ارسال با URL (InputMediaPhotoExternal) — بدونِ آپلود.
-    try:
-        await asyncio.wait_for(_send_by_url(bot, chat_id, url), timeout=LINK_TIMEOUT)
-        _log(bot, f"PHOTO SEND OK method=external_url url={url}")
-        return True
-    except asyncio.TimeoutError:
-        _log(bot, f"PHOTO SEND TIMEOUT method=external_url url={url} "
-                  f"timeout={LINK_TIMEOUT}s")
-    except Exception:
-        _log_exception(bot, f"PHOTO SEND ERROR method=external_url url={url}")
-
-    # ۳) fallback: آپلود با send_file (با سقفِ زمانی تا media-sender/آپلود
-    #    مدت‌ها درگیر نشود).
+    # ۲) ارسالِ واقعیِ عکس با آپلود (send_file) — روشِ اصلی برای سروش‌پلاس.
     stream = _make_image_stream(data, 0)
     try:
         await asyncio.wait_for(
@@ -462,6 +456,17 @@ async def _send_image(bot, chat_id, url):
                   f"timeout={LINK_TIMEOUT}s")
     except Exception:
         _log_exception(bot, f"PHOTO SEND ERROR method=upload url={url}")
+
+    # ۳) آخرین گزینه: ارسال با URL (فقط در محیط‌هایی که پشتیبانی شود).
+    try:
+        await asyncio.wait_for(_send_by_url(bot, chat_id, url), timeout=LINK_TIMEOUT)
+        _log(bot, f"PHOTO SEND OK method=external_url url={url}")
+        return True
+    except asyncio.TimeoutError:
+        _log(bot, f"PHOTO SEND TIMEOUT method=external_url url={url} "
+                  f"timeout={LINK_TIMEOUT}s")
+    except Exception:
+        _log_exception(bot, f"PHOTO SEND ERROR method=external_url url={url}")
         return False
 
 
@@ -578,10 +583,16 @@ async def process(chat_id, user_id, bot):
         #    اگر یک URL خراب/نامعتبر باشد، کل درخواست شکست نمی‌خورد؛ از بین
         #    نامزدهایِ جستجو یکی‌یکی جلو می‌رویم تا IMAGE_COUNT عکسِ معتبر
         #    پیدا و ارسال شود. فقط عکس‌هایِ واقعاً ارسال‌شده شمرده و شارژ
-        #    می‌شوند.
+        #    می‌شوند. علاوه بر سقفِ هر لینک، یک سقفِ کلی هم هست تا عملیاتِ کل
+        #    بیش از PROCESS_TIMEOUT طول نکشد.
+        deadline = time.monotonic() + PROCESS_TIMEOUT
         sent = 0
         for url in urls:
             if sent >= IMAGE_COUNT:
+                break
+            if time.monotonic() >= deadline:
+                _log(bot, f"PHOTO PROCESS TIMEOUT chat_id={chat_id} "
+                          f"user_id={user_id} exceeded {PROCESS_TIMEOUT}s")
                 break
             ok = await _send_image(bot, chat_id, url)
             if ok:

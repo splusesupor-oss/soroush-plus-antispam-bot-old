@@ -24,6 +24,9 @@ SPlusthon آپلود را با ``self(request)`` یعنی از طریق همان
 """
 import logging
 
+import asyncio
+import logging
+
 from splusthon import SoroushClient
 from splusthon.network import MTProtoSender
 from splusthon.tl import functions
@@ -89,10 +92,17 @@ async def _ensure_config(client):
     return getattr(client, "_config", None) is not None
 
 
+MEDIA_SENDER_TIMEOUT = 8  # حداکثرِ زمانِ ساختِ sender رسانه‌ای (اتصال + auth)
+
+
 async def _create_media_sender(client, dc):
     """یک MTProtoSender اختصاصی به سرورِ فایل/DC داده‌شده می‌سازد.
 
     آدرسِ WebSocket/DC را log می‌کند تا علتِ قطعِ اتصال معلوم شود.
+    کلِ عملیات (اتصال + export auth + import) سقفِ زمانی دارد تا یک اتصالِ
+    مرده مدت‌ها کلِ عملیات را درگیر نکند. در صورتِ هر خطا، sender به‌درستی
+    disconnect می‌شود تا aiohttp session نشت نکند (رفعِ «Unclosed client
+    session»).
     """
     _log.info(
         "MEDIA SENDER connecting to ws dc=%s ip=%s port=%s "
@@ -103,23 +113,39 @@ async def _create_media_sender(client, dc):
         getattr(dc, "media_only", None),
     )
     sender = MTProtoSender(None, loggers=getattr(client, "_log", None))
-    await sender.connect(client._connection(
-        dc.ip_address,
-        dc.port,
-        dc.id,
-        loggers=getattr(client, "_log", None),
-        proxy=getattr(client, "_proxy", None),
-        local_addr=getattr(client, "_local_addr", None),
-    ))
-    _log.info("MEDIA SENDER connected; exporting auth for DC %s", getattr(dc, "id", None))
-    auth = await client(functions.auth.ExportAuthorizationRequest(dc.id))
-    client._init_request.query = functions.auth.ImportAuthorizationRequest(
-        id=auth.id, bytes=auth.bytes)
-    req = functions.InvokeWithLayerRequest(LAYER, client._init_request)
-    await sender.send(req)
-    sender.dc_id = dc.id
-    _log.info("MEDIA SENDER ready dc=%s", dc.id)
-    return sender
+    try:
+        await asyncio.wait_for(
+            sender.connect(client._connection(
+                dc.ip_address,
+                dc.port,
+                dc.id,
+                loggers=getattr(client, "_log", None),
+                proxy=getattr(client, "_proxy", None),
+                local_addr=getattr(client, "_local_addr", None),
+            )),
+            timeout=MEDIA_SENDER_TIMEOUT,
+        )
+        _log.info("MEDIA SENDER connected; exporting auth for DC %s",
+                  getattr(dc, "id", None))
+        auth = await asyncio.wait_for(
+            client(functions.auth.ExportAuthorizationRequest(dc.id)),
+            timeout=MEDIA_SENDER_TIMEOUT,
+        )
+        client._init_request.query = functions.auth.ImportAuthorizationRequest(
+            id=auth.id, bytes=auth.bytes)
+        req = functions.InvokeWithLayerRequest(LAYER, client._init_request)
+        await asyncio.wait_for(sender.send(req), timeout=MEDIA_SENDER_TIMEOUT)
+        sender.dc_id = dc.id
+        _log.info("MEDIA SENDER ready dc=%s", dc.id)
+        return sender
+    except Exception:
+        # رفعِ نشتیِ session: sender را به‌درستی disconnect کن (خودش
+        # connection و aiohttp session را می‌بندد).
+        try:
+            await sender.disconnect()
+        except Exception:
+            pass
+        raise
 
 
 def _sender_alive(sender):

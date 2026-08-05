@@ -169,6 +169,49 @@ def test_install_idempotent_and_patches():
     check("idempotent (دوباره وصله نمی‌شود)", SoroushClient.__call__ is after)
 
 
+def test_media_sender_retries_after_failure():
+    """پس از شکستِ ساخت، بلاکِ دائمی نمی‌ماند و دفعهٔ بعد دوباره تلاش می‌شود."""
+    calls = {"n": 0}
+
+    class FakeSender:
+        def __init__(self):
+            self._fut = asyncio.get_event_loop().create_future()
+            self.dc_id = None
+
+        async def disconnect(self):
+            self.dc_id = "disconnected"
+
+    class FakeSelf:
+        _config = SimpleNamespace(dc_options=[])
+        session = SimpleNamespace(dc_id=3)
+        _log = None
+        _proxy = None
+        _local_addr = None
+        _media_sender = None
+        _init_request = SimpleNamespace()
+
+    def fake_create(client, dc):
+        calls["n"] += 1
+        raise RuntimeError("Server disconnected")
+
+    orig_create = fx._create_media_sender
+    fx._create_media_sender = fake_create
+    try:
+        async def run():
+            client = FakeSelf()
+            first = await fx._get_media_sender(client)
+            # بارِ دوم هم باید دوباره تلاش کند (نه اینکه فوراً None برگردد)
+            second = await fx._get_media_sender(client)
+            return first, second, client
+        first, second, client = asyncio.run(run())
+        check("شکستِ اول → None", first is None)
+        check("شکستِ دوم هم → None (اما تلاشِ دوباره شد)",
+              second is None and calls["n"] == 2, f"attempts={calls['n']}")
+        check("سعیِ دوباره انجام شد (rebuild)", calls["n"] >= 2, f"{calls['n']}")
+    finally:
+        fx._create_media_sender = orig_create
+
+
 # ---------------------------------------------------------------------------
 def main():
     test_find_media_dc()
@@ -179,6 +222,7 @@ def main():
     test_no_media_raises_error()
     test_non_file_not_redirected()
     test_install_idempotent_and_patches()
+    test_media_sender_retries_after_failure()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 
