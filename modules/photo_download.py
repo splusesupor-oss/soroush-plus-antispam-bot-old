@@ -225,6 +225,25 @@ def _is_spam_url(url):
     return False
 
 
+# نقشهٔ سادهٔ نویسهٔ فارسی → لاتین برای جستجویِ بهتر (مثل «رونالدو» → ronaldo).
+_FA_TO_LATIN = {
+    "ا": "a", "آ": "a", "ب": "b", "پ": "p", "ت": "t", "ث": "s", "ج": "j",
+    "چ": "ch", "ح": "h", "خ": "kh", "د": "d", "ذ": "z", "ر": "r", "ز": "z",
+    "ژ": "zh", "س": "s", "ش": "sh", "ص": "s", "ض": "z", "ط": "t", "ظ": "z",
+    "ع": "", "غ": "gh", "ف": "f", "ق": "q", "ک": "k", "گ": "g", "ل": "l",
+    "م": "m", "ن": "n", "و": "v", "ه": "h", "ی": "y", "ئ": "e", "ء": "",
+    "،": ",", "؟": "?", " ": " ",
+}
+
+
+def _transliterate_fa(text):
+    """تبدیلِ سادهٔ متنِ فارسی به نویسهٔ لاتین (برای جستجو)."""
+    out = []
+    for ch in text:
+        out.append(_FA_TO_LATIN.get(ch, ch))
+    return "".join(out).strip()
+
+
 def _is_direct_image_url(url):
     """آیا این URL یک آدرسِ مستقیمِ قابلِ دانلودِ تصویر است؟
 
@@ -232,8 +251,8 @@ def _is_direct_image_url(url):
       یا
     - پسوندِ فایلِ تصویر داشته باشد (.jpg/.png/...).
     لینکِ صفحه/مقاله (که فقط داخل مرورگر باز می‌شود و دانلودِ مستقیم نمی‌دهد)
-    و دامنه‌هایِ اسپم/تبلیغاتی/کازینو رد می‌شوند تا ربات سراغِ لینک‌هایِ
-    ناکارآمد یا نامرتبط نرود.
+    و دامنه‌هایِ اسپم/تبلیغاتی/کازینو/فروشگاهی رد می‌شوند تا ربات سراغِ
+    لینک‌هایِ ناکارآمد یا نامرتبط نرود.
     """
     if not url:
         return False
@@ -247,59 +266,96 @@ def _is_direct_image_url(url):
     return bool(_IMAGE_EXT_RE.search(url))
 
 
-def _search_image_urls(query, limit=IMAGE_COUNT):
-    """عبارت را جستجو و آدرسِ مستقیمِ تصویر را برمی‌گرداند (همگام، داخل thread).
-
-    ترتیب منابع (همه بدون کلید، روی Termux قابل اجرا):
-      ۱) Bing Image — آدرسِ مستقیمِ فایلِ تصویر (برای فارسی و انگلیسی کار می‌کند).
-      ۲) Openverse API — آدرسِ مستقیمِ تصویر.
-    خروجی فقط «آدرسِ فایلِ تصویر» است، نه لینکِ صفحه/مقاله.
-    """
+def _search_openverse(query, limit):
+    """جستجو در Openverse (واقعی و مرتبط‌تر، مخصوصاً برای فارسی)."""
     from urllib.parse import quote
     headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/120.0 Safari/537.36"),
     }
+    url = ("https://api.openverse.org/v1/images/?q="
+           + quote(query) + "&page_size=20")
+    resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
+    if resp.status_code != 200:
+        return []
+    data = resp.json()
+    seen = []
+    for item in data.get("results", []):
+        u = (item.get("url") or "").strip()
+        if u and "http" in u and u not in seen:
+            seen.append(u)
+    return [u for u in seen if _is_direct_image_url(u)][:limit]
 
-    # ۱) Bing Image search
+
+def _search_bing(query, limit):
+    """جستجو در Bing Image (مکمل)."""
+    from urllib.parse import quote
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0 Safari/537.36"),
+    }
+    url = "https://www.bing.com/images/search?q=" + quote(query)
+    resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
+    if resp.status_code != 200:
+        return []
+    html = resp.text
+    urls = re.findall(r'murl&quot;:&quot;([^&]+)&quot;', html)
+    urls += re.findall(r'"murl":"([^"]+)"', html)
+    seen = []
+    for u in urls:
+        u = u.replace("\\/", "/").strip()
+        if u and "http" in u and u not in seen:
+            seen.append(u)
+    return [u for u in seen if _is_direct_image_url(u)][:limit]
+
+
+def _search_image_urls(query, limit=IMAGE_COUNT):
+    """عبارت را جستجو و آدرسِ مستقیمِ تصویرِ مرتبط را برمی‌گرداند (همگام).
+
+    استراتژیِ بهتر برای فارسی:
+      ۱) Openverse — نتایجِ مرتبط و پایدار (پاسخِ خوب برای فارسی).
+      ۲) اگر عبارت فارسی بود، با نویسه‌گردانیِ لاتین (مثل «رونالدو» → ronaldo)
+         هم جستجو می‌شود تا نتایجِ انگلیسیِ مرتبط هم بیاید.
+      ۳) Bing به‌عنوان مکمل.
+    خروجی فقط «آدرسِ فایلِ تصویر» است (لینکِ صفحه/مقاله نه) و لینک‌هایِ
+    اسپم/فروشگاهی/نامرتبط حذف شده‌اند.
+    """
+    combined = []
+
+    # ۱) Openverse با خودِ عبارت
     try:
-        url = "https://www.bing.com/images/search?q=" + quote(query)
-        resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
-        if resp.status_code == 200:
-            html = resp.text
-            urls = re.findall(r'murl&quot;:&quot;([^&]+)&quot;', html)
-            urls += re.findall(r'"murl":"([^"]+)"', html)
-            seen = []
-            for u in urls:
-                u = u.replace("\\/", "/").strip()
-                if u and "http" in u and u not in seen:
-                    seen.append(u)
-            direct = [u for u in seen if _is_direct_image_url(u)]
-            if direct:
-                return direct[:limit]
+        combined += _search_openverse(query, limit)
     except Exception:
         pass
 
-    # ۲) Openverse API
-    try:
-        url = ("https://api.openverse.org/v1/images/?q="
-               + quote(query) + "&page_size=20")
-        resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
-        if resp.status_code == 200:
-            data = resp.json()
-            seen = []
-            for item in data.get("results", []):
-                u = (item.get("url") or "").strip()
-                if u and "http" in u and u not in seen:
-                    seen.append(u)
-            direct = [u for u in seen if _is_direct_image_url(u)]
-            if direct:
-                return direct[:limit]
-    except Exception:
-        pass
+    # ۲) اگر عبارت فارسی بود، با نویسهٔ لاتینِ آن هم جستجو کن
+    latin = _transliterate_fa(query)
+    if latin and latin.lower() != query.lower():
+        try:
+            combined += _search_openverse(latin, limit)
+        except Exception:
+            pass
 
-    return []
+    # ۳) Bing (هم با عبارت و هم لاتین)
+    for q in (query, latin):
+        if not q:
+            continue
+        try:
+            combined += _search_bing(q, limit)
+        except Exception:
+            pass
+
+    # حذفِ تکراری و قطع روی limit
+    seen, out = set(), []
+    for u in combined:
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+        if len(out) >= limit:
+            break
+    return out[:limit]
 
 
 def _is_valid_image_bytes(content):
@@ -447,62 +503,12 @@ async def _send_by_url(bot, chat_id, url):
     return True
 
 
-async def _send_link(bot, chat_id, url):
-    """روشِ جایگزین: فرستادنِ لینکِ دانلودِ مستقیمِ تصویر به‌صورتِ متن.
+async def _download_valid(bot, url):
+    """دانلود و اعتبارسنجیِ یک عکس؛ اگر واقعاً تصویرِ معتبر باشد bytes برمی‌گرداند.
 
-    وقتی آپلودِ فایل ممکن نیست (media sender در دسترس نیست)، این روش به
-    کاربر یک لینکِ مستقیمِ تصویر می‌دهد تا خودش تصویر را ببیند/دریافت کند.
+    در غیرِ این صورت None برمی‌گرداند (عکسِ خراب/نامعتبر رد می‌شود تا لینکِ
+    شکسته ارسال نشود).
     """
-    from splusthon.tl import types
-    text = "🖼️ تصویر (لینکِ مستقیم):\n" + url
-    await bot.client.send_message(chat_id, text)
-    return True
-
-
-async def _upload_photo(bot, chat_id, data, url, force_reconnect=False):
-    """ارسالِ عکس با آپلودِ واقعی (send_file).
-
-    اگر force_reconnect=True باشد، قبل از آپلود media sender قطع و از نو
-    ساخته می‌شود (تلاشِ مجدد). برمی‌گرداند True اگر عکسِ واقعی ارسال شد.
-    """
-    stream = _make_image_stream(data, 0)
-
-    # در صورتِ تلاشِ مجدد، media sender را از نو بساز (فقط اگر کلاینت واقعیِ
-    # SoroushClient وصله‌خورده باشد؛ نه در تست).
-    if force_reconnect and hasattr(bot.client, "_call"):
-        try:
-            from modules.splusthon_upload_fix import _get_media_sender
-            await _get_media_sender(bot.client, force_reconnect=True)
-        except Exception:
-            pass
-
-    try:
-        await asyncio.wait_for(
-            bot.client.send_file(chat_id, stream), timeout=LINK_TIMEOUT)
-        _log(bot, f"PHOTO SEND OK method=upload url={url}")
-        return True
-    except asyncio.TimeoutError:
-        _log(bot, f"PHOTO SEND TIMEOUT method=upload url={url} "
-                  f"timeout={LINK_TIMEOUT}s")
-    except Exception:
-        _log_exception(bot, f"PHOTO SEND ERROR method=upload url={url}")
-    return False
-
-
-async def _send_image(bot, chat_id, url):
-    """ارسالِ یک عکس به چت؛ برمی‌گرداند True اگر موفق.
-
-    ترتیبِ روش‌ها (به‌ترتیب):
-      ۱) آپلودِ واقعیِ عکس (PHOTO SEND method=upload) — روشِ اصلی.
-      ۲) تلاشِ مجددِ آپلود با reconnectِ media sender.
-      ۳) روشِ جایگزین: فرستادنِ لینکِ دانلودِ مستقیمِ تصویر به‌صورتِ متن.
-      ۴) اگر هیچ‌کدام موفق نشد → False.
-    هر مرحله سقفِ زمانیِ کوتاه دارد (LINK_TIMEOUT). سکه فقط بابتِ ارسالِ
-    موفق (عکس یا لینکِ مستقیم) کسر می‌شود.
-    """
-    _log(bot, f"PHOTO LINK SELECTED url={url}")
-
-    # ۱) دانلود + اعتبارسنجی — فقط عکسِ واقعی.
     _log(bot, f"PHOTO DOWNLOAD START url={url}")
     try:
         data = await asyncio.wait_for(
@@ -512,36 +518,56 @@ async def _send_image(bot, chat_id, url):
             timeout=LINK_TIMEOUT)
     except asyncio.TimeoutError:
         _log(bot, f"PHOTO DOWNLOAD TIMEOUT url={url} timeout={LINK_TIMEOUT}s")
-        data = None
+        return None
     except Exception:
         _log_exception(bot, f"PHOTO DOWNLOAD ERROR url={url}")
-        data = None
+        return None
     if not data:
         _log(bot, f"PHOTO DOWNLOAD FAILED url={url} reason=download_invalid")
-        return False
+        return None
     _log(bot, f"PHOTO DOWNLOAD OK url={url} bytes={len(data)}")
+    return data
 
-    # ۲) آپلودِ واقعیِ عکس (روشِ اصلی).
-    if await _upload_photo(bot, chat_id, data, url):
-        return True
 
-    # ۳) تلاشِ مجددِ آپلود با reconnectِ media sender.
-    _log(bot, f"PHOTO UPLOAD RETRY with media-sender reconnect url={url}")
-    if await _upload_photo(bot, chat_id, data, url, force_reconnect=True):
-        return True
+async def _upload_album(bot, chat_id, items, force_reconnect=False):
+    """ارسالِ همهٔ عکس‌هایِ معتبر با هم به‌صورتِ یک آلبوم (نه جدا جدا).
 
-    # ۴) روشِ جایگزین: لینکِ مستقیمِ تصویر به‌صورتِ متن.
-    _log(bot, f"PHOTO FALLBACK to direct link url={url}")
+    items = [(url, bytes), ...]. اگر media sender نبود/قطع بود و
+    force_reconnect=True، قبل از آپلود دوباره ساخته می‌شود.
+    """
+    if not items:
+        return False
+    streams = []
+    for idx, (_url, data) in enumerate(items):
+        streams.append(_make_image_stream(data, idx))
+    if force_reconnect and hasattr(bot.client, "_call"):
+        try:
+            from modules.splusthon_upload_fix import _get_media_sender
+            await _get_media_sender(bot.client, force_reconnect=True)
+        except Exception:
+            pass
     try:
-        await asyncio.wait_for(_send_link(bot, chat_id, url), timeout=LINK_TIMEOUT)
-        _log(bot, f"PHOTO SEND OK method=direct_link url={url}")
+        await asyncio.wait_for(
+            bot.client.send_file(chat_id, streams), timeout=LINK_TIMEOUT * len(items))
+        _log(bot, f"PHOTO SEND OK method=album count={len(items)}")
         return True
     except asyncio.TimeoutError:
-        _log(bot, f"PHOTO SEND TIMEOUT method=direct_link url={url} "
-                  f"timeout={LINK_TIMEOUT}s")
+        _log(bot, f"PHOTO SEND TIMEOUT method=album count={len(items)}")
     except Exception:
-        _log_exception(bot, f"PHOTO SEND ERROR method=direct_link url={url}")
-        return False
+        _log_exception(bot, f"PHOTO SEND ERROR method=album count={len(items)}")
+    return False
+
+
+async def _send_links_together(bot, chat_id, items):
+    """fallback: همهٔ لینک‌هایِ معتبر را در یک پیامِ متن می‌فرستد (نه جدا جدا).
+
+    فقط لینکِ عکس‌هایی که واقعاً معتبر دانلود شده‌اند فرستاده می‌شود؛ هرگز
+    لینکِ شکسته/نامعتبر.
+    """
+    urls = [u for u, _data in items]
+    text = "🖼️ تصویر (لینک‌هایِ مستقیم):\n" + "\n".join(urls)
+    await bot.client.send_message(chat_id, text)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -653,40 +679,64 @@ async def process(chat_id, user_id, bot):
             close_session(chat_id, user_id)
             return "no_results", NO_RESULTS
 
-        # ۳) ارسال حداکثر IMAGE_COUNT عکس در چت.
-        #    اگر یک URL خراب/نامعتبر باشد، کل درخواست شکست نمی‌خورد؛ از بین
-        #    نامزدهایِ جستجو یکی‌یکی جلو می‌رویم تا IMAGE_COUNT عکسِ معتبر
-        #    پیدا و ارسال شود. فقط عکس‌هایِ واقعاً ارسال‌شده شمرده و شارژ
-        #    می‌شوند. علاوه بر سقفِ هر لینک، یک سقفِ کلی هم هست تا عملیاتِ کل
-        #    بیش از PROCESS_TIMEOUT طول نکشد.
+        # ۳) جمع‌آوری عکس‌هایِ معتبر (حداکثر IMAGE_COUNT) از بین نامزدها.
+        #    اگر یک URL خراب/نامعتبر باشد، کل درخواست شکست نمی‌خورد؛ رد می‌شود
+        #    و سراغِ لینکِ بعدی می‌رویم. فقط عکسِ واقعاً معتبر (bytes درست)
+        #    نگه داشته می‌شود تا لینکِ شکسته ارسال نشود.
         deadline = time.monotonic() + PROCESS_TIMEOUT
-        sent = 0
+        items = []  # [(url, bytes), ...]
         for url in urls:
-            if sent >= IMAGE_COUNT:
+            if len(items) >= IMAGE_COUNT:
                 break
             if time.monotonic() >= deadline:
                 _log(bot, f"PHOTO PROCESS TIMEOUT chat_id={chat_id} "
                           f"user_id={user_id} exceeded {PROCESS_TIMEOUT}s")
                 break
-            ok = await _send_image(bot, chat_id, url)
-            if ok:
-                sent += 1
-            await asyncio.sleep(0.3)
+            data = await _download_valid(bot, url)
+            if data:
+                items.append((url, data))
+            await asyncio.sleep(0.2)
 
-        if sent == 0:
+        if not items:
             _log(bot, f"PHOTO DOWNLOAD FAILED chat_id={chat_id} user_id={user_id} "
-                      f"query={query!r} sent=0 (all links failed)")
+                      f"query={query!r} no valid image (all links failed)")
             close_session(chat_id, user_id)
             return "error", ERROR_MSG
 
-        # ۴) کسرِ سکه — فقط بعد از موفقیتِ واقعیِ ارسال.
+        # ۴) ارسالِ همهٔ عکس‌هایِ معتبر با هم (آلبوم) — نه جدا جدا.
+        #    ترتیب: آپلودِ آلبوم → تلاشِ مجدد با reconnect → لینکِ مستقیمِ
+        #    فقطِ عکس‌هایِ معتبر (در یک پیام). اگر هیچ‌کدام نشد → خطا.
+        delivered = 0
+        if await _upload_album(bot, chat_id, items):
+            delivered = len(items)
+        elif await _upload_album(bot, chat_id, items, force_reconnect=True):
+            delivered = len(items)
+        else:
+            # fallback: لینکِ عکس‌هایِ معتبر در یک پیام (هرگز لینکِ شکسته)
+            _log(bot, f"PHOTO FALLBACK to direct links count={len(items)}")
+            try:
+                await asyncio.wait_for(
+                    _send_links_together(bot, chat_id, items), timeout=LINK_TIMEOUT)
+                _log(bot, "PHOTO SEND OK method=direct_links")
+                delivered = len(items)
+            except asyncio.TimeoutError:
+                _log(bot, f"PHOTO SEND TIMEOUT method=direct_links "
+                          f"timeout={LINK_TIMEOUT}s")
+            except Exception:
+                _log_exception(bot, "PHOTO SEND ERROR method=direct_links")
+
+        if delivered == 0:
+            close_session(chat_id, user_id)
+            return "error", ERROR_MSG
+
+        # ۵) کسرِ سکه — فقط بعد از موفقیتِ واقعیِ ارسال.
         #    هزینه = ۱۰ برنز به‌ازای هر عکسِ ارسال‌شده (۱ عکس = ۱۰، ۲ عکس = ۲۰).
-        cost = COST_PER_IMAGE * sent
+        cost = COST_PER_IMAGE * delivered
         try:
             economy.spend(
                 chat_id, user_id, cost, economy.BRONZE,
                 reference=f"photo_download:{chat_id}:{user_id}:{int(time.time())}",
-                note=f"دانلود عکس ({sent} تصویر)",
+                note=f"دانلود عکس ({delivered} تصویر)",
             )
         except Exception:
             _log_exception(bot, f"PHOTO DOWNLOAD FAILED (spend) chat_id={chat_id} "
@@ -695,7 +745,7 @@ async def process(chat_id, user_id, bot):
             return "error", ERROR_MSG
 
         close_session(chat_id, user_id)
-        return "done", f"✅ {sent} تصویر ارسال شد. {cost} سکه برنز کسر شد."
+        return "done", f"✅ {delivered} تصویر ارسال شد. {cost} سکه برنز کسر شد."
     except Exception:
         # لایهٔ نهایی: هر خطایِ پیش‌بینی‌نشده را با traceback ثبت کن و به‌جایِ
         # پیامِ عمومیِ خام، علت را در لاگ نگه دار (بدون این لاگ نمی‌شود فهمید

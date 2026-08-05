@@ -167,7 +167,11 @@ class FakeClient:
         self.upload_calls += 1
         if self.fail_upload:
             raise RuntimeError("FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER")
-        self.sent += 1
+        # اگر آلبوم (لیستی از استریم) ارسال شود، تعدادِ عکس‌هایِ داخلِ لیست را می‌شماریم
+        if isinstance(img, (list, tuple)):
+            self.sent += len(img)
+        else:
+            self.sent += 1
 
 
 class FakeBot:
@@ -827,6 +831,38 @@ def test_spam_url_filter():
         check(f"اسپم-رد: {u[:40]}", not pd._is_direct_image_url(u), u)
 
 
+def test_transliterate_fa():
+    """نویسه‌گردانیِ فارسی→لاتین برای جستجویِ بهتر."""
+    check("رونالدو → ronaldv (شامل r)", "r" in pd._transliterate_fa("رونالدو"))
+    check("کوه → koh (شامل k)", "k" in pd._transliterate_fa("کوه"))
+    check("گل → gl", pd._transliterate_fa("گل") == "gl")
+    # بدونِ تغییر برای لاتین
+    check("لاتین دست‌نخورده", pd._transliterate_fa("cat") == "cat")
+
+
+def test_no_broken_link_fallback():
+    """اگر هیچ عکسِ معتبری پیدا نشد، لینکِ شکسته ارسال نمی‌شود و خطا می‌دهد."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3010, 50
+    _fund(chat, user, 100)
+    # هیچ لینکی تصویرِ معتبر نمی‌دهد (دانلود همیشه None)
+    bot = FakeBot(FakeClient())
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/bad.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: None
+    try:
+        sent = _run_flow(bot, chat, user, 0)
+        bal = _economy.get_balance(chat, user)
+        check("بدونِ عکسِ معتبر → هیچ چیزی ارسال نشد", sent == 0, f"{sent}")
+        check("لینکِ شکسته ارسال نشد (send_message صدا نشد)",
+              bot.client.link_calls == 0, f"link_calls={bot.client.link_calls}")
+        check("۰ برنز کسر شد", bal[_economy.BRONZE] == 100, f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
 def test_confirm_text_exact():
     """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
     pd.reset_all()
@@ -867,6 +903,8 @@ def main():
     test_send_failure_0_bronze()
     test_upload_primary_success_10_bronze()
     test_upload_fails_link_fallback_10_bronze()
+    test_transliterate_fa()
+    test_no_broken_link_fallback()
     test_no_confirm_0_bronze()
     test_insufficient_balance_not_performed()
     test_image_stream_is_photo()
