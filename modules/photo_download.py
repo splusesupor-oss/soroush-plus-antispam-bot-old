@@ -37,6 +37,9 @@ from urllib.parse import quote, urlparse
 
 import requests
 
+# سشنِ مشترکِ HTTP برایِ reuseِ کانکشن (سرعت + جلوگیری ازِ نشتی)
+_HTTP = requests.Session()
+
 import economy
 
 COST_PER_IMAGE = 10   # هزینهٔ دقیقِ هر عکس (برنز)
@@ -44,13 +47,13 @@ IMAGE_COUNT = 2       # حداکثر ۲ عکس در هر درخواست
 SEARCH_CANDIDATES = 5  # تعدادِ نامزدِ جستجو (کمتر برای سرعت)
 DL_CONCURRENCY = 3    # دانلودِ هم‌زمانِ لینک‌ها (موازی)
 SEND_RETRIES = 2      # تلاش مجدد برای ارسالِ هر عکس در صورت خطای گذرا
-NETWORK_TIMEOUT = (10, 20)
+NETWORK_TIMEOUT = (5, 8)
 # حداکثرِ زمانِ کلِ یک لینک (دانلود + ارسال). اگر لینکی بیشتر از این طول کشید،
 # رد می‌شود و سراغِ لینکِ بعدی می‌رویم تا کل عملیات مدت‌ها درگیر یک لینک نشود.
-LINK_TIMEOUT = 10
+LINK_TIMEOUT = 8
 # سقفِ زمانیِ کلِ عملیاتِ یک درخواست (جستجو + تلاش روی چند لینک + ارسال).
 # بعد از این زمان، دیگر لینکِ جدیدی تست نمی‌شود تا عملیات چند دقیقه معطل نماند.
-PROCESS_TIMEOUT = 45
+PROCESS_TIMEOUT = 25
 
 # پسوندِ فایلِ تصویر — برای تشخیصِ آدرسِ مستقیمِ فایل
 _IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|gif|webp|avif|bmp)([?#;].*)?$", re.I)
@@ -282,6 +285,27 @@ _FA_EN_HINTS = {
     "رونالدو": "ronaldo",
     "گل رز": "rose", "کوه": "mountain", "منظره": "landscape",
     "ماشین": "car", "ماشین مسابقه": "race car", "طبیعت": "nature",
+    "موتور": "motorcycle", "موتورسیکلت": "motorcycle", "موتور هوندا": "honda motorcycle",
+    "هوندا": "honda", "موتور سیکلت": "motorcycle", "دوچرخه": "bicycle",
+    "قطار": "train", "هواپیما": "airplane", "کشتی": "ship", "قایق": "boat",
+    "شهر": "city", "ساحل": "beach", "صحرا": "desert", "جزیره": "island",
+    "کتاب": "book", "خانه": "house", "ساختمان": "building", "برج": "tower",
+    "غذا": "food", "میوه": "fruit", "سیب": "apple", "موز": "banana",
+    "پرتقال": "orange", "گوجه": "tomato", "هویج": "carrot", "گلابی": "pear",
+    "انگور": "grape", "هندوانه": "watermelon", "توت": "berry",
+    "فوتبال": "football", "بسکتبال": "basketball", "والیبال": "volleyball",
+    "تنیس": "tennis", "گلف": "golf", "شنا": "swimming", "دویدن": "running",
+    "ورزش": "sport", "کوهستان": "mountain range", "قلعه": "castle",
+    "پل": "bridge", "جاده": "road", "تپه": "hill", "آبشار": "waterfall",
+    "رودخانه": "river", "اقیانوس": "ocean", "لاکپشت": "turtle", "کوسه": "shark",
+    "دلفین": "dolphin", "نهنگ": "whale", "خرچنگ": "crab", "پروانه": "butterfly",
+    "زنبور": "bee", "مورچه": "ant", "عنکبوت": "spider", "مار": "snake",
+    "سوسمار": "lizard", "تمساح": "crocodile", "گوزن": "deer", "گورخر": "zebra",
+    "شترمرغ": "ostrich", "طاووس": "peacock", "جغد": "owl", "عقاب": "eagle",
+    "کلاغ": "crow", "قناری": "canary", "کبوتر": "pigeon", "مرغ": "chicken",
+    "خروس": "rooster", "بز": "goat", "گوسفند": "sheep", "گاو": "cow",
+    "ماهی قرمز": "goldfish", "اختاپوس": "octopus", "ستاره دریایی": "starfish",
+    "لاکپشت دریایی": "sea turtle", "شاهین": "falcon", "فلامینگو": "flamingo",
     "آسمان": "sky", "دریا": "sea", "جنگل": "forest", "پرنده": "bird",
     "ماهی": "fish", "اسب": "horse", "ببر": "tiger", "شیر": "lion",
     "خرس": "bear", "گرگ": "wolf", "روباه": "fox", "پاندا": "panda",
@@ -292,36 +316,56 @@ _FA_EN_HINTS = {
 }
 
 
-def _search_keywords(query):
-    """کلیدواژه‌هایِ جستجو را می‌سازد (عبارت + نگاشتِ انگلیسیِ مشخص).
+def _normalize_fa_text(value):
+    """نرمال‌سازیِ متنِ فارسی: حذفِ نیم‌فاصله (ZWNJ)، یکسان‌سازیِ حروفِ عربی/فارسی.
 
-    برایِ سنجشِ ارتباط استفاده می‌شود. **نویسه‌گردانیِ سادهٔ فارسی→لاتین
-    استفاده نمی‌شود** چون خروجیِ بی‌معنا می‌دهد (مثل «لاکپشت های نینجا» →
-    «lakpsht hay nynja») که باعثِ تطابقِ اتفاقی با تصاویرِ نامرتبط می‌شود.
-    به‌جایِ آن فقط:
-      - کلماتِ معنادارِ خودِ عبارت (فارسی)، و
-      - عبارتِ انگلیسیِ مشخص از نگاشتِ کوچک (مثل «لاکپشت های نینجا» →
-        «ninja turtle») در نظر گرفته می‌شوند.
+    «لاک‌پشت» → «لاکپشت»، «ك»→«ک»، «ي»→«ی»، «ة»→«ه». این کار معنی را
+    تغییر نمی‌دهد و باعث می‌شود شکل‌هایِ مختلفِ یک کلمه (با/بدونِ نیم‌فاصله)
+    یکسان شناخته شوند.
+    """
+    if not value:
+        return ""
+    text = (value or "").replace("\u200c", "").replace("\u200f", "")
+    for a, b in (("ي", "ی"), ("ك", "ک"), ("ة", "ه"), ("ۀ", "ه"), ("ؤ", "و")):
+        text = text.replace(a, b)
+    return text
+
+
+def _search_keywords(query):
+    """کلیدواژه‌هایِ جستجو را می‌سازد (عبارتِ نرمال‌شده + نگاشتِ انگلیسیِ مشخص).
+
+    برایِ سنجشِ ارتباط استفاده می‌شود. ابتدا متن نرمال می‌شود (حذفِ نیم‌فاصله
+    و یکسان‌سازیِ حروف) تا «لاک‌پشت» و «لاکپشت» یکی شوند. سپس:
+      - کلماتِ معنادارِ خودِ عبارت (فارسیِ نرمال‌شده)، و
+      - عبارتِ انگلیسیِ مشخص از نگاشتِ کوچک استفاده می‌شود.
+    **نویسه‌گردانیِ سادهٔ فارسی→لاتین استفاده نمی‌شود** چون خروجیِ بی‌معنا
+    می‌دهد که باعثِ تطابقِ اتفاقی با تصاویرِ نامرتبط می‌شود.
+    خروجی: (keywords, search_queries, english_hint) — english_hint در صورتِ
+    وجود برایِ سنجشِ «قویِ» ارتباط استفاده می‌شود.
     """
     kws = set()
-    q = query.strip()
+    q = _normalize_fa_text(query).strip()
     if not q:
-        return kws, []
-    # کلماتِ معنادارِ خودِ عبارت (فارسی) — بدونِ کلماتِ توقف
+        return kws, [], None
+
+    # کلماتِ معنادارِ خودِ عبارت (فارسیِ نرمال‌شده) — بدونِ کلماتِ توقف
     for tok in q.split():
         tok = tok.lower()
         if tok and tok not in _STOPWORDS:
             kws.add(tok)
+
     # عبارتِ انگلیسیِ مشخص (از نگاشتِ کوچک) — مشخص‌ترین اول
     search_queries = [q]
+    english_hint = None
     matched = [en for fa, en in _FA_EN_HINTS.items() if fa in q]
     if matched:
         english_hint = max(matched, key=len)
         search_queries.append(english_hint)
         for tok in english_hint.split():
             kws.add(tok.lower())
+
     kws.discard("")
-    return kws, search_queries
+    return kws, search_queries, english_hint
 
 
 def _relevance_score(title, tags, url, keywords):
@@ -336,6 +380,25 @@ def _relevance_score(title, tags, url, keywords):
     return score
 
 
+def _strongly_relevant(title, tags, url, keywords, english_hint):
+    """آیا تصویر «به‌شدت» مرتبط است؟
+
+    اگر عبارتِ انگلیسیِ مشخص (english_hint) وجود داشته باشد، باید **همهٔ**
+    کلماتِ آن در عنوان/برچسب/URLِ تصویر حاضر باشند (مثل ninja + turtle برایِ
+    «لاکپشت های نینجا»). این باعث می‌شود تصویرِ اتفاقیِ «ninja» (بدونِ turtle)
+    یا «hay» رد شود. اگر hint نباشد، همان امتیازِ ≥۱ کافی است.
+    """
+    text = (" ".join([title or "", " ".join(tags or []), url or ""])).lower()
+    if english_hint:
+        hint_tokens = [t for t in english_hint.lower().split() if t]
+        if not hint_tokens:
+            return True
+        return all(t in text for t in hint_tokens)
+    if not keywords:
+        return False
+    return any(kw in text for kw in keywords)
+
+
 def _search_openverse(query, limit):
     """جستجو در Openverse؛ برمی‌گرداند لیستِ (url, title, tags)."""
     from urllib.parse import quote
@@ -346,7 +409,7 @@ def _search_openverse(query, limit):
     }
     url = ("https://api.openverse.org/v1/images/?q="
            + quote(query) + "&page_size=20")
-    resp = requests.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
+    resp = _HTTP.get(url, headers=headers, timeout=NETWORK_TIMEOUT)
     if resp.status_code != 200:
         return []
     data = resp.json()
@@ -378,8 +441,8 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
       ۴) فقط نتایجِ مرتبط (score>=۱) برگردانده می‌شوند؛ اگر هیچ‌کدام مرتبط
          نبود، لیستِ خالی (برایِ نمایشِ پیامِ «تصویرِ مرتبط پیدا نشد»).
     """
-    keywords, search_queries = _search_keywords(query)
-    if not keywords:
+    keywords, search_queries, english_hint = _search_keywords(query)
+    if not keywords and not english_hint:
         return []
 
     candidates = []  # (url, title, tags)
@@ -389,16 +452,20 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
         except Exception:
             pass
 
-    # امتیازِ ارتباط و مرتب‌سازی
+    # فیلترِ ارتباطِ قوی + امتیاز و مرتب‌سازی
     scored = []
     seen_urls = set()
     for url, title, tags in candidates:
         if url in seen_urls:
             continue
         seen_urls.add(url)
+        if not _strongly_relevant(title, tags, url, keywords, english_hint):
+            continue
         score = _relevance_score(title, tags, url, keywords)
-        if score >= 1:
-            scored.append((score, url))
+        scored.append((score, url))
+
+    if not scored:
+        return []
 
     # مرتب از مرتبط‌ترین به کم‌مرتبط‌ترین
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -452,7 +519,7 @@ def _fetch_image_bytes(url, timeout=NETWORK_TIMEOUT, log_func=None):
     if log_func:
         log_func(f"DOWNLOAD REQUEST url={url}")
     try:
-        resp = requests.get(url, headers=headers, timeout=timeout)
+        resp = _HTTP.get(url, headers=headers, timeout=timeout)
     except Exception as e:
         if log_func:
             log_func(f"DOWNLOAD ERROR url={url} reason={type(e).__name__}: {e}\n"

@@ -765,14 +765,14 @@ def test_fetch_accepts_after_logging():
     pd.reset_all()
     logged = []
     import requests
-    orig_get = requests.get
+    orig_get = pd._HTTP.get
     class FakeResp:
         status_code = 200
         headers = {"Content-Type": "application/octet-stream"}
         content = b"\xff\xd8\xff\xe0" + b"\x00" * 200
     def fake_get(url, *a, **k):
         return FakeResp()
-    requests.get = fake_get
+    pd._HTTP.get = fake_get
     try:
         data = pd._fetch_image_bytes("http://x.com/a", log_func=logged.append)
         check("با content-type اشتباه ولی bytes معتبر، پذیرفته شد",
@@ -782,7 +782,7 @@ def test_fetch_accepts_after_logging():
         check("جزئیات (status/type/bytes/magic) لاگ شد",
               any("status=" in m and "magic=" in m for m in logged), f"{logged}")
     finally:
-        requests.get = orig_get
+        pd._HTTP.get = orig_get
         pd.reset_all()
 
 
@@ -879,7 +879,7 @@ def test_links_message_numbered_and_blockquote():
 
 def test_relevance_filter():
     """فقط تصاویری که با query مرتبط‌اند (عنوان/برچسب) قبول می‌شوند."""
-    kw, _ = pd._search_keywords("گربه")
+    kw, _, _hint = pd._search_keywords("گربه")
     # مرتبط
     check("عنوانِ حاوی «گربه» مرتبط است",
           pd._relevance_score("یک گربه زیبا", [], "http://x", kw) >= 1)
@@ -896,7 +896,7 @@ def test_no_translit_false_positive():
     برایِ «لاکپشت های نینجا»، تصویری با عنوانِ «hay» (که از نویسهٔ «های»
     می‌آمد) نباید مرتبط تلقی شود.
     """
-    kw, _ = pd._search_keywords("لاکپشت های نینجا")
+    kw, _, _hint = pd._search_keywords("لاکپشت های نینجا")
     check("کلیدواژهٔ بی‌معنای hay نباید در کلیدواژه‌ها باشد", "hay" not in kw, f"{kw}")
     check("کلیدواژهٔ ninja هست", "ninja" in kw, f"{kw}")
     check("کلیدواژهٔ turtle هست", "turtle" in kw, f"{kw}")
@@ -906,6 +906,32 @@ def test_no_translit_false_positive():
     # تصویرِ واقعیِ نینجا مرتبط است
     check("Teenage Mutant Ninja Turtles مرتبط است",
           pd._relevance_score("Teenage Mutant Ninja Turtles", [], "http://x", kw) >= 1)
+
+
+def test_normalize_fa_handles_zwnj():
+    """نیم‌فاصله و شکل‌هایِ مختلف باید نرمال شوند ولی معنی عوض نشود."""
+    check("لاک‌پشت → لاکپشت (نیم‌فاصله حذف)",
+          pd._normalize_fa_text("لاک\u200cپشت") == "لاکپشت")
+    check("حروفِ عربی یکسان می‌شوند",
+          pd._normalize_fa_text("لاکپشت") == pd._normalize_fa_text("لاكپشت"))
+    # همهٔ شکل‌هایِ «لاکپشت های نینجا» باید به یک hint برسند
+    _, _, h1 = pd._search_keywords("لاکپشت های نینجا")
+    _, _, h2 = pd._search_keywords("لاک\u200cپشت های نینجا")
+    _, _, h3 = pd._search_keywords("لاک پشت های نینجا")
+    check("هر سه شکل hint یکسان دارند", h1 == h2 == h3 == "ninja turtle",
+          f"{h1} / {h2} / {h3}")
+
+
+def test_strong_relevance_requires_all_hint_words():
+    """وقتی hint هست، همهٔ کلماتِ آن باید حاضر باشند (تصویرِ اتفاقی رد می‌شود)."""
+    kw, _, hint = pd._search_keywords("لاکپشت های نینجا")
+    check("hint باید ninja turtle باشد", hint == "ninja turtle", f"{hint}")
+    # تصویرِ فقط «ninja» (بدون turtle) نامرتبط است
+    check("فقط ninja (بدون turtle) نامرتبط است",
+          not pd._strongly_relevant("Ninja martial arts", [], "http://x", kw, hint))
+    # TMNT مرتبط است
+    check("TMNT مرتبط است",
+          pd._strongly_relevant("Teenage Mutant Ninja Turtles", [], "http://x", kw, hint))
 
 
 def test_owner_bypass_insufficient():
@@ -982,6 +1008,8 @@ def main():
     test_links_message_numbered_and_blockquote()
     test_relevance_filter()
     test_no_translit_false_positive()
+    test_normalize_fa_handles_zwnj()
+    test_strong_relevance_requires_all_hint_words()
     test_owner_bypass_insufficient()
     test_confirm_text_exact()
 
