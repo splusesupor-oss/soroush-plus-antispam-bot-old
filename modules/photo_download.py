@@ -116,6 +116,9 @@ _BANNED_WORDS_FA = {
     "هرزگی", "سکسی", "بیکینی", "بی‌کینی", "پستان", "سینه‌برهنه",
     "نود", "نودی", "عکس مست", "امراض جنسی", "مقاربت", "آمیزش",
     "اروتیک", "اروتیسم",
+    # موضوعاتِ حساسِ سیاسی/تاریخیِ درخواستیِ مالک
+    "پهلوی", "خاندان پهلوی", "رضا شاه", "رضاشاه", "محمدرضا پهلوی",
+    "شاه پهلوی", "دودمان پهلوی",
 }
 _BANNED_WORDS_EN = {
     "sex", "porn", "porno", "nude", "naked", "nsfw", "erotic", "xxx",
@@ -127,6 +130,7 @@ _BANNED_WORDS_EN = {
 _BANNED_PATTERNS = [
     r"برهنه", r"لخت", r"عکس\s*مست", r"سکس", r"پورن", r"جنسی",
     r"nude", r"naked", r"porn", r"sex", r"nsfw", r"erotic", r"xxx",
+    r"پهلوی", r"رضا\s*شاه", r"رضاشاه", r"شاه\s*پهلوی",
 ]
 
 # ---------------------------------------------------------------------------
@@ -332,6 +336,8 @@ _FA_EN_HINTS = {
     "تنیس": "tennis", "گلف": "golf", "شنا": "swimming", "دویدن": "running",
     "ورزش": "sport", "کوهستان": "mountain range", "قلعه": "castle",
     "پل": "bridge", "جاده": "road", "تپه": "hill", "آبشار": "waterfall",
+    "پلنگ": "leopard", "پلنگ صورتی": "pink panther", "پلنگ برفی": "snow leopard",
+    "یوزپلنگ": "cheetah", "ببر": "tiger", "شیر": "lion",
     "رودخانه": "river", "اقیانوس": "ocean", "لاکپشت": "turtle", "کوسه": "shark",
     "دلفین": "dolphin", "نهنگ": "whale", "خرچنگ": "crab", "پروانه": "butterfly",
     "زنبور": "bee", "مورچه": "ant", "عنکبوت": "spider", "مار": "snake",
@@ -391,6 +397,20 @@ def _normalize_fa_text(value):
     return text
 
 
+def _fa_key_in_query(key, q):
+    """آیا «کلید» به‌عنوانِ یک کلمهٔ کامل در عبارت هست؟ (نه داخلِ کلمهٔ دیگر)
+
+    مانعِ تطابقِ اشتباه مثل «پل» داخلِ «پلنگ» می‌شود.
+    """
+    if not key:
+        return False
+    # کلیدِ چندکلمه‌ای: باید دقیقاً به‌صورتِ زیرعبارت (با مرزِ کلمه) باشد
+    if " " in key.strip():
+        return (" " + key.strip() + " ") in (" " + q + " ")
+    # کلیدِ تک‌کلمه: در بینِ توکن‌هایِ عبارت باشد
+    return key.strip() in set(q.split())
+
+
 def _search_keywords(query):
     """کلیدواژه‌هایِ جستجو را می‌سازد (عبارتِ نرمال‌شده + نگاشتِ انگلیسیِ مشخص).
 
@@ -419,10 +439,11 @@ def _search_keywords(query):
     # (مثلاً «لاکپشت های نینجا» → ninja turtle، نه فقط ninja)
     search_queries = [q]
     english_hint = None
-    # طولانی‌ترین «کلیدِ فارسیِ» منطبق انتخاب می‌شود تا «کوه دماوند» به‌جایِ
-    # «کوه»→mountain به «دماوند»→damavand برسد.
-    matched = [fa for fa in _FA_PEOPLE_HINTS if fa in q]
-    matched += [fa for fa in _FA_EN_HINTS if fa in q]
+    # طولانی‌ترین «کلیدِ فارسیِ» منطبق (با مرزِ کلمه) انتخاب می‌شود تا
+    # «کوه دماوند» به‌جایِ «کوه»→mountain به «دماوند»→damavand برسد،
+    # و «پل» داخلِ «پلنگ» تطبیق نخورد.
+    matched = [fa for fa in _FA_PEOPLE_HINTS if _fa_key_in_query(fa, q)]
+    matched += [fa for fa in _FA_EN_HINTS if _fa_key_in_query(fa, q)]
     if matched:
         best_fa = max(matched, key=len)
         english_hint = (_FA_PEOPLE_HINTS.get(best_fa)
@@ -584,87 +605,75 @@ def _search_wikipedia_topic(query):
 
 
 def _search_image_urls(query, limit=IMAGE_COUNT):
-    """جستجویِ مرتبط: فقط عکس‌هایی که با query ارتباط دارند برمی‌گرداند.
+    """جستجویِ تصویر: «همان عبارتِ دقیقِ کاربر» اول جستجو می‌شود.
 
-    استراتژی:
-      ۱) فقط منبعِ Openverse (مطمئن و مرتبط). Bing حذف شد چون برایِ فارسی
-         نتایجِ تصادفی/اسپم می‌دهد.
-      ۲) جستجو با عبارت + نویسه‌گردانیِ لاتین + عبارتِ انگلیسیِ نگاشت‌شده.
-      ۳) برایِ هر نتیجه، «امتیازِ ارتباط» با کلیدواژه‌هایِ جستجو سنجیده می‌شود.
-      ۴) فقط نتایجِ مرتبط (score>=۱) برگردانده می‌شوند؛ اگر هیچ‌کدام مرتبط
-         نبود، لیستِ خالی (برایِ نمایشِ پیامِ «تصویرِ مرتبط پیدا نشد»).
+    اصول:
+      ۱) عبارتِ دقیقِ کاربر (بدونِ تغییر) همیشه اولین عبارتِ جستجو است.
+      ۲) نگاشتِ انگلیسی فقط به‌عنوانِ «مکمل» (عبارتِ دوم) اضافه می‌شود،
+         نه جایگزین — تا اگر عبارتِ فارسی در منبع بود همان بیاید.
+      ۳) نتایجی که از جستجویِ «عبارتِ دقیق» آمده‌اند امتیازِ بیشتری می‌گیرند.
+      ۴) منابعِ معتبر: ویکی‌پدیا → Wikimedia Commons → Openverse.
+      ۵) فقط نتایجِ مرتبط ارسال می‌شود؛ در غیرِ این صورت لیستِ خالی.
     """
     keywords, search_queries, english_hint = _search_keywords(query)
-    if not keywords and not english_hint:
+    exact = _normalize_fa_text(query).strip()
+    if not exact:
         return []
 
-    cache_key = _normalize_fa_text(query).strip().lower()
+    cache_key = exact.lower()
     now = time.monotonic()
     cached = _SEARCH_CACHE.get(cache_key)
     if cached and (now - cached[0]) < _CACHE_TTL:
         return cached[1][:limit]
 
-    # برایِ افرادِ مشهور، فقط با نامِ انگلیسیِ مشخص جستجو می‌شود (نه فارسی)،
-    # چون جستجویِ فارسیِ «بروسلی» نتایجِ بی‌ربط (افغانستان، پشتِ صحنه) می‌دهد.
-    search_queries_used = search_queries
-    if english_hint and english_hint in _FA_PEOPLE_HINTS.values():
-        search_queries_used = [english_hint]
+    # عبارتِ دقیقِ کاربر + مکملِ انگلیسی (اگر هست)
+    search_queries_used = [exact]
+    if english_hint:
+        search_queries_used.append(english_hint)
 
-    # جمع‌آوریِ نامزدها از چند منبع (fallback) مثلِ موتورِ جستجو:
-    #   ۱) ویکی‌پدیا (تشخیصِ موضوع + تصویرِ اصلیِ صفحه) — اولویتِ اول
-    #   ۲) Openverse
-    #   ۳) Wikimedia Commons (محتوایِ فارسی)
-    candidates = []  # (url, title, tags)
-    # ۱) ویکی‌پدیا
+    # جمع‌آوریِ نامزدها از منابعِ معتبر؛ برچسبِ «از عبارتِ دقیق» را نگه می‌داریم.
+    candidates = []  # (url, title, tags, from_exact)
+    sources = [
+        _search_wikipedia_topic,
+        _search_wikimedia,
+        _search_openverse,
+    ]
     for sq in search_queries_used:
-        try:
-            candidates += _search_wikipedia_topic(sq)
-        except Exception:
-            pass
-    # ۲) Openverse + ۳) Wikimedia
-    for sq in search_queries_used:
-        try:
-            candidates += _search_openverse(sq, limit)
-        except Exception:
-            pass
-        try:
-            candidates += _search_wikimedia(sq, limit)
-        except Exception:
-            pass
+        from_exact = (sq == exact)
+        for src in sources:
+            try:
+                res = src(sq, limit)
+            except Exception:
+                res = []
+            for url, title, tags in res:
+                candidates.append((url, title, tags, from_exact))
 
-    # فیلترِ ارتباط + امتیاز و مرتب‌سازی
-    # - اگر hint انگلیسیِ مشخص داریم (مثل ninja turtle یا amir tataloo):
-    #   باید «همهٔ» کلماتِ آن در metadata باشد (تطابقِ قوی، ردِ تصاویرِ اتفاقی).
-    # - اگر hint نداریم (جستجویِ عمومی مثل «لباس» یا «ماشین»): مثلِ موتورِ
-    #   جستجو عمل می‌کنیم — نتایجِ Openverse (که خودش بر اساسِ relevance رتبه
-    #   می‌دهد و منبعِ امن است) را با فیلترِ اسپم/دامنه قبول می‌کنیم و مرتب
-    #   می‌کنیم، نه اینکه به‌خاطرِ عدمِ تطابقِ فارسی با عنوانِ انگلیسی رد کنیم.
+    # فیلترِ ارتباط و امتیاز
     scored = []
     seen_urls = set()
-    for url, title, tags in candidates:
+    for url, title, tags, from_exact in candidates:
         if url in seen_urls:
             continue
         seen_urls.add(url)
         if english_hint:
             if not _strongly_relevant(title, tags, url, keywords, english_hint):
                 continue
-        else:
-            # بدونِ hint: امتیازِ ارتباط را محاسبه کن ولی ردِ سخت نکن؛
-            # نتایجِ Openverse از قبل relevance-شده‌اند.
-            pass
         score = _relevance_score(title, tags, url, keywords)
+        # نتایجِ عبارتِ دقیق امتیازِ بیشتری می‌گیرند
+        if from_exact:
+            score += 3
         scored.append((score, url))
 
     if not scored:
         return []
 
-    # مرتب از مرتبط‌ترین به کم‌مرتبط‌ترین
     scored.sort(key=lambda x: x[0], reverse=True)
     result = [url for _score, url in scored[:limit]]
 
-    # ذخیره در کش برایِ عبارت‌هایِ پرتکرار
     _SEARCH_CACHE[cache_key] = (now, result)
     return result
+
+
 
 
 def _is_valid_image_bytes(content):

@@ -1005,6 +1005,25 @@ def test_normal_queries_not_blocked():
         check(f"مسدود نیست: {q}", not pd.is_blocked(q))
     for q in ["عکس سکسی", "پورن", "عکس برهنه", "sex", "nude", "سکس"]:
         check(f"مسدود است: {q}", pd.is_blocked(q))
+    # موضوعاتِ حساسِ درخواستیِ مالک نیز مسدودند
+    for q in ["پهلوی", "رضا شاه", "خاندان پهلوی", "رضاشاه", "محمدرضا پهلوی"]:
+        check(f"مسدود است: {q}", pd.is_blocked(q))
+
+
+def test_word_boundary_hint():
+    """«پل» نباید داخلِ «پلنگ» تطبیق کند (مرزِ کلمه)."""
+    _, _, h1 = pd._search_keywords("پلنگ صورتی")
+    _, _, h2 = pd._search_keywords("پل")
+    check("پلنگ صورتی → pink panther", h1 == "pink panther", f"{h1}")
+    check("پل → bridge", h2 == "bridge", f"{h2}")
+
+
+def test_exact_query_prioritized():
+    """عبارتِ دقیقِ کاربر همیشه در جستجو هست و اولویت دارد."""
+    kw, sq, hint = pd._search_keywords("پلنگ صورتی")
+    check("عبارتِ دقیقِ فارسی در search_queries هست", "پلنگ صورتی" in sq, f"{sq}")
+    check("hint مکمل است نه جایگزین", hint == "pink panther")
+    check("عبارتِ دقیق اول است", sq[0] == "پلنگ صورتی", f"{sq}")
 
 
 def test_search_cache():
@@ -1100,6 +1119,8 @@ def main():
     test_wikimedia_source()
     test_wikipedia_topic_source()
     test_normal_queries_not_blocked()
+    test_word_boundary_hint()
+    test_exact_query_prioritized()
     test_search_cache()
     test_owner_bypass_insufficient()
     test_confirm_text_exact()
