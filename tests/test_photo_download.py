@@ -863,6 +863,20 @@ def test_no_broken_link_fallback():
         pd.reset_all()
 
 
+def test_links_message_numbered_and_blockquote():
+    """پیامِ fallback باید لینکِ شماره‌خورده و blockquote داشته باشد."""
+    from splusthon.tl.types import MessageEntityBlockquote
+    items = [("http://e.com/1.jpg", b"x"), ("http://e.com/2.jpg", b"y")]
+    text, entities = pd._build_links_message(items)
+    check("شمارهٔ ۱ وجود دارد", "لینک 1:" in text, text)
+    check("شمارهٔ ۲ وجود دارد", "لینک 2:" in text, text)
+    check("هر دو URL در متن هست", "http://e.com/1.jpg" in text and "http://e.com/2.jpg" in text)
+    check("دو entity blockquote ساخته شد", len(entities) == 2,
+          f"{len(entities)}")
+    check("همه entityها MessageEntityBlockquote هستند",
+          all(isinstance(e, MessageEntityBlockquote) for e in entities))
+
+
 def test_confirm_text_exact():
     """متن تأیید دقیقاً مطابق خواستهٔ کاربر است و عدد ۴۰ ندارد."""
     pd.reset_all()
@@ -913,6 +927,7 @@ def main():
     test_fetch_accepts_after_logging()
     test_is_direct_image_url()
     test_spam_url_filter()
+    test_links_message_numbered_and_blockquote()
     test_confirm_text_exact()
 
     print(f"\npassed={PASSED} failed={FAILED}")

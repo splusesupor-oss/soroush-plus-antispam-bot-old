@@ -41,7 +41,8 @@ import economy
 
 COST_PER_IMAGE = 10   # هزینهٔ دقیقِ هر عکس (برنز)
 IMAGE_COUNT = 2       # حداکثر ۲ عکس در هر درخواست
-SEARCH_CANDIDATES = 8  # تعدادِ نامزدِ جستجو برای اینکه حداقل ۲ عکسِ معتبر پیدا شود
+SEARCH_CANDIDATES = 5  # تعدادِ نامزدِ جستجو (کمتر برای سرعت)
+DL_CONCURRENCY = 3    # دانلودِ هم‌زمانِ لینک‌ها (موازی)
 SEND_RETRIES = 2      # تلاش مجدد برای ارسالِ هر عکس در صورت خطای گذرا
 NETWORK_TIMEOUT = (10, 20)
 # حداکثرِ زمانِ کلِ یک لینک (دانلود + ارسال). اگر لینکی بیشتر از این طول کشید،
@@ -529,6 +530,38 @@ async def _download_valid(bot, url):
     return data
 
 
+async def _download_valid_parallel(bot, urls, limit, deadline):
+    """دانلودِ هم‌زمانِ لینک‌ها تا جمع‌آوریِ limit عکسِ معتبر.
+
+    لینک‌ها با حداکثرِ ``DL_CONCURRENCY`` هم‌زمان بررسی می‌شوند؛ اولین
+    عکس‌هایِ معتبر سریع برمی‌گردند تا پاسخ در چند ثانیه باشد نه چند دقیقه.
+    """
+    results = []
+
+    async def _try(url):
+        if len(results) >= limit or time.monotonic() >= deadline:
+            return None
+        data = await _download_valid(bot, url)
+        if data:
+            results.append((url, data))
+        return data
+
+    # دانلودِ هم‌زمانِ همهٔ نامزدها (محدود به DL_CONCURRENCY هم‌زمان)
+    sem = asyncio.Semaphore(DL_CONCURRENCY)
+
+    async def _worker(url):
+        async with sem:
+            if len(results) >= limit or time.monotonic() >= deadline:
+                return
+            data = await _download_valid(bot, url)
+            if data:
+                results.append((url, data))
+
+    tasks = [_worker(u) for u in urls]
+    await asyncio.gather(*tasks, return_exceptions=True)
+    return results[:limit]
+
+
 async def _upload_album(bot, chat_id, items, force_reconnect=False):
     """ارسالِ همهٔ عکس‌هایِ معتبر با هم به‌صورتِ یک آلبوم (نه جدا جدا).
 
@@ -558,15 +591,48 @@ async def _upload_album(bot, chat_id, items, force_reconnect=False):
     return False
 
 
-async def _send_links_together(bot, chat_id, items):
-    """fallback: همهٔ لینک‌هایِ معتبر را در یک پیامِ متن می‌فرستد (نه جدا جدا).
+def _u16_len(value):
+    """طول به واحدِ UTF-16 (که MessageEntity از آن استفاده می‌کند)."""
+    return len((value or "").encode("utf-16-le")) // 2
 
+
+def _build_links_message(items):
+    """متنِ شماره‌دارِ لینک‌ها + entityهای blockquote برای هر لینک.
+
+    خروجی: (text, entities) — هر لینک جدا، شماره‌خورده و داخلِ نقلِ‌قولِ
+    شیشه‌ای (MessageEntityBlockquote) قرار می‌گیرد.
+    """
+    from splusthon.tl.types import MessageEntityBlockquote
+
+    header = "🖼️ تصویر (لینک‌هایِ مستقیم):\n\n"
+    blocks = []
+    entities = []
+    offset = _u16_len(header)
+    for i, (url, _data) in enumerate(items, 1):
+        block = f"لینک {i}:\n{url}"
+        blocks.append(block)
+        entities.append(MessageEntityBlockquote(
+            offset=offset, length=_u16_len(block)))
+        offset += _u16_len(block) + _u16_len("\n\n")
+    text = header + "\n\n".join(blocks)
+    return text, entities
+
+
+async def _send_links_together(bot, chat_id, items):
+    """fallback: همهٔ لینک‌هایِ معتبر را در یک پیامِ متن می‌فرستد.
+
+    هر لینک جدا، شماره‌خورده و داخلِ نقلِ‌قولِ شیشه‌ای (blockquote) است.
     فقط لینکِ عکس‌هایی که واقعاً معتبر دانلود شده‌اند فرستاده می‌شود؛ هرگز
     لینکِ شکسته/نامعتبر.
     """
-    urls = [u for u, _data in items]
-    text = "🖼️ تصویر (لینک‌هایِ مستقیم):\n" + "\n".join(urls)
-    await bot.client.send_message(chat_id, text)
+    text, entities = _build_links_message(items)
+    try:
+        await bot.client.send_message(
+            chat_id, text, formatting_entities=entities)
+    except Exception:
+        # اگر سرور entity را نپذیرد، همان متنِ ساده ارسال شود (بدون blockquote)
+        _log_exception(bot, "PHOTO SEND direct_links entities rejected; retry plain")
+        await bot.client.send_message(chat_id, text)
     return True
 
 
@@ -679,23 +745,13 @@ async def process(chat_id, user_id, bot):
             close_session(chat_id, user_id)
             return "no_results", NO_RESULTS
 
-        # ۳) جمع‌آوری عکس‌هایِ معتبر (حداکثر IMAGE_COUNT) از بین نامزدها.
+        # ۳) جمع‌آوری عکس‌هایِ معتبر (حداکثر IMAGE_COUNT) از بین نامزدها،
+        #    با دانلودِ هم‌زمان (موازی) تا سریع تمام شود.
         #    اگر یک URL خراب/نامعتبر باشد، کل درخواست شکست نمی‌خورد؛ رد می‌شود
-        #    و سراغِ لینکِ بعدی می‌رویم. فقط عکسِ واقعاً معتبر (bytes درست)
-        #    نگه داشته می‌شود تا لینکِ شکسته ارسال نشود.
+        #    و لینکِ بعدی (موازی) بررسی می‌شود. فقط عکسِ واقعاً معتبر (bytes
+        #    درست) نگه داشته می‌شود تا لینکِ شکسته ارسال نشود.
         deadline = time.monotonic() + PROCESS_TIMEOUT
-        items = []  # [(url, bytes), ...]
-        for url in urls:
-            if len(items) >= IMAGE_COUNT:
-                break
-            if time.monotonic() >= deadline:
-                _log(bot, f"PHOTO PROCESS TIMEOUT chat_id={chat_id} "
-                          f"user_id={user_id} exceeded {PROCESS_TIMEOUT}s")
-                break
-            data = await _download_valid(bot, url)
-            if data:
-                items.append((url, data))
-            await asyncio.sleep(0.2)
+        items = await _download_valid_parallel(bot, urls, IMAGE_COUNT, deadline)
 
         if not items:
             _log(bot, f"PHOTO DOWNLOAD FAILED chat_id={chat_id} user_id={user_id} "
