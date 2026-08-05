@@ -128,19 +128,20 @@ def test_insufficient_balance_aborts():
 #  کسر سکه فقط بعد از آماده‌بودن تصاویر + آزادسازی قفل در خطا
 # ===========================================================================
 class FakeClient:
-    """کلاینت تستی که هم آپلود (send_file) و هم ارسالِ URL را شبیه‌سازی می‌کند.
+    """کلاینت تستی که آپلود (send_file)، ارسالِ URL و لینکِ مستقیم را شبیه‌سازی می‌کند.
 
-    - fail_upload=True: آپلود (send_file) همیشه شکست می‌خورد (مثلِ خطای
-      FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER).
-    - fail_url=True: ارسالِ با URL (InputMediaPhotoExternal) همیشه شکست
-      می‌خورد.
+    - fail_upload=True: آپلود (send_file) همیشه شکست می‌خورد.
+    - fail_url=True: ارسالِ با URL (InputMediaPhotoExternal) همیشه شکست می‌خورد.
+    - fail_link=True: ارسالِ لینکِ مستقیم (send_message) همیشه شکست می‌خورد.
     """
-    def __init__(self, fail_upload=False, fail_url=False):
+    def __init__(self, fail_upload=False, fail_url=False, fail_link=False):
         self.sent = 0
         self.fail_upload = fail_upload
         self.fail_url = fail_url
+        self.fail_link = fail_link
         self.upload_calls = 0
         self.url_calls = 0
+        self.link_calls = 0
 
     async def get_input_entity(self, entity):
         return entity
@@ -150,6 +151,14 @@ class FakeClient:
         self.url_calls += 1
         if self.fail_url:
             raise RuntimeError("URL_INVALID")
+        self.sent += 1
+        return None
+
+    async def send_message(self, entity, text, **kw):
+        await asyncio.sleep(0.01)
+        self.link_calls += 1
+        if self.fail_link:
+            raise RuntimeError("LINK_FAIL")
         self.sent += 1
         return None
 
@@ -520,13 +529,13 @@ def test_download_failure_0_bronze():
 
 
 def test_send_failure_0_bronze():
-    """۴ب) آپلود و ارسالِ URL هر دو ناموفق → ۰ برنز بابت آن عکس کم شود."""
+    """۴ب) آپلود، ارسالِ URL و لینکِ مستقیم همه ناموفق → ۰ برنز بابت آن عکس."""
     pd.reset_all()
     _economy.reset_all()
     chat, user = -3005, 45
     _fund(chat, user, 100)
-    # آپلود و ارسالِ URL هر دو همیشه شکست می‌خورند
-    bot = FakeBot(FakeClient(fail_upload=True, fail_url=True))
+    # همهٔ روش‌ها (آپلود، URL، لینکِ مستقیم) شکست می‌خورند
+    bot = FakeBot(FakeClient(fail_upload=True, fail_url=True, fail_link=True))
     orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
     pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
     pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
@@ -559,6 +568,30 @@ def test_upload_primary_success_10_bronze():
         check("آپلود (upload) فراخوانی شد و نیازی به URL نبود",
               bot.client.upload_calls >= 1 and bot.client.url_calls == 0,
               f"upload={bot.client.upload_calls} url={bot.client.url_calls}")
+        check("۱۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 10,
+              f"{bal[_economy.BRONZE]}")
+    finally:
+        pd._search_image_urls, pd._fetch_image_bytes = orig_search, orig_fetch
+        pd.reset_all()
+
+
+def test_upload_fails_link_fallback_10_bronze():
+    """آپلود ناموفق → fallback به لینکِ مستقیم → موفق → ۱۰ برنز."""
+    pd.reset_all()
+    _economy.reset_all()
+    chat, user = -3009, 49
+    _fund(chat, user, 100)
+    # آپلود همیشه شکست می‌خورد؛ لینکِ مستقیم موفق است
+    bot = FakeBot(FakeClient(fail_upload=True, fail_link=False))
+    orig_search, orig_fetch = pd._search_image_urls, pd._fetch_image_bytes
+    pd._search_image_urls = _monkey_search(["http://e.com/1.jpg"])
+    pd._fetch_image_bytes = lambda url, timeout=None, log_func=None: b"\xff\xd8\xff\xe0jpeg"
+    try:
+        sent = _run_flow(bot, chat, user, 1)
+        bal = _economy.get_balance(chat, user)
+        check("fallback به لینکِ مستقیم موفق بود", sent == 1, f"{sent}")
+        check("لینکِ مستقیم (send_message) فراخوانی شد",
+              bot.client.link_calls >= 1, f"link_calls={bot.client.link_calls}")
         check("۱۰ برنز کسر شد", bal[_economy.BRONZE] == 100 - 10,
               f"{bal[_economy.BRONZE]}")
     finally:
@@ -781,6 +814,7 @@ def main():
     test_download_failure_0_bronze()
     test_send_failure_0_bronze()
     test_upload_primary_success_10_bronze()
+    test_upload_fails_link_fallback_10_bronze()
     test_no_confirm_0_bronze()
     test_insufficient_balance_not_performed()
     test_image_stream_is_photo()

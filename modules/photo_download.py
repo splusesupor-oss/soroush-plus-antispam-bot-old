@@ -409,19 +409,58 @@ async def _send_by_url(bot, chat_id, url):
     return True
 
 
+async def _send_link(bot, chat_id, url):
+    """روشِ جایگزین: فرستادنِ لینکِ دانلودِ مستقیمِ تصویر به‌صورتِ متن.
+
+    وقتی آپلودِ فایل ممکن نیست (media sender در دسترس نیست)، این روش به
+    کاربر یک لینکِ مستقیمِ تصویر می‌دهد تا خودش تصویر را ببیند/دریافت کند.
+    """
+    from splusthon.tl import types
+    text = "🖼️ تصویر (لینکِ مستقیم):\n" + url
+    await bot.client.send_message(chat_id, text)
+    return True
+
+
+async def _upload_photo(bot, chat_id, data, url, force_reconnect=False):
+    """ارسالِ عکس با آپلودِ واقعی (send_file).
+
+    اگر force_reconnect=True باشد، قبل از آپلود media sender قطع و از نو
+    ساخته می‌شود (تلاشِ مجدد). برمی‌گرداند True اگر عکسِ واقعی ارسال شد.
+    """
+    stream = _make_image_stream(data, 0)
+
+    # در صورتِ تلاشِ مجدد، media sender را از نو بساز (فقط اگر کلاینت واقعیِ
+    # SoroushClient وصله‌خورده باشد؛ نه در تست).
+    if force_reconnect and hasattr(bot.client, "_call"):
+        try:
+            from modules.splusthon_upload_fix import _get_media_sender
+            await _get_media_sender(bot.client, force_reconnect=True)
+        except Exception:
+            pass
+
+    try:
+        await asyncio.wait_for(
+            bot.client.send_file(chat_id, stream), timeout=LINK_TIMEOUT)
+        _log(bot, f"PHOTO SEND OK method=upload url={url}")
+        return True
+    except asyncio.TimeoutError:
+        _log(bot, f"PHOTO SEND TIMEOUT method=upload url={url} "
+                  f"timeout={LINK_TIMEOUT}s")
+    except Exception:
+        _log_exception(bot, f"PHOTO SEND ERROR method=upload url={url}")
+    return False
+
+
 async def _send_image(bot, chat_id, url):
     """ارسالِ یک عکس به چت؛ برمی‌گرداند True اگر موفق.
 
-    ترتیبِ روشِ ارسال (با لاگِ جدا برای هر مرحله):
-      ۱) دانلود + اعتبارسنجی (PHOTO DOWNLOAD ...)
-      ۲) ارسالِ واقعیِ عکس با آپلود (PHOTO SEND method=upload) — این روشِ
-         اصلی است؛ چون سروش‌پلاس ارسالِ با URL (SendMediaRequest) را پشتیبانی
-         نمی‌کند و 422 NOT_SUPPORTED می‌دهد.
-      ۳) در صورتِ شکستِ آپلود: ارسال با URL (external_url) به‌عنوان آخرین
-         گزینه (در محیط‌هایی که پشتیبانی شود).
-    هر مرحله سقفِ زمانیِ کوتاه دارد (LINK_TIMEOUT) تا یک لینکِ مشکل‌دار، کل
-    عملیات را مدت‌ها درگیر نکند (رفعِ ۷۰ تا ۱۳۵ ثانیه). اگر این لینک خراب بود،
-    فقط Skip می‌شود و لینکِ بعدی امتحان می‌شود.
+    ترتیبِ روش‌ها (به‌ترتیب):
+      ۱) آپلودِ واقعیِ عکس (PHOTO SEND method=upload) — روشِ اصلی.
+      ۲) تلاشِ مجددِ آپلود با reconnectِ media sender.
+      ۳) روشِ جایگزین: فرستادنِ لینکِ دانلودِ مستقیمِ تصویر به‌صورتِ متن.
+      ۴) اگر هیچ‌کدام موفق نشد → False.
+    هر مرحله سقفِ زمانیِ کوتاه دارد (LINK_TIMEOUT). سکه فقط بابتِ ارسالِ
+    موفق (عکس یا لینکِ مستقیم) کسر می‌شود.
     """
     _log(bot, f"PHOTO LINK SELECTED url={url}")
 
@@ -444,29 +483,26 @@ async def _send_image(bot, chat_id, url):
         return False
     _log(bot, f"PHOTO DOWNLOAD OK url={url} bytes={len(data)}")
 
-    # ۲) ارسالِ واقعیِ عکس با آپلود (send_file) — روشِ اصلی برای سروش‌پلاس.
-    stream = _make_image_stream(data, 0)
-    try:
-        await asyncio.wait_for(
-            bot.client.send_file(chat_id, stream), timeout=LINK_TIMEOUT)
-        _log(bot, f"PHOTO SEND OK method=upload url={url}")
+    # ۲) آپلودِ واقعیِ عکس (روشِ اصلی).
+    if await _upload_photo(bot, chat_id, data, url):
         return True
-    except asyncio.TimeoutError:
-        _log(bot, f"PHOTO SEND TIMEOUT method=upload url={url} "
-                  f"timeout={LINK_TIMEOUT}s")
-    except Exception:
-        _log_exception(bot, f"PHOTO SEND ERROR method=upload url={url}")
 
-    # ۳) آخرین گزینه: ارسال با URL (فقط در محیط‌هایی که پشتیبانی شود).
+    # ۳) تلاشِ مجددِ آپلود با reconnectِ media sender.
+    _log(bot, f"PHOTO UPLOAD RETRY with media-sender reconnect url={url}")
+    if await _upload_photo(bot, chat_id, data, url, force_reconnect=True):
+        return True
+
+    # ۴) روشِ جایگزین: لینکِ مستقیمِ تصویر به‌صورتِ متن.
+    _log(bot, f"PHOTO FALLBACK to direct link url={url}")
     try:
-        await asyncio.wait_for(_send_by_url(bot, chat_id, url), timeout=LINK_TIMEOUT)
-        _log(bot, f"PHOTO SEND OK method=external_url url={url}")
+        await asyncio.wait_for(_send_link(bot, chat_id, url), timeout=LINK_TIMEOUT)
+        _log(bot, f"PHOTO SEND OK method=direct_link url={url}")
         return True
     except asyncio.TimeoutError:
-        _log(bot, f"PHOTO SEND TIMEOUT method=external_url url={url} "
+        _log(bot, f"PHOTO SEND TIMEOUT method=direct_link url={url} "
                   f"timeout={LINK_TIMEOUT}s")
     except Exception:
-        _log_exception(bot, f"PHOTO SEND ERROR method=external_url url={url}")
+        _log_exception(bot, f"PHOTO SEND ERROR method=direct_link url={url}")
         return False
 
 
