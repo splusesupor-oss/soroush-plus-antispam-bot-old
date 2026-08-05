@@ -565,6 +565,35 @@ async def _test_battle_tie_both_reward():
     router.reset_all()
 
 
+async def _test_battle_tie_zero_zero_no_reward():
+    """مساویِ صفر-صفر → هیچ‌کدام جایزه نمی‌گیرند."""
+    router.reset_all()
+    bot = Bot()
+    # هر دو همه غلط → ۰-۰ مساوی → بدون جایزه
+    join_ev = await _run_full_battle(bot, 100, 200, [False, False, False], [False, False, False])
+    check("نبرد: ۰-۰ مساوی → هیچ جایزه‌ای داده نشد", bot.paid == [], f"{bot.paid}")
+    finish = next(((t, e) for t, e in join_ev.messages if "پایان" in t), None)
+    if finish:
+        check("نبرد: مساوی اعلام شد", "مساوی شد" in finish[0], f"{finish[0]}")
+        check("نبرد: امتیازهای ۰-۰ نمایش داده شد",
+              "P1: ۰" in finish[0] and "P2: ۰" in finish[0], f"{finish[0]}")
+    router.reset_all()
+
+
+async def _test_battle_tie_nonzero_both_reward():
+    """مساویِ غیرصفر (مثل ۱-۱) → هر دو بازیکن ۲ برنز می‌گیرند."""
+    router.reset_all()
+    bot = Bot()
+    # هر دو ۱ درست، ۲ غلط → ۱-۱ مساوی → هر دو ۲ برنز
+    join_ev = await _run_full_battle(bot, 100, 200, [True, False, False], [True, False, False])
+    paid = sorted(amt for (_u, amt) in bot.paid)
+    check("نبرد: مساویِ ۱-۱ → هر دو ۲ برنز", paid == [2, 2], f"{bot.paid}")
+    finish = next(((t, e) for t, e in join_ev.messages if "پایان" in t), None)
+    if finish:
+        check("نبرد: مساوی اعلام شد", "مساوی شد" in finish[0], f"{finish[0]}")
+    router.reset_all()
+
+
 async def _test_battle_wrong_answer_no_elimination():
     """پاسخ غلط هیچ بازیکنی را حذف نمی‌کند؛ هر دو ۳ سوال می‌گیرند."""
     router.reset_all()
@@ -903,6 +932,8 @@ def main():
         await _test_battle_non_assignee_cannot_answer()
         await _test_battle_play_and_winner_reward()
         await _test_battle_tie_both_reward()
+        await _test_battle_tie_zero_zero_no_reward()
+        await _test_battle_tie_nonzero_both_reward()
         await _test_battle_wrong_answer_no_elimination()
         await _test_battle_turn_order_alternating()
         await _test_battle_per_answer_feedback()

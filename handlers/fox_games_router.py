@@ -733,21 +733,27 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
                           else result["p2"]["name"])
                 outcome = f"🏆 برنده: {w_name}"
 
-            # جایزه: ۲ سکه برنز به برنده؛ اگر مساوی، به هر دو بازیکن ۲ سکه.
+            # جایزه: ۲ سکه برنز به برنده؛ اگر مساوی (غیر از ۰-۰) به هر دو بازیکن ۲ سکه.
+            # نکته: مساویِ صفر-صفر امتیازی ندارد (هیچ‌کس جوابِ درست نداده).
+            s1 = result.get("score1", 0)
+            s2 = result.get("score2", 0)
             reward_lines = []
             if result["tie"]:
-                for p in (result["p1"], result["p2"]):
-                    paid = _coins(
-                        bot, chat_id, p["user_id"], p["name"], battle.REWARD,
-                        logger,
-                        reference=f"battle:{chat_id}:{result['session_id']}:"
-                                  f"{p['user_id']}",
-                        game="battle",
-                    )
-                    if paid:
-                        reward_lines.append(
-                            f"🪙 {p['name']} +{to_persian_digits(battle.REWARD)} سکه برنز"
+                if s1 > 0 or s2 > 0:
+                    # مساوی با امتیازِ غیرصفر (۱-۱، ۲-۲، ...) → هر دو جایزه می‌گیرند
+                    for p in (result["p1"], result["p2"]):
+                        paid = _coins(
+                            bot, chat_id, p["user_id"], p["name"], battle.REWARD,
+                            logger,
+                            reference=f"battle:{chat_id}:{result['session_id']}:"
+                                      f"{p['user_id']}",
+                            game="battle",
                         )
+                        if paid:
+                            reward_lines.append(
+                                f"🪙 {p['name']} +{to_persian_digits(battle.REWARD)} سکه برنز"
+                            )
+                # اگر مساویِ صفر-صفر بود → هیچ جایزه‌ای
             elif result["winner"] is not None:
                 w = (result["p1"] if result["winner"] == result["p1"]["user_id"]
                      else result["p2"])
