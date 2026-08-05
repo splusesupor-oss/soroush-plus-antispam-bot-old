@@ -1010,6 +1010,20 @@ def test_normal_queries_not_blocked():
         check(f"مسدود است: {q}", pd.is_blocked(q))
 
 
+def test_digit_normalization_relevance():
+    """«۴۰۵» و «405» باید در سنجشِ ارتباط یکی شوند."""
+    check("پژو ۴۰۵ → 405", pd._norm_for_match("پژو ۴۰۵") == "پژو 405",
+          pd._norm_for_match("پژو ۴۰۵"))
+    check("ماشین ۴۰۵ → ماشین 405",
+          pd._norm_for_match("ماشین ۴۰۵") == "ماشین 405")
+    # نتیجهٔ «Peugeot 405» با عبارتِ «ماشین ۴۰۵» مرتبط است (از طریق hint)
+    kw, _, hint = pd._search_keywords("ماشین ۴۰۵")
+    check("hint ماشین ۴۰۵ → peugeot 405", hint == "peugeot 405", f"{hint}")
+    check("Peugeot 405 مرتبط است",
+          pd._title_relevant("Peugeot 405 Turbo", [], "http://x",
+                             "ماشین ۴۰۵", kw, hint))
+
+
 def test_word_boundary_hint():
     """«پل» نباید داخلِ «پلنگ» تطبیق کند (مرزِ کلمه)."""
     _, _, h1 = pd._search_keywords("پلنگ صورتی")
@@ -1119,6 +1133,7 @@ def main():
     test_wikimedia_source()
     test_wikipedia_topic_source()
     test_normal_queries_not_blocked()
+    test_digit_normalization_relevance()
     test_word_boundary_hint()
     test_exact_query_prioritized()
     test_search_cache()

@@ -295,6 +295,8 @@ _FA_EN_HINTS = {
     "رونالدو": "ronaldo",
     "گل رز": "rose", "کوه": "mountain", "منظره": "landscape",
     "ماشین": "car", "ماشین مسابقه": "race car", "طبیعت": "nature",
+    "ماشین ۴۰۵": "peugeot 405", "پژو ۴۰۵": "peugeot 405",
+    "۴۰۵": "peugeot 405", "ماشین پژو": "peugeot",
     "دوج": "dodge", "ماشین دوج": "dodge car", "خودرو دوج": "dodge car",
     "دوج چلنجر": "dodge challenger", "دوج چارجر": "dodge charger",
     "دوج رام": "dodge ram", "بی‌ام‌و": "bmw", "مرسدس": "mercedes",
@@ -554,7 +556,7 @@ def _search_wikimedia(query, limit):
     return out
 
 
-def _search_wikipedia_topic(query):
+def _search_wikipedia_topic(query, limit=None):
     """جستجویِ ویکی‌پدیا (فارسی): تشخیصِ موضوع + گرفتنِ تصویرِ اصلیِ صفحه.
 
     برمی‌گرداند لیستِ (url, title, []). اگر صفحه‌ای با تصویرِ اصلی پیدا
@@ -604,18 +606,70 @@ def _search_wikipedia_topic(query):
     return []
 
 
-def _search_image_urls(query, limit=IMAGE_COUNT):
-    """جستجویِ تصویر: «همان عبارتِ دقیقِ کاربر» اول جستجو می‌شود.
+_PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
-    اصول:
-      ۱) عبارتِ دقیقِ کاربر (بدونِ تغییر) همیشه اولین عبارتِ جستجو است.
-      ۲) نگاشتِ انگلیسی فقط به‌عنوانِ «مکمل» (عبارتِ دوم) اضافه می‌شود،
-         نه جایگزین — تا اگر عبارتِ فارسی در منبع بود همان بیاید.
-      ۳) نتایجی که از جستجویِ «عبارتِ دقیق» آمده‌اند امتیازِ بیشتری می‌گیرند.
-      ۴) منابعِ معتبر: ویکی‌پدیا → Wikimedia Commons → Openverse.
-      ۵) فقط نتایجِ مرتبط ارسال می‌شود؛ در غیرِ این صورت لیستِ خالی.
+
+def _norm_for_match(value):
+    """متن را برایِ مقایسهٔ ارتباط نرمال می‌کند: فارسی+حروف عربی+ارقام.
+
+    «۴۰۵» و «405» یکی می‌شوند؛ «پژو ۴۰۵» و «Peugeot 405» با ترجمهٔ سادهٔ
+    اعداد قابلِ مقایسه‌اند.
     """
-    keywords, search_queries, english_hint = _search_keywords(query)
+    text = _normalize_fa_text(value).lower()
+    text = text.translate(_PERSIAN_DIGITS)
+    return text
+
+
+def _title_relevant(title, tags, url, exact, keywords, english_hint):
+    """آیا عنوان/برچسب/URLِ یک نتیجه با عبارتِ جستجو مرتبط است؟
+
+    - اگر hint انگلیسی داریم، باید همهٔ کلماتِ آن در متنِ نتیجه باشد (فیلترِ
+      قوی؛ مثلاً pink + panther).
+    - اگر hint نداریم، با «کلیدواژه‌هایِ خودِ عبارت» (پس از نرمال‌سازیِ ارقام)
+      مقایسه می‌شود؛ هر تطابقی کافی است.
+    برمی‌گرداند True اگر مرتبط باشد.
+    """
+    text = _norm_for_match(" ".join([title or "", " ".join(tags or []), url or ""]))
+
+    # فیلترِ قوی با hint انگلیسی
+    if english_hint:
+        hint_tokens = [t for t in english_hint.lower().split() if t]
+        if hint_tokens:
+            if all(t in text for t in hint_tokens):
+                return True
+            # اگر hint کامل نشد، به تطابقِ کلیدواژه‌هایِ خودِ عبارت برگرد
+        # (در صورتِ نبودِ تطابقِ کاملِ hint، به کلیدواژه‌هایِ عبارت وابسته است)
+
+    # تطابق با کلیدواژه‌هایِ خودِ عبارت (نرمال‌شده، با ارقام)
+    for kw in keywords:
+        nkw = _norm_for_match(kw)
+        if nkw and len(nkw) >= 2 and nkw in text:
+            return True
+
+    # تطابقِ دقیقِ کلِ عبارت (نرمال‌شده) در عنوان
+    n_exact = _norm_for_match(exact)
+    if n_exact and len(n_exact) >= 2 and n_exact in text:
+        return True
+
+    return False
+
+
+def _search_image_urls(query, limit=IMAGE_COUNT):
+    """جستجویِ تصویر: «عبارتِ دقیقِ کاربر» به‌صورتِ همان‌که نوشته جستجو می‌شود.
+
+    اصول (مطابقِ خواستهٔ کاربر):
+      ۱) عبارتِ دقیقِ کاربر بدونِ هیچ تغییر/ترجمه/حدسی جستجو می‌شود.
+      ۲) منابعِ معتبر: ویکی‌پدیا (تصویرِ اصلیِ صفحهٔ موضوع) و Wikimedia Commons
+         (که برایِ فارسی خوب کار می‌کنند) و Openverse.
+      ۳) نتایجِ «عبارتِ دقیق» از این منابع معتبر همان هستند که موتور برایِ
+         همان عبارتِ دقیق پیدا کرده و «اعتماد» می‌شوند (مرتبط‌اند).
+      ۴) فقط برایِ «افرادِ مشهورِ شناخته‌شده» (مثل بروسلی) که عبارتِ فارسی‌شان
+         در منبع بی‌ربط است، عبارتِ انگلیسیِ دقیقِ همان شخص هم به‌عنوانِ مکمل
+         جستجو می‌شود و نتایجِ آن با فیلترِ سختِ ارتباط بررسی می‌شوند.
+      ۵) اگر هیچ نتیجه‌ای (عبارتِ دقیق) نبود → خالی (پیامِ «تصویر مرتبطی
+         پیدا نشد»).
+    """
+    keywords, _search_queries, english_hint = _search_keywords(query)
     exact = _normalize_fa_text(query).strip()
     if not exact:
         return []
@@ -626,54 +680,61 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
     if cached and (now - cached[0]) < _CACHE_TTL:
         return cached[1][:limit]
 
-    # عبارتِ دقیقِ کاربر + مکملِ انگلیسی (اگر هست)
-    search_queries_used = [exact]
+    exact_candidates = []  # از عبارتِ دقیق (اولویتِ اول)
+    hint_candidates = []   # از عبارتِ انگلیسیِ مکمل (fallback)
+
+    # ۱) عبارتِ دقیقِ کاربر (اولویتِ اصلی)
+    for src in (_search_wikipedia_topic, _search_wikimedia, _search_openverse):
+        try:
+            exact_candidates += src(exact, limit)
+        except Exception:
+            pass
+
+    # ۲) عبارتِ انگلیسیِ مکمل (اگر hint داریم) — برایِ مواردی که عبارتِ فارسی
+    #    در منبع بی‌ربط است (مثل «پلنگ صورتی»→pink panther یا «ماشین ۴۰۵»→
+    #    peugeot 405 یا افرادِ مشهور). این فقط fallback است.
     if english_hint:
-        search_queries_used.append(english_hint)
-
-    # جمع‌آوریِ نامزدها از منابعِ معتبر؛ برچسبِ «از عبارتِ دقیق» را نگه می‌داریم.
-    candidates = []  # (url, title, tags, from_exact)
-    sources = [
-        _search_wikipedia_topic,
-        _search_wikimedia,
-        _search_openverse,
-    ]
-    for sq in search_queries_used:
-        from_exact = (sq == exact)
-        for src in sources:
+        for src in (_search_wikipedia_topic, _search_wikimedia, _search_openverse):
             try:
-                res = src(sq, limit)
+                hint_candidates += src(english_hint, limit)
             except Exception:
-                res = []
-            for url, title, tags in res:
-                candidates.append((url, title, tags, from_exact))
+                pass
 
-    # فیلترِ ارتباط و امتیاز
-    scored = []
-    seen_urls = set()
-    for url, title, tags, from_exact in candidates:
-        if url in seen_urls:
+    # ترکیب: اول نتایجِ عبارتِ دقیق (مرتبط، اعتمادشده)، بعد مکملِ افرادِ مشهور
+    # با فیلترِ ارتباطِ قوی (همهٔ کلماتِ hint)
+    combined = []
+    seen = set()
+
+    for url, title, tags in exact_candidates:
+        if url in seen:
             continue
-        seen_urls.add(url)
-        if english_hint:
-            if not _strongly_relevant(title, tags, url, keywords, english_hint):
-                continue
-        score = _relevance_score(title, tags, url, keywords)
-        # نتایجِ عبارتِ دقیق امتیازِ بیشتری می‌گیرند
-        if from_exact:
-            score += 3
-        scored.append((score, url))
+        seen.add(url)
+        # عبارتِ دقیق از موتورِ معتبر آمده؛ اما هنوز باید «مرتبط» باشد تا
+        # نتایجِ بی‌ربطِ موتور (مثلِ ماشینِ عمومی برایِ «ماشین ۴۰۵» یا صفحهٔ
+        # بی‌ربط برایِ «پلنگ صورتی») حذف شوند. با tolerance به اختلافِ زبان
+        # و ارقامِ فارسی/انگلیسی.
+        if not _title_relevant(title, tags, url, exact, keywords, english_hint):
+            continue
+        combined.append((5, url))  # وزنِ بالا برایِ عبارتِ دقیق
 
-    if not scored:
+    for url, title, tags in hint_candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        # برایِ مکملِ افرادِ مشهور: فیلترِ سختِ ارتباط (همهٔ کلماتِ hint)
+        if english_hint and not _strongly_relevant(title, tags, url, keywords, english_hint):
+            continue
+        combined.append((2, url))
+
+    if not combined:
         return []
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    result = [url for _score, url in scored[:limit]]
+    # مرتب‌سازیِ پایدار: عبارتِ دقیق اول
+    combined.sort(key=lambda x: x[0], reverse=True)
+    result = [url for _w, url in combined[:limit]]
 
     _SEARCH_CACHE[cache_key] = (now, result)
     return result
-
-
 
 
 def _is_valid_image_bytes(content):
