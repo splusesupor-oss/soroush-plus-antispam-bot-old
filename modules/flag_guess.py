@@ -5,8 +5,10 @@
 مصرف شدند تاریخچه صفر می‌شود و دور تازه آغاز می‌گردد — با این تضمین که پرچم
 اولِ دور جدید با آخرین پرچم دور قبل یکی نباشد.
 """
+import json
 import random
 from itertools import count
+from pathlib import Path
 
 COUNTRIES = (
     # --- خاورمیانه و آسیای غربی ---
@@ -153,6 +155,35 @@ _LAST_COUNTRY = {}
 _SEEN_HISTORY = {}
 _FALLBACK_TOKENS = count(1)
 
+# فایلِ ماندگارِ تاریخچهٔ هر کاربر تا بعد از ری‌استارتِ ربات هم حفظ شود.
+_PROGRESS_FILE = Path(__file__).resolve().parent.parent / "config" / "flag_guess_progress.json"
+
+
+def _load_progress():
+    """تاریخچهٔ دیده‌شده را از فایل می‌خواند (بعد از ری‌استارت حفظ می‌شود)."""
+    try:
+        if _PROGRESS_FILE.exists():
+            data = json.loads(_PROGRESS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    _SEEN_HISTORY.setdefault(k, set(v or ()))
+    except (OSError, ValueError):
+        pass
+
+
+def _save_progress():
+    """تاریخچهٔ دیده‌شده را روی دیسک می‌نویسد."""
+    try:
+        _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {k: sorted(v) for k, v in _SEEN_HISTORY.items()}
+        _PROGRESS_FILE.write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+_load_progress()
+
 
 def _next_token():
     """توکن یکتا که با ری‌استارت ربات تکرار نمی‌شود.
@@ -172,10 +203,7 @@ def _next_token():
 _RANDOM = random.SystemRandom()
 
 EXHAUSTED_MESSAGE = (
-    "🏁 تمام پرچم‌های این بازی برای شما نمایش داده شد.\n\n"
-    "🔒 برای جلوگیری از سوءاستفاده و کسب امتیاز تکراری، "
-    "این بازی برای شما به پایان رسیده است.\n\n"
-    "🎮 لطفاً از سایر بازی‌های ربات استفاده کنید."
+    "✅ شما این بازی را تکمیل کردید. لطفاً از بازی‌های دیگر استفاده کنید."
 )
 
 
@@ -225,6 +253,7 @@ def _pick_country(chat_id, user_id):
 
     country = _RANDOM.choice(remaining)
     seen.add(country[1])
+    _save_progress()
     return country
 
 
@@ -288,6 +317,7 @@ def answer(chat_id, text, user_id=None):
         # در غیر این صورت یک نفر می‌توانست با شروع دادن دستور توسط دیگران
         # بی‌نهایت بار همان پرچم‌ها را جواب دهد و سکه بگیرد.
         _SEEN_HISTORY.setdefault(_user_key(user_id), set()).add(state["answer"])
+        _save_progress()
     return state["answer"]
 
 
@@ -305,5 +335,7 @@ def reset_history(user_id=None):
         _SEEN_HISTORY.clear()
         _LAST_COUNTRY.clear()
         _ACTIVE.clear()
+        _save_progress()
         return
     _SEEN_HISTORY.pop(_user_key(user_id), None)
+    _save_progress()

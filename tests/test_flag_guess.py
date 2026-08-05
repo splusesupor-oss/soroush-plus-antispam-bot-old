@@ -151,11 +151,10 @@ def test_lock_is_per_user_only():
 def test_exhausted_message_text():
     print("\n### متن پیام پایان بازی")
     msg = fg.EXHAUSTED_MESSAGE
-    for part in ("🏁 تمام پرچم‌های این بازی برای شما نمایش داده شد.",
-                 "🔒 برای جلوگیری از سوءاستفاده و کسب امتیاز تکراری",
-                 "این بازی برای شما به پایان رسیده است.",
-                 "🎮 لطفاً از سایر بازی‌های ربات استفاده کنید."):
-        check(f"شامل: {part[:40]}", part in msg)
+    check("پیام تکمیل بازی است",
+          "✅ شما این بازی را تکمیل کردید." in msg, f"{msg}")
+    check("راهنمای استفاده از بازی‌های دیگر",
+          "لطفاً از بازی‌های دیگر استفاده کنید" in msg, f"{msg}")
 
 
 def test_multiple_chats_independent():
@@ -235,6 +234,38 @@ def test_double_start_guard():
     fg.finish(-100600, first["token"])
 
 
+def test_progress_persists_across_restart():
+    """تاریخچهٔ کاربر باید بعد از «ری‌استارت» (بارگذاری دوباره از فایل) حفظ شود."""
+    import importlib
+    print("\n### ماندگاری تاریخچه بعد از ری‌استارت")
+    # پاک‌سازی و یک کاربر که چند پرچم دیده
+    fg.reset_history()
+    chat, user = -100800, 8001
+    g1 = fg.start(chat, user)
+    assert g1 is not None
+    first = g1["answer"]
+    fg.finish(chat, g1["token"])
+    seen_before = fg.seen_count(user)
+    check("کاربر حداقل یک پرچم دیده", seen_before >= 1, f"{seen_before}")
+
+    # شبیه‌سازی ری‌استارت: ماژول دوباره بارگذاری می‌شود و فایل خوانده می‌شود
+    file = fg._PROGRESS_FILE
+    check("فایل پیشرفت ساخته شد", file.exists(), str(file))
+    data = __import__("json").loads(file.read_text(encoding="utf-8"))
+    check("تاریخچهٔ کاربر در فایل ثبت شده", str(user) in data, f"{list(data)[:3]}")
+
+    # بارگذاری دوباره از فایل (مثل start مجدد ربات)
+    fg._SEEN_HISTORY.clear()
+    fg._load_progress()
+    check("بعد از بارگذاری، تاریخچه برگشت", fg.seen_count(user) == seen_before,
+          f"{fg.seen_count(user)} vs {seen_before}")
+    check("کاربر پرچمِ دیده‌شده را دوباره نمی‌گیرد",
+          fg.start(chat, user)["answer"] != first)
+    fg.reset_history()
+
+
+
+
 def main():
     test_catalogue()
     test_no_immediate_repeat()
@@ -244,6 +275,7 @@ def main():
     test_exhausted_user_earns_nothing()
     test_lock_is_per_user_only()
     test_exhausted_message_text()
+    test_progress_persists_across_restart()
     test_multiple_chats_independent()
     test_concurrent_games_isolated()
     test_randomness_across_restarts()
@@ -258,3 +290,5 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

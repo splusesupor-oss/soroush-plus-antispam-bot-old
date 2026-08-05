@@ -1,6 +1,8 @@
+import json
 import random
 import time
 from itertools import count
+from pathlib import Path
 
 
 # ۱۰۰ چیستان متنوع: منطقی، فکری، خلاقانه و روزمره.
@@ -135,6 +137,34 @@ used_riddles = set()          # سازگاری با کد قدیمی؛ دیگر �
 _SEEN_BY_USER = {}
 _FALLBACK_TOKENS = count(1)
 
+# فایلِ ماندگارِ تاریخچهٔ چیستان‌های دیده‌شدهٔ هر کاربر، تا بعد از ری‌استارت
+# ربات هم حفظ شود.
+_PROGRESS_FILE = Path(__file__).resolve().parent.parent / "config" / "riddle_progress.json"
+
+
+def _load_progress():
+    try:
+        if _PROGRESS_FILE.exists():
+            data = json.loads(_PROGRESS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    _SEEN_BY_USER.setdefault(k, set(v or ()))
+    except (OSError, ValueError):
+        pass
+
+
+def _save_progress():
+    try:
+        _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {k: sorted(v) for k, v in _SEEN_BY_USER.items()}
+        _PROGRESS_FILE.write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+_load_progress()
+
 
 def _next_token():
     """توکن یکتا که با ری‌استارت ربات تکرار نمی‌شود.
@@ -170,8 +200,10 @@ def remaining_count(user_id):
 def reset_user(user_id=None):
     if user_id is None:
         _SEEN_BY_USER.clear()
+        _save_progress()
         return
     _SEEN_BY_USER.pop(_user_key(user_id), None)
+    _save_progress()
 
 
 def reset_all():
@@ -179,6 +211,7 @@ def reset_all():
     active_riddles.clear()
     used_riddles.clear()
     _SEEN_BY_USER.clear()
+    _save_progress()
 
 
 def _norm(value):
@@ -205,6 +238,7 @@ def new_riddle(chat_id, user_id):
     question, answer = _RANDOM.choice(remaining)
     seen.add(question)
     used_riddles.add(RIDDLES.index((question, answer)))
+    _save_progress()
 
     active_riddles[(chat_id, user_id)] = {
         "question": question,
