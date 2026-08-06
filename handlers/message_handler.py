@@ -1408,34 +1408,29 @@ async def handle_new_message(bot, event):
                 await event.reply(
                     "❌ فقط مالک یا ادمین اجازه ایجاد تماس گروهی را دارند")
                 return
-            await event.reply("📞 در حال ایجاد تماس گروهی...")
+            # نامِ تماس = نامِ گروه
+            try:
+                chat_entity = await event.get_chat()
+                call_title = getattr(chat_entity, "title", None) or "تماس گروهی"
+            except Exception:
+                call_title = "تماس گروهی"
+            creator_name = admin_tools.display_name(sender)
 
-            async def _create_call():
-                try:
-                    # نامِ تماس = نامِ گروه
-                    try:
-                        chat_entity = await event.get_chat()
-                        call_title = getattr(chat_entity, "title", None) or "تماس گروهی"
-                    except Exception:
-                        call_title = "تماس گروهی"
-                    creator_name = admin_tools.display_name(sender)
-
-                    link, error, created_at = await admin_tools.create_group_call(
-                        bot.client, chat_id, title=call_title)
-                    if error:
-                        await event.reply(f"❌ {error}")
-                        return
-                    admin_tools.log_action(
-                        chat_id, sender, "ایجاد تماس گروهی",
-                        note=f"لینک {link}")
-                    invite_text = admin_tools.format_call_invite(
-                        call_title, creator_name, created_at, link)
-                    await event.reply(invite_text)
-                except Exception as e:
-                    bot.logger.log_error(f"خطا در ایجاد کال: {e}")
-                    await event.reply(f"❌ خطا در ایجاد تماس گروهی: {e}")
-
-            _run_background(bot, "create_call", _create_call)
+            try:
+                link, error, created_at = await admin_tools.create_group_call(
+                    bot.client, chat_id, title=call_title)
+                if error:
+                    await event.reply(f"❌ {error}")
+                    return
+                admin_tools.log_action(
+                    chat_id, sender, "ایجاد تماس گروهی",
+                    note=f"لینک {link}")
+                invite_text = admin_tools.format_call_invite(
+                    call_title, creator_name, created_at, link)
+                await event.reply(invite_text)
+            except Exception as e:
+                bot.logger.log_error(f"خطا در ایجاد کال: {e}")
+                await event.reply(f"❌ خطا در ایجاد تماس گروهی: {e}")
             return
 
         if clean_text == "ثبت اصل":

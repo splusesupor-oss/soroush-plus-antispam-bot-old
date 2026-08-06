@@ -175,11 +175,12 @@ def _u16_len(value):
 def format_log(chat_id, limit=30):
     """لاگ را به متنِ مرتب و خوانا + entityهای قالب‌بندی برمی‌گرداند.
 
-    خروجی ``(text, entities)``:
-      - نامِ ادمین داخلِ نقل‌قولِ شیشه‌ای (MessageEntityBlockquote)
-      - عملیات زیرِ نام، ردیفی
-      - زیرِ لیست، یک خطِ Bold: «⏳ این لاگ‌ها هر ۲۴ ساعت به‌صورت خودکار
-        ریست می‌شوند.»
+    عملیاتِ پشتِ‌سرهمِ یک ادمین در یک «بخش» گروه‌بندی می‌شوند: نامِ ادمین
+    فقط یک بار (داخلِ نقل‌قولِ شیشه‌ای) نمایش داده می‌شود و همهٔ عملیاتِ
+    همان ادمین زیرِ همان بخش به‌صورتِ ردیفی می‌آیند. اگر ادمین عوض شد،
+    بخشِ جدیدی ساخته می‌شود.
+
+    خروجی ``(text, entities)``.
     """
     from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 
@@ -187,30 +188,43 @@ def format_log(chat_id, limit=30):
     if not entries:
         return "📭 هنوز اقدامی در این گروه ثبت نشده است.", []
 
-    lines = ["🧾 لاگ مدیریتی گروه:\n"]
-    entities = []
-    for i, e in enumerate(entries, 1):
-        when = e.get("time", "")
+    # get_log جدیدترین‌ها را اول برمی‌گرداند؛ برایِ نمایشِ قدیمی‌ترین‌ها اول
+    # (مطابقِ قالبِ خواسته‌شده) آن را برمی‌گردانیم.
+    entries = list(reversed(entries))
+
+    # گروه‌بندی: بخش‌هایِ پشت‌سرهمِ همان ادمین را یکی می‌کنیم.
+    sections = []  # [(actor, time, [(action, note)])]
+    for e in entries:
         actor = e.get("actor", "کاربر ناشناس")
+        when = e.get("time", "")
         action = e.get("action", "")
         note = e.get("note", "")
+        target = e.get("target")
+        # اگر هدف (کاربرِ موردِ عملیات) موجود باشد به نمایشِ عملیات می‌چسبانیم.
+        if target:
+            action_text = f"{action} {target}"
+        else:
+            action_text = action
+        if sections and sections[-1][0] == actor:
+            sections[-1][2].append((action_text, note))
+        else:
+            sections.append((actor, when, [(action_text, note)]))
 
-        # 1. تاریخ
-        lines.append(f"{i}. {when}\n")
+    lines = ["🧾 لاگ مدیریتی گروه:\n"]
+    entities = []
+    for idx, (actor, when, actions) in enumerate(sections, 1):
+        lines.append(f"{idx}. {when}\n")
+        # نامِ ادمین فقط یک بار، داخلِ نقل‌قولِ شیشه‌ای
         actor_line = f"👤 {actor}\n"
-        actor_start = len("".join(lines))
+        actor_start = _u16_len("".join(lines))
         lines.append(actor_line)
         entities.append(MessageEntityBlockquote(
-            offset=_u16_len("".join(lines[:actor_start])),
-            length=_u16_len(actor_line)))
-
-        # 2. عملیات (ردیف زیر نام)
-        action_line = f"→ {action}\n"
-        lines.append(action_line)
-
-        # 3. توضیحات
-        if note:
-            lines.append(f"📝 {note}\n")
+            offset=actor_start, length=_u16_len(actor_line)))
+        # همهٔ عملیاتِ همین ادمین، ردیفی (خارج از نقل‌قول)
+        for action, note in actions:
+            lines.append(f"→ {action}\n")
+            if note:
+                lines.append(f"📝 {note}\n")
         lines.append("\n")
 
     # Footer Bold

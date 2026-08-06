@@ -62,6 +62,34 @@ def test_admin_log():
     at.clear_log(-2002)
 
 
+def test_admin_log_grouped_by_admin():
+    at._ADMIN_LOG_FILE.write_text("{}", encoding="utf-8")
+    # سه اقدامِ پشت‌سرهم از یک ادمین + یک اقدام از ادمین دیگر
+    at.log_action(-4001, {"username": "admin1"}, "اخطار",
+                  target={"username": "user1"}, note="تعداد: 2")
+    at.log_action(-4001, {"username": "admin1"}, "حذف پیام")
+    at.log_action(-4001, {"username": "admin1"}, "تنظیم پاکسازی خودکار",
+                  note="ساعت 01:30، تعداد 100 پیام")
+    at.log_action(-4001, {"username": "admin2"}, "اخراج",
+                  target={"username": "user"})
+    text, entities = at.format_log(-4001)
+
+    # نامِ ادمین فقط یک بار نمایش داده شود
+    check("نام admin1 فقط یک بار", text.count("@admin1") == 1, f"{text}")
+    check("نام admin2 فقط یک بار", text.count("@admin2") == 1, f"{text}")
+    # سه عملیاتِ admin1 زیرِ همان بخش
+    check("عملیات اول admin1", "→ اخطار @user1" in text)
+    check("عملیات دوم admin1", "→ حذف پیام" in text)
+    check("عملیات سوم admin1", "→ تنظیم پاکسازی خودکار" in text)
+    check("عملیات admin2", "→ اخراج @user" in text)
+    # هدف به عملیات چسبیده
+    check("هدف در عملیات", "اخطار @user1" in text)
+    from splusthon.tl.types import MessageEntityBlockquote
+    bq_count = sum(1 for e in entities if isinstance(e, MessageEntityBlockquote))
+    check("دقیقاً ۲ blockquote (یکی برای هر ادمین)", bq_count == 2, f"{bq_count}")
+    at.clear_log(-4001)
+
+
 def test_format_call_invite():
     from datetime import datetime
     created = datetime(2026, 8, 6, 13, 29)  # پنجشنبه
@@ -160,6 +188,7 @@ def test_group_lock_reuse():
 def main():
     test_display_name()
     test_admin_log()
+    test_admin_log_grouped_by_admin()
     test_auto_cleanup_settings()
     test_scheduling_computation()
     test_log_pruned_after_24h()
