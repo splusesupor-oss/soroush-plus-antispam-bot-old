@@ -896,16 +896,17 @@ async def handle_new_message(bot, event):
                 title = getattr(event_chat, "title", "") or ""
                 bot_detector.disable_for_bot(chat_id, sender)
                 bot.logger.log_info(
-                    "BOT DETECTED "
-                    f"chat_id={chat_id} bot_id={user_id} "
-                    f"bot_name={bot_detector.display(sender)!r} "
-                    f"bot_flag={getattr(sender, 'bot', None)!r} "
-                    f"group_title={title!r} -> fox disabled\n"
-                    f"SENDER_FULL={bot_detector.sender_dump(sender)}")
+                    "BOT DETECTION DEBUG\n"
+                    f"group_id={chat_id}\n"
+                    f"sender_id={user_id}\n"
+                    f"sender_username={getattr(sender, 'username', None)!r}\n"
+                    f"sender_type={sender.__class__.__name__ if sender else 'None'}\n"
+                    f"is_bot={getattr(sender, 'bot', None)!r}\n"
+                    f"detection_result=bot_detected_fox_disabled\n"
+                    f"group_title={title!r}")
                 await event.reply(
-                    f"🤖 به دلیل فعال بودن ربات "
-                    f"{bot_detector.display(sender)}، "
-                    f"روباه در این گروه غیرفعال شد.")
+                    "🤖 ربات دیگری در این گروه فعال است.\n"
+                    "به دلیل فعال بودن این ربات، روباه در این گروه خاموش شد.")
                 return
 
         # ------------------------------------------------------------------

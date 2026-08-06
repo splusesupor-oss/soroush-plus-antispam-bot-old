@@ -72,8 +72,12 @@ def test_bot_detection_flow():
     check("نام ربات ذخیره شد (@otherbot)",
           bd.disabled_bot_name(CHAT) == "@otherbot")
     check("پیام اطلاع‌رسانی ارسال شد",
-          any("به دلیل فعال بودن ربات" in r for r in ev.replies)
-          and any("otherbot" in r for r in ev.replies), f"{ev.replies}")
+          any("ربات دیگری در این گروه فعال است" in r
+              and "روباه در این گروه خاموش شد" in r for r in ev.replies),
+          f"{ev.replies}")
+    check("پیام فقط یک بار ارسال شد",
+          sum(1 for r in ev.replies if "روباه در این گروه خاموش شد" in r) == 1,
+          f"{ev.replies}")
 
     # --- ۲) در گروهِ غیرفعال، پیام بعدی (حتی از ربات) دور ریخته می‌شود ---
     bot2 = tac.build_bot()
@@ -170,9 +174,9 @@ def test_partial_entity_bot_none_resolved_via_get_entity():
 
     check("senderِ خلاصه با bot=None، با get_entity ربات تشخیص داده شد",
           bd.is_disabled(CHAT), f"{ev.replies}")
-    check("پیام اطلاع‌رسانی با نام ربات",
-          any("to دلیل فعال بودن ربات" in r and "bot" in r for r in ev.replies)
-          or any("ربات" in r for r in ev.replies), f"{ev.replies}")
+    check("پیام اطلاع‌رسانی ارسال شد",
+          any("روباه در این گروه خاموش شد" in r for r in ev.replies),
+          f"{ev.replies}")
 
     bd._FILE.unlink(missing_ok=True)
     bd._KNOWN_BOT_IDS.clear()
