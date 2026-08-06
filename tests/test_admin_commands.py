@@ -256,14 +256,21 @@ def test_cleanup_day_time_of_day():
 def test_remove_warning_reply():
     at._ADMIN_LOG_FILE.write_text("{}", encoding="utf-8")
     bot = build_bot(reply_sender=User(4242, name="کاربر هدف"))
-    # دو اخطار بده، بعد «حذف اخطار» یکی را کم کند
+    # سه اخطار بده؛ «حذف اخطار» باید همهٔ سوابقِ همان کاربر را یکجا حذف کند
     bot.tracker.increment(CHAT, 4242)
     bot.tracker.increment(CHAT, 4242)
-    check("دو اخطار موجود", bot.tracker.get_count(CHAT, 4242) == 2)
+    bot.tracker.increment(CHAT, 4242)
+    check("سه اخطار موجود", bot.tracker.get_count(CHAT, 4242) == 3)
+    # کاربر دیگری در همان گروه و همان کاربر در گروه دیگر (برای اطمینان از ایزوله‌بودن)
+    bot.tracker.increment(CHAT, 9999)
+    bot.tracker.increment(-424242, 4242)
     ev = Event("حذف اخطار", _owner_id(), reply_sender=User(4242, name="کاربر هدف"))
     asyncio.run(drive(bot, ev))
-    check("حذف اخطار پاسخ داد", ev.said("یک اخطار از کاربر حذف شد"), f"{ev.replies}")
-    check("تعداد به یک رسید", bot.tracker.get_count(CHAT, 4242) == 1)
+    check("حذف اخطار پاسخ داد",
+          ev.said("تمام اخطارهای کاربر حذف شد"), f"{ev.replies}")
+    check("تخلفات کاربر به صفر رسید", bot.tracker.get_count(CHAT, 4242) == 0)
+    check("کاربرِ دیگر دست‌نخورده", bot.tracker.get_count(CHAT, 9999) == 1)
+    check("گروهِ دیگر دست‌نخورده", bot.tracker.get_count(-424242, 4242) == 1)
     at.clear_log(CHAT)
 
 

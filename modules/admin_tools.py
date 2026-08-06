@@ -687,11 +687,12 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
             except Exception as e:
                 _log(f"UNLOCK FAILED chat_id={chat_id} error={e!r}")
 
-            # ۴) اعلامِ پایان
+            # ۴) اعلامِ پایان (با تعدادِ واقعیِ پیام‌های حذف‌شده در همین اجرا)
             try:
                 await bot.client.send_message(
                     chat_id,
-                    "🔓 پاکسازی به پایان رسید و گروه دوباره باز شد.",
+                    "🔓 پاکسازی به پایان رسید و گروه دوباره باز شد.\n"
+                    f"🗑️ تعداد پیام‌های پاک‌شده: {deleted}",
                 )
             except Exception:
                 pass

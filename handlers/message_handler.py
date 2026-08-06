@@ -1293,13 +1293,11 @@ async def handle_new_message(bot, event):
                     return
 
                 before = bot.tracker.get_count(chat_id, target_user.id)
-                new_count = bot.tracker.decrement(chat_id, target_user.id)
+                bot.tracker.reset_count(chat_id, target_user.id)
                 admin_tools.log_action(
                     chat_id, sender, "حذف اخطار", target=target_user,
-                    note=f"{before} → {new_count}")
-                await event.reply(
-                    f"✅ یک اخطار از کاربر حذف شد.\n"
-                    f"تعداد اخطار: {new_count}")
+                    note=f"{before} → 0")
+                await event.reply("✅ تمام اخطارهای کاربر حذف شد.")
             except Exception as e:
                 bot.logger.log_error(f"خطا در حذف اخطار: {e}")
                 await event.reply(f"❌ خطا: {e}")
