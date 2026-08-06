@@ -112,8 +112,81 @@ def test_bot_detection_flow():
     bd._FILE.unlink(missing_ok=True)
 
 
+def test_partial_entity_bot_none_resolved_via_get_entity():
+    """علتِ اصلیِ اسکرین‌شات: senderِ خلاصه با bot=None باید با get_entity قطعی شود."""
+    import handlers.message_handler as mh
+    import types
+    tac = _load_harness()
+
+    def __init__(self, uid, name="علی", username=None, bot=False):
+        self.id = uid
+        self.first_name = name
+        self.last_name = None
+        self.username = username
+        self.bot = bot
+    tac.User.__init__ = __init__
+
+    owner = tac._owner_id()
+    CHAT = tac.CHAT
+
+    # کاربرِ واقعیِ «ربات» که entityِ خلاصه‌اش bot=None است، ولی get_entity
+    # (GetUsers) آن را با bot=True برمی‌گرداند — همان سناریوی واقعی.
+    partial_bot = tac.User(999888, name="bot", username="bot", bot=None)
+
+    class Client:
+        async def get_entity(self, entity):
+            # شبیه‌سازیِ GetUsers: user کامل با bot=True
+            return tac.User(999888, name="bot", username="bot", bot=True)
+        async def get_messages(self, *a, **k): return []
+        async def delete_messages(self, *a, **k): return None
+        async def send_message(self, *a, **k): return None
+
+    class GA:
+        async def lock_group(self, c): pass
+        async def unlock_group(self, c): pass
+
+    bot = types.SimpleNamespace(
+        client=Client(), logger=_Logger(),
+        config_manager=types.SimpleNamespace(get=lambda k, d=None: d),
+        tracker=types.SimpleNamespace(get_count=lambda *a: 0, increment=lambda *a: 0,
+                                      reset_count=lambda *a: None, decrement=lambda *a: 0),
+        detector=types.SimpleNamespace(is_spam=lambda *a: (False, None),
+                                       check_message=lambda *a: (False, None)),
+        group_timer_tasks={}, bot_account_id=555, punished_users=set(),
+        spam_burst_messages={}, spammer_messages={}, spam_burst_users=set(),
+        moderation_queue=types.SimpleNamespace(enqueue=lambda *a: True),
+        admin_actions=types.SimpleNamespace(), group_actions=GA(),
+        cleanup_tasks={})
+
+    bd._FILE.unlink(missing_ok=True)
+    bd._KNOWN_BOT_IDS.clear()
+    bd._KNOWN_HUMAN_IDS.clear()
+
+    ev = tac.Event("سلام", owner)
+    # فرستنده = همان entityِ خلاصه با bot=None
+    async def gs(): return partial_bot
+    ev.get_sender = gs
+    asyncio.run(mh.handle_new_message(bot, ev))
+
+    check("senderِ خلاصه با bot=None، با get_entity ربات تشخیص داده شد",
+          bd.is_disabled(CHAT), f"{ev.replies}")
+    check("پیام اطلاع‌رسانی با نام ربات",
+          any("to دلیل فعال بودن ربات" in r and "bot" in r for r in ev.replies)
+          or any("ربات" in r for r in ev.replies), f"{ev.replies}")
+
+    bd._FILE.unlink(missing_ok=True)
+    bd._KNOWN_BOT_IDS.clear()
+    bd._KNOWN_HUMAN_IDS.clear()
+
+
+class _Logger:
+    def log_info(self, *a, **k): pass
+    def log_error(self, *a, **k): pass
+
+
 def main():
     test_bot_detection_flow()
+    test_partial_entity_bot_none_resolved_via_get_entity()
     print(f"\n=== bot_detector: PASSED={PASSED} FAILED={FAILED} ===")
     return 1 if FAILED else 0
 

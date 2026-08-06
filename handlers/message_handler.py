@@ -885,18 +885,23 @@ async def handle_new_message(bot, event):
                         await event.reply(
                             "🦊 روباه در این گروه از قبل فعال است ✅")
                 return
-            # آیا فرستندهٔ این پیام یک رباتِ دیگر است؟ فقط با فیلدِ مستقیمِ API
-            # (User.bot). حسابِ خودِ روباه و مالک از قبل در is_bot_account /
-            # is_global_owner مستثنا شده‌اند.
-            if (bot_detector.is_bot_sender(sender)
-                    and not is_global_owner(user_id)):
+            # آیا فرستندهٔ این پیام یک رباتِ دیگر است؟ تشخیص فقط بر اساسِ فیلدِ
+            # مستقیمِ API (User.bot)؛ اگر entityِ خلاصه باشد (bot=None)، entityِ
+            # کامل با client.get_entity گرفته و فیلدِ bot قطعی خوانده می‌شود.
+            # حسابِ خودِ روباه و مالک از قبل در is_bot_account / is_global_owner
+            # مستثنا شده‌اند.
+            is_other_bot = await bot_detector.resolve_is_bot(
+                bot.client, sender, user_id)
+            if is_other_bot and not is_global_owner(user_id):
                 title = getattr(event_chat, "title", "") or ""
                 bot_detector.disable_for_bot(chat_id, sender)
                 bot.logger.log_info(
                     "BOT DETECTED "
                     f"chat_id={chat_id} bot_id={user_id} "
                     f"bot_name={bot_detector.display(sender)!r} "
-                    f"group_title={title!r} -> fox disabled")
+                    f"bot_flag={getattr(sender, 'bot', None)!r} "
+                    f"group_title={title!r} -> fox disabled\n"
+                    f"SENDER_FULL={bot_detector.sender_dump(sender)}")
                 await event.reply(
                     f"🤖 به دلیل فعال بودن ربات "
                     f"{bot_detector.display(sender)}، "
