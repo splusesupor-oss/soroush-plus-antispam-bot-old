@@ -1399,44 +1399,6 @@ async def handle_new_message(bot, event):
                     f"{admin_tools.format_cleanup(chat_id)}")
                 return
 
-        # ایجاد کال (تماس گروهی)
-        if clean_text == "ایجاد کال":
-            sender_username = getattr(sender, "username", None)
-            if not admin_tools.has_admin_permission(
-                chat_id, user_id, sender_username
-            ):
-                await event.reply(
-                    "❌ فقط مالک یا ادمین اجازه ایجاد تماس گروهی را دارند")
-                return
-            # نامِ تماس = نامِ گروه
-            try:
-                chat_entity = await event.get_chat()
-                call_title = getattr(chat_entity, "title", None) or "تماس گروهی"
-            except Exception:
-                call_title = "تماس گروهی"
-            creator_name = admin_tools.display_name(sender)
-
-            try:
-                conf_version = bot.config_manager.get(
-                    "conference_version",
-                    admin_tools.DEFAULT_CONFERENCE_VERSION)
-                link, error, created_at = await admin_tools.create_group_call(
-                    bot.client, chat_id, title=call_title,
-                    logger=bot.logger, version=conf_version)
-                if error:
-                    await event.reply(f"❌ {error}")
-                    return
-                admin_tools.log_action(
-                    chat_id, sender, "ایجاد تماس گروهی",
-                    note=f"لینک {link}")
-                invite_text = admin_tools.format_call_invite(
-                    call_title, creator_name, created_at, link)
-                await event.reply(invite_text)
-            except Exception as e:
-                bot.logger.log_error(f"خطا در ایجاد کال: {e}")
-                await event.reply(f"❌ خطا در ایجاد تماس گروهی: {e}")
-            return
-
         if clean_text == "ثبت اصل":
             _log_command_route(bot, clean_text, "ثبت اصل", "user_original.set")
             begin_registration(user_id)
@@ -2409,9 +2371,6 @@ async def handle_new_message(bot, event):
                 "🗑️ حذف اخطار:\n"
                 "برای حذف اخطار داده‌شده به یک کاربر\n"
                 "«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»\n\n"
-                "📞 ایجاد تماس گروهی:\n"
-                "برای ایجاد تماس گروهی\n"
-                "«📞 \"ایجاد کال\"»\n\n"
                 "با سازنده ربات تماس بگیرید:\n"
                 "@osine1"
             )
@@ -2551,8 +2510,6 @@ async def handle_new_message(bot, event):
                 "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه",
                 "🗑️ حذف اخطار:",
                 "برای حذف اخطار داده‌شده به یک کاربر",
-                "📞 ایجاد تماس گروهی:",
-                "برای ایجاد تماس گروهی",
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -2620,7 +2577,6 @@ async def handle_new_message(bot, event):
                 "🧹 پاکسازی خودکار:\nبرای پاکسازی خودکار پیام‌ها\n«🧹 \"پاکسازی خودکار\"»",
                 "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه\n«روی کاربر ریپلای کنید و بنویسید \"صفر\"»",
                 "🗑️ حذف اخطار:\nبرای حذف اخطار داده‌شده به یک کاربر\n«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»",
-                "📞 ایجاد تماس گروهی:\nبرای ایجاد تماس گروهی\n«📞 \"ایجاد کال\"»",
             ]
             for section in quote_sections:
                 pos = help_text.find(section)

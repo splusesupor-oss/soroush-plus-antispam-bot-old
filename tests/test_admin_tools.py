@@ -90,24 +90,6 @@ def test_admin_log_grouped_by_admin():
     at.clear_log(-4001)
 
 
-def test_format_call_invite():
-    from datetime import datetime
-    created = datetime(2026, 8, 6, 13, 29)  # پنجشنبه
-    text = at.format_call_invite("گروه تست", "@osine1", created,
-                                 "https://splus.ir/call/abc")
-    check("پیام دعوت ساخته شد", "دعوت شدید" in text)
-    check("نام تماس هست", "📞 نام تماس: «گروه تست»" in text)
-    check("سازنده هست", "😀 سازنده تماس: @osine1" in text)
-    check("زمان ساخت با روز هفته هست", "پنجشنبه" in text and "ساعت 13:29" in text)
-    check("هشدار عمومی هست", "لینک عمومی است" in text)
-    check("لینک تماس هست", "🔗 لینک تماس:" in text and "https://splus.ir/call/abc" in text)
-
-
-def test_meet_link_builder():
-    link = f"{at._MEET_BASE}/abc123"
-    check("لینک meet با slug ساخته می‌شود", link == "https://splus.ir/meet/abc123")
-
-
 def test_log_pruned_after_24h():
     at._ADMIN_LOG_FILE.write_text("{}", encoding="utf-8")
     # ورودیِ جدید
@@ -197,8 +179,6 @@ def main():
     test_auto_cleanup_settings()
     test_scheduling_computation()
     test_log_pruned_after_24h()
-    test_format_call_invite()
-    test_meet_link_builder()
     import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         tmp = f.name

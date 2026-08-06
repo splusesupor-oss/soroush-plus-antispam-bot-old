@@ -29,6 +29,5 @@
     "admin_usernames": [
         "osine1"
     ],
-    "banned_words": [],
-    "conference_version": "1"
+    "banned_words": []
 }
