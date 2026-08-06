@@ -677,9 +677,9 @@ async def create_group_call(client, chat_id, title="تماس گروهی", logger
         → ConferenceCreated(slug)
         → لینک = https://splus.ir/meet/{slug}
 
-    مسیرِ قدیمیِ phone.CreateGroupCallRequest به‌طورِ کامل حذف شده است؛
-    سروش‌پلاس آن را پشتیبانی نمی‌کند (۴۲۲ NOT_SUPPORTED) و هیچ fallback
-    دیگری وجود ندارد.
+    مسیرِ قدیمیِ ساختِ تماسِ گروهیِ استانداردِ تلگرام (که سروش‌پلاس آن را
+    پشتیبانی نمی‌کند و ۴۲۲ NOT_SUPPORTED برمی‌گرداند) به‌طورِ کامل حذف
+    شده است و هیچ fallbackِ دیگری وجود ندارد.
 
     ``version`` از فراخوان (معمولاً از config) داده می‌شود؛ اگر None باشد،
     از ``DEFAULT_CONFERENCE_VERSION`` استفاده می‌شود.
