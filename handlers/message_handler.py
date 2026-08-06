@@ -126,6 +126,7 @@ from modules.outgoing_profiler import (
     response_rpc_ms,
 )
 from handlers.admin_handler import handle_admin_commands
+from modules import admin_tools
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -1240,8 +1241,10 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text == "صفر":
-            if not is_global_owner(getattr(sender, "id", None)):
-                await event.reply("❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد")
+            # فقط مالک اصلی ربات یا مالک گروه؛ ادمینِ عادی اجازه ندارد.
+            if not admin_tools.has_zero_permission(chat_id, user_id):
+                await event.reply(
+                    "❌ فقط مالک اصلی ربات یا مالک گروه اجازه صفر کردن تخلفات را دارد")
                 return
             if not event.reply_to:
                 await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
@@ -1258,10 +1261,135 @@ async def handle_new_message(bot, event):
                     return
 
                 bot.tracker.reset_count(chat_id, target_user.id)
+                admin_tools.log_action(
+                    chat_id, sender, "صفر کردن تخلفات", target=target_user)
                 await event.reply("✅ تخلفات کاربر صفر شد.")
             except Exception as e:
                 bot.logger.log_error(f"خطا در صفر کردن تخلفات: {e}")
                 await event.reply(f"❌ خطا: {e}")
+            return
+
+        # حذف اخطار با ریپلای
+        if clean_text == "حذف اخطار":
+            sender_username = getattr(sender, "username", None)
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, sender_username
+            ):
+                await event.reply(
+                    "❌ فقط مالک یا ادمین اجازه حذف اخطار را دارند")
+                return
+            if not event.reply_to:
+                await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+                return
+
+            try:
+                reply_msg = await bot.client.get_messages(
+                    chat_id,
+                    ids=event.reply_to.reply_to_msg_id,
+                )
+                target_user = await reply_msg.get_sender() if reply_msg else None
+                if not target_user:
+                    await event.reply("❌ کاربر پیدا نشد")
+                    return
+
+                before = bot.tracker.get_count(chat_id, target_user.id)
+                new_count = bot.tracker.decrement(chat_id, target_user.id)
+                admin_tools.log_action(
+                    chat_id, sender, "حذف اخطار", target=target_user,
+                    note=f"{before} → {new_count}")
+                await event.reply(
+                    f"✅ یک اخطار از کاربر حذف شد.\n"
+                    f"تعداد اخطار: {new_count}")
+            except Exception as e:
+                bot.logger.log_error(f"خطا در حذف اخطار: {e}")
+                await event.reply(f"❌ خطا: {e}")
+            return
+
+        # لاگ مدیریتی
+        if clean_text == "لاگ مدیریتی":
+            sender_username = getattr(sender, "username", None)
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, sender_username
+            ):
+                await event.reply("❌ فقط مالک یا ادمین اجازه مشاهده لاگ را دارند")
+                return
+            await event.reply(admin_tools.format_log(chat_id))
+            return
+
+        # پاکسازی خودکار — جریانِ مرحله‌به‌مرحله
+        if clean_text == "پاکسازی خودکار":
+            sender_username = getattr(sender, "username", None)
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, sender_username
+            ):
+                await event.reply("❌ فقط مالک یا ادمین اجازه پاکسازی خودکار را دارند")
+                return
+            admin_tools._PENDING_CLEANUP[chat_id] = {
+                "step": "time", "time": None, "user_id": user_id}
+            await event.reply(
+                "🕐 پاکسازی در چه ساعتی انجام شود؟\n"
+                "یک ساعت معتبر مانند «15:12» ارسال کنید.")
+            return
+
+        # مرحلهٔ پاکسازی خودکار (پاسخِ مرحله‌ای) — فقط برای همان ادمینِ شروع‌کننده
+        pending_cleanup = admin_tools._PENDING_CLEANUP.get(chat_id)
+        if pending_cleanup and pending_cleanup.get("user_id") == user_id:
+            state = pending_cleanup
+            if state.get("step") == "time":
+                time_str = admin_tools.valid_time(clean_text)
+                if time_str is None:
+                    await event.reply("❌ ساعت نامعتبر است؛ مانند «15:12» ارسال کنید.")
+                    return
+                state["time"] = time_str
+                state["step"] = "count"
+                await event.reply(
+                    "🗑️ چه تعداد پیام حذف شود؟\n"
+                    "عددی بین ۱ تا ۳۰۰۰ ارسال کنید (مثلاً «800»).")
+                return
+            if state.get("step") == "count":
+                count = admin_tools.valid_count(clean_text)
+                if count is None:
+                    await event.reply(
+                        "❌ تعداد نامعتبر است؛ عددی بین ۱ تا ۳۰۰۰ ارسال کنید.")
+                    return
+                admin_tools.set_cleanup(chat_id, state["time"], count)
+                admin_tools._PENDING_CLEANUP.pop(chat_id, None)
+                admin_tools.log_action(
+                    chat_id, sender, "تنظیم پاکسازی خودکار",
+                    note=f"ساعت {state['time']}، {count} پیام")
+                await event.reply(
+                    f"✅ پاکسازی خودکار تنظیم شد.\n\n"
+                    f"🕐 ساعت: {state['time']}\n"
+                    f"🗑️ تعداد پیام: {count}")
+                return
+
+        # ایجاد کال (تماس گروهی)
+        if clean_text == "ایجاد کال":
+            sender_username = getattr(sender, "username", None)
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, sender_username
+            ):
+                await event.reply(
+                    "❌ فقط مالک یا ادمین اجازه ایجاد تماس گروهی را دارند")
+                return
+            await event.reply("📞 در حال ایجاد تماس گروهی...")
+
+            async def _create_call():
+                try:
+                    link, error = await admin_tools.create_group_call(
+                        bot.client, chat_id, title="تماس گروهی")
+                    if error:
+                        await event.reply(f"❌ {error}")
+                        return
+                    admin_tools.log_action(
+                        chat_id, sender, "ایجاد تماس گروهی")
+                    await event.reply(
+                        f"📞 تماس گروهی ایجاد شد.\n\nبرای ورود به تماس:\n{link}")
+                except Exception as e:
+                    bot.logger.log_error(f"خطا در ایجاد کال: {e}")
+                    await event.reply(f"❌ خطا در ایجاد تماس گروهی: {e}")
+
+            _run_background(bot, "create_call", _create_call)
             return
 
         if clean_text == "ثبت اصل":
@@ -2224,7 +2352,21 @@ async def handle_new_message(bot, event):
                 "برای نمایش پیام سنجاق‌شده\n"
                 "بنویسید:\n"
                 "پیام سنجاق\n\n"
+                "🧾 لاگ مدیریتی:\n"
+                "برای دیدن اینکه ادمین‌ها چه کسی و چه پیامی را حذف کردند\n"
+                "«🧾 \"لاگ مدیریتی\"»\n\n"
+                "🧹 پاکسازی خودکار:\n"
+                "برای پاکسازی خودکار پیام‌ها\n"
+                "«🧹 \"پاکسازی خودکار\"»\n\n"
                 "⚠️ صفر کردن تخلفات:\n"
+                "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه\n"
+                "«روی کاربر ریپلای کنید و بنویسید \"صفر\"»\n\n"
+                "🗑️ حذف اخطار:\n"
+                "برای حذف اخطار داده‌شده به یک کاربر\n"
+                "«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»\n\n"
+                "📞 ایجاد تماس گروهی:\n"
+                "برای ایجاد تماس گروهی\n"
+                "«📞 \"ایجاد کال\"»\n\n"
                 "با سازنده ربات تماس بگیرید:\n"
                 "@osine1"
             )
@@ -2356,6 +2498,16 @@ async def handle_new_message(bot, event):
                 "♻️ آزاد کردن کاربر:",
                 "⚠️ اخطار دادن به کاربر:",
                 "⚠️ صفر کردن تخلفات:",
+                # قابلیت‌های مدیریتی جدید
+                "🧾 لاگ مدیریتی:",
+                "برای دیدن اینکه ادمین‌ها چه کسی و چه پیامی را حذف کردند",
+                "🧹 پاکسازی خودکار:",
+                "برای پاکسازی خودکار پیام‌ها",
+                "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه",
+                "🗑️ حذف اخطار:",
+                "برای حذف اخطار داده‌شده به یک کاربر",
+                "📞 ایجاد تماس گروهی:",
+                "برای ایجاد تماس گروهی",
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -2418,6 +2570,12 @@ async def handle_new_message(bot, event):
                 "🚪 اخراج کاربر:\nروی پیام ریپلای کنید و بنویسید:\nاخراج",
                 "♻️ آزاد کردن کاربر:\nبرای آزاد کردن کاربر محروم شده بنویسید:\nآزاد",
                 "⚠️ صفر کردن تخلفات:\nبا سازنده ربات تماس بگیرید:\n@osine1",
+                # قابلیت‌های مدیریتی جدید
+                "🧾 لاگ مدیریتی:\nبرای دیدن اینکه ادمین‌ها چه کسی و چه پیامی را حذف کردند\n«🧾 \"لاگ مدیریتی\"»",
+                "🧹 پاکسازی خودکار:\nبرای پاکسازی خودکار پیام‌ها\n«🧹 \"پاکسازی خودکار\"»",
+                "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه\n«روی کاربر ریپلای کنید و بنویسید \"صفر\"»",
+                "🗑️ حذف اخطار:\nبرای حذف اخطار داده‌شده به یک کاربر\n«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»",
+                "📞 ایجاد تماس گروهی:\nبرای ایجاد تماس گروهی\n«📞 \"ایجاد کال\"»",
             ]
             for section in quote_sections:
                 pos = help_text.find(section)
@@ -2642,10 +2800,12 @@ async def handle_new_message(bot, event):
             if clean_text == "قفل":
                 bot.logger.log_info("LOCK COMMAND RECEIVED")
                 await bot.group_actions.lock_group(chat_id)
+                admin_tools.log_action(chat_id, sender, "قفل کردن گروه")
                 await event.reply("🔒 گروه قفل شد")
             else:
                 bot.logger.log_info("UNLOCK COMMAND RECEIVED")
                 await bot.group_actions.unlock_group(chat_id)
+                admin_tools.log_action(chat_id, sender, "باز کردن گروه")
                 await event.reply("🔓 گروه باز شد")
             return
 
@@ -2987,6 +3147,9 @@ async def handle_new_message(bot, event):
                             chat_id, user_id, sender_username or "", deleted_count
                         )
 
+                admin_tools.log_action(
+                    chat_id, sender, "حذف دسته‌ای پیام",
+                    note=f"{deleted_count} پیام")
                 await event.reply(f"{deleted_count} پیام پاک شد 💣")
                 return
 
@@ -3021,6 +3184,14 @@ async def handle_new_message(bot, event):
                         chat_id,
                         event.reply_to.reply_to_msg_id
                     )
+                try:
+                    reply_msg = await bot.client.get_messages(
+                        chat_id, ids=event.reply_to.reply_to_msg_id)
+                    target_user = await reply_msg.get_sender() if reply_msg else None
+                    admin_tools.log_action(
+                        chat_id, sender, "حذف پیام", target=target_user)
+                except Exception:
+                    admin_tools.log_action(chat_id, sender, "حذف پیام")
 
             except Exception as e:
                 await event.reply(f"❌ خطا: {e}")
@@ -3071,6 +3242,8 @@ async def handle_new_message(bot, event):
                         reason="اخراج دستی توسط مالک یا ادمین",
                         source="manual",
                     )
+                    admin_tools.log_action(
+                        chat_id, sender, "اخراج کاربر", target=target_user)
                     await event.reply("✅ کاربر اخراج شد")
 
                 async def kick_failed(_error):
@@ -3125,7 +3298,8 @@ async def handle_new_message(bot, event):
                 )
 
                 if ok:
-
+                    admin_tools.log_action(
+                        chat_id, sender, "آزاد کردن کاربر", target=user)
                     await event.reply("♻️ کاربر آزاد شد ✅")
                 else:
                     await event.reply("❌ آزاد کردن انجام نشد")
@@ -3162,9 +3336,11 @@ async def handle_new_message(bot, event):
 
                 username = getattr(user, "username", None) or "کاربر"
 
-                print("WARN:", repr(chat_id), type(chat_id), repr(user.id), type(user.id))
                 count = bot.tracker.increment(chat_id, user.id)
                 threshold = bot.config_manager.get("spam_threshold", 5)
+                admin_tools.log_action(
+                    chat_id, sender, "اخطار", target=user,
+                    note=f"تعداد {count}")
 
                 await event.reply(
                     f"⚠️ کاربر 「 {_format_banned_user(user, user.id)} 」\n\n"
@@ -3250,6 +3426,8 @@ async def handle_new_message(bot, event):
 
                 async def mute_succeeded(_result):
                     add_mute(chat_id)
+                    admin_tools.log_action(
+                        chat_id, sender, "سکوت کاربر", target=target_user)
                     await event.reply(
                         f"🔕 کاربر 『 {_format_banned_user(target_user, target_user.id)} 』 سکوت شد"
                     )
@@ -3304,6 +3482,8 @@ async def handle_new_message(bot, event):
 
                 async def unmute_succeeded(_result):
                     add_mute(chat_id)
+                    admin_tools.log_action(
+                        chat_id, sender, "رفع سکوت کاربر", target=target_user)
                     await event.reply("🔊 سکوت کاربر برداشته شد")
 
                 async def unmute_failed(_error):

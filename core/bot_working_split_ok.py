@@ -11,6 +11,7 @@ from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
 from modules.group_expiry import match_command as expiry_command
+from modules.admin_tools import run_cleanup_watcher
 from handlers.group_expiry_handler import (
     run_expiry_watcher as run_group_expiry_watcher,
 )
@@ -419,6 +420,11 @@ class SoroushAntiSpamBot:
                 self, deactivate, logger=self.logger)
 
         asyncio.create_task(group_expiry_loop())
+
+        # 🧹 ناظر پاکسازی خودکار — در ساعتِ تنظیم‌شده، پیام‌های گروه را پاک می‌کند.
+        if not hasattr(self, "cleanup_tasks"):
+            self.cleanup_tasks = {}
+        asyncio.create_task(run_cleanup_watcher(self, logger=self.logger))
 
         async def is_currently_restricted(chat_id, user):
             """وضعیت فعلی عضو را از SPlusthon می‌خواند؛ خطا یعنی حفظ بن فعلی."""

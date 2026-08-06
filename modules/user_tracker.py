@@ -87,6 +87,26 @@ class UserTracker:
             del self.spam_counts[g_key][u_key]
             self.save()
 
+    def decrement(self, group_id: int, user_id: int) -> int:
+        """یک اخطار/تخلف را امن کم می‌کند (کم‌تر از صفر نمی‌رود).
+
+        برمی‌گرداند تعدادِ جدیدِ تخلفات.
+        """
+        g_key, u_key = self._key(group_id, user_id)
+        current = self.get_count(group_id, user_id)
+        new_count = max(current - 1, 0)
+        if new_count <= 0:
+            # صفر شد → رکورد را به‌کلی حذف می‌کنیم تا با بقیهٔ اطلاعات تداخل نکند.
+            if g_key in self.spam_counts and u_key in self.spam_counts[g_key]:
+                del self.spam_counts[g_key][u_key]
+                self.save()
+            return 0
+        if g_key not in self.spam_counts:
+            self.spam_counts[g_key] = {}
+        self.spam_counts[g_key][u_key] = new_count
+        self.save()
+        return new_count
+
     def reset_group(self, group_id: int):
         g_key = normalize_group_id(group_id)
         if g_key in self.spam_counts:
