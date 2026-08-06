@@ -1325,21 +1325,52 @@ async def handle_new_message(bot, event):
                 await event.reply("❌ فقط مالک یا ادمین اجازه پاکسازی خودکار را دارند")
                 return
             admin_tools._PENDING_CLEANUP[chat_id] = {
-                "step": "time", "time": None, "user_id": user_id}
+                "step": "day", "day": None, "time": None,
+                "user_id": user_id}
             await event.reply(
-                "🕐 پاکسازی در چه ساعتی انجام شود؟\n"
-                "یک ساعت معتبر مانند «15:12» ارسال کنید.")
+                "🧹 پاکسازی خودکار\n\n"
+                "پاکسازی چه زمانی انجام شود؟\n"
+                "گزینه‌ها:\n"
+                "- امروز\n"
+                "- فردا")
             return
 
         # مرحلهٔ پاکسازی خودکار (پاسخِ مرحله‌ای) — فقط برای همان ادمینِ شروع‌کننده
         pending_cleanup = admin_tools._PENDING_CLEANUP.get(chat_id)
         if pending_cleanup and pending_cleanup.get("user_id") == user_id:
             state = pending_cleanup
+            if state.get("step") == "day":
+                day = admin_tools.valid_day(clean_text)
+                if day is None:
+                    await event.reply(
+                        "❌ لطفاً یکی از گزینه‌های «امروز» یا «فردا» را ارسال کنید.")
+                    return
+                state["day"] = day
+                state["step"] = "time"
+                await event.reply(
+                    "🕐 ساعت انجام پاکسازی را وارد کنید:\n"
+                    "مثال: «13:32»")
+                return
             if state.get("step") == "time":
                 time_str = admin_tools.valid_time(clean_text)
                 if time_str is None:
                     await event.reply("❌ ساعت نامعتبر است؛ مانند «15:12» ارسال کنید.")
                     return
+                # اگر «امروز» و ساعت گذشته → اعلام و دریافتِ دوباره
+                scheduled = admin_tools.compute_scheduled_at(
+                    state.get("day"), time_str)
+                if scheduled is None:
+                    await event.reply("❌ ساعت نامعتبر است؛ دوباره تلاش کنید.")
+                    return
+                hour = int(time_str.split(":")[0])
+                tod = admin_tools.time_of_day(hour)
+                if state.get("day") == "today" and scheduled.date() != \
+                        admin_tools.datetime.now().date():
+                    await event.reply(
+                        f"⏰ ساعت {time_str} ({tod}) گذشته است و برای جلوگیری "
+                        "از اشتباه، فردا لحاظ می‌شود.\n"
+                        "اگر منظورتان همین امروز است، یک ساعتِ بعدی انتخاب "
+                        "کنید؛ در غیر این صورت ادامه می‌دهیم.")
                 state["time"] = time_str
                 state["step"] = "count"
                 await event.reply(
@@ -1352,15 +1383,19 @@ async def handle_new_message(bot, event):
                     await event.reply(
                         "❌ تعداد نامعتبر است؛ عددی بین ۱ تا ۳۰۰۰ ارسال کنید.")
                     return
-                admin_tools.set_cleanup(chat_id, state["time"], count)
+                result = admin_tools.set_cleanup(
+                    chat_id, state.get("day"), state["time"], count)
                 admin_tools._PENDING_CLEANUP.pop(chat_id, None)
+                if result is None:
+                    await event.reply("❌ خطا در ذخیرهٔ تنظیم؛ دوباره تلاش کنید.")
+                    return
                 admin_tools.log_action(
                     chat_id, sender, "تنظیم پاکسازی خودکار",
-                    note=f"ساعت {state['time']}، {count} پیام")
+                    note=(f"روز {state.get('day')}، ساعت {state['time']}، "
+                          f"{count} پیام"))
                 await event.reply(
                     f"✅ پاکسازی خودکار تنظیم شد.\n\n"
-                    f"🕐 ساعت: {state['time']}\n"
-                    f"🗑️ تعداد پیام: {count}")
+                    f"{admin_tools.format_cleanup(chat_id)}")
                 return
 
         # ایجاد کال (تماس گروهی)

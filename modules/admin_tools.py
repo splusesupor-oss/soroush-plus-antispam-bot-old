@@ -159,7 +159,9 @@ def format_log(chat_id, limit=30):
 #  پاکسازی خودکار — تنظیماتِ ماندگار + جریانِ مرحله‌به‌مرحله
 # ---------------------------------------------------------------------------
 # جریانِ مرحله‌به‌مرحله (در حافظه): chat_id -> مرحلهٔ انتظار
-_PENDING_CLEANUP = {}  # chat_id -> {"step": "time"|"count", "time": "HH:MM"}
+#   step: "day" | "time" | "count"
+_PENDING_CLEANUP = {}  # chat_id -> {"step": ..., "day": "today"|"tomorrow",
+#                       "time": "HH:MM", "user_id": ...}
 
 
 def _load_cleanups():
@@ -181,11 +183,121 @@ def _save_cleanups(data):
         pass
 
 
-def set_cleanup(chat_id, time_str, count):
-    """تنظیماتِ پاکسازیِ این گروه را ذخیره می‌کند (ماندگار)."""
+def format_jalali(date):
+    """تاریخِ میلادی را به شمسی به‌صورت «۱۴۰۵/۰۵/۱۵» برمی‌گرداند.
+
+    الگوریتمِ استانداردِ تبدیلِ میلادی→شمسی.
+    """
+    g_y = date.year
+    g_m = date.month
+    g_d = date.day
+
+    g_days_in_month = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    j_days_in_month = (31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29)
+
+    gy = g_y - 1600
+    gm = g_m - 1
+    gd = g_d - 1
+
+    g_day_no = (365 * gy + (gy + 3) // 4 - (gy + 99) // 100
+                + (gy + 399) // 400)
+    for i in range(gm):
+        g_day_no += g_days_in_month[i]
+    if gm > 1 and ((gy % 4 == 0 and gy % 100 != 0) or (gy % 400 == 0)):
+        # leap year
+        g_day_no += 1
+    g_day_no += gd
+
+    j_day_no = g_day_no - 79
+    j_np = j_day_no // 12053
+    j_day_no %= 12053
+    jy = 979 + 33 * j_np + 4 * (j_day_no // 1461)
+    j_day_no %= 1461
+    if j_day_no >= 366:
+        jy += (j_day_no - 1) // 365
+        j_day_no = (j_day_no - 1) % 365
+
+    for i in range(11):
+        if j_day_no < j_days_in_month[i]:
+            break
+        j_day_no -= j_days_in_month[i]
+    jm = i + 1
+    jd = j_day_no + 1
+    return f"{jy:04d}/{jm:02d}/{jd:02d}"
+
+
+def valid_day(value):
+    """«امروز» یا «فردا» را تشخیص می‌دهد."""
+    norm = (value or "").strip().replace("‌", "")
+    if norm in ("امروز", "امرز", "اموز"):
+        return "today"
+    if norm in ("فردا", "فرداه", "فر دا"):
+        return "tomorrow"
+    return None
+
+
+def valid_time(value):
+    """بررسیِ ساعتِ معتبر به شکل HH:MM."""
+    value = (value or "").strip()
+    try:
+        hour, minute = value.split(":")
+        hour, minute = int(hour), int(minute)
+    except (ValueError, AttributeError):
+        return None
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return f"{hour:02d}:{minute:02d}"
+    return None
+
+
+def time_of_day(hour):
+    """برچسبِ بخشِ روز بر اساسِ ساعت: صبح/ظهر/عصر/شب."""
+    if hour < 6:
+        return "شب"
+    if hour < 12:
+        return "صبح"
+    if hour < 16:
+        return "ظهر"
+    if hour < 19:
+        return "عصر"
+    return "شب"
+
+
+def compute_scheduled_at(day, time_str, now=None):
+    """زمانِ دقیقِ اجرایِ پاکسازی را محاسبه می‌کند.
+
+    ``day``: "today" یا "tomorrow"؛ ``time_str``: "HH:MM".
+    اگر زمانِ «امروز» گذشته باشد، به «فردا» منتقل می‌شود.
+    خروجی: datetime (منطقهٔ محلی) یا None اگر نامعتبر.
+    """
+    if now is None:
+        now = datetime.now()
+    t = valid_time(time_str)
+    if t is None:
+        return None
+    hour, minute = int(t.split(":")[0]), int(t.split(":")[1])
+
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if day == "tomorrow":
+        target = target + timedelta(days=1)
+    else:
+        # «امروز» اما اگر ساعت گذشته → فردا
+        if target <= now:
+            target = target + timedelta(days=1)
+    return target
+
+
+def set_cleanup(chat_id, day, time_str, count):
+    """تنظیماتِ پاکسازیِ این گروه را با زمانِ کامل ذخیره می‌کند (ماندگار)."""
+    now = datetime.now()
+    scheduled_at = compute_scheduled_at(day, time_str, now)
+    if scheduled_at is None:
+        return None
     data = _load_cleanups()
     data[str(chat_id)] = {
+        "set_at": now.isoformat(timespec="seconds"),
+        "scheduled_at": scheduled_at.isoformat(timespec="seconds"),
         "time": time_str,
+        "day": day,
         "count": int(count),
         "last_run": None,
     }
@@ -207,25 +319,12 @@ def all_cleanups():
     return _load_cleanups()
 
 
-def mark_cleanup_run(chat_id, day):
+def mark_cleanup_run(chat_id, scheduled_at):
     data = _load_cleanups()
     rec = data.get(str(chat_id))
     if rec:
-        rec["last_run"] = day
+        rec["last_run"] = scheduled_at
         _save_cleanups(data)
-
-
-def valid_time(value):
-    """بررسیِ ساعتِ معتبر به شکل HH:MM."""
-    value = (value or "").strip()
-    try:
-        hour, minute = value.split(":")
-        hour, minute = int(hour), int(minute)
-    except (ValueError, AttributeError):
-        return None
-    if 0 <= hour <= 23 and 0 <= minute <= 59:
-        return f"{hour:02d}:{minute:02d}"
-    return None
 
 
 def valid_count(value):
@@ -237,6 +336,58 @@ def valid_count(value):
     if 1 <= n <= 3000:
         return n
     return None
+
+
+def format_cleanup(chat_id):
+    """نمایشِ خوانای تنظیماتِ پاکسازیِ این گروه.
+
+    مثال:
+      🕐 زمان تنظیم: امروز ساعت ۱۳:۳۰
+      🧹 زمان پاکسازی: فردا ساعت ۰۱:۳۰
+      🗑️ تعداد پیام: ۱۰۰
+    """
+    rec = get_cleanup(chat_id)
+    if not rec:
+        return "🧹 پاکسازی خودکاری برای این گروه تنظیم نشده است."
+
+    try:
+        set_at = datetime.fromisoformat(rec.get("set_at", ""))
+    except (ValueError, TypeError):
+        set_at = None
+    try:
+        sched = datetime.fromisoformat(rec.get("scheduled_at", ""))
+    except (ValueError, TypeError):
+        sched = None
+
+    today = datetime.now()
+    if set_at is not None:
+        set_day = set_at.date() == today.date()
+        set_label = f"{'امروز' if set_day else format_jalali(set_at.date())} " \
+                    f"ساعت {set_at.strftime('%H:%M')}"
+    else:
+        set_label = "-"
+
+    if sched is not None:
+        diff_days = (sched.date() - today.date()).days
+        if diff_days <= 0:
+            day_label = "امروز"
+        elif diff_days == 1:
+            day_label = "فردا"
+        else:
+            day_label = format_jalali(sched.date())
+        tod = time_of_day(sched.hour)
+        sched_label = (f"{day_label} ساعت {sched.strftime('%H:%M')} "
+                       f"({tod})")
+    else:
+        sched_label = "-"
+
+    count = rec.get("count", 0)
+    return (
+        f"🧹 پاکسازی خودکار:\n\n"
+        f"🕐 زمان تنظیم: {set_label}\n"
+        f"🧹 زمان پاکسازی: {sched_label}\n"
+        f"🗑️ تعداد پیام: {count}"
+    )
 
 
 # قفلِ مشترکِ per-group برایِ پاکسازی (دستی و خودکار با هم تداخل نکنند).
@@ -336,28 +487,35 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
 
 
 async def run_cleanup_watcher(bot, logger=None, interval=None):
-    """حلقهٔ پس‌زمینه: در زمانِ تنظیم‌شده، پاکسازیِ هر گروه را اجرا می‌کند.
+    """حلقهٔ پس‌زمینه: دقیقاً در زمانِ ذخیره‌شده، پاکسازیِ هر گروه را اجرا می‌کند.
 
-    هر ``interval`` ثانیه (پیش‌فرض ۳۰) بررسی می‌کند؛ دقیقاً در دقیقهٔ
-    زمانِ ذخیره‌شده و فقط یک بار در روز اجرا می‌شود.
+    هر ``interval`` ثانیه (پیش‌فرض ۳۰) بررسی می‌کند؛ اگر زمانِ اجرا رسیده و
+    هنوز اجرا نشده باشد (``last_run`` برابرِ آن زمان نباشد)، اجرا می‌شود.
     """
     import asyncio
     delay = 30 if interval is None else interval
     while True:
         try:
             now = datetime.now()
-            current = f"{now.hour:02d}:{now.minute:02d}"
-            day = now.date().isoformat()
             for key, rec in list(all_cleanups().items()):
-                if rec.get("last_run") == day:
+                sched = rec.get("scheduled_at")
+                if not sched:
                     continue
-                if rec.get("time") != current:
+                try:
+                    sched_dt = datetime.fromisoformat(sched)
+                except (ValueError, TypeError):
+                    continue
+                # اگر هنوز زمان نرسیده → رد
+                if now < sched_dt:
+                    continue
+                # اگر قبلاً اجرا شده → رد
+                if rec.get("last_run") == sched:
                     continue
                 try:
                     chat_id = int(key)
                 except (TypeError, ValueError):
                     chat_id = key
-                mark_cleanup_run(chat_id, day)
+                mark_cleanup_run(chat_id, sched)
                 task = asyncio.create_task(
                     execute_cleanup(
                         bot, chat_id, int(rec.get("count", 0)),

@@ -65,12 +65,35 @@ def test_auto_cleanup_settings():
     check("تعداد ۳۰۰۱ نامعتبر", at.valid_count("3001") is None)
     check("تعداد صفر نامعتبر", at.valid_count("0") is None)
 
-    at.set_cleanup(-1003, "15:12", 800)
+    at.set_cleanup(-1003, "today", "15:12", 800)
     rec = at.get_cleanup(-1003)
-    check("تنظیم ذخیره شد", rec and rec["time"] == "15:12" and rec["count"] == 800)
+    check("تنظیم ذخیره شد",
+          rec and rec["time"] == "15:12" and rec["count"] == 800
+          and rec["day"] == "today", f"{rec}")
+    check("set_at ذخیره شد", rec and bool(rec.get("set_at")))
+    check("scheduled_at ذخیره شد", rec and bool(rec.get("scheduled_at")))
     check("در همهٔ تنظیم‌ها هست", str(-1003) in at.all_cleanups())
     at.clear_cleanup(-1003)
     check("حذف تنظیم", at.get_cleanup(-1003) is None)
+
+
+def test_scheduling_computation():
+    from datetime import datetime, timedelta
+    now = datetime(2026, 8, 6, 13, 30)
+    # امروز + ساعتِ بعدی → همان روز
+    s = at.compute_scheduled_at("today", "15:12", now)
+    check("امروز ۱۵:۱۲ همان روز است",
+          s.date() == now.date() and s.hour == 15 and s.minute == 12)
+    # امروز + ساعتِ گذشته → فردا
+    s2 = at.compute_scheduled_at("today", "01:30", now)
+    check("امروزِ گذشته → فردا",
+          (s2.date() - now.date()).days == 1 and s2.hour == 1 and s2.minute == 30)
+    # فردا + ساعت → فردا
+    s3 = at.compute_scheduled_at("tomorrow", "01:30", now)
+    check("فردا ۰۱:۳۰ → فردا",
+          (s3.date() - now.date()).days == 1 and s3.hour == 1)
+    check("زمانِ معتبر نیست → None",
+          at.compute_scheduled_at("today", "99:99", now) is None)
 
 
 def test_user_tracker_decrement(tmpfile):
@@ -102,6 +125,7 @@ def main():
     test_display_name()
     test_admin_log()
     test_auto_cleanup_settings()
+    test_scheduling_computation()
     import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         tmp = f.name

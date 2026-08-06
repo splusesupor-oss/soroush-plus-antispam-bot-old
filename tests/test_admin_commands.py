@@ -198,19 +198,59 @@ def test_auto_cleanup_flow():
 
     ev1 = Event("پاکسازی خودکار", owner)
     asyncio.run(drive(bot, ev1))
-    check("ساعت پرسیده شد", ev1.said("در چه ساعتی"), f"{ev1.replies}")
+    check("روز پرسیده شد", ev1.said("امروز") and ev1.said("فردا"),
+          f"{ev1.replies}")
 
-    ev2 = Event("15:12", owner)
+    ev2 = Event("فردا", owner)
     asyncio.run(drive(bot, ev2))
-    check("تعداد پرسیده شد", ev2.said("چه تعداد پیام"), f"{ev2.replies}")
+    check("ساعت پرسیده شد", ev2.said("ساعت انجام پاکسازی"), f"{ev2.replies}")
 
-    ev3 = Event("800", owner)
+    ev3 = Event("15:12", owner)
     asyncio.run(drive(bot, ev3))
-    check("تنظیم تأیید شد", ev3.said("پاکسازی خودکار تنظیم شد"), f"{ev3.replies}")
+    check("تعداد پرسیده شد", ev3.said("چه تعداد پیام"), f"{ev3.replies}")
+
+    ev4 = Event("800", owner)
+    asyncio.run(drive(bot, ev4))
+    check("تنظیم تأیید شد", ev4.said("پاکسازی خودکار تنظیم شد"), f"{ev4.replies}")
 
     rec = at.get_cleanup(CHAT)
-    check("تنظیم ذخیره شد", rec and rec["time"] == "15:12" and rec["count"] == 800)
+    check("تنظیم ذخیره شد",
+          rec and rec["day"] == "tomorrow" and rec["time"] == "15:12"
+          and rec["count"] == 800, f"{rec}")
+    check("scheduled_at ذخیره شد", rec and bool(rec.get("scheduled_at")))
+    check("set_at ذخیره شد", rec and bool(rec.get("set_at")))
+    check("نمایشِ خوانا شامل زمان پاکسازی است",
+          "زمان پاکسازی" in at.format_cleanup(CHAT))
     at.clear_cleanup(CHAT)
+
+
+def test_auto_cleanup_past_time_rolls_to_tomorrow():
+    at._PENDING_CLEANUP.pop(CHAT, None)
+    bot = build_bot()
+    owner = _owner_id()
+
+    ev1 = Event("پاکسازی خودکار", owner)
+    asyncio.run(drive(bot, ev1))
+    ev2 = Event("امروز", owner)
+    asyncio.run(drive(bot, ev2))
+    # یک ساعت قطعاً گذشته (00:01)
+    ev3 = Event("00:01", owner)
+    asyncio.run(drive(bot, ev3))
+    # ادامه می‌یابد (ساعتِ گذشته اعلام می‌شود ولی جریان متوقف نمی‌شود)
+    check("بعد از ساعتِ گذشته، تعداد پرسیده شد", ev3.said("چه تعداد پیام"),
+          f"{ev3.replies}")
+    at._PENDING_CLEANUP.pop(CHAT, None)
+
+
+def test_cleanup_day_time_of_day():
+    check("شب", at.time_of_day(2) == "شب")
+    check("صبح", at.time_of_day(9) == "صبح")
+    check("ظهر", at.time_of_day(14) == "ظهر")
+    check("عصر", at.time_of_day(17) == "عصر")
+    check("شب دیرهنگام", at.time_of_day(22) == "شب")
+    check("امروز", at.valid_day("امروز") == "today")
+    check("فردا", at.valid_day("فردا") == "tomorrow")
+    check("نامعتبر", at.valid_day("هرگز") is None)
 
 
 def test_remove_warning_reply():
@@ -258,6 +298,8 @@ def main():
     test_admin_log_command()
     test_admin_log_denied_for_regular_user()
     test_auto_cleanup_flow()
+    test_auto_cleanup_past_time_rolls_to_tomorrow()
+    test_cleanup_day_time_of_day()
     test_remove_warning_reply()
     test_remove_warning_denied_for_regular_user()
     test_zero_only_owner_and_group_owner()
