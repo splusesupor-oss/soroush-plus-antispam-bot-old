@@ -143,9 +143,17 @@ def log_action(chat_id, actor, action, target=None, note=""):
     key = str(chat_id)
     data = _load_admin_log()
     bucket = data.setdefault(key, [])
+    actor_id = None
+    if isinstance(actor, dict):
+        actor_id = actor.get("id", actor.get("user_id"))
+    elif actor is not None:
+        actor_id = getattr(actor, "id", getattr(actor, "user_id", None))
     entry = {
         "time": datetime.now().isoformat(timespec="seconds"),
         "_ts": time.time(),
+        # Stable grouping key; display text is deliberately separate because
+        # usernames and display names can change.
+        "actor_id": str(actor_id) if actor_id is not None else None,
         "actor": display_name(actor),
         "action": action,
         "target": display_name(target) if target is not None else None,
@@ -199,28 +207,33 @@ def format_log(chat_id, limit=30):
     # (مطابقِ قالبِ خواسته‌شده) آن را برمی‌گردانیم.
     entries = list(reversed(entries))
 
-    # گروه‌بندی: بخش‌هایِ پشت‌سرهمِ همان ادمین را یکی می‌کنیم.
-    sections = []  # [(actor, time, [(action, note)])]
+    # Group by stable actor_id across the whole daily window, not only when
+    # entries are adjacent. Older records without actor_id are kept readable
+    # and fall back to their stored display value.
+    sections = []  # [(actor_key, actor_display, [(action, note)])]
+    section_by_actor = {}
     for e in entries:
-        actor = e.get("actor", "کاربر ناشناس")
+        actor_display = e.get("actor", "کاربر ناشناس")
+        actor_key = e.get("actor_id") or f"legacy:{actor_display}"
         when = e.get("time", "")
         action = e.get("action", "")
         note = e.get("note", "")
         target = e.get("target")
-        # اگر هدف (کاربرِ موردِ عملیات) موجود باشد به نمایشِ عملیات می‌چسبانیم.
-        if target:
-            action_text = f"{action} {target}"
+        action_text = f"{action} {target}" if target else action
+        section_index = section_by_actor.get(actor_key)
+        if section_index is None:
+            section_by_actor[actor_key] = len(sections)
+            sections.append([actor_key, actor_display, [(action_text, note)]])
         else:
-            action_text = action
-        if sections and sections[-1][0] == actor:
-            sections[-1][2].append((action_text, note))
-        else:
-            sections.append((actor, when, [(action_text, note)]))
+            # Keep the newest known username/name for display while retaining
+            # the stable numeric actor_id for grouping.
+            sections[section_index][1] = actor_display or sections[section_index][1]
+            sections[section_index][2].append((action_text, note))
 
     lines = ["🧾 لاگ مدیریتی گروه:\n"]
     entities = []
-    for idx, (actor, when, actions) in enumerate(sections, 1):
-        lines.append(f"{idx}. {when}\n")
+    for idx, (_actor_key, actor, actions) in enumerate(sections, 1):
+        lines.append(f"{idx}.\n")
         # نامِ ادمین فقط یک بار، داخلِ نقل‌قولِ شیشه‌ای
         actor_line = f"👤 {actor}\n"
         actor_start = _u16_len("".join(lines))
