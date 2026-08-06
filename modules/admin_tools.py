@@ -345,14 +345,18 @@ def valid_time(value):
 
 
 def time_of_day(hour):
-    """برچسبِ بخشِ روز بر اساسِ ساعت: صبح/ظهر/عصر/شب."""
-    if hour < 6:
+    """برچسبِ بخشِ روز بر اساسِ ساعتِ واقعی: صبح/ظهر/عصر/شب.
+
+    بازه‌ها: ۰۰-۰۵ شب ، ۰۵-۱۱ صبح ، ۱۲-۱۴ ظهر ، ۱۵-۱۷ عصر ، ۱۸-۲۴ شب.
+    برچسب فقط بر اساسِ بازهٔ واقعیِ ساعت ساخته می‌شود، نه یک mapping ثابت.
+    """
+    if hour < 5:
         return "شب"
     if hour < 12:
         return "صبح"
-    if hour < 16:
+    if hour < 15:
         return "ظهر"
-    if hour < 19:
+    if hour < 18:
         return "عصر"
     return "شب"
 
@@ -376,17 +380,65 @@ def _fa_digits(value):
     return value
 
 
+# ساعتِ نمایندهٔ بخشِ روز وقتی عددی وارد نشده باشد.
+_DAY_PART_DEFAULT_HOUR = {"morning": 7, "noon": 12, "afternoon": 17, "night": 21}
+
+
+def _explicit_day_part_hour(day_part, hour):
+    """ساعتِ ۲۴ساعتهٔ صریح برای یک بخشِ روز و یک عددِ ۱ تا ۱۲.
+
+    عددِ None → ساعتِ نمایندهٔ همان بخشِ روز.
+    """
+    if hour is None:
+        return _DAY_PART_DEFAULT_HOUR.get(day_part)
+    if day_part == "morning":
+        return hour                      # ۷ صبح = ۷
+    if day_part == "noon":
+        return 12 if hour == 12 else hour + 12   # ۱۲ ظهر=۱۲ ، ۱ ظهر=۱۳
+    if day_part == "afternoon":
+        return hour if hour >= 12 else hour + 12  # ۵ عصر=۱۷
+    if day_part == "night":
+        return 0 if hour == 12 else hour + 12    # ۷ شب=۱۹ ، ۱۲ شب=۰۰
+    return hour
+
+
+def _resolve_ambiguous(hour, minute, now):
+    """ساعتِ مبهمِ ۱ تا ۱۱ را با نزدیک‌ترینِ زمانِ آینده (AM/PM) حل می‌کند.
+
+    دو کاندیدِ امروز: ``hour:minute`` و ``hour+12:minute``. نزدیک‌ترینِ
+    کاندیدی که هنوز نرسیده انتخاب می‌شود؛ اگر هر دو گذشته باشند، زودترینِ
+    کاندید برای فردا برمی‌گردد (تا ``compute_scheduled_at`` آن را به فردا
+    منتقل کند).
+    """
+    candidates = [(hour, minute), (hour + 12, minute)]
+    base = now.replace(second=0, microsecond=0)
+    future = []
+    for h, m in candidates:
+        if h > 23:
+            continue
+        dt = base.replace(hour=h, minute=m)
+        if dt >= now:
+            future.append(dt)
+    if future:
+        best = min(future)
+        return f"{best.hour:02d}:{best.minute:02d}"
+    # همهٔ کاندیدهای امروز گذشته → زودترینِ کاندید برای فردا
+    best_h, best_m = min(candidates)
+    return f"{best_h:02d}:{best_m:02d}"
+
+
 def parse_time(value, now=None):
-    """تفسیرِ هوشمندِ ساعتِ فارسی/انگلیسی به فرمتِ HH:MM (۲۴ساعته).
+    """تفسیرِ ساعتِ فارسی/انگلیسی به فرمتِ HH:MM (۲۴ساعته).
 
     قواعد:
-      - «19:00» / «19» / «۱۹» / «19:5»  → همان ساعتِ صریح (بدونِ حدس).
+      - «15:30» / «19:00» / «19» / «۱۹» / «19:5» → ساعتِ صریحِ ۲۴ساعته
+        (بدونِ حدسِ AM/PM).
+      - «12:00» / «12» → 12:00 (ظهرِ پیش‌فرض).
       - «۷ صبح» → 07:00 ، «۷ شب» → 19:00 ، «۵ عصر» → 17:00 ، «۱۲ ظهر» → 12:00 ،
-        «۱۲ شب» → 00:00.
+        «۱۲ شب» → 00:00. عبارتِ بخشِ روز صراحتاً اولویت دارد.
       - «صبح»/«ظهر»/«عصر»/«شب» بدونِ عدد → ساعتیِ نمایندهٔ همان بخشِ روز.
-      - «ساعت ۷» / «۷» (فقط عددِ ۱ تا ۱۲ بدونِ بخشِ روز) → بر اساسِ بخشِ روزِ
-        فعلیِ سیستم: اگر الان صبح است → صبحِ همان‌روز؛ در غیرِ این‌صورت → شبِ
-        همان‌روز (ساعتِ ۱۳ تا ۲۳).
+      - «۷» / «7:00» / «ساعت ۷» (عددِ مبهمِ ۱ تا ۱۱ بدونِ بخشِ روز) →
+        بینِ AM و PM بر اساسِ زمانِ فعلی و نزدیک‌ترینِ زمانِ آینده انتخاب می‌شود.
 
     خروجی: رشتهٔ ``"HH:MM"`` یا ``None`` اگر نامعتبر.
     """
@@ -395,10 +447,10 @@ def parse_time(value, now=None):
     raw = _fa_digits((value or "").strip())
     if not raw:
         return None
-    raw = raw.replace("\u200c", " ").lower()
+    raw = raw.replace("\u200c", " ").strip()
     raw = re.sub(r"\s*ساعت\s*", " ", raw).strip()
 
-    # کلمهٔ بخشِ روز
+    # کلمهٔ بخشِ روز (صریح، اولویت‌دار)
     parts = {"صبح": "morning", "ظهر": "noon", "عصر": "afternoon", "شب": "night"}
     day_part = None
     for word, key in parts.items():
@@ -407,53 +459,46 @@ def parse_time(value, now=None):
             raw = raw.replace(word, " ").strip()
             break
 
-    # «HH:MM» صریح → بدونِ حدس
+    # استخراجِ عدد/ساعت و دقیقه (با یا بدونِ «:»)
     colon = re.search(r"(\d{1,2})\s*:\s*(\d{1,2})", raw)
     if colon:
-        hour, minute = int(colon.group(1)), int(colon.group(2))
-        if 0 <= hour <= 23 and 0 <= minute <= 59:
-            return f"{hour:02d}:{minute:02d}"
-        return None
-
-    # عدد
-    nums = re.findall(r"\d{1,2}", raw)
-    hour = int(nums[0]) if nums else None
-    minute = 0
-
-    # عددِ صریحِ ۱۳ تا ۲۳ بدونِ بخشِ روز → همان (ساعتِ ۲۴ساعته)
-    if hour is not None and day_part is None and 13 <= hour <= 23:
-        return f"{hour:02d}:00"
-
-    # عددِ ۱ تا ۱۲ (یا بدونِ عدد)
-    if hour is not None and not (1 <= hour <= 12):
-        return None
-
-    # نمایندهٔ پیش‌فرضِ بخشِ روزِ بدونِ عدد (مثل «شب» تنها) — مطلقِ ۲۴ساعته
-    defaults = {"morning": 7, "noon": 12, "afternoon": 17, "night": 21}
-    if hour is None:
-        hour24 = defaults.get(day_part)
-        if hour24 is None:
-            return None
-        return f"{hour24:02d}:00"
-
-    if day_part == "morning":
-        hour24 = hour                      # ۷ صبح = ۷
-    elif day_part == "noon":
-        hour24 = 12 if hour == 12 else hour + 12   # ۱۲ ظهر=۱۲ ، ۱ ظهر=۱۳
-    elif day_part == "afternoon":
-        hour24 = hour if hour >= 12 else hour + 12  # ۵ عصر=۱۷
-    elif day_part == "night":
-        hour24 = 0 if hour == 12 else hour + 12    # ۷ شب=۱۹ ، ۱۲ شب=۰۰
+        hour = int(colon.group(1))
+        minute = int(colon.group(2))
     else:
-        # فقط عددِ ۱ تا ۱۲ بدونِ بخشِ روز → بر اساسِ بخشِ روزِ فعلی
-        if time_of_day(now.hour) == "صبح":
-            hour24 = hour                  # الان صبح → ۷ یعنی ۰۷:۰۰
-        else:
-            hour24 = 0 if hour == 12 else hour + 12  # شب/عصر/ظهر → ۷ یعنی ۱۹:۰۰
+        nums = re.findall(r"\d{1,2}", raw)
+        hour = int(nums[0]) if nums else None
+        minute = 0
 
-    if not (0 <= hour24 <= 23):
+    if minute is not None and not (0 <= minute <= 59):
         return None
-    return f"{hour24:02d}:{minute:02d}"
+
+    # بخشِ روزِ صریح → بدونِ حدس
+    if day_part is not None:
+        h24 = _explicit_day_part_hour(day_part, hour)
+        if h24 is None:
+            return None
+        return f"{h24:02d}:{minute:02d}"
+
+    if hour is None:
+        return None
+
+    # ساعتِ صریحِ ۰ (نیمه‌شب) → 00:MM
+    if hour == 0:
+        return f"00:{minute:02d}"
+
+    # ساعتِ صریحِ ۱۳ تا ۲۳ → ۲۴ساعته بدونِ حدس
+    if 13 <= hour <= 23:
+        return f"{hour:02d}:{minute:02d}"
+
+    # ۱۲ → ظهرِ پیش‌فرض (مگر با بخشِ روزِ «شب» که بالا رسیدگی شد)
+    if hour == 12:
+        return f"12:{minute:02d}"
+
+    # ۱ تا ۱۱ بدونِ بخشِ روز → مبهم → نزدیک‌ترینِ زمانِ آینده (AM/PM)
+    if 1 <= hour <= 11:
+        return _resolve_ambiguous(hour, minute, now)
+
+    return None
 
 
 def compute_scheduled_at(day, time_str, now=None):

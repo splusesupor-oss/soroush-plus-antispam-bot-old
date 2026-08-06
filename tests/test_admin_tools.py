@@ -148,39 +148,71 @@ def test_scheduling_computation():
 
 
 def test_parse_time():
-    from datetime import datetime
-    morning = datetime(2026, 8, 6, 7, 30)   # صبح
-    night = datetime(2026, 8, 6, 21, 0)     # شب
-    evening = datetime(2026, 8, 6, 15, 0)   # ظهر/عصر
+    from datetime import datetime, timedelta, timezone
+    try:
+        from zoneinfo import ZoneInfo
+        TZ = ZoneInfo("Asia/Tehran")
+    except Exception:  # pragma: no cover
+        TZ = timezone(timedelta(hours=3, minutes=30))
 
-    # صریحِ ۲۴ساعته
-    check("19:00 → 19:00", at.parse_time("19:00", night) == "19:00")
-    check("۱۹ → 19:00", at.parse_time("۱۹", night) == "19:00")
-    check("14 → 14:00", at.parse_time("14", night) == "14:00")
-    check("19:5 → 19:05", at.parse_time("19:5", night) == "19:05")
-    # با بخش روز
-    check("7 صبح → 07:00", at.parse_time("7 صبح", morning) == "07:00")
-    check("7 شب → 19:00", at.parse_time("7 شب", night) == "19:00")
-    check("5 عصر → 17:00", at.parse_time("5 عصر", evening) == "17:00")
-    check("12 ظهر → 12:00", at.parse_time("12 ظهر", evening) == "12:00")
-    check("12 شب → 00:00", at.parse_time("12 شب", night) == "00:00")
-    # بدون بخش روز: تفسیر بر اساس بخش روزِ فعلی
-    check("صبح+«ساعت 7» → 07:00",
-          at.parse_time("ساعت 7", morning) == "07:00")
-    check("شب+«ساعت 7» → 19:00",
-          at.parse_time("ساعت 7", night) == "19:00")
-    check("عصر+«ساعت 7» → 19:00",
-          at.parse_time("ساعت 7", evening) == "19:00")
-    # بخش روز بدون عدد → نماینده
-    check("ظهر → 12:00", at.parse_time("ظهر", evening) == "12:00")
-    check("شب → 21:00", at.parse_time("شب", night) == "21:00")
-    # نامعتبر
-    check("نامعتبر → None", at.parse_time("abc", night) is None)
-    check("بزرگ‌تر از ۲۳ → None", at.parse_time("25:30", night) is None)
-    # «امروز + ۱۴:۳۰» وقتی الان ۱۳:۳۰ است → همان روز (نه فردا)
-    s = at.compute_scheduled_at("today", "14:30", morning)
-    check("امروز ۱۴:۳۰ در ۱۳:۳۰ → همان روز",
-          s.date() == morning.date() and s.hour == 14)
+    def t(h, m):
+        # زمانِ فعلیِ mock شده در timezone تهران
+        return datetime(2026, 8, 6, h, m, tzinfo=TZ)
+
+    now_1728 = t(17, 28)  # عصر
+    now_0800 = t(8, 0)    # صبح
+    now_0600 = t(6, 0)    # صبحِ زود (۰۷:۰۰ هنوز نرسیده)
+
+    # — ساعت‌های صریح (۲۴ساعته، بدونِ حدس) —
+    check("19:00 → 19:00", at.parse_time("19:00", now_1728) == "19:00")
+    check("۱۵:۳۰ → 15:30", at.parse_time("15:30", now_1728) == "15:30")
+    check("12:00 → 12:00", at.parse_time("12:00", now_1728) == "12:00")
+    check("۱۹ → 19:00", at.parse_time("۱۹", now_1728) == "19:00")
+    check("19:5 → 19:05", at.parse_time("19:5", now_1728) == "19:05")
+
+    # — عبارتِ صریحِ بخشِ روز (اولویت‌دار) —
+    check("7 صبح → 07:00", at.parse_time("7 صبح", now_1728) == "07:00")
+    check("7 شب → 19:00", at.parse_time("7 شب", now_1728) == "19:00")
+    check("5 عصر → 17:00", at.parse_time("5 عصر", now_1728) == "17:00")
+    check("12 ظهر → 12:00", at.parse_time("12 ظهر", now_1728) == "12:00")
+    check("12 شب → 00:00", at.parse_time("12 شب", now_1728) == "00:00")
+    check("ظهر → 12:00", at.parse_time("ظهر", now_1728) == "12:00")
+    check("شب → 21:00", at.parse_time("شب", now_1728) == "21:00")
+
+    # — ساعتِ مبهم (۱ تا ۱۱، بدونِ بخشِ روز) → نزدیک‌ترینِ زمانِ آینده AM/PM —
+    # ۱۷:۲۸ + «۷» → ۱۹:۰۰ امروز (۰۷:۰۰ گذشته، ۱۹:۰۰ آینده) → ۱۹:۰۰
+    check("۱۷:۲۸ + «7» → 19:00", at.parse_time("7", now_1728) == "19:00")
+    check("۱۷:۲۸ + «ساعت 7» → 19:00",
+          at.parse_time("ساعت 7", now_1728) == "19:00")
+    check("۱۷:۲۸ + «7:00» → 19:00", at.parse_time("7:00", now_1728) == "19:00")
+    # ۰۸:۰۰ + «7» → ۰۷:۰۰ گذشته، ۱۹:۰۰ آینده → ۱۹:۰۰ امروز
+    check("۰۸:۰۰ + «7» → 19:00", at.parse_time("7", now_0800) == "19:00")
+    # ۰۶:۰۰ + «7» → ۰۷:۰۰ هنوز نرسیده → ۰۷:۰۰ امروز
+    check("۰۶:۰۰ + «7» → 07:00", at.parse_time("7", now_0600) == "07:00")
+
+    # — زمان‌بندیِ امروز/فردا بر اساسِ مقایسهٔ واقعیِ datetime —
+    s_past = at.compute_scheduled_at("today", "15:30", now_1728)
+    check("۱۷:۲۸ + امروز ۱۵:۳۰ → فردا (گذشته)",
+          s_past.date() == (now_1728 + timedelta(days=1)).date()
+          and s_past.hour == 15 and s_past.minute == 30)
+    s_future = at.compute_scheduled_at("today", "19:00", now_1728)
+    check("۱۷:۲۸ + امروز ۱۹:۰۰ → امروز (آینده)",
+          s_future.date() == now_1728.date() and s_future.hour == 19)
+    s_amb = at.compute_scheduled_at("today", at.parse_time("7", now_1728),
+                                    now_1728)
+    check("۱۷:۲۸ + «7» → امروز ۱۹:۰۰",
+          s_amb.date() == now_1728.date() and s_amb.hour == 19)
+
+    # — نامعتبر —
+    check("نامعتبر → None", at.parse_time("abc", now_1728) is None)
+    check("بزرگ‌تر از ۲۳ → None", at.parse_time("25:30", now_1728) is None)
+    check("ساعت خالی → None", at.parse_time("", now_1728) is None)
+
+    # — برچسبِ بخشِ روز واقعی (۱۵:۳۰ باید «عصر» باشد، نه «ظهر») —
+    check("برچسب 15:30 = عصر", at.time_of_day(15) == "عصر")
+    check("برچسب 13 = ظهر", at.time_of_day(13) == "ظهر")
+    check("برچسب 12 = ظهر", at.time_of_day(12) == "ظهر")
+    check("برچسب 19 = شب", at.time_of_day(19) == "شب")
 
 
 def test_user_tracker_decrement(tmpfile):
