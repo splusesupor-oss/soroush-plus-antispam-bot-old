@@ -14,9 +14,22 @@ owner_check، group_actions) استفاده می‌کند؛ چیزی از معم
 """
 import asyncio
 import json
+import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# منطقهٔ زمانیِ واقعیِ ربات (سروش/ایران). برخلافِ datetime.now() که به
+# ساعتِ سرور وابسته است، از زمانِ واقعیِ تهران برای تفسیرِ «امروز/فردا»
+# و بخشِ روزِ ساعت استفاده می‌شود.
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        _TEHRAN = ZoneInfo("Asia/Tehran")
+    except ZoneInfoNotFoundError:
+        _TEHRAN = timezone(timedelta(hours=3, minutes=30))
+except ImportError:  # pragma: no cover
+    _TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
 from modules.owner_check import is_global_owner
 from modules.admin_storage import is_admin
@@ -344,15 +357,114 @@ def time_of_day(hour):
     return "شب"
 
 
+def now_local():
+    """زمانِ فعلیِ واقعیِ ربات در منطقهٔ زمانیِ سروش (تهران).
+
+    برایِ تفسیرِ صحیحِ «امروز/فردا» و بخشِ روزِ ساعت استفاده می‌شود؛ نه یک
+    ساعتِ ثابت یا hardcode.
+    """
+    return datetime.now(_TEHRAN)
+
+
+def _fa_digits(value):
+    """ارقامِ فارسی/عربی را به انگلیسی تبدیل می‌کند."""
+    fa = "۰۱۲۳۴۵۶۷۸۹"
+    ar = "٠١٢٣٤٥٦٧٨٩"
+    en = "0123456789"
+    for f, e in zip(fa + ar, en + en):
+        value = value.replace(f, e)
+    return value
+
+
+def parse_time(value, now=None):
+    """تفسیرِ هوشمندِ ساعتِ فارسی/انگلیسی به فرمتِ HH:MM (۲۴ساعته).
+
+    قواعد:
+      - «19:00» / «19» / «۱۹» / «19:5»  → همان ساعتِ صریح (بدونِ حدس).
+      - «۷ صبح» → 07:00 ، «۷ شب» → 19:00 ، «۵ عصر» → 17:00 ، «۱۲ ظهر» → 12:00 ،
+        «۱۲ شب» → 00:00.
+      - «صبح»/«ظهر»/«عصر»/«شب» بدونِ عدد → ساعتیِ نمایندهٔ همان بخشِ روز.
+      - «ساعت ۷» / «۷» (فقط عددِ ۱ تا ۱۲ بدونِ بخشِ روز) → بر اساسِ بخشِ روزِ
+        فعلیِ سیستم: اگر الان صبح است → صبحِ همان‌روز؛ در غیرِ این‌صورت → شبِ
+        همان‌روز (ساعتِ ۱۳ تا ۲۳).
+
+    خروجی: رشتهٔ ``"HH:MM"`` یا ``None`` اگر نامعتبر.
+    """
+    if now is None:
+        now = now_local()
+    raw = _fa_digits((value or "").strip())
+    if not raw:
+        return None
+    raw = raw.replace("\u200c", " ").lower()
+    raw = re.sub(r"\s*ساعت\s*", " ", raw).strip()
+
+    # کلمهٔ بخشِ روز
+    parts = {"صبح": "morning", "ظهر": "noon", "عصر": "afternoon", "شب": "night"}
+    day_part = None
+    for word, key in parts.items():
+        if word in raw:
+            day_part = key
+            raw = raw.replace(word, " ").strip()
+            break
+
+    # «HH:MM» صریح → بدونِ حدس
+    colon = re.search(r"(\d{1,2})\s*:\s*(\d{1,2})", raw)
+    if colon:
+        hour, minute = int(colon.group(1)), int(colon.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+        return None
+
+    # عدد
+    nums = re.findall(r"\d{1,2}", raw)
+    hour = int(nums[0]) if nums else None
+    minute = 0
+
+    # عددِ صریحِ ۱۳ تا ۲۳ بدونِ بخشِ روز → همان (ساعتِ ۲۴ساعته)
+    if hour is not None and day_part is None and 13 <= hour <= 23:
+        return f"{hour:02d}:00"
+
+    # عددِ ۱ تا ۱۲ (یا بدونِ عدد)
+    if hour is not None and not (1 <= hour <= 12):
+        return None
+
+    # نمایندهٔ پیش‌فرضِ بخشِ روزِ بدونِ عدد (مثل «شب» تنها) — مطلقِ ۲۴ساعته
+    defaults = {"morning": 7, "noon": 12, "afternoon": 17, "night": 21}
+    if hour is None:
+        hour24 = defaults.get(day_part)
+        if hour24 is None:
+            return None
+        return f"{hour24:02d}:00"
+
+    if day_part == "morning":
+        hour24 = hour                      # ۷ صبح = ۷
+    elif day_part == "noon":
+        hour24 = 12 if hour == 12 else hour + 12   # ۱۲ ظهر=۱۲ ، ۱ ظهر=۱۳
+    elif day_part == "afternoon":
+        hour24 = hour if hour >= 12 else hour + 12  # ۵ عصر=۱۷
+    elif day_part == "night":
+        hour24 = 0 if hour == 12 else hour + 12    # ۷ شب=۱۹ ، ۱۲ شب=۰۰
+    else:
+        # فقط عددِ ۱ تا ۱۲ بدونِ بخشِ روز → بر اساسِ بخشِ روزِ فعلی
+        if time_of_day(now.hour) == "صبح":
+            hour24 = hour                  # الان صبح → ۷ یعنی ۰۷:۰۰
+        else:
+            hour24 = 0 if hour == 12 else hour + 12  # شب/عصر/ظهر → ۷ یعنی ۱۹:۰۰
+
+    if not (0 <= hour24 <= 23):
+        return None
+    return f"{hour24:02d}:{minute:02d}"
+
+
 def compute_scheduled_at(day, time_str, now=None):
     """زمانِ دقیقِ اجرایِ پاکسازی را محاسبه می‌کند.
 
     ``day``: "today" یا "tomorrow"؛ ``time_str``: "HH:MM".
     اگر زمانِ «امروز» گذشته باشد، به «فردا» منتقل می‌شود.
-    خروجی: datetime (منطقهٔ محلی) یا None اگر نامعتبر.
+    خروجی: datetime (منطقهٔ زمانیِ تهران) یا None اگر نامعتبر.
     """
     if now is None:
-        now = datetime.now()
+        now = now_local()
     t = valid_time(time_str)
     if t is None:
         return None
@@ -370,7 +482,7 @@ def compute_scheduled_at(day, time_str, now=None):
 
 def set_cleanup(chat_id, day, time_str, count):
     """تنظیماتِ پاکسازیِ این گروه را با زمانِ کامل ذخیره می‌کند (ماندگار)."""
-    now = datetime.now()
+    now = now_local()
     scheduled_at = compute_scheduled_at(day, time_str, now)
     if scheduled_at is None:
         return None
@@ -441,7 +553,7 @@ def format_cleanup(chat_id):
     except (ValueError, TypeError):
         sched = None
 
-    today = datetime.now()
+    today = now_local()
     if set_at is not None:
         set_day = set_at.date() == today.date()
         set_label = f"{'امروز' if set_day else format_jalali(set_at.date())} " \
@@ -578,13 +690,16 @@ async def run_cleanup_watcher(bot, logger=None, interval=None):
     delay = 30 if interval is None else interval
     while True:
         try:
-            now = datetime.now()
+            now = now_local()
             for key, rec in list(all_cleanups().items()):
                 sched = rec.get("scheduled_at")
                 if not sched:
                     continue
                 try:
                     sched_dt = datetime.fromisoformat(sched)
+                    # داده‌های قدیمیِ بدونِ منطقهٔ زمانی → تهران
+                    if sched_dt.tzinfo is None:
+                        sched_dt = sched_dt.replace(tzinfo=_TEHRAN)
                 except (ValueError, TypeError):
                     continue
                 # اگر هنوز زمان نرسیده → رد

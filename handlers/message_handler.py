@@ -1305,6 +1305,42 @@ async def handle_new_message(bot, event):
                 await event.reply(f"❌ خطا: {e}")
             return
 
+        # حذف اخطارها (جمع) — همهٔ اخطارهای کاربر صفر می‌شود
+        if clean_text == "حذف اخطارها":
+            sender_username = getattr(sender, "username", None)
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, sender_username
+            ):
+                await event.reply(
+                    "❌ فقط مالک یا ادمین اجازه حذف اخطارها را دارند")
+                return
+            if not event.reply_to:
+                await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+                return
+
+            try:
+                reply_msg = await bot.client.get_messages(
+                    chat_id,
+                    ids=event.reply_to.reply_to_msg_id,
+                )
+                target_user = await reply_msg.get_sender() if reply_msg else None
+                if not target_user:
+                    await event.reply("❌ کاربر پیدا نشد")
+                    return
+
+                before = bot.tracker.get_count(chat_id, target_user.id)
+                bot.tracker.reset_count(chat_id, target_user.id)
+                admin_tools.log_action(
+                    chat_id, sender, "حذف اخطارها", target=target_user,
+                    note=f"{before} → 0")
+                await event.reply(
+                    f"✅ همهٔ اخطارهای کاربر حذف شد.\n"
+                    f"تعداد اخطار: 0")
+            except Exception as e:
+                bot.logger.log_error(f"خطا در حذف اخطارها: {e}")
+                await event.reply(f"❌ خطا: {e}")
+            return
+
         # لاگ مدیریتی
         if clean_text == "لاگ مدیریتی":
             sender_username = getattr(sender, "username", None)
@@ -1353,9 +1389,11 @@ async def handle_new_message(bot, event):
                     "مثال: «13:32»")
                 return
             if state.get("step") == "time":
-                time_str = admin_tools.valid_time(clean_text)
+                time_str = admin_tools.parse_time(clean_text)
                 if time_str is None:
-                    await event.reply("❌ ساعت نامعتبر است؛ مانند «15:12» ارسال کنید.")
+                    await event.reply(
+                        "❌ ساعت نامعتبر است؛ مانند «15:12»، «۷ صبح»، "
+                        "«۷ شب» یا «ساعت ۷» ارسال کنید.")
                     return
                 # اگر «امروز» و ساعت گذشته → اعلام و دریافتِ دوباره
                 scheduled = admin_tools.compute_scheduled_at(
@@ -1366,7 +1404,7 @@ async def handle_new_message(bot, event):
                 hour = int(time_str.split(":")[0])
                 tod = admin_tools.time_of_day(hour)
                 if state.get("day") == "today" and scheduled.date() != \
-                        admin_tools.datetime.now().date():
+                        admin_tools.now_local().date():
                     await event.reply(
                         f"⏰ ساعت {time_str} ({tod}) گذشته است و برای جلوگیری "
                         "از اشتباه، فردا لحاظ می‌شود.\n"
@@ -2371,6 +2409,9 @@ async def handle_new_message(bot, event):
                 "🗑️ حذف اخطار:\n"
                 "برای حذف اخطار داده‌شده به یک کاربر\n"
                 "«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»\n\n"
+                "🗑️ حذف اخطارها:\n"
+                "برای صفر کردن همهٔ اخطارهای یک کاربر\n"
+                "«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطارها\"»\n\n"
                 "با سازنده ربات تماس بگیرید:\n"
                 "@osine1"
             )
@@ -2510,6 +2551,8 @@ async def handle_new_message(bot, event):
                 "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه",
                 "🗑️ حذف اخطار:",
                 "برای حذف اخطار داده‌شده به یک کاربر",
+                "🗑️ حذف اخطارها:",
+                "برای صفر کردن همهٔ اخطارهای یک کاربر",
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -2577,6 +2620,7 @@ async def handle_new_message(bot, event):
                 "🧹 پاکسازی خودکار:\nبرای پاکسازی خودکار پیام‌ها\n«🧹 \"پاکسازی خودکار\"»",
                 "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه\n«روی کاربر ریپلای کنید و بنویسید \"صفر\"»",
                 "🗑️ حذف اخطار:\nبرای حذف اخطار داده‌شده به یک کاربر\n«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»",
+                "🗑️ حذف اخطارها:\nبرای صفر کردن همهٔ اخطارهای یک کاربر\n«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطارها\"»",
             ]
             for section in quote_sections:
                 pos = help_text.find(section)

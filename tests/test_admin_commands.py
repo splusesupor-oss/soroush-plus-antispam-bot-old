@@ -275,6 +275,22 @@ def test_remove_warning_denied_for_regular_user():
           ev.said("فقط مالک یا ادمین"), f"{ev.replies}")
 
 
+def test_remove_all_warnings_resets_to_zero():
+    at._ADMIN_LOG_FILE.write_text("{}", encoding="utf-8")
+    bot = build_bot(reply_sender=User(5151, name="کاربر هدف"))
+    # سه اخطار بده، بعد «حذف اخطارها» همه را صفر کند
+    bot.tracker.increment(CHAT, 5151)
+    bot.tracker.increment(CHAT, 5151)
+    bot.tracker.increment(CHAT, 5151)
+    check("سه اخطار موجود", bot.tracker.get_count(CHAT, 5151) == 3)
+    ev = Event("حذف اخطارها", _owner_id(), reply_sender=User(5151, name="کاربر هدف"))
+    asyncio.run(drive(bot, ev))
+    check("حذف اخطارها پاسخ داد",
+          ev.said("همهٔ اخطارهای کاربر حذف شد"), f"{ev.replies}")
+    check("همهٔ اخطارها صفر شد", bot.tracker.get_count(CHAT, 5151) == 0)
+    at.clear_log(CHAT)
+
+
 def test_zero_only_owner_and_group_owner():
     at._ADMIN_LOG_FILE.write_text("{}", encoding="utf-8")
     bot = build_bot(reply_sender=User(7777, name="هدف"))
@@ -302,6 +318,7 @@ def main():
     test_cleanup_day_time_of_day()
     test_remove_warning_reply()
     test_remove_warning_denied_for_regular_user()
+    test_remove_all_warnings_resets_to_zero()
     test_zero_only_owner_and_group_owner()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0

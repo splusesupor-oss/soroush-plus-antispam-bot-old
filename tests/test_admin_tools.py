@@ -147,6 +147,42 @@ def test_scheduling_computation():
           at.compute_scheduled_at("today", "99:99", now) is None)
 
 
+def test_parse_time():
+    from datetime import datetime
+    morning = datetime(2026, 8, 6, 7, 30)   # صبح
+    night = datetime(2026, 8, 6, 21, 0)     # شب
+    evening = datetime(2026, 8, 6, 15, 0)   # ظهر/عصر
+
+    # صریحِ ۲۴ساعته
+    check("19:00 → 19:00", at.parse_time("19:00", night) == "19:00")
+    check("۱۹ → 19:00", at.parse_time("۱۹", night) == "19:00")
+    check("14 → 14:00", at.parse_time("14", night) == "14:00")
+    check("19:5 → 19:05", at.parse_time("19:5", night) == "19:05")
+    # با بخش روز
+    check("7 صبح → 07:00", at.parse_time("7 صبح", morning) == "07:00")
+    check("7 شب → 19:00", at.parse_time("7 شب", night) == "19:00")
+    check("5 عصر → 17:00", at.parse_time("5 عصر", evening) == "17:00")
+    check("12 ظهر → 12:00", at.parse_time("12 ظهر", evening) == "12:00")
+    check("12 شب → 00:00", at.parse_time("12 شب", night) == "00:00")
+    # بدون بخش روز: تفسیر بر اساس بخش روزِ فعلی
+    check("صبح+«ساعت 7» → 07:00",
+          at.parse_time("ساعت 7", morning) == "07:00")
+    check("شب+«ساعت 7» → 19:00",
+          at.parse_time("ساعت 7", night) == "19:00")
+    check("عصر+«ساعت 7» → 19:00",
+          at.parse_time("ساعت 7", evening) == "19:00")
+    # بخش روز بدون عدد → نماینده
+    check("ظهر → 12:00", at.parse_time("ظهر", evening) == "12:00")
+    check("شب → 21:00", at.parse_time("شب", night) == "21:00")
+    # نامعتبر
+    check("نامعتبر → None", at.parse_time("abc", night) is None)
+    check("بزرگ‌تر از ۲۳ → None", at.parse_time("25:30", night) is None)
+    # «امروز + ۱۴:۳۰» وقتی الان ۱۳:۳۰ است → همان روز (نه فردا)
+    s = at.compute_scheduled_at("today", "14:30", morning)
+    check("امروز ۱۴:۳۰ در ۱۳:۳۰ → همان روز",
+          s.date() == morning.date() and s.hour == 14)
+
+
 def test_user_tracker_decrement(tmpfile):
     tracker = UserTracker(spam_counts_file=str(tmpfile), threshold=5)
     tracker.reset_count(-1, 111)
@@ -178,6 +214,7 @@ def main():
     test_admin_log_grouped_by_admin()
     test_auto_cleanup_settings()
     test_scheduling_computation()
+    test_parse_time()
     test_log_pruned_after_24h()
     import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
