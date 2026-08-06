@@ -621,6 +621,27 @@ class SoroushAntiSpamBot:
             # لاگ. نتیجه: ربات روشن بود ولی به پیام‌ها جواب نمی‌داد.
             try:
                 instrument_event(event, self.logger)
+                # Temporary passive trace: record every incoming event before
+                # routing/gates so Bot-originated messages cannot disappear
+                # silently before message_handler.py.
+                try:
+                    _entry_sender = await event.get_sender()
+                    self.logger.log_info(
+                        "BOT EVENT ENTRY DEBUG\n"
+                        f"event_out={getattr(event, 'out', None)}\n"
+                        f"is_private={getattr(event, 'is_private', None)}\n"
+                        f"chat_id={getattr(event, 'chat_id', None)}\n"
+                        f"sender_id={getattr(_entry_sender, 'id', None)}\n"
+                        f"sender_username={getattr(_entry_sender, 'username', None)!r}\n"
+                        f"sender_type={_entry_sender.__class__.__name__ if _entry_sender else 'None'}\n"
+                        f"sender_bot={getattr(_entry_sender, 'bot', None)!r}"
+                    )
+                except Exception as _entry_error:
+                    self.logger.log_error(
+                        "BOT EVENT ENTRY DEBUG FAILED "
+                        f"chat_id={getattr(event, 'chat_id', None)} "
+                        f"error={_entry_error!r}"
+                    )
                 raw_text = event.message.message or ""
                 # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
                 # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
