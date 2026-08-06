@@ -28,6 +28,8 @@ _CLEANUP_FILE = _BASE / "auto_cleanup.json"
 
 # حداکثر تعداد لاگِ نگه‌داشته‌شده برای هر گروه (تا فایل بی‌نهایت رشد نکند).
 MAX_LOG_PER_GROUP = 200
+# لاگ فقط برای ۲۴ ساعت نگه داشته می‌شود؛ قدیمی‌ترها خودکار حذف می‌شوند.
+LOG_TTL_SECONDS = 24 * 60 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +100,34 @@ def _save_admin_log(data):
         pass
 
 
+def _prune_log(data):
+    """لاگ‌های قدیمی‌تر از ۲۴ ساعت را از همهٔ گروه‌ها حذف و ذخیره می‌کند.
+
+    برمی‌گرداند True اگر چیزی حذف شده باشد.
+    """
+    now = time.time()
+    changed = False
+    for key in list(data.keys()):
+        bucket = data[key]
+        if not isinstance(bucket, list):
+            data.pop(key, None)
+            changed = True
+            continue
+        kept = []
+        for e in bucket:
+            ts = e.get("_ts", 0)
+            if ts and (now - ts) < LOG_TTL_SECONDS:
+                kept.append(e)
+            else:
+                changed = True
+        if kept:
+            data[key] = kept
+        else:
+            data.pop(key, None)
+            changed = True
+    return changed
+
+
 def log_action(chat_id, actor, action, target=None, note=""):
     """یک اقدامِ مدیریتی را در لاگِ گروه ثبت می‌کند.
 
@@ -108,6 +138,7 @@ def log_action(chat_id, actor, action, target=None, note=""):
     bucket = data.setdefault(key, [])
     entry = {
         "time": datetime.now().isoformat(timespec="seconds"),
+        "_ts": time.time(),
         "actor": display_name(actor),
         "action": action,
         "target": display_name(target) if target is not None else None,
@@ -116,13 +147,17 @@ def log_action(chat_id, actor, action, target=None, note=""):
     bucket.append(entry)
     if len(bucket) > MAX_LOG_PER_GROUP:
         del bucket[:-MAX_LOG_PER_GROUP]
+    # پس از افزودن، لاگ‌های قدیمی را هم پاک کن (خودکار).
+    _prune_log(data)
     _save_admin_log(data)
     return entry
 
 
 def get_log(chat_id, limit=30):
-    """آخرین لاگ‌های این گروه (جدیدترین‌ها اول)."""
+    """آخرین لاگ‌های ۲۴ ساعتِ اخیرِ این گروه (جدیدترین‌ها اول)."""
     data = _load_admin_log()
+    if _prune_log(data):
+        _save_admin_log(data)
     bucket = data.get(str(chat_id), [])
     return list(reversed(bucket[-limit:]))
 
@@ -133,26 +168,59 @@ def clear_log(chat_id):
     _save_admin_log(data)
 
 
+def _u16_len(value):
+    return len((value or "").encode("utf-16-le")) // 2
+
+
 def format_log(chat_id, limit=30):
-    """لاگ را به متنِ مرتب و خوانا تبدیل می‌کند."""
+    """لاگ را به متنِ مرتب و خوانا + entityهای قالب‌بندی برمی‌گرداند.
+
+    خروجی ``(text, entities)``:
+      - نامِ ادمین داخلِ نقل‌قولِ شیشه‌ای (MessageEntityBlockquote)
+      - عملیات زیرِ نام، ردیفی
+      - زیرِ لیست، یک خطِ Bold: «⏳ این لاگ‌ها هر ۲۴ ساعت به‌صورت خودکار
+        ریست می‌شوند.»
+    """
+    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+
     entries = get_log(chat_id, limit)
     if not entries:
-        return "📭 هنوز اقدامی در این گروه ثبت نشده است."
+        return "📭 هنوز اقدامی در این گروه ثبت نشده است.", []
+
     lines = ["🧾 لاگ مدیریتی گروه:\n"]
+    entities = []
     for i, e in enumerate(entries, 1):
         when = e.get("time", "")
         actor = e.get("actor", "کاربر ناشناس")
         action = e.get("action", "")
-        target = e.get("target")
         note = e.get("note", "")
-        if target:
-            line = f"{i}. {when}\n   👤 {actor} → {action} ← {target}"
-        else:
-            line = f"{i}. {when}\n   👤 {actor} → {action}"
+
+        # 1. تاریخ
+        lines.append(f"{i}. {when}\n")
+        actor_line = f"👤 {actor}\n"
+        actor_start = len("".join(lines))
+        lines.append(actor_line)
+        entities.append(MessageEntityBlockquote(
+            offset=_u16_len("".join(lines[:actor_start])),
+            length=_u16_len(actor_line)))
+
+        # 2. عملیات (ردیف زیر نام)
+        action_line = f"→ {action}\n"
+        lines.append(action_line)
+
+        # 3. توضیحات
         if note:
-            line += f"\n   📝 {note}"
-        lines.append(line + "\n")
-    return "\n".join(lines)
+            lines.append(f"📝 {note}\n")
+        lines.append("\n")
+
+    # Footer Bold
+    footer = "⏳ این لاگ‌ها هر ۲۴ ساعت به‌صورت خودکار ریست می‌شوند."
+    footer_start = _u16_len("".join(lines))
+    lines.append(footer)
+    entities.append(MessageEntityBold(
+        offset=footer_start, length=_u16_len(footer)))
+
+    return "".join(lines), entities
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +626,37 @@ def _extract_group_call(result):
     return None
 
 
+_PERSIAN_WEEKDAYS = ("دوشنبه", "سه‌شنبه", "چهارشنبه",
+                     "پنجشنبه", "جمعه", "شنبه", "یکشنبه")
+
+
+def format_call_invite(call_title, creator_name, created_at, link):
+    """پیامِ دعوتِ تماسِ گروهی را با فرمتِ کامل می‌سازد.
+
+    اطلاعات واقعیِ تماس:
+      - نامِ تماس (call_title)
+      - سازندهٔ تماس (creator_name)
+      - روز هفته + تاریخِ کاملِ ساخت (created_at)
+      - لینکِ واقعیِ تماس (link)
+    """
+    # روز هفته (میلادی ۰=دوشنبه) → فارسی
+    weekday = _PERSIAN_WEEKDAYS[created_at.weekday()]
+    jalali = format_jalali(created_at.date())
+    full_time = f"{weekday} {jalali} ساعت {created_at.strftime('%H:%M')}"
+    text = (
+        "شما به یک تماس گروهی دعوت شدید.\n\n"
+        f"📞 نام تماس: «{call_title}»\n\n"
+        f"😀 سازنده تماس: {creator_name}\n\n"
+        f"⏰ زمان ساخت: {full_time}\n\n"
+        "توجه، این یک لینک عمومی است و تمام کاربران سروش+ می‌توانند با "
+        "وارد شدن به این لینک به تماس شما بپیوندند. در به اشتراک گذاشتن "
+        "آن دقت کنید.\n\n"
+        "🔗 لینک تماس:\n"
+        f"{link}"
+    )
+    return text
+
+
 async def create_group_call(client, chat_id, title="تماس گروهی"):
     """یک تماسِ گروهی ایجاد و لینکِ ورود به آن را برمی‌گرداند.
 
@@ -567,9 +666,10 @@ async def create_group_call(client, chat_id, title="تماس گروهی"):
 
     اگر سرورِ سروش این قابلیت را پشتیبانی نکند، RPC خطا می‌دهد که همان
     به کاربر گزارش می‌شود (هیچ پیاده‌سازیِ جعلی‌ای نیست).
-    برمی‌گرداند ``(link, error)``.
+    برمی‌گرداند ``(link, error, created_at)``.
     """
     from splusthon.tl import functions, types
+    created_at = datetime.now()
     try:
         peer = await client.get_input_entity(chat_id)
         result = await client(functions.phone.CreateGroupCallRequest(
@@ -577,16 +677,16 @@ async def create_group_call(client, chat_id, title="تماس گروهی"):
         call = _extract_group_call(result)
         if call is None:
             return None, ("تماس ایجاد شد اما سرور شناسهٔ تماس را برنگرداند؛ "
-                          "شاید سروش‌پلاس این قابلیت را کامل پشتیبانی نمی‌کند.")
+                          "شاید سروش‌پلاس این قابلیت را کامل پشتیبانی نمی‌کند."), created_at
         invite = await client(functions.phone.ExportGroupCallInviteRequest(
             call=types.InputGroupCall(id=call.id, access_hash=call.access_hash)))
         link = getattr(invite, "link", None) or ""
         if not link:
-            return None, "لینکِ تماس از سرور دریافت نشد."
-        return link, None
+            return None, "لینکِ تماس از سرور دریافت نشد.", created_at
+        return link, None, created_at
     except Exception as e:
         name = e.__class__.__name__
         return None, (
             f"ایجاد تماس گروهی در این گروه ممکن نشد "
             f"({name}). سروش‌پلاس این قابلیت را پشتیبانی نمی‌کند یا "
-            f"دسترسی لازم نیست. جزئیات: {e}")
+            f"دسترسی لازم نیست. جزئیات: {e}"), created_at

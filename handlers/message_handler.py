@@ -1313,7 +1313,8 @@ async def handle_new_message(bot, event):
             ):
                 await event.reply("❌ فقط مالک یا ادمین اجازه مشاهده لاگ را دارند")
                 return
-            await event.reply(admin_tools.format_log(chat_id))
+            text, entities = admin_tools.format_log(chat_id)
+            await event.reply(text, formatting_entities=entities or None)
             return
 
         # پاکسازی خودکار — جریانِ مرحله‌به‌مرحله
@@ -1411,15 +1412,25 @@ async def handle_new_message(bot, event):
 
             async def _create_call():
                 try:
-                    link, error = await admin_tools.create_group_call(
-                        bot.client, chat_id, title="تماس گروهی")
+                    # نامِ تماس = نامِ گروه
+                    try:
+                        chat_entity = await event.get_chat()
+                        call_title = getattr(chat_entity, "title", None) or "تماس گروهی"
+                    except Exception:
+                        call_title = "تماس گروهی"
+                    creator_name = admin_tools.display_name(sender)
+
+                    link, error, created_at = await admin_tools.create_group_call(
+                        bot.client, chat_id, title=call_title)
                     if error:
                         await event.reply(f"❌ {error}")
                         return
                     admin_tools.log_action(
-                        chat_id, sender, "ایجاد تماس گروهی")
-                    await event.reply(
-                        f"📞 تماس گروهی ایجاد شد.\n\nبرای ورود به تماس:\n{link}")
+                        chat_id, sender, "ایجاد تماس گروهی",
+                        note=f"لینک {link}")
+                    invite_text = admin_tools.format_call_invite(
+                        call_title, creator_name, created_at, link)
+                    await event.reply(invite_text)
                 except Exception as e:
                     bot.logger.log_error(f"خطا در ایجاد کال: {e}")
                     await event.reply(f"❌ خطا در ایجاد تماس گروهی: {e}")

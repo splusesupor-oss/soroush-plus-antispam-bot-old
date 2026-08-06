@@ -47,12 +47,48 @@ def test_admin_log():
     check("گروه ۱ دو اقدام دارد", len(log1) == 2, f"{len(log1)}")
     check("گروه ۲ یک اقدام دارد", len(log2) == 1, f"{len(log2)}")
     # هیچ ID عددی در خروجی نباشد
-    text = at.format_log(-1001)
+    text, entities = at.format_log(-1001)
     check("لاگ فرمت شده ساخته شد", "لاگ مدیریتی" in text)
     check("شناسهٔ عددی در لاگ نیست", "-1001" not in text and "1001" not in text)
     check("نام ادمین در لاگ هست", "@admin1" in text or "admin1" in text)
+    # فرمت: تاریخ، سپس نامِ ادمین داخل blockquote، سپس عملیات زیرِ نام
+    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+    check("حداقل یک blockquote برای نام ادمین هست",
+          any(isinstance(e, MessageEntityBlockquote) for e in entities))
+    check("footer Bold هست",
+          any(isinstance(e, MessageEntityBold) for e in entities))
+    check("footer متن ۲۴ ساعت را دارد", "۲۴ ساعت" in text)
     at.clear_log(-1001)
     at.clear_log(-2002)
+
+
+def test_format_call_invite():
+    from datetime import datetime
+    created = datetime(2026, 8, 6, 13, 29)  # پنجشنبه
+    text = at.format_call_invite("گروه تست", "@osine1", created,
+                                 "https://splus.ir/call/abc")
+    check("پیام دعوت ساخته شد", "دعوت شدید" in text)
+    check("نام تماس هست", "📞 نام تماس: «گروه تست»" in text)
+    check("سازنده هست", "😀 سازنده تماس: @osine1" in text)
+    check("زمان ساخت با روز هفته هست", "پنجشنبه" in text and "ساعت 13:29" in text)
+    check("هشدار عمومی هست", "لینک عمومی است" in text)
+    check("لینک تماس هست", "🔗 لینک تماس:" in text and "https://splus.ir/call/abc" in text)
+
+
+def test_log_pruned_after_24h():
+    at._ADMIN_LOG_FILE.write_text("{}", encoding="utf-8")
+    # ورودیِ جدید
+    at.log_action(-3001, {"username": "a1"}, "اخطار")
+    # ورودیِ ساختگیِ قدیمی (بیش از ۲۴ ساعت)
+    data = at._load_admin_log()
+    data.setdefault("-3001", []).append({
+        "time": "2020-01-01T00:00:00", "_ts": 1,
+        "actor": "@old", "action": "قدیمی", "note": ""})
+    at._save_admin_log(data)
+    entries = at.get_log(-3001)
+    check("لاگِ قدیمی حذف شد", len(entries) == 1, f"{len(entries)}")
+    check("لاگِ جدید مانده", entries[0]["actor"] == "@a1")
+    at.clear_log(-3001)
 
 
 def test_auto_cleanup_settings():
@@ -126,6 +162,8 @@ def main():
     test_admin_log()
     test_auto_cleanup_settings()
     test_scheduling_computation()
+    test_log_pruned_after_24h()
+    test_format_call_invite()
     import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         tmp = f.name
