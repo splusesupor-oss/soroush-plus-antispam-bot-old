@@ -935,8 +935,13 @@ class SoroushAntiSpamBot:
 
                   # پیوی فقط دستور صفر کردن تخلف
                 if is_private_splus:
-                    text = (event.message.message or "").strip()
-                    _is_broadcast_word = text in _broadcast_words
+                    text = normalize_command_text(
+                        event.message.message or ""
+                    )
+                    # Use the same normalization as the broadcast handler;
+                    # otherwise ZWNJ/Arabic spelling variants never reach
+                    # the notification workflow.
+                    _is_broadcast_word = is_broadcast_command(text)
                     if _is_broadcast_word:
                         self.logger.log_info(
                             f"BROADCAST ROUTE PRIVATE BRANCH text={text!r}"
