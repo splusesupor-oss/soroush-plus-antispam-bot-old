@@ -115,14 +115,24 @@ def display(user):
 
 
 def disable_for_bot(chat_id, bot_user):
-    """گروه را برای رباتِ شناسایی‌شده غیرفعال ثبت می‌کند (ماندگار)."""
+    """گروه را ثبت و بلافاصله قابل‌خواندن بودنِ وضعیت را تأیید می‌کند.
+
+    مقدار بازگشتی فقط وقتی ``True`` است که ذخیره‌سازی موفق شده و همان شناسه
+    گروه از فایل دوباره خوانده شود؛ در غیر این صورت caller نباید گروه را
+    خاموش‌شده اعلام یا پیام موفقیت ارسال کند.
+    """
     data = _load()
-    data[str(chat_id)] = {
+    key = str(chat_id)
+    data[key] = {
         "bot_id": getattr(bot_user, "id", None),
         "bot_name": display(bot_user),
         "disabled_at": datetime.now().isoformat(timespec="seconds"),
     }
-    _save(data)
+    try:
+        _save(data)
+        return key in _load()
+    except Exception:
+        return False
 
 
 def is_disabled(chat_id):

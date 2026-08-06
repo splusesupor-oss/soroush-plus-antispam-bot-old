@@ -890,24 +890,68 @@ async def handle_new_message(bot, event):
             # کامل با client.get_entity گرفته و فیلدِ bot قطعی خوانده می‌شود.
             # حسابِ خودِ روباه و مالک از قبل در is_bot_account / is_global_owner
             # مستثنا شده‌اند.
+            # این لاگ قبل از تصمیم‌گیری ثبت می‌شود تا معلوم باشد sender به
+            # مسیر تشخیص رسیده است؛ حساب خود روباه بالاتر عمداً return می‌شود.
+            bot.logger.log_info(
+                "BOT DETECTION DEBUG\n"
+                f"group_id={chat_id}\n"
+                f"sender_id={user_id}\n"
+                f"sender_username={getattr(sender, 'username', None)!r}\n"
+                f"sender_type={sender.__class__.__name__ if sender else 'None'}\n"
+                f"is_bot={getattr(sender, 'bot', None)!r}\n"
+                "detection_result=sender_detected_resolving")
             is_other_bot = await bot_detector.resolve_is_bot(
                 bot.client, sender, user_id)
             if is_other_bot and not is_global_owner(user_id):
                 title = getattr(event_chat, "title", "") or ""
-                bot_detector.disable_for_bot(chat_id, sender)
-                bot.logger.log_info(
-                    "BOT DETECTION DEBUG\n"
-                    f"group_id={chat_id}\n"
-                    f"sender_id={user_id}\n"
-                    f"sender_username={getattr(sender, 'username', None)!r}\n"
-                    f"sender_type={sender.__class__.__name__ if sender else 'None'}\n"
-                    f"is_bot={getattr(sender, 'bot', None)!r}\n"
-                    f"detection_result=bot_detected_fox_disabled\n"
-                    f"group_title={title!r}")
-                await event.reply(
-                    "🤖 ربات دیگری در این گروه فعال است.\n"
-                    "به دلیل فعال بودن این ربات، روباه در این گروه خاموش شد.")
-                return
+                bot_id = getattr(sender, "id", None)
+                bot_name = bot_detector.display(sender)
+                disable_called = False
+                disabled_state = False
+                notification_sent = False
+                try:
+                    disable_called = True
+                    persisted = bot_detector.disable_for_bot(chat_id, sender)
+                    disabled_state = bot_detector.is_disabled(chat_id)
+                    bot.logger.log_info(
+                        "BOT SHUTDOWN DEBUG\n"
+                        f"group_id={chat_id}\n"
+                        f"bot_id={bot_id}\n"
+                        f"bot_name={bot_name!r}\n"
+                        "resolve_is_bot=True\n"
+                        f"disable_for_bot_called={disable_called}\n"
+                        f"bot_disabled_groups_updated={persisted}\n"
+                        f"disabled_state={disabled_state}\n"
+                        "notification_sent=False")
+                    if not persisted or not disabled_state:
+                        raise RuntimeError("bot_disabled_groups.json persistence verification failed")
+                    await event.reply(
+                        "🤖 ربات دیگری در این گروه فعال است.\n"
+                        "به دلیل فعال بودن این ربات، روباه در این گروه خاموش شد.")
+                    notification_sent = True
+                    bot.logger.log_info(
+                        "BOT SHUTDOWN DEBUG\n"
+                        f"group_id={chat_id}\n"
+                        f"bot_id={bot_id}\n"
+                        f"bot_name={bot_name!r}\n"
+                        "resolve_is_bot=True\n"
+                        f"disable_for_bot_called={disable_called}\n"
+                        f"disabled_state={disabled_state}\n"
+                        f"notification_sent={notification_sent}")
+                    return
+                except Exception as error:
+                    bot.logger.log_error(
+                        "BOT SHUTDOWN DEBUG FAILED\n"
+                        f"group_id={chat_id}\n"
+                        f"bot_id={bot_id}\n"
+                        f"bot_name={bot_name!r}\n"
+                        "resolve_is_bot=True\n"
+                        f"disable_for_bot_called={disable_called}\n"
+                        f"disabled_state={disabled_state}\n"
+                        f"notification_sent={notification_sent}\n"
+                        f"error={error!r}")
+                    # در خطای ذخیره/تأیید/اعلان وانمود نمی‌کنیم shutdown کامل
+                    # شده است؛ رویداد به مسیر عادی ادامه می‌یابد.
 
         # ------------------------------------------------------------------
         # 📥 دانلود عکس — اتصالِ زودهنگام تا پیامِ مرحله‌ای (عبارت/تأیید/لغو)
