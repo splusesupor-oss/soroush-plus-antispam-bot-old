@@ -127,6 +127,7 @@ from modules.outgoing_profiler import (
 )
 from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
+from modules import bot_detector
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -865,6 +866,42 @@ async def handle_new_message(bot, event):
                 )
             return
         clean_text = message_text.strip()
+
+        # ------------------------------------------------------------------
+        # 🤖 تشخیصِ رباتِ دیگر در گروه و غیرفعال‌سازیِ خودکارِ روباه
+        # ------------------------------------------------------------------
+        if not event.is_private:
+            if bot_detector.is_disabled(chat_id):
+                # این گروه به دلیلِ فعال بودنِ یک رباتِ دیگر غیرفعال شده است.
+                # روباه در این گروه کاری انجام نمی‌دهد؛ فقط مالک/ادمین می‌تواند
+                # با «فعال کردن روباه» آن را دوباره فعال کند.
+                if (clean_text == bot_detector.REENABLE_COMMAND
+                        and admin_tools.has_admin_permission(
+                            chat_id, user_id, sender_username)):
+                    if bot_detector.reenable(chat_id):
+                        await event.reply(
+                            "🦊 روباه در این گروه دوباره فعال شد ✅")
+                    else:
+                        await event.reply(
+                            "🦊 روباه در این گروه از قبل فعال است ✅")
+                return
+            # آیا فرستندهٔ این پیام یک رباتِ دیگر است؟ فقط با فیلدِ مستقیمِ API
+            # (User.bot). حسابِ خودِ روباه و مالک از قبل در is_bot_account /
+            # is_global_owner مستثنا شده‌اند.
+            if (bot_detector.is_bot_sender(sender)
+                    and not is_global_owner(user_id)):
+                title = getattr(event_chat, "title", "") or ""
+                bot_detector.disable_for_bot(chat_id, sender)
+                bot.logger.log_info(
+                    "BOT DETECTED "
+                    f"chat_id={chat_id} bot_id={user_id} "
+                    f"bot_name={bot_detector.display(sender)!r} "
+                    f"group_title={title!r} -> fox disabled")
+                await event.reply(
+                    f"🤖 به دلیل فعال بودن ربات "
+                    f"{bot_detector.display(sender)}، "
+                    f"روباه در این گروه غیرفعال شد.")
+                return
 
         # ------------------------------------------------------------------
         # 📥 دانلود عکس — اتصالِ زودهنگام تا پیامِ مرحله‌ای (عبارت/تأیید/لغو)
