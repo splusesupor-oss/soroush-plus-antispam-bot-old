@@ -287,10 +287,11 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(
             bot,
-            "BROADCAST STATE CREATE",
+            "BROADCAST STATE CREATED",
             owner_id,
             f"phase={(get(owner_id) or {}).get('phase')!r}",
         )
+        _log_phase(bot, "BROADCAST STATE CREATE", owner_id, "compatibility_alias")
         _log_phase(bot, "WAITING_FOR_TEXT", owner_id)
         try:
             await _broadcast_reply(bot, event, PROMPT)
@@ -300,7 +301,8 @@ async def handle_private_broadcast(bot, event, owner_id, text):
                 f"error={error!r}"
             )
             raise
-        _log_phase(bot, "BROADCAST PROMPT SENT", owner_id)
+        _log_phase(bot, "BROADCAST PREVIEW SENT", owner_id)
+        _log_phase(bot, "BROADCAST PROMPT SENT", owner_id, "compatibility_alias")
         return True
 
     if not state:

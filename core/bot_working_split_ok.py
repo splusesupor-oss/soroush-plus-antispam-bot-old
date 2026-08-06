@@ -717,6 +717,44 @@ class SoroushAntiSpamBot:
                         f"chat_type={routing_chat.__class__.__name__} "
                         f"private_route={is_private_splus}"
                     )
+                # Dedicated private broadcast fast path. It runs before the
+                # generic outgoing/self-message guards so SPlusthon variants
+                # that mark an incoming DM as event.out cannot swallow the
+                # owner's command.
+                if is_private_splus:
+                    private_sender = await event.get_sender()
+                    private_sender_id = getattr(private_sender, "id", None)
+                    private_is_owner = is_global_owner(private_sender_id)
+                    private_has_state = bool(get_broadcast_state(private_sender_id))
+                    private_is_broadcast = is_broadcast_command(text)
+                    self.logger.log_info(
+                        "BROADCAST PRIVATE ROUTE\n"
+                        f"sender_id={private_sender_id}\n"
+                        f"sender_username={getattr(private_sender, 'username', None)!r}\n"
+                        f"event_out={getattr(event, 'out', None)}\n"
+                        f"trigger={private_is_broadcast}\n"
+                        f"state_present={private_has_state}\n"
+                        f"owner_check={private_is_owner}"
+                    )
+                    if private_is_owner and (private_is_broadcast or private_has_state):
+                        self.logger.log_info(
+                            "BROADCAST COMMAND RECEIVED "
+                            f"owner_id={private_sender_id} text={text!r}"
+                        )
+                        handled = await handle_private_broadcast(
+                            self, event, private_sender_id, text
+                        )
+                        if handled:
+                            self.logger.log_info(
+                                "BROADCAST ROUTE HANDLED "
+                                f"owner_id={private_sender_id} text={text!r}"
+                            )
+                            return
+                        self.logger.log_error(
+                            "BROADCAST ROUTE NOT HANDLED "
+                            f"owner_id={private_sender_id} text={text!r}"
+                        )
+
                 if (
                     event.out
                     and is_private_splus
