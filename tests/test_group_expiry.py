@@ -590,12 +590,15 @@ def test_full_independence():
             imported.add(node.module.split(".")[0])
     check("ماژول به splusthon وابسته نیست", "splusthon" not in imported,
           f"-> {sorted(imported)}")
-    check("فقط کتابخانهٔ استاندارد import می‌شود",
+    # تنها وابستگیِ داخلیِ پروژه، ماژولِ مرکزیِ زمان (time_utils) است.
+    check("فقط کتابخانهٔ استاندارد + ماژولِ مرکزیِ زمان import می‌شود",
           imported <= {"json", "os", "tempfile", "datetime", "pathlib",
-                       "zoneinfo"},
+                       "zoneinfo", "modules"},
           f"-> {sorted(imported)}")
-    check("هیچ ماژول داخلی پروژه import نمی‌شود",
-          not any(i in imported for i in ("modules", "handlers", "core")))
+    import re as _re
+    _internal = _re.findall(r"from\s+modules\.([\w.]+)\s+import", source)
+    check("تنها ماژولِ داخلیِ پروژه time_utils (مرکزیِ زمان) است",
+          set(_internal) <= {"time_utils"}, f"-> {_internal}")
 
     check("فایل ذخیره‌سازی اختصاصی است",
           ge.FILE.name == "group_expiry.json"

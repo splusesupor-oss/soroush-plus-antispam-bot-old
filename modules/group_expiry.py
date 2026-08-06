@@ -24,14 +24,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-try:
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-    try:
-        TEHRAN = ZoneInfo("Asia/Tehran")
-    except ZoneInfoNotFoundError:
-        TEHRAN = timezone(timedelta(hours=3, minutes=30))
-except ImportError:  # pragma: no cover
-    TEHRAN = timezone(timedelta(hours=3, minutes=30))
+# منبعِ مرکزیِ زمان و timezone پروژه (تهران).
+from modules.time_utils import TEHRAN
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "group_expiry.json"
 

@@ -16,20 +16,14 @@ import asyncio
 import json
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
-# منطقهٔ زمانیِ واقعیِ ربات (سروش/ایران). برخلافِ datetime.now() که به
-# ساعتِ سرور وابسته است، از زمانِ واقعیِ تهران برای تفسیرِ «امروز/فردا»
-# و بخشِ روزِ ساعت استفاده می‌شود.
-try:
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-    try:
-        _TEHRAN = ZoneInfo("Asia/Tehran")
-    except ZoneInfoNotFoundError:
-        _TEHRAN = timezone(timedelta(hours=3, minutes=30))
-except ImportError:  # pragma: no cover
-    _TEHRAN = timezone(timedelta(hours=3, minutes=30))
+# منبعِ مرکزیِ زمان و timezone پروژه (تهران).
+from modules.time_utils import TEHRAN, now_local
+
+# نامِ داخلیِ هم‌نامِ قبلی برای سازگاری با ارجاع‌های موجود و تست‌ها.
+_TEHRAN = TEHRAN
 
 from modules.owner_check import is_global_owner
 from modules.admin_storage import is_admin
@@ -359,15 +353,6 @@ def time_of_day(hour):
     if hour < 18:
         return "عصر"
     return "شب"
-
-
-def now_local():
-    """زمانِ فعلیِ واقعیِ ربات در منطقهٔ زمانیِ سروش (تهران).
-
-    برایِ تفسیرِ صحیحِ «امروز/فردا» و بخشِ روزِ ساعت استفاده می‌شود؛ نه یک
-    ساعتِ ثابت یا hardcode.
-    """
-    return datetime.now(_TEHRAN)
 
 
 def _fa_digits(value):
