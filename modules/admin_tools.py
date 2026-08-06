@@ -671,36 +671,89 @@ def format_call_invite(call_title, creator_name, created_at, link):
     return text
 
 
-async def create_group_call(client, chat_id, title="تماس گروهی"):
-    """یک تماسِ گروهی ایجاد و لینکِ ورود به آن را برمی‌گرداند.
+_MEET_BASE = "https://splus.ir/meet"
+# نسخهٔ پروتکلِ تماسِ گروهی (conference). در API سروش به‌صورتِ رشته لازم است.
+_CONFERENCE_VERSION = "1"
 
-    از API واقعیِ SPlusthon استفاده می‌کند:
-      phone.CreateGroupCallRequest  → ساختِ تماس
-      phone.ExportGroupCallInviteRequest → لینکِ دعوت
 
-    اگر سرورِ سروش این قابلیت را پشتیبانی نکند، RPC خطا می‌دهد که همان
-    به کاربر گزارش می‌شود (هیچ پیاده‌سازیِ جعلی‌ای نیست).
+def _rpc_summary(obj):
+    """خلاصه‌ای خوانا از یک شیء RPC (request/response) برای لاگ."""
+    try:
+        return getattr(obj, "to_dict", lambda: str(obj))()
+    except Exception:
+        return str(obj)
+
+
+async def create_group_call(client, chat_id, title="تماس گروهی", logger=None):
+    """یک تماسِ گروهی واقعی در سروش‌پلاس می‌سازد و لینکِ ورود را برمی‌گرداند.
+
+    سروش‌پلاس `phone.CreateGroupCallRequest` (استانداردِ تلگرام) را
+    پشتیبانی نمی‌کند (۴۲۲ NOT_SUPPORTED). APIِ درستِ سروش، `conference` است:
+      conference.CreateConferenceCallRequest(version, name)
+        → ConferenceCreated(slug)
+      لینک = https://splus.ir/meet/{slug}
+
+    اگر این API هم کار نکند، fallback به CreateGroupCallRequest انجام می‌شود.
+    در همهٔ مسیرها، جزئیاتِ درخواست/پاسخ RPC قبل از خطا لاگ می‌شود.
+
     برمی‌گرداند ``(link, error, created_at)``.
     """
     from splusthon.tl import functions, types
     created_at = datetime.now()
+    peer = None
+
+    def _log(msg):
+        try:
+            if logger is not None:
+                logger.log_info(f"GROUP CALL {msg}")
+        except Exception:
+            pass
+
     try:
         peer = await client.get_input_entity(chat_id)
+    except Exception as e:
+        return None, f"دریافت شناسهٔ گروه ناموفق بود: {e}", created_at
+
+    # ۱) مسیرِ اصلیِ سروش: conference
+    try:
+        _log(f"REQUEST conference.CreateConferenceCallRequest "
+             f"version={_CONFERENCE_VERSION} name={title!r}")
+        result = await client(functions.conference.CreateConferenceCallRequest(
+            version=_CONFERENCE_VERSION, name=title))
+        _log(f"RESPONSE conference created: {_rpc_summary(result)}")
+        slug = getattr(result, "slug", None) or ""
+        if slug:
+            link = f"{_MEET_BASE}/{slug}"
+            return link, None, created_at
+        _log("WARN conference created but no slug in response")
+    except Exception as e:
+        _log(f"ERROR conference.CreateConferenceCall FAILED "
+             f"{e.__class__.__name__}: {e}")
+
+    # ۲) fallback: CreateGroupCallRequest + ExportGroupCallInvite
+    try:
+        _log(f"REQUEST phone.CreateGroupCallRequest peer={peer} title={title!r}")
         result = await client(functions.phone.CreateGroupCallRequest(
             peer=peer, title=title))
+        _log(f"RESPONSE phone group call: {_rpc_summary(result)}")
         call = _extract_group_call(result)
         if call is None:
-            return None, ("تماس ایجاد شد اما سرور شناسهٔ تماس را برنگرداند؛ "
-                          "شاید سروش‌پلاس این قابلیت را کامل پشتیبانی نمی‌کند."), created_at
+            return None, (
+                "تماس ایجاد نشد؛ سرور شناسهٔ تماس را برنگرداند. سروش‌پلاس "
+                "امکانِ ساختِ تماس گروهی را فعال نکرده است."), created_at
+        _log(f"REQUEST phone.ExportGroupCallInvite call_id={call.id}")
         invite = await client(functions.phone.ExportGroupCallInviteRequest(
-            call=types.InputGroupCall(id=call.id, access_hash=call.access_hash)))
+            call=types.InputGroupCall(
+                id=call.id, access_hash=call.access_hash)))
+        _log(f"RESPONSE invite: {_rpc_summary(invite)}")
         link = getattr(invite, "link", None) or ""
         if not link:
             return None, "لینکِ تماس از سرور دریافت نشد.", created_at
         return link, None, created_at
     except Exception as e:
         name = e.__class__.__name__
+        _log(f"ERROR phone.CreateGroupCall FAILED {name}: {e}")
         return None, (
-            f"ایجاد تماس گروهی در این گروه ممکن نشد "
-            f"({name}). سروش‌پلاس این قابلیت را پشتیبانی نمی‌کند یا "
-            f"دسترسی لازم نیست. جزئیات: {e}"), created_at
+            f"ایجاد تماس گروهی در این گروه ممکن نشد ({name}). "
+            f"سروش‌پلاس این قابلیت را پشتیبانی نمی‌کند یا دسترسی لازم نیست. "
+            f"جزئیات: {e}"), created_at

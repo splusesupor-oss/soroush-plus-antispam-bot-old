@@ -103,6 +103,11 @@ def test_format_call_invite():
     check("لینک تماس هست", "🔗 لینک تماس:" in text and "https://splus.ir/call/abc" in text)
 
 
+def test_meet_link_builder():
+    link = f"{at._MEET_BASE}/abc123"
+    check("لینک meet با slug ساخته می‌شود", link == "https://splus.ir/meet/abc123")
+
+
 def test_log_pruned_after_24h():
     at._ADMIN_LOG_FILE.write_text("{}", encoding="utf-8")
     # ورودیِ جدید
@@ -193,6 +198,7 @@ def main():
     test_scheduling_computation()
     test_log_pruned_after_24h()
     test_format_call_invite()
+    test_meet_link_builder()
     import tempfile, os
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         tmp = f.name

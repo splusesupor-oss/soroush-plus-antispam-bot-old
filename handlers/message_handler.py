@@ -1418,7 +1418,8 @@ async def handle_new_message(bot, event):
 
             try:
                 link, error, created_at = await admin_tools.create_group_call(
-                    bot.client, chat_id, title=call_title)
+                    bot.client, chat_id, title=call_title,
+                    logger=bot.logger)
                 if error:
                     await event.reply(f"❌ {error}")
                     return
