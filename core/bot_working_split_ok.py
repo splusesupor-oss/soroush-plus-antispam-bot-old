@@ -953,18 +953,12 @@ class SoroushAntiSpamBot:
                             f"BROADCAST OWNER CHECK get_sender FAILED error={error!r}"
                         )
                         raise
-                    if event.out:
-                        try:
-                            private_me = await self.client.get_me()
-                        except Exception as error:
-                            self.logger.log_error(
-                                f"BROADCAST OWNER CHECK get_me FAILED error={error!r}"
-                            )
-                            raise
-                        sender_id = getattr(private_me, "id", None)
-                    else:
-                        sender_id = getattr(sender, "id", None)
-
+                    # For a received private message, authorization must use
+                    # the actual sender. Some SPlusthon builds expose an
+                    # incoming DM with event.out=True; using get_me() here
+                    # would authorize the fox account instead of the owner and
+                    # silently stop the notification workflow.
+                    sender_id = getattr(sender, "id", None)
                     _owner_ok = is_global_owner(sender_id)
                     if _is_broadcast_word or _owner_ok:
                         self.logger.log_info(
