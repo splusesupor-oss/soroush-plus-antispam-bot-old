@@ -375,7 +375,52 @@ def _track_group_timer(bot, chat_id, task):
     return task
 
 
+async def _delete_spam_ids(bot, chat_id, user_id, ids, *, batch_size=100):
+    """Delete one user's spam ids serially, retrying each batch safely."""
+    pending = sorted({message_id for message_id in ids if isinstance(message_id, int) and message_id > 0})
+    deleted = 0
+    batch_number = 0
+    while pending:
+        batch_number += 1
+        batch = pending[:batch_size]
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                bot.logger.log_info(
+                    "SPAM CLEANUP BATCH "
+                    f"group_id={chat_id} user_id={user_id} "
+                    f"batch_number={batch_number} batch_size={len(batch)}"
+                )
+                await bot.client.delete_messages(chat_id, batch)
+                deleted += len(batch)
+                pending = pending[len(batch):]
+                break
+            except Exception as error:
+                last_error = error
+                bot.logger.log_error(
+                    "SPAM CLEANUP RETRY "
+                    f"group_id={chat_id} user_id={user_id} "
+                    f"message_id={batch[0] if batch else None} "
+                    f"attempt={attempt} reason={error!r}"
+                )
+                if attempt < 3:
+                    await _asyncio.sleep(0.5 * attempt)
+        else:
+            bot.logger.log_error(
+                "SPAM CLEANUP BATCH FAILED "
+                f"group_id={chat_id} user_id={user_id} "
+                f"batch_number={batch_number} remaining={len(pending)} "
+                f"reason={last_error!r}"
+            )
+            break
+        await _asyncio.sleep(0.2)
+    return deleted, pending
+
+
 def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
+    # Use the same tuple key everywhere. Previously the ban path stored a
+    # string key while the incoming-message path looked up a tuple, so new
+    # messages arriving during cleanup were never queued.
     key = (chat_id, user_id)
     bot.spam_burst_messages.setdefault(key, set()).update(message_ids)
     existing_task = bot.spam_burst_tasks.get(key)
@@ -383,25 +428,30 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
         return
 
     async def delete_burst_messages():
-        idle_rounds = 0
+        detected = deleted = 0
         try:
-            while idle_rounds < 3:
-                ids = sorted(bot.spam_burst_messages.pop(key, set()))
+            idle_rounds = 0
+            while idle_rounds < 5:
+                ids = set(bot.spam_burst_messages.pop(key, set()))
                 if not ids:
                     idle_rounds += 1
-                    await _asyncio.sleep(0.2)
+                    await _asyncio.sleep(0.3)
                     continue
-
                 idle_rounds = 0
-                for start in range(0, len(ids), 100):
-                    batch = ids[start:start + 100]
-                    try:
-                        await bot.client.delete_messages(chat_id, batch)
-                    except Exception as error:
-                        bot.logger.log_error(
-                            f"خطا در حذف دسته‌ای spam burst {user_id}: {error}"
-                        )
-                    await _asyncio.sleep(0.2)
+                detected += len(ids)
+                bot.logger.log_info(
+                    "SPAM CLEANUP START "
+                    f"group_id={chat_id} user_id={user_id} detected_count={detected}"
+                )
+                removed, remaining = await _delete_spam_ids(bot, chat_id, user_id, ids)
+                deleted += removed
+                if remaining:
+                    bot.spam_burst_messages.setdefault(key, set()).update(remaining)
+            bot.logger.log_info(
+                "SPAM CLEANUP VERIFY "
+                f"group_id={chat_id} user_id={user_id} detected={detected} "
+                f"deleted={deleted} remaining={len(bot.spam_burst_messages.get(key, set()))}"
+            )
         finally:
             bot.spam_burst_tasks.pop(key, None)
 
@@ -409,50 +459,39 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
 
 
 async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
-    history = get_user_history(chat_id, user_id)
-    if history is None:
-        print("HEAVY SPAM CLEANUP\n"
-              f"User: {user_id}\nStored messages: 0\nDeleted messages: 0\n"
-              "Failed deletions: 0\nReason: no history found")
-        return
-    if not history:
-        print("HEAVY SPAM CLEANUP\n"
-              f"User: {user_id}\nStored messages: 0\nDeleted messages: 0\n"
-              "Failed deletions: 0\nReason: history empty")
+    history = get_user_history(chat_id, user_id) or []
+    ids = {item.get("message_id") for item in history}
+    if not ids:
+        bot.logger.log_error(
+            "SPAM CLEANUP VERIFY "
+            f"group_id={chat_id} user_id={user_id} detected=0 deleted=0 remaining=0"
+        )
         return
 
-    raw_ids = [item.get("message_id") for item in history]
-    valid_ids = [message_id for message_id in raw_ids if isinstance(message_id, int) and message_id > 0]
-    invalid_count = len(raw_ids) - len(valid_ids)
-    if not valid_ids:
-        print("HEAVY SPAM CLEANUP\n"
-              f"User: {user_id}\nStored messages: {len(history)}\nDeleted messages: 0\n"
-              f"Failed deletions: {invalid_count}\nReason: message ids missing or invalid")
-        clear_user(chat_id, user_id)
-        return
-
-    deleted_count = 0
-    failed_count = invalid_count
-    for start in range(0, len(valid_ids), 100):
-        batch = valid_ids[start:start + 100]
-        try:
-            await bot.client.delete_messages(chat_id, batch)
-            deleted_count += len(batch)
-        except Exception as error:
-            failed_count += len(batch)
-            bot.logger.log_error(
-                f"خطای حذف دسته‌ای heavy spam {user_id}: {error}"
-            )
-        await _asyncio.sleep(0.2)
-
-    print("HEAVY SPAM CLEANUP\n"
-          f"User: {user_id}\nStored messages: {len(history)}\n"
-          f"Deleted messages: {deleted_count}\nFailed deletions: {failed_count}")
-    if deleted_count:
-        await event.reply(f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد")
-    elif failed_count:
-        print("HEAVY SPAM CLEANUP reason: delete failed")
-
+    bot.logger.log_info(
+        "SPAM CLEANUP START "
+        f"group_id={chat_id} user_id={user_id} "
+        f"first_message_id={min(ids)} detected_count={len(ids)}"
+    )
+    deleted, remaining = await _delete_spam_ids(bot, chat_id, user_id, ids)
+    # Messages arriving while the serial deletion was running are included by
+    # the burst queue; drain them before clearing the user's history.
+    key = (chat_id, user_id)
+    queued = set(bot.spam_burst_messages.get(key, set()))
+    if queued:
+        extra_deleted, extra_remaining = await _delete_spam_ids(
+            bot, chat_id, user_id, queued
+        )
+        deleted += extra_deleted
+        remaining |= extra_remaining
+        bot.spam_burst_messages.pop(key, None)
+    bot.logger.log_info(
+        "SPAM CLEANUP VERIFY "
+        f"group_id={chat_id} user_id={user_id} detected={len(ids)} "
+        f"deleted={deleted} remaining={len(remaining)}"
+    )
+    if deleted:
+        await event.reply(f"🗑 {_math_digits(deleted)} پیام هرزنامه پاک شد")
     clear_user(chat_id, user_id)
 
 
@@ -1616,7 +1655,7 @@ async def handle_new_message(bot, event):
                     if punish_key in bot.punished_users:
                         return
                     bot.punished_users.add(punish_key)
-                    bot.spam_burst_users.add(punish_key)
+                    bot.spam_burst_users.add((chat_id, user_id))
                     ids = get_message_ids(chat_id, user_id)
                     async def repeat_history_ban_succeeded(_result):
                         _queue_spam_burst_deletion(bot, chat_id, user_id, set(ids))
@@ -1629,7 +1668,7 @@ async def handle_new_message(bot, event):
 
                     async def repeat_history_ban_failed(_error):
                         bot.punished_users.discard(punish_key)
-                        bot.spam_burst_users.discard(punish_key)
+                        bot.spam_burst_users.discard((chat_id, user_id))
 
                     bot.moderation_queue.enqueue(
                         chat_id,
