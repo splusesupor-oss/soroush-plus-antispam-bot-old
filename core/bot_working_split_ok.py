@@ -647,6 +647,15 @@ class SoroushAntiSpamBot:
                 # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
                 # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
                 text = normalize_command_text(raw_text)
+                # Mandatory first-stage trace for every event. This must run
+                # before any broadcast/private/group condition so a missing
+                # command can be localized to event delivery or matching.
+                self.logger.log_info(
+                    "PRIVATE COMMAND DEBUG\n"
+                    f"text={raw_text!r}\n"
+                    f"normalized={text!r}\n"
+                    f"is_broadcast_command={is_broadcast_command(raw_text)}"
+                )
                 # BROADCAST TRACE: قبل از هر await ثبت می‌شود تا اگر یکی از
                 # فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
                 _broadcast_words = BROADCAST_COMMAND_WORDS
