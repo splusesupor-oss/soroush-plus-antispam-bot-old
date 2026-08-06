@@ -5,10 +5,55 @@ Soroush Plus announcement is only faithful if bold, blockquote and every other
 entity survive the preview/confirm round trip. Storing text alone silently
 downgrades a formatted announcement to plain text.
 """
+import json
+import os
 import uuid as _uuid
+from pathlib import Path
 
 
-_PENDING_BROADCASTS = {}
+_STATE_FILE = Path(__file__).resolve().parent.parent / "config" / "broadcast_state.json"
+
+
+def _load_pending():
+    try:
+        if _STATE_FILE.exists():
+            data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
+
+
+def _save_pending():
+    """Persist only the pending workflow; delivery locks remain runtime-only."""
+    try:
+        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = _STATE_FILE.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    owner: {
+                        "phase": state.get("phase"),
+                        "text": state.get("text", ""),
+                        # Entities are process-local API objects; text and phase
+                        # are the durable recovery contract.
+                        "entities": [],
+                    }
+                    for owner, state in _PENDING_BROADCASTS.items()
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        os.replace(temporary, _STATE_FILE)
+    except OSError:
+        # The caller keeps the in-memory state; the next operation retries the
+        # write and the error is not allowed to crash message handling.
+        pass
+
+
+_PENDING_BROADCASTS = _load_pending()
 
 
 # «اطلاع‌رسانی» با نیم‌فاصله (ZWNJ) همان دستور «اطلاع رسانی» است. کاربر معمولاً
@@ -53,14 +98,16 @@ def is_broadcast_command(text):
 
 
 def clear(owner_id):
-    """Destroy every temporary broadcast value for this owner."""
+    """Destroy every pending value for this owner and persist the change."""
     _PENDING_BROADCASTS.pop(str(owner_id), None)
+    _save_pending()
 
 
 def begin(owner_id):
-    """Start a brand-new session, replacing any stale one."""
+    """Start a brand-new persistent session, replacing any stale one."""
     clear(owner_id)
     _PENDING_BROADCASTS[str(owner_id)] = {"phase": "awaiting_message"}
+    _save_pending()
 
 
 def get(owner_id):
@@ -69,11 +116,14 @@ def get(owner_id):
 
 def set_message(owner_id, text, entities=None):
     """Store the announcement body together with its formatting entities."""
+    # Keep entities in RAM for the current workflow; _save_pending strips
+    # non-JSON API objects while persisting the durable text/phase.
     _PENDING_BROADCASTS[str(owner_id)] = {
         "phase": "awaiting_confirmation",
         "text": text,
         "entities": list(entities) if entities else [],
     }
+    _save_pending()
 
 
 def consume_confirmation(owner_id):
