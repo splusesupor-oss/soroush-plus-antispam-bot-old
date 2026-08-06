@@ -1417,9 +1417,12 @@ async def handle_new_message(bot, event):
             creator_name = admin_tools.display_name(sender)
 
             try:
+                conf_version = bot.config_manager.get(
+                    "conference_version",
+                    admin_tools.DEFAULT_CONFERENCE_VERSION)
                 link, error, created_at = await admin_tools.create_group_call(
                     bot.client, chat_id, title=call_title,
-                    logger=bot.logger)
+                    logger=bot.logger, version=conf_version)
                 if error:
                     await event.reply(f"❌ {error}")
                     return

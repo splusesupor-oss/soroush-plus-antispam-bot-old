@@ -654,8 +654,10 @@ def format_call_invite(call_title, creator_name, created_at, link):
 
 
 _MEET_BASE = "https://splus.ir/meet"
-# نسخهٔ پروتکلِ تماسِ گروهی (conference). در API سروش به‌صورتِ رشته لازم است.
-_CONFERENCE_VERSION = "1"
+# نسخهٔ پروتکلِ تماسِ گروهی (conference) که سرورِ سروش آن را اعتبارسنجی می‌کند.
+# مقدارِ دقیق را کتابخانه تعریف نمی‌کند (فقط `version:string`)؛ از config خوانده
+# می‌شود تا با نسخهٔ کلاینتِ سروشِ شما هماهنگ شود.
+DEFAULT_CONFERENCE_VERSION = "1"
 
 
 def _rpc_summary(obj):
@@ -666,7 +668,8 @@ def _rpc_summary(obj):
         return str(obj)
 
 
-async def create_group_call(client, chat_id, title="تماس گروهی", logger=None):
+async def create_group_call(client, chat_id, title="تماس گروهی", logger=None,
+                            version=None):
     """یک تماسِ گروهی واقعی در سروش‌پلاس می‌سازد و لینکِ ورود را برمی‌گرداند.
 
     فقط و فقط از APIِ اختصاصیِ سروش‌پلاس استفاده می‌شود:
@@ -678,6 +681,9 @@ async def create_group_call(client, chat_id, title="تماس گروهی", logger
     سروش‌پلاس آن را پشتیبانی نمی‌کند (۴۲۲ NOT_SUPPORTED) و هیچ fallback
     دیگری وجود ندارد.
 
+    ``version`` از فراخوان (معمولاً از config) داده می‌شود؛ اگر None باشد،
+    از ``DEFAULT_CONFERENCE_VERSION`` استفاده می‌شود.
+
     اگر conference خطا بدهد، خطایِ واقعی لاگ می‌شود و هیچ درخواستِ دیگری
     فرستاده نمی‌شود.
 
@@ -685,6 +691,7 @@ async def create_group_call(client, chat_id, title="تماس گروهی", logger
     """
     from splusthon.tl import functions
     created_at = datetime.now()
+    conf_version = version or DEFAULT_CONFERENCE_VERSION
 
     def _log(msg):
         try:
@@ -695,9 +702,9 @@ async def create_group_call(client, chat_id, title="تماس گروهی", logger
 
     try:
         _log(f"REQUEST conference.CreateConferenceCallRequest "
-             f"version={_CONFERENCE_VERSION} name={title!r}")
+             f"version={conf_version!r} name={title!r}")
         result = await client(functions.conference.CreateConferenceCallRequest(
-            version=_CONFERENCE_VERSION, name=title))
+            version=conf_version, name=title))
         _log(f"RESPONSE conference created: {_rpc_summary(result)}")
         slug = getattr(result, "slug", None) or ""
         if not slug:
