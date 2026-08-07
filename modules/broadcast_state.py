@@ -93,8 +93,16 @@ def normalize_command_text(text):
 
 
 def is_broadcast_command(text):
-    """True اگر متن — با هر املای رایج — یکی از دستورهای اطلاع‌رسانی باشد."""
-    return normalize_command_text(text) in BROADCAST_COMMAND_WORDS
+    """True اگر متن یکی از triggerهای اطلاع‌رسانی باشد.
+
+    علاوه بر مقایسهٔ معمول، مقایسهٔ فشرده هم انجام می‌شود تا تفاوت‌های
+    فاصله/نیم‌فاصله/کاراکترهای نامرئی بین کلاینت‌ها trigger را از بین نبرد.
+    """
+    normalized = normalize_command_text(text).strip("\"'«»،,:：؛.!؟")
+    if normalized in BROADCAST_COMMAND_WORDS:
+        return True
+    compact = "".join(normalized.split())
+    return compact in {"اطلاعرسانی", "تایید", "لغو"}
 
 
 def clear(owner_id):

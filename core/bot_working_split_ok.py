@@ -654,12 +654,18 @@ class SoroushAntiSpamBot:
                 # Mandatory first-stage trace for every event. This must run
                 # before any broadcast/private/group condition so a missing
                 # command can be localized to event delivery or matching.
+                _broadcast_detected = is_broadcast_command(raw_text)
                 self.logger.log_info(
                     "PRIVATE COMMAND DEBUG\n"
                     f"text={raw_text!r}\n"
                     f"normalized={text!r}\n"
-                    f"is_broadcast_command={is_broadcast_command(raw_text)}"
+                    f"is_broadcast_command={_broadcast_detected}"
                 )
+                if _broadcast_detected:
+                    self.logger.log_info(
+                        "BROADCAST COMMAND DETECTED "
+                        f"text={raw_text!r} normalized={text!r}"
+                    )
                 # Restore the original reliable private route: do not wait for
                 # get_chat(), peer classification, or event.out. A DM is
                 # routed using event.is_private and its actual sender exactly
