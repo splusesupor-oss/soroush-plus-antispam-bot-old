@@ -677,19 +677,25 @@ class SoroushAntiSpamBot:
                         f"trigger={private_trigger}\n"
                         f"owner_check={private_is_owner}"
                     )
-                    if private_is_owner and (private_trigger or private_state):
+                    # Preserve the original reliable contract: every private
+                    # message from the owner is offered to the broadcast
+                    # handler. The handler performs its own normalization and
+                    # exact trigger/state decision. An outer boolean matcher
+                    # must never prevent a valid spelling from reaching it.
+                    if private_is_owner:
                         handled = await handle_private_broadcast(
-                            self, event, private_sender_id, text
+                            self, event, private_sender_id, raw_text
                         )
                         if handled:
                             self.logger.log_info(
                                 "BROADCAST READY "
-                                f"owner_id={private_sender_id} text={text!r}"
+                                f"owner_id={private_sender_id} text={raw_text!r}"
                             )
                             return
-                        self.logger.log_error(
-                            "BROADCAST ROUTE NOT HANDLED "
-                            f"owner_id={private_sender_id} text={text!r}"
+                        self.logger.log_info(
+                            "BROADCAST ROUTE SKIP "
+                            f"owner_id={private_sender_id} text={raw_text!r} "
+                            "reason=handler_not_broadcast"
                         )
 
                 # BROADCAST TRACE: قبل از هر await ثبت می‌شود تا اگر یکی از
