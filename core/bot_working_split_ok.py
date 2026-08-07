@@ -677,6 +677,15 @@ class SoroushAntiSpamBot:
                     private_state = get_broadcast_state(private_sender_id)
                     private_trigger = is_broadcast_command(raw_text)
                     self.logger.log_info(
+                        "PRIVATE BROADCAST DEBUG\n"
+                        f"user_id={private_sender_id}\n"
+                        f"text={raw_text!r}\n"
+                        f"matched={private_trigger}\n"
+                        "handler_called=False\n"
+                        f"is_private={getattr(event, 'is_private', None)}\n"
+                        f"owner_check={private_is_owner}"
+                    )
+                    self.logger.log_info(
                         "BROADCAST COMMAND RECEIVED\n"
                         f"owner_id={private_sender_id}\n"
                         f"text={raw_text!r}\n"
@@ -691,6 +700,14 @@ class SoroushAntiSpamBot:
                     if private_is_owner:
                         handled = await handle_private_broadcast(
                             self, event, private_sender_id, raw_text
+                        )
+                        self.logger.log_info(
+                            "PRIVATE BROADCAST DEBUG\n"
+                            f"user_id={private_sender_id}\n"
+                            f"text={raw_text!r}\n"
+                            f"matched={private_trigger}\n"
+                            "handler_called=True\n"
+                            f"handled={handled}"
                         )
                         if handled:
                             self.logger.log_info(
