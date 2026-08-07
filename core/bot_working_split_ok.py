@@ -660,6 +660,38 @@ class SoroushAntiSpamBot:
                     f"normalized={text!r}\n"
                     f"is_broadcast_command={is_broadcast_command(raw_text)}"
                 )
+                # Restore the original reliable private route: do not wait for
+                # get_chat(), peer classification, or event.out. A DM is
+                # routed using event.is_private and its actual sender exactly
+                # as the original broadcast implementation did.
+                if getattr(event, "is_private", False):
+                    private_sender = await event.get_sender()
+                    private_sender_id = getattr(private_sender, "id", None)
+                    private_is_owner = is_global_owner(private_sender_id)
+                    private_state = get_broadcast_state(private_sender_id)
+                    private_trigger = is_broadcast_command(raw_text)
+                    self.logger.log_info(
+                        "BROADCAST COMMAND RECEIVED\n"
+                        f"owner_id={private_sender_id}\n"
+                        f"text={raw_text!r}\n"
+                        f"trigger={private_trigger}\n"
+                        f"owner_check={private_is_owner}"
+                    )
+                    if private_is_owner and (private_trigger or private_state):
+                        handled = await handle_private_broadcast(
+                            self, event, private_sender_id, text
+                        )
+                        if handled:
+                            self.logger.log_info(
+                                "BROADCAST READY "
+                                f"owner_id={private_sender_id} text={text!r}"
+                            )
+                            return
+                        self.logger.log_error(
+                            "BROADCAST ROUTE NOT HANDLED "
+                            f"owner_id={private_sender_id} text={text!r}"
+                        )
+
                 # BROADCAST TRACE: قبل از هر await ثبت می‌شود تا اگر یکی از
                 # فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
                 _broadcast_words = BROADCAST_COMMAND_WORDS

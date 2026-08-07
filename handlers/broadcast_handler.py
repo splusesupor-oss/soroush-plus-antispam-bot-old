@@ -266,6 +266,7 @@ async def _broadcast_to_groups(bot, text, entities=None, origin="unknown"):
 
 async def handle_private_broadcast(bot, event, owner_id, text):
     """Returns True only when the private message belongs to this workflow."""
+    _log_phase(bot, "BROADCAST HANDLER START", owner_id, f"text={text!r}")
     raw_text = getattr(getattr(event, "message", None), "message", None) or text or ""
     # فرمان‌ها با متن نرمال‌شده مقایسه می‌شوند تا «اطلاع‌رسانی» با نیم‌فاصله هم
     # پذیرفته شود؛ اما بدنهٔ اطلاعیه همیشه از raw_text خوانده می‌شود تا offsetهای
@@ -273,6 +274,12 @@ async def handle_private_broadcast(bot, event, owner_id, text):
     text = normalize_command_text(text if text is not None else raw_text)
     entities = _extract_message_entities(event)
     state = get(owner_id)
+    _log_phase(
+        bot,
+        "BROADCAST STATE LOADED",
+        owner_id,
+        f"present={bool(state)} phase={(state or {}).get('phase', '<none>')!r}",
+    )
 
     _log_phase(
         bot,
