@@ -18,7 +18,23 @@ def _load_pending():
     try:
         if _STATE_FILE.exists():
             data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                return {}
+            # Recover from partial/corrupt entries without breaking the
+            # private command handler for every future message.
+            valid = {}
+            for owner, state in data.items():
+                if not isinstance(state, dict):
+                    continue
+                phase = state.get("phase")
+                if phase not in {"awaiting_message", "awaiting_confirmation"}:
+                    continue
+                valid[str(owner)] = {
+                    "phase": phase,
+                    "text": state.get("text", ""),
+                    "entities": [],
+                }
+            return valid
     except (OSError, ValueError, TypeError):
         pass
     return {}

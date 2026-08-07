@@ -670,7 +670,21 @@ class SoroushAntiSpamBot:
                 # get_chat(), peer classification, or event.out. A DM is
                 # routed using event.is_private and its actual sender exactly
                 # as the original broadcast implementation did.
-                if getattr(event, "is_private", False):
+                event_chat_id_hint = getattr(event, "chat_id", None)
+                private_event = bool(
+                    getattr(event, "is_private", False)
+                    or (
+                        isinstance(event_chat_id_hint, int)
+                        and event_chat_id_hint > 0
+                    )
+                )
+                self.logger.log_info(
+                    "PRIVATE BROADCAST DEBUG\n"
+                    f"event_is_private={getattr(event, 'is_private', None)}\n"
+                    f"chat_id={event_chat_id_hint}\n"
+                    f"private_event={private_event}"
+                )
+                if private_event:
                     private_sender = await event.get_sender()
                     private_sender_id = getattr(private_sender, "id", None)
                     private_is_owner = is_global_owner(private_sender_id)
