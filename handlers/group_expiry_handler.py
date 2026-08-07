@@ -139,18 +139,20 @@ async def check_once(bot, deactivate, logger=None):
     تعداد گروه‌های بسته‌شده را برمی‌گرداند.
     """
     closed = 0
-    for key, record in due_groups():
+    due = due_groups()
+    _log(logger, f"EXPIRY CHECK due_count={len(due)}")
+    for key, record in due:
         title = record.get("title", "") or ""
+        _log(logger, "EXPIRY FOUND "
+                     f"group_id={key} expires_at={record.get('expires_at')} "
+                     f"title={title!r}")
         try:
             chat_id = int(key)
         except (TypeError, ValueError):
             chat_id = key
 
-        # ابتدا علامت‌گذاری: اگر ارسال پیام شکست بخورد هم گروه دوباره و
-        # دوباره اعلام نمی‌شود.
-        if not mark_notified(key):
-            continue
-
+        _log(logger, "EXPIRY ACTION START "
+                     f"group_id={chat_id} title={title!r}")
         try:
             deactivate(chat_id, title)
             _log(logger, f"GROUP EXPIRY DEACTIVATED chat_id={chat_id} "
@@ -165,6 +167,11 @@ async def check_once(bot, deactivate, logger=None):
             try:
                 await bot.client.send_message(
                     target, message, formatting_entities=_entities(spans))
+                if not mark_notified(key):
+                    _log_error(logger, "EXPIRY NOTIFICATION STATE FAILED "
+                                       f"group_id={key}")
+                    continue
+                _log(logger, f"EXPIRY NOTIFICATION SENT group_id={key} chat_id={target}")
                 _log(logger, f"GROUP EXPIRY NOTICE SENT chat_id={target}")
                 break
             except Exception as error:

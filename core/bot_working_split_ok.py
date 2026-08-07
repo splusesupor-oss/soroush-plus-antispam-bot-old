@@ -411,6 +411,10 @@ class SoroushAntiSpamBot:
         # ⏳ ناظر تاریخ انقضای گروه — کاملاً مستقل از بقیهٔ حلقه‌ها.
         # بدون نیاز به هیچ پیامی، دقیقاً در زمان تعیین‌شده گروه را می‌بندد.
         async def group_expiry_loop():
+            self.logger.log_info(
+                "EXPIRY WATCHER START "
+                f"interval={getattr(run_group_expiry_watcher, '__name__', 'watcher')}"
+            )
             def deactivate(group_id, title):
                 deactivate_group(group_id, title)
                 for task in self.group_timer_tasks.pop(group_id, set()):
