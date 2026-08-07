@@ -50,6 +50,12 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         _log(bot, f"PHOTO DOWNLOAD START chat_id={chat_id} user_id={user_id}")
         return True
 
+    # پیام‌های بعد از تأیید، تا پایان همان task، بخشی از جریان قبلی نیستند
+    # و نباید دوباره به handle_confirm برسند.
+    if photo_download.is_processing(chat_id, user_id):
+        _log(bot, f"PHOTO MESSAGE IGNORED while processing chat_id={chat_id} user_id={user_id}")
+        return True
+
     # ۲) اگر کاربر جریانِ فعال دارد، پیامِ او همان مرحلهٔ جریان است
     s = photo_download.session(chat_id, user_id)
     if s is None:
@@ -87,6 +93,9 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     if result == "no_session":
         return False
     if result == "start":
+        if not photo_download.begin_processing(chat_id, user_id):
+            _log(bot, f"PHOTO DUPLICATE REQUEST IGNORED chat_id={chat_id} user_id={user_id}")
+            return True
         # تأیید شد: اجرای کامل بدون بلاک کردن Event Loop.
         # دانلود/جستجو/ارسال عملیاتِ سنگین هستند؛ اجرای آن‌ها داخلِ
         # create_task باعث نمی‌شود دریافتِ پیام‌ها/WebSocket قفل شود

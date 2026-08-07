@@ -140,6 +140,7 @@ _SESSIONS = {}       # (chat_id, user_id) -> {"query": str, "ts": float}
 _GROUP_LOCKS = {}    # chat_id -> asyncio.Lock
 _BUSY_GROUPS = set()  # chat_id هایی که در حال پردازش‌اند
 _BUSY_USERS = set()   # (chat_id, user_id) هایی که در حال پردازش‌اند
+_PROCESSING = set()   # processing state set before the async task is created
 
 # کشِ جستجو: normalized_query -> (timestamp, [urls]) برایِ پاسخِ سریع به
 # عبارت‌هایِ پرتکرار. بعد از _CACHE_TTL ثانیه منقضی می‌شود.
@@ -153,6 +154,7 @@ def reset_all():
     _GROUP_LOCKS.clear()
     _BUSY_GROUPS.clear()
     _BUSY_USERS.clear()
+    _PROCESSING.clear()
     _SEARCH_CACHE.clear()
 
 
@@ -165,7 +167,25 @@ def _group_lock(chat_id):
 
 
 def is_busy(chat_id, user_id):
-    return chat_id in _BUSY_GROUPS or (chat_id, user_id) in _BUSY_USERS
+    key = (chat_id, user_id)
+    return chat_id in _BUSY_GROUPS or key in _BUSY_USERS or key in _PROCESSING
+
+
+def begin_processing(chat_id, user_id):
+    """Atomically claim the confirmed request before creating its task."""
+    key = (chat_id, user_id)
+    if key in _PROCESSING or key in _BUSY_USERS or chat_id in _BUSY_GROUPS:
+        return False
+    _PROCESSING.add(key)
+    return True
+
+
+def is_processing(chat_id, user_id):
+    return (chat_id, user_id) in _PROCESSING
+
+
+def clear_processing(chat_id, user_id):
+    _PROCESSING.discard((chat_id, user_id))
 
 
 # ---------------------------------------------------------------------------
@@ -1207,6 +1227,7 @@ async def process(chat_id, user_id, bot):
         close_session(chat_id, user_id)
         return "error", ERROR_MSG
     finally:
+        clear_processing(chat_id, user_id)
         _release_busy(chat_id, user_id)
 
 
