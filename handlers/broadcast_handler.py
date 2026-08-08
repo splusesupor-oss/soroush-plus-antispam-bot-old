@@ -21,6 +21,7 @@ Two details are easy to get wrong and are handled explicitly here:
 import asyncio
 
 from modules.broadcast_state import (
+    match_broadcast_trigger,
     acquire_broadcast_slot,
     begin,
     claim_group,
@@ -289,7 +290,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
     )
 
-    if text in {"اطلاع رسانی", "اطلاعرسانی", "اعلان"}:
+    if match_broadcast_trigger(text) is not None:
         begin(owner_id)
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(
