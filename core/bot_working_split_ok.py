@@ -12,6 +12,7 @@ from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
 from modules.group_expiry import match_command as expiry_command
 from modules.admin_tools import run_cleanup_watcher
+from modules import access_profile_guard
 from handlers.group_expiry_handler import (
     run_expiry_watcher as run_group_expiry_watcher,
 )
@@ -649,6 +650,36 @@ class SoroushAntiSpamBot:
                         f"error={_entry_error!r}"
                     )
                 raw_text = event.message.message or ""
+                # Profile access guard runs before every command/game handler.
+                profile_user = _entry_sender
+                if profile_user is not None and not is_global_owner(getattr(profile_user, "id", None)):
+                    if not any(getattr(profile_user, n, None) for n in ("about", "bio", "biography")):
+                        try:
+                            full_user = await self.client.get_full_user(profile_user)
+                            profile_user = getattr(full_user, "user", full_user)
+                        except Exception as profile_error:
+                            self.logger.log_error(
+                                f"PROFILE GUARD BIO FETCH FAILED user_id={getattr(profile_user, 'id', None)} error={profile_error!r}"
+                            )
+                    profile_reason = access_profile_guard.reason(profile_user)
+                    profile_id = getattr(profile_user, "id", getattr(_entry_sender, "id", None))
+                    if profile_reason:
+                        was_blocked = access_profile_guard.is_blocked(profile_id)
+                        access_profile_guard.block(profile_id, profile_reason)
+                        self.logger.log_info(
+                            f"PROFILE ACCESS BLOCK user_id={profile_id} reason={profile_reason!r}"
+                        )
+                        if not was_blocked:
+                            notice = "⚠️ دسترسی شما از ربات حذف شد.\\n\\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
+                            try:
+                                from splusthon.tl.types import MessageEntityBold as _ProfileBold
+                                await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
+                            except Exception:
+                                await event.reply(notice)
+                        return
+                    if access_profile_guard.is_blocked(profile_id):
+                        access_profile_guard.unblock(profile_id)
+                        self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={profile_id}")
                 # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
                 # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
                 # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
