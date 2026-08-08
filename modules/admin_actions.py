@@ -222,18 +222,35 @@ class AdminActions:
             self.logger.log_error(f"خطا در بن دائمی {user_id}: {e}")
             return False
 
-    async def send_warning(self, chat_id, username: str, reason: str, count: int, threshold: int, reply_to=None):
-        """ارسال پیام هشدار"""
+    async def send_warning(self, chat_id, username: str, reason: str, count: int,
+                           threshold: int, reply_to=None, user=None):
+        """ارسال هشدار با قالب کوتاه و entityهای واقعی SPlus."""
         if not self.config.get("send_warning", True):
             return
         try:
-            template = self.config.get("warning_message", "⚠️ @{username} پیام شما به دلیل {reason} حذف شد.")
-            msg = template.format(username=username or "کاربر", reason=reason, count=count, threshold=threshold)
-            
-            if reply_to:
-                await self.client.send_message(chat_id, msg, reply_to=reply_to)
-            else:
-                await self.client.send_message(chat_id, msg)
+            from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+
+            actual_username = getattr(user, "username", None) if user is not None else username
+            first = getattr(user, "first_name", None) if user is not None else None
+            last = getattr(user, "last_name", None) if user is not None else None
+            display = " ".join(x for x in (first, last) if x).strip()
+            name = (f"@{str(actual_username).lstrip('@')}" if actual_username
+                    else display or "کاربر ناشناس")
+            reason_text = str(reason or "نامشخص")
+            digits = str(count).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
+            max_digits = str(threshold).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
+            prefix = f"⚠️ کاربر {name}\n"
+            body = f"پیام شما حذف شد | دلیل فیلتر گروه : {reason_text}\n"
+            warning_label = "تعداد اخطار:"
+            suffix = f" {digits}/{max_digits}"
+            msg = prefix + body + warning_label + suffix
+            u16 = lambda value: len(value.encode("utf-16-le")) // 2
+            entities = [
+                MessageEntityBlockquote(offset=0, length=u16(prefix)),
+                MessageEntityBold(offset=u16(prefix + body), length=u16(warning_label)),
+            ]
+            await self.client.send_message(
+                chat_id, msg, reply_to=reply_to, formatting_entities=entities)
         except Exception as e:
             print("WARNING ERROR:", repr(e))
             self.logger.log_error(f"خطا در ارسال هشدار: {e}")

@@ -3505,10 +3505,14 @@ async def handle_new_message(bot, event):
                     chat_id, sender, "اخطار", target=user,
                     note=f"تعداد {count}")
 
-                await event.reply(
-                    f"⚠️ کاربر 「 {_format_banned_user(user, user.id)} 」\n\n"
-                    "اخطار دریافت کرد "
-                    f"تعداد اخطار: {_math_digits(count)}/{_math_digits(threshold)}"
+                await bot.admin_actions.send_warning(
+                    chat_id=chat_id,
+                    username=getattr(user, "username", None),
+                    user=user,
+                    reason="اخطار دستی",
+                    count=count,
+                    threshold=threshold,
+                    reply_to=None,
                 )
 
                 if bot.tracker.should_punish(chat_id, user.id):
@@ -3996,6 +4000,7 @@ async def handle_new_message(bot, event):
                 await bot.admin_actions.send_warning(
                     chat_id=chat_id,
                     username=username,
+                    user=sender,
                     reason=reason,
                     count=count,
                     threshold=threshold,
