@@ -90,6 +90,7 @@ _COMMAND_NORMALIZE_MAP = {
 BROADCAST_COMMAND_WORDS = frozenset({
     "اطلاع رسانی",
     "اطلاعرسانی",
+    "اعلان",
     "تایید",
     "✅ تایید",
     "تأیید",
@@ -118,7 +119,7 @@ def is_broadcast_command(text):
     if normalized in BROADCAST_COMMAND_WORDS:
         return True
     compact = "".join(normalized.split())
-    return compact in {"اطلاعرسانی", "تایید", "لغو"}
+    return compact in {"اطلاعرسانی", "اعلان", "تایید", "لغو"}
 
 
 def clear(owner_id):

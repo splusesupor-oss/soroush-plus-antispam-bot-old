@@ -289,7 +289,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
         f"entity_count={len(entities)} entities=[{_describe_entities(entities)}]",
     )
 
-    if text in {"اطلاع رسانی", "اطلاعرسانی"}:
+    if text in {"اطلاع رسانی", "اطلاعرسانی", "اعلان"}:
         begin(owner_id)
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(
