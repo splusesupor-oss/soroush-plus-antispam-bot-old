@@ -509,16 +509,30 @@ async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger):
         await _bold_reply(event, "⏳ یک حدس جمله در این گروه در جریان است؛ ابتدا همان را پاسخ دهید.")
         return True
     title = "🧩 حدس بزن:"
-    text = f"{title}\n\n> {state['question']}\n\n⏳ ۳۰ ثانیه فرصت دارید"
-    await _bold_reply(event, text, [title])
+    text = f"{title}\n\n{state['question']}\n\n⏳ ۳۰ ثانیه فرصت دارید"
+    # Quote the complete clue with Soroush Plus Blockquote, not a literal >.
+    question = state["question"]
+    entities = [
+        MessageEntityBold(offset=0, length=_u16(title)),
+        MessageEntityBlockquote(
+            offset=_u16(text[:text.index(question)]),
+            length=_u16(question),
+        ),
+    ]
+    try:
+        await event.reply(text, formatting_entities=entities)
+    except Exception:
+        await event.reply(text)
 
     async def on_timeout():
+        await asyncio.sleep(sentence_guess.TIMEOUT_SECONDS)
         result = sentence_guess.timeout(chat_id)
         if result:
             await _bold_reply(event, f"⏰ زمان تمام شد!\\n\\nجواب: {result['answer']}", ["جواب:"])
 
     import asyncio
-    asyncio.create_task(asyncio.wait_for(on_timeout(), timeout=31))
+    # The timer starts only after the question has been sent.
+    asyncio.create_task(on_timeout())
     return True
 
 
