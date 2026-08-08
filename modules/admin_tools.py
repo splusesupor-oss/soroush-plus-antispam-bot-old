@@ -655,8 +655,9 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
     lock = get_group_lock(chat_id)
     if lock.locked():
         _log(f"SKIP chat_id={chat_id} reason=delete_in_progress")
-        return
+        return False
     async with lock:
+        _log(f"START chat_id={chat_id} count={count}")
         try:
             # ۱) قفلِ گروه
             try:
@@ -714,6 +715,7 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
                        "پاکسازی خودکار",
                        note=f"{deleted} پیام حذف شد")
             _log(f"DONE chat_id={chat_id} deleted={deleted}")
+            return True
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -722,6 +724,7 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
                 await bot.group_actions.unlock_group(chat_id)
             except Exception:
                 pass
+            return False
 
 
 async def run_cleanup_watcher(bot, logger=None, interval=None):
@@ -756,11 +759,49 @@ async def run_cleanup_watcher(bot, logger=None, interval=None):
                     chat_id = int(key)
                 except (TypeError, ValueError):
                     chat_id = key
-                mark_cleanup_run(chat_id, sched)
+                # Do not mark before the job succeeds: a transient RPC or
+                # task failure must leave the durable schedule eligible for
+                # retry on the next scheduler pass.
+                active_tasks = getattr(bot, "cleanup_tasks", {}).get(chat_id, set())
+                if any(not existing.done() for existing in active_tasks):
+                    continue
                 task = asyncio.create_task(
                     execute_cleanup(
                         bot, chat_id, int(rec.get("count", 0)),
                         logger=logger))
+
+                def _cleanup_finished(done_task, group_id=chat_id, scheduled=sched):
+                    try:
+                        getattr(bot, "cleanup_tasks", {}).get(group_id, set()).discard(done_task)
+                    except Exception:
+                        pass
+                    try:
+                        succeeded = done_task.result()
+                        if succeeded:
+                            mark_cleanup_run(group_id, scheduled)
+                            if logger is not None:
+                                logger.log_info(
+                                    f"AUTO CLEANUP SCHEDULE COMMITTED "
+                                    f"chat_id={group_id} scheduled_at={scheduled}"
+                                )
+                        elif logger is not None:
+                            logger.log_error(
+                                f"AUTO CLEANUP SCHEDULE RETAINED "
+                                f"chat_id={group_id} scheduled_at={scheduled}"
+                            )
+                    except asyncio.CancelledError:
+                        if logger is not None:
+                            logger.log_error(
+                                f"AUTO CLEANUP TASK CANCELLED chat_id={group_id}"
+                            )
+                    except Exception as task_error:
+                        if logger is not None:
+                            logger.log_error(
+                                f"AUTO CLEANUP TASK CRASHED chat_id={group_id} "
+                                f"error={task_error!r}"
+                            )
+
+                task.add_done_callback(_cleanup_finished)
                 try:
                     getattr(bot, "cleanup_tasks", {}).setdefault(
                         chat_id, set()).add(task)
