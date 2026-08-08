@@ -608,7 +608,8 @@ async def _maemma_message(bot, event, chat_id, user_id, sender, text, logger):
                   game="maemma")
     # بعد از جوابِ درست فقط پیام موفقیت و جایزه نمایش داده می‌شود؛ هیچ
     # سوالِ بعدی یا پیامِ «زمان تمام شد» ارسال نمی‌شود.
-    title = "🎉 پاسخ صحیح بود!"
+    winner_name = display_name(sender)
+    title = f"🎉 {winner_name} پاسخ درست داد!"
     reward = (f"\n\n🪙 +{to_persian_digits(maemma.REWARD)} سکه برنز"
               if paid else "")
     await _bold_reply(event, f"{title}{reward}", [title, reward.strip()])

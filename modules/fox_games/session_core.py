@@ -133,10 +133,8 @@ def display_name(user):
     username = getattr(user, "username", None)
     if username:
         return f"@{str(username).lstrip('@')}"
-    user_id = getattr(user, "id", None)
-    if user_id is not None:
-        return f"بازیکن {user_id}"
-    return "بازیکن ناشناس"
+    # Never expose numeric ids in player-facing game messages.
+    return "کاربر ناشناس"
 
 
 def username_tag(user):
