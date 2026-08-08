@@ -528,7 +528,7 @@ async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger):
         await asyncio.sleep(sentence_guess.TIMEOUT_SECONDS)
         result = sentence_guess.timeout(chat_id)
         if result:
-            await _bold_reply(event, f"⏰ زمان تمام شد!\\n\\nجواب: {result['answer']}", ["جواب:"])
+            await _bold_reply(event, f"⏰ زمان تمام شد!\n\nجواب: {result['answer']}", ["جواب:"])
 
     import asyncio
     # The timer starts only after the question has been sent.
