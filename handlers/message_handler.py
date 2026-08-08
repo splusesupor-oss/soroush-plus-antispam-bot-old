@@ -871,6 +871,11 @@ async def handle_new_message(bot, event):
 
         # اطلاعات پیام
         message_text = getattr(event.message, "message", "") or ""
+        bot.logger.log_info(
+            "MESSAGE HANDLER ENTER "
+            f"chat_id={getattr(event, 'chat_id', None)} "
+            f"text={message_text!r}"
+        )
         # برای کپشن عکس/فایل هم چک کن
         if not message_text and hasattr(
                 event.message, 'file') and event.message.file:
@@ -889,7 +894,14 @@ async def handle_new_message(bot, event):
         profiler.mark("RECEIVE")
         # Independent advertising-name guard: runs before text moderation and
         # never contributes a warning or banned-word record.
-        if sender and not event.is_private and not is_global_owner(user_id):
+        command_priority = normalize_command(message_text) in {
+            "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
+            "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",
+            "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز", "اخطار",
+            "حدس ایموجی", "حدس جمله", "معما", "حدس پرچم",
+        }
+        if (sender and not event.is_private and not command_priority
+                and not is_global_owner(user_id)):
             if not admin_tools.has_admin_permission(chat_id, user_id, sender_username):
                 ad_reason = ad_name_detector.reason(sender)
                 if ad_reason:

@@ -652,7 +652,20 @@ class SoroushAntiSpamBot:
                 raw_text = event.message.message or ""
                 # Profile access guard runs before every command/game handler.
                 profile_user = _entry_sender
-                if profile_user is not None and not is_global_owner(getattr(profile_user, "id", None)):
+                command_priority_text = normalize_command_text(raw_text)
+                command_priority = command_priority_text in {
+                    "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
+                    "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها",
+                    "رتبه‌ها", "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز",
+                    "اخطار", "حدس ایموجی", "حدس جمله", "معما", "حدس پرچم",
+                }
+                self.logger.log_info(
+                    "COMMAND PRIORITY CHECK "
+                    f"text={raw_text!r} normalized={command_priority_text!r} "
+                    f"priority={command_priority}"
+                )
+                if (profile_user is not None and not command_priority
+                        and not is_global_owner(getattr(profile_user, "id", None))):
                     profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None)
                     # SoroushClient does not expose get_full_user; use only
                     # fields present on the received User entity and make the
