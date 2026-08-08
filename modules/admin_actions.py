@@ -249,7 +249,8 @@ class AdminActions:
             body = f"پیام شما حذف شد | {reason_line}\n"
             warning_label = "تعداد اخطار:"
             suffix = f" {digits}/{max_digits}"
-            msg = prefix + body + warning_label + suffix
+            # Keep one completely empty line between the reason and warning count.
+            msg = prefix + body + "\n" + warning_label + suffix
             u16 = lambda value: len(value.encode("utf-16-le")) // 2
             entities = [
                 MessageEntityBlockquote(offset=0, length=u16(prefix)),
