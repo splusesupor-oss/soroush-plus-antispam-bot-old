@@ -128,6 +128,7 @@ from modules.outgoing_profiler import (
 from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
 from modules import bot_detector
+from modules import ad_name_detector
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -886,6 +887,46 @@ async def handle_new_message(bot, event):
         user_id = sender.id if sender else 0
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
         profiler.mark("RECEIVE")
+        # Independent advertising-name guard: runs before text moderation and
+        # never contributes a warning or banned-word record.
+        if sender and not event.is_private and not is_global_owner(user_id):
+            if not admin_tools.has_admin_permission(chat_id, user_id, sender_username):
+                ad_reason = ad_name_detector.reason(sender)
+                if ad_reason:
+                    shown_name = ad_name_detector.display_name(sender)
+                    try:
+                        from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+                        notice = (
+                            "⚠️ کاربر\n"
+                            f"{shown_name}\n\n"
+                            "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
+                        )
+                        name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
+                        name_len = len(shown_name.encode("utf-16-le")) // 2
+                        bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
+                        await event.reply(notice, formatting_entities=[
+                            MessageEntityBold(offset=0, length=bold_len),
+                            MessageEntityBlockquote(offset=name_start, length=name_len),
+                        ])
+                    except Exception:
+                        await event.reply(
+                            f"⚠️ کاربر\n{shown_name}\n\n"
+                            "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
+                        )
+                    try:
+                        await bot.admin_actions.delete_message(chat_id, event=event)
+                    except Exception as error:
+                        bot.logger.log_error(f"AD NAME DELETE FAILED user_id={user_id} error={error!r}")
+                    try:
+                        await bot.admin_actions.ban_user(
+                            chat_id, user_id, reason="نام تبلیغاتی")
+                    except Exception as error:
+                        bot.logger.log_error(f"AD NAME BAN FAILED user_id={user_id} error={error!r}")
+                    bot.logger.log_info(
+                        f"AD NAME KICK user_id={user_id} chat_id={chat_id} "
+                        f"name={shown_name!r} reason={ad_reason!r}"
+                    )
+                    return
         # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
         is_bot_account = (
             user_id == getattr(bot, "bot_account_id", None)
