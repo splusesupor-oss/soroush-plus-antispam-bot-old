@@ -2,6 +2,7 @@
 اقدامات مدیریتی - حذف، سایلنت، بن
 """
 import asyncio
+import re
 from modules.group_stats import add_deleted
 from datetime import timedelta
 
@@ -236,11 +237,16 @@ class AdminActions:
             display = " ".join(x for x in (first, last) if x).strip()
             name = (f"@{str(actual_username).lstrip('@')}" if actual_username
                     else display or "کاربر ناشناس")
-            reason_text = str(reason or "نامشخص")
+            raw_reason = str(reason or "نامشخص").strip()
+            banned_match = re.match(r"^کلمه ممنوعه\s*\((.*?)\)$", raw_reason)
+            if banned_match:
+                reason_line = f"دلیل کلمه ممنوعه : ({banned_match.group(1)})"
+            else:
+                reason_line = f"دلیل فیلتر گروه : {raw_reason}"
             digits = str(count).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
             max_digits = str(threshold).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
             prefix = f"⚠️ کاربر {name}\n"
-            body = f"پیام شما حذف شد | دلیل فیلتر گروه : {reason_text}\n"
+            body = f"پیام شما حذف شد | {reason_line}\n"
             warning_label = "تعداد اخطار:"
             suffix = f" {digits}/{max_digits}"
             msg = prefix + body + warning_label + suffix
