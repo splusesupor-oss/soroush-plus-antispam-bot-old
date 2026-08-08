@@ -780,16 +780,37 @@ class SoroushAntiSpamBot:
                     and isinstance(event_chat_id, int)
                     and event_chat_id > 0
                 )
+                routing_type = routing_chat.__class__.__name__ if routing_chat is not None else "None"
+                routing_type_lower = routing_type.lower()
+                # SPlusthon has returned several private-peer class names over
+                # its lifetime. Do not rely on one exact ``User`` class.
+                routing_is_private_entity = (
+                    "user" in routing_type_lower
+                    or "private" in routing_type_lower
+                    or routing_type_lower in {"peeruser", "inputpeeruser"}
+                )
+                routing_is_group_entity = any(
+                    marker in routing_type_lower
+                    for marker in ("group", "channel", "chat")
+                )
                 is_private_splus = bool(
                     event.is_private
-                    or routing_chat.__class__.__name__ == "User"
-                    or peer_is_user
+                    or routing_is_private_entity
+                    or (peer_is_user and not routing_is_group_entity)
                     or positive_chat_id
+                )
+                self.logger.log_info(
+                    "PRIVATE ROUTE RESOLUTION DEBUG\n"
+                    f"event_is_private={getattr(event, 'is_private', None)}\n"
+                    f"event_chat_id={event_chat_id}\n"
+                    f"chat_type={routing_type}\n"
+                    f"peer_is_user={peer_is_user}\n"
+                    f"private_route={is_private_splus}"
                 )
                 if text in _broadcast_words:
                     self.logger.log_info(
                         "BROADCAST ROUTE CHAT RESOLVED "
-                        f"chat_type={routing_chat.__class__.__name__} "
+                        f"chat_type={routing_type} "
                         f"chat_id={getattr(routing_chat, 'id', None)} "
                         f"private_route={is_private_splus}"
                     )
