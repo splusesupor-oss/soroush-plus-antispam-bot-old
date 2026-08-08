@@ -87,10 +87,13 @@ _COMMAND_NORMALIZE_MAP = {
 }
 
 # هر املایی که باید دستور اطلاع‌رسانی محسوب شود، پس از نرمال‌سازی.
-BROADCAST_COMMAND_WORDS = frozenset({
+# Single source of truth for all public broadcast entry triggers.
+BROADCAST_TRIGGERS = frozenset({
     "اطلاع رسانی",
     "اطلاعرسانی",
     "اعلان",
+})
+BROADCAST_COMMAND_WORDS = frozenset(set(BROADCAST_TRIGGERS) | {
     "تایید",
     "✅ تایید",
     "تأیید",
@@ -109,17 +112,29 @@ def normalize_command_text(text):
     return " ".join(normalized.split())
 
 
-def is_broadcast_command(text):
-    """True اگر متن یکی از triggerهای اطلاع‌رسانی باشد.
+def normalize_broadcast_trigger(text):
+    """Canonical form used by every broadcast route and test."""
+    return normalize_command_text(text).strip("\"'«»،,:：؛.!؟")
 
-    علاوه بر مقایسهٔ معمول، مقایسهٔ فشرده هم انجام می‌شود تا تفاوت‌های
-    فاصله/نیم‌فاصله/کاراکترهای نامرئی بین کلاینت‌ها trigger را از بین نبرد.
-    """
-    normalized = normalize_command_text(text).strip("\"'«»،,:：؛.!؟")
-    if normalized in BROADCAST_COMMAND_WORDS:
-        return True
+
+def match_broadcast_trigger(text):
+    """Return the canonical trigger or ``None``; never depend on handler state."""
+    normalized = normalize_broadcast_trigger(text)
+    if normalized in BROADCAST_TRIGGERS:
+        return normalized
     compact = "".join(normalized.split())
-    return compact in {"اطلاعرسانی", "اعلان", "تایید", "لغو"}
+    if compact == "اطلاعرسانی":
+        return "اطلاع رسانی"
+    if compact == "اعلان":
+        return "اعلان"
+    return None
+
+
+def is_broadcast_command(text):
+    """True for a public trigger or a workflow confirmation command."""
+    return match_broadcast_trigger(text) is not None or normalize_broadcast_trigger(text) in {
+        "تایید", "✅ تایید", "تأیید", "لغو", "❌ لغو"
+    }
 
 
 def clear(owner_id):

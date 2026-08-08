@@ -46,6 +46,8 @@ from modules.broadcast_state import (
     get as get_broadcast_state,
     is_broadcast_command,
     normalize_command_text,
+    normalize_broadcast_trigger,
+    match_broadcast_trigger,
 )
 from handlers.admin_handler import handle_admin_commands
 import random
@@ -689,8 +691,17 @@ class SoroushAntiSpamBot:
                     private_sender = await event.get_sender()
                     private_sender_id = getattr(private_sender, "id", None)
                     private_is_owner = is_global_owner(private_sender_id)
+                    normalized_trigger_text = normalize_broadcast_trigger(raw_text)
+                    matched_trigger = match_broadcast_trigger(raw_text)
                     private_state = get_broadcast_state(private_sender_id)
                     private_trigger = is_broadcast_command(raw_text)
+                    self.logger.log_info(
+                        "BROADCAST TRIGGER CHECK\n"
+                        f"text={raw_text!r}\n"
+                        f"normalized_text={normalized_trigger_text!r}\n"
+                        f"matched_trigger={matched_trigger!r}\n"
+                        f"owner_check={private_is_owner}"
+                    )
                     self.logger.log_info(
                         "PRIVATE BROADCAST DEBUG\n"
                         f"user_id={private_sender_id}\n"
