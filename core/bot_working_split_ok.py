@@ -654,19 +654,20 @@ class SoroushAntiSpamBot:
                 profile_user = _entry_sender
                 if profile_user is not None and not is_global_owner(getattr(profile_user, "id", None)):
                     profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None)
-                    if not profile_bio:
-                        try:
-                            # SPlusthon may return UserFull(user=..., full_user=...)
-                            # where the biography lives on full_user.about, not
-                            # on the User entity itself.
-                            full_user = await self.client.get_full_user(profile_user)
-                            full_entity = getattr(full_user, "full_user", full_user)
-                            profile_bio = next((getattr(full_entity, n, None) for n in ("about", "bio", "biography") if getattr(full_entity, n, None)), None)
-                            profile_user = getattr(full_user, "user", profile_user)
-                        except Exception as profile_error:
-                            self.logger.log_error(
-                                f"PROFILE GUARD BIO FETCH FAILED user_id={getattr(profile_user, 'id', None)} error={profile_error!r}"
-                            )
+                    # SoroushClient does not expose get_full_user; use only
+                    # fields present on the received User entity and make the
+                    # limitation explicit in runtime logs.
+                    self.logger.log_info(
+                        "PROFILE GUARD USER INFO\n"
+                        f"username={getattr(profile_user, 'username', None)!r}\n"
+                        f"name={' '.join(str(x) for x in (getattr(profile_user, 'first_name', None), getattr(profile_user, 'last_name', None)) if x)!r}\n"
+                        f"bio={profile_bio!r}"
+                    )
+                    if profile_bio is None:
+                        self.logger.log_info(
+                            "PROFILE GUARD BIO UNAVAILABLE "
+                            "reason=SoroushClient_User_entity_has_no_about_field"
+                        )
                     profile_reason = access_profile_guard.reason(profile_user, profile_bio)
                     profile_id = getattr(profile_user, "id", getattr(_entry_sender, "id", None))
                     if profile_reason:
