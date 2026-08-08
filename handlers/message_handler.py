@@ -162,11 +162,7 @@ def _jalali_today():
 
 
 def _format_group_member(user):
-    username = getattr(user, "username", None)
-    if username:
-        return f"@{username}"
-
-    user_id = getattr(user, "id", None)
+    """Display name first; username is only a fallback, never an ID."""
     name = " ".join(
         part.strip(" |")
         for part in (
@@ -174,12 +170,12 @@ def _format_group_member(user):
             getattr(user, "last_name", None),
         )
         if part and part.strip(" |")
-    )
-
+    ).strip()
     if name:
         return name
-    if user_id is not None:
-        return f"ID: {user_id}"
+    username = getattr(user, "username", None)
+    if username and not str(username).strip().isdigit():
+        return f"@{str(username).lstrip('@')}"
     return "کاربر ناشناس"
 
 
