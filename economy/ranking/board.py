@@ -18,7 +18,7 @@ def _rows(chat_id):
         group, user_id = accounts.split_key(key)
         if group != wanted:
             continue
-        is_owner = accounts.is_main_owner(user_id)
+        is_owner = accounts.is_owner_silver_group(chat_id, user_id)
         effective_user = {**user, accounts.SILVER: accounts.OWNER_SILVER} if is_owner else user
         value = accounts.compute_total_value(effective_user)
         rows.append({
