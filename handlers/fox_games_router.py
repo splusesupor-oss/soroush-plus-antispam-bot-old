@@ -509,7 +509,7 @@ async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger):
         await _bold_reply(event, "⏳ یک حدس جمله در این گروه در جریان است؛ ابتدا همان را پاسخ دهید.")
         return True
     title = "🧩 حدس بزن:"
-    text = f"{title}\\n\\n> {state['question']}\\n\\n⏳ ۳۰ ثانیه فرصت دارید"
+    text = f"{title}\n\n> {state['question']}\n\n⏳ ۳۰ ثانیه فرصت دارید"
     await _bold_reply(event, text, [title])
 
     async def on_timeout():
