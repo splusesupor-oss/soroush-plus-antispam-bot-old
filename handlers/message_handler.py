@@ -907,7 +907,6 @@ async def handle_new_message(bot, event):
                 if ad_reason:
                     shown_name = ad_name_detector.display_name(sender)
                     try:
-                        from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
                         notice = (
                             "⚠️ کاربر\n"
                             f"{shown_name}\n\n"
