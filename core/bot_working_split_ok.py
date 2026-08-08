@@ -135,6 +135,8 @@ class SoroushAntiSpamBot:
         self.group_actions = None
         self.delete_notice_lock = set()
         self.punished_users = set()
+        # Per-user/group fast gate set as soon as severe spam is detected.
+        self.spam_lock = set()
         self.repeat_messages = {}
         self.flood_messages = {}
         self.user_messages = {}
