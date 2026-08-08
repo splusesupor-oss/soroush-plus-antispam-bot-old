@@ -960,6 +960,15 @@ async def handle_new_message(bot, event):
             f"chat_id={chat_id} user_id={user_id} text={message_text!r} "
             f"normalized={clean_text!r}"
         )
+        _legacy_commands = {
+            "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
+            "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",
+            "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز", "اخطار",
+        }
+        bot.logger.log_info(
+            "COMMAND MATCH CHECK "
+            f"command={clean_text!r} matched={clean_text in _legacy_commands}"
+        )
 
         # ------------------------------------------------------------------
         # 🤖 تشخیصِ رباتِ دیگر در گروه و غیرفعال‌سازیِ خودکارِ روباه
@@ -1098,6 +1107,8 @@ async def handle_new_message(bot, event):
         # پیش از بازی‌ها بررسی می‌شود تا گفتگوی باز منو با پاسخ بازی‌ها
         # تداخل نکند.
         # ------------------------------------------------------------------
+        if clean_text in {"موجودی", "فروشگاه", "انتقال سکه"}:
+            bot.logger.log_info(f"HANDLER CALLED handler=economy command={clean_text!r}")
         if await handle_economy(
             bot, event, chat_id, user_id, sender, clean_text, bot.logger
         ):
@@ -2336,6 +2347,7 @@ async def handle_new_message(bot, event):
 
         # لیست بازی
         if clean_text.strip() in ["لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "بازی ها", "بازی‌ها"]:
+            bot.logger.log_info(f"HANDLER CALLED handler=game_list command={clean_text!r}")
             games_text = (
                 "🎮 لیست بازی‌های روباه\n\n"
                 "🧩 چیستان\n"
@@ -2419,6 +2431,7 @@ async def handle_new_message(bot, event):
         # راهنمای ربات
         help_commands = {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی"}
         if clean_text.strip() in help_commands:
+            bot.logger.log_info(f"HANDLER CALLED handler=help command={clean_text!r}")
             # متن راهنما برای همهٔ کاربران یکسان است؛ هیچ نام یا اطلاعات
             # شخصی‌ای داخل آن قرار نمی‌گیرد. دستور «شخصیت» منطق جداگانهٔ
             # خودش را دارد و فقط نامی را تحلیل می‌کند که کاربر خودش می‌نویسد.
@@ -2598,6 +2611,7 @@ async def handle_new_message(bot, event):
             admin_marker = "👑 دستورات ادمین‌ها:\n\n"
             games_marker = "🎮 لیست بازی‌ها:\n\n"
             if clean_text.strip() == "لیست کاربران":
+                bot.logger.log_info("HANDLER CALLED handler=user_list")
                 # «لیست کاربران» فقط دستورات کاربری را نشان می‌دهد؛ بخش بازی‌ها
                 # از آن حذف می‌شود تا بازی‌ها فقط در «🎮 لیست بازی‌ها» دیده شوند.
                 pre_admin = full_help_text[:full_help_text.index(admin_marker)]
