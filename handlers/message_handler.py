@@ -3461,6 +3461,24 @@ async def handle_new_message(bot, event):
                 )
 
                 if ok:
+                    # Clear every in-memory moderation cache as well as the
+                    # persistent banned storage. Otherwise a released user
+                    # can still be treated as banned by a stale rejoin/spam
+                    # state on their next message.
+                    released_key = f"{chat_id}:{user.id}"
+                    bot.punished_users.discard(released_key)
+                    bot.tracker.banned_users.pop(released_key, None)
+                    bot.tracker.muted_users.pop(released_key, None)
+                    bot.rejoin_spam_state.pop((chat_id, user.id), None)
+                    bot.spam_burst_users.discard((chat_id, user.id))
+                    bot.spam_burst_messages.pop((chat_id, user.id), None)
+                    getattr(bot, "forward_spam_counts", {}).pop((chat_id, user.id), None)
+                    getattr(bot, "forward_spam_processing", set()).discard((chat_id, user.id))
+                    bot.logger.log_info(
+                        "USER RELEASED CACHE CLEARED "
+                        f"chat_id={chat_id} user_id={user.id} "
+                        "banned_storage=False"
+                    )
                     admin_tools.log_action(
                         chat_id, sender, "آزاد کردن کاربر", target=user)
                     await event.reply("♻️ کاربر آزاد شد ✅")
