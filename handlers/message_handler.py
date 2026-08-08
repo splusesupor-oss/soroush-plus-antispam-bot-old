@@ -1312,6 +1312,10 @@ async def handle_new_message(bot, event):
                         f"user={user_id} chat_id={chat_id} count={len(repeated_gif_ids)}"
                     )
                     bot.logger.log_info(
+                        "DELETE QUEUE SIZE "
+                        f"user={user_id} chat_id={chat_id} size={gif_pending_count(chat_id)}"
+                    )
+                    bot.logger.log_info(
                         "DELETE START "
                         f"message_ids={repeated_gif_ids!r}"
                     )
@@ -3998,6 +4002,10 @@ async def handle_new_message(bot, event):
         profiler.mark("SPAM_CHECK")
         if is_spam:
             bot.logger.log_info(
+                "SPAM DETECTED "
+                f"user={user_id} chat_id={chat_id} reason={reason!r}"
+            )
+            bot.logger.log_info(
                 "SPAM DETECT TIME "
                 f"user={user_id} chat_id={chat_id} message_id={getattr(event.message, 'id', None)}"
             )
@@ -4116,7 +4124,8 @@ async def handle_new_message(bot, event):
                 )
                 await bot.admin_actions.delete_message(chat_id, event=event)
                 bot.logger.log_info(
-                    f"DELETE FINISHED user={user_id} chat_id={chat_id} success=True"
+                    f"DELETE FINISHED user={user_id} chat_id={chat_id} success=True "
+                    "DELETE SUCCESS COUNT=1"
                 )
 
             # هشدار فقط ۵ بار
