@@ -102,6 +102,7 @@ from economy import (
 from handlers.economy_handler import handle as handle_economy
 from modules.gif_spam_detector import (
     handle_gif as handle_gif_message,
+    flush_deletes as flush_gif_deletes,
     is_gif_message,
     pending_count as gif_pending_count,
     reset_gif_history,
@@ -1307,9 +1308,22 @@ async def handle_new_message(bot, event):
                 deleted = len(repeated_gif_ids)
                 if repeated_gif_ids:
                     bot.logger.log_info(
-                        f"GIF SPAM QUEUED chat_id={chat_id} user_id={user_id} "
-                        f"ids={repeated_gif_ids} newly_flagged={newly_flagged} "
-                        f"pending={gif_pending_count(chat_id)}"
+                        "DUPLICATE GIF DETECTED "
+                        f"user={user_id} chat_id={chat_id} count={len(repeated_gif_ids)}"
+                    )
+                    bot.logger.log_info(
+                        "DELETE START "
+                        f"message_ids={repeated_gif_ids!r}"
+                    )
+                    # Drain the existing GIF queue before proceeding to the
+                    # mute queue; this prevents moderation from racing ahead
+                    # of deletion and leaving the tail visible.
+                    await _asyncio.sleep(0.4)
+                    deleted_now = await flush_gif_deletes(
+                        bot.client, chat_id, bot.logger)
+                    bot.logger.log_info(
+                        "DELETE RESULT "
+                        f"success={deleted_now == len(repeated_gif_ids)} deleted={deleted_now}"
                     )
                 if newly_flagged:
                     async def gif_mute_succeeded(_result):
