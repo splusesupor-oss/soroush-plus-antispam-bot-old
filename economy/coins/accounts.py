@@ -395,6 +395,13 @@ def set_name(chat_id, user_id, name):
 
 def get_profile(chat_id, user_id):
     """پروفایل کامل: موجودی، ارزش کل، بردها و نام."""
+    if is_main_owner(user_id):
+        data = storage.snapshot()
+        user = data.get("users", {}).get(user_key(chat_id, user_id), {})
+        profile = _owner_balance(chat_id, user_id)
+        profile["wins"] = int(user.get("wins", 0))
+        profile["name"] = user.get("name")
+        return profile
     data = storage.snapshot()
     user = data.get("users", {}).get(user_key(chat_id, user_id))
     if not user:

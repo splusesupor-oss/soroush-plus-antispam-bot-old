@@ -18,12 +18,14 @@ def _rows(chat_id):
         group, user_id = accounts.split_key(key)
         if group != wanted:
             continue
-        value = accounts.compute_total_value(user)
+        is_owner = accounts.is_main_owner(user_id)
+        effective_user = {**user, accounts.SILVER: accounts.OWNER_SILVER} if is_owner else user
+        value = accounts.compute_total_value(effective_user)
         rows.append({
             "user_id": user_id,
             "total_coin_value": value,
             "bronze": int(user.get(accounts.BRONZE, 0)),
-            "silver": int(user.get(accounts.SILVER, 0)),
+            "silver": accounts.OWNER_SILVER if is_owner else int(user.get(accounts.SILVER, 0)),
             "gold": int(user.get(accounts.GOLD, 0)),
             "name": user.get("name"),
             "wins": int(user.get("wins", 0)),
