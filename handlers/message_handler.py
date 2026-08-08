@@ -943,6 +943,11 @@ async def handle_new_message(bot, event):
             return
         # Normalize only the routing copy; keep message_text unchanged for filters.
         clean_text = normalize_command(message_text)
+        bot.logger.log_info(
+            "PUBLIC COMMAND ROUTE ENTER "
+            f"chat_id={chat_id} user_id={user_id} text={message_text!r} "
+            f"normalized={clean_text!r}"
+        )
 
         # ------------------------------------------------------------------
         # 🤖 تشخیصِ رباتِ دیگر در گروه و غیرفعال‌سازیِ خودکارِ روباه
