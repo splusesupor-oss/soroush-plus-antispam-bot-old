@@ -684,7 +684,10 @@ class SoroushAntiSpamBot:
                     f"chat_id={event_chat_id_hint}\n"
                     f"private_event={private_event}"
                 )
-                if private_event:
+                # Owner-first: privacy flags are advisory only for this
+                # workflow because the live SPlusthon stream has emitted
+                # private owner messages with is_private=False.
+                if True:
                     private_sender = await event.get_sender()
                     private_sender_id = getattr(private_sender, "id", None)
                     private_is_owner = is_global_owner(private_sender_id)
@@ -700,6 +703,14 @@ class SoroushAntiSpamBot:
                         f"owner_check={private_is_owner}"
                     )
                     self.logger.log_info(
+                        "PRIVATE OWNER CHECK\n"
+                        f"user_id={private_sender_id}\n"
+                        f"username={getattr(private_sender, 'username', None)!r}\n"
+                        f"is_owner={private_is_owner}\n"
+                        f"matched_command={private_trigger}\n"
+                        "handler_called=False"
+                    )
+                    self.logger.log_info(
                         "BROADCAST COMMAND RECEIVED\n"
                         f"owner_id={private_sender_id}\n"
                         f"text={raw_text!r}\n"
@@ -711,7 +722,7 @@ class SoroushAntiSpamBot:
                     # handler. The handler performs its own normalization and
                     # exact trigger/state decision. An outer boolean matcher
                     # must never prevent a valid spelling from reaching it.
-                    if private_is_owner:
+                    if private_is_owner and (private_trigger or private_state):
                         handled = await handle_private_broadcast(
                             self, event, private_sender_id, raw_text
                         )
