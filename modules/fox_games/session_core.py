@@ -127,7 +127,7 @@ def display_name(user):
         )
         if part and str(part).strip()
     ]
-    name = " ".join(parts).strip(" |")
+    name = " ".join(parts).replace("|", "").replace("☫", "").strip()
     if name:
         return name
     username = getattr(user, "username", None)

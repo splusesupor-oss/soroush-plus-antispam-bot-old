@@ -170,7 +170,7 @@ def _format_group_member(user):
             getattr(user, "last_name", None),
         )
         if part and part.strip(" |")
-    ).strip()
+    ).replace("|", "").replace("☫", "").strip()
     if name:
         return name
     username = getattr(user, "username", None)
