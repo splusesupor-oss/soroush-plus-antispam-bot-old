@@ -653,15 +653,21 @@ class SoroushAntiSpamBot:
                 # Profile access guard runs before every command/game handler.
                 profile_user = _entry_sender
                 if profile_user is not None and not is_global_owner(getattr(profile_user, "id", None)):
-                    if not any(getattr(profile_user, n, None) for n in ("about", "bio", "biography")):
+                    profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None)
+                    if not profile_bio:
                         try:
+                            # SPlusthon may return UserFull(user=..., full_user=...)
+                            # where the biography lives on full_user.about, not
+                            # on the User entity itself.
                             full_user = await self.client.get_full_user(profile_user)
-                            profile_user = getattr(full_user, "user", full_user)
+                            full_entity = getattr(full_user, "full_user", full_user)
+                            profile_bio = next((getattr(full_entity, n, None) for n in ("about", "bio", "biography") if getattr(full_entity, n, None)), None)
+                            profile_user = getattr(full_user, "user", profile_user)
                         except Exception as profile_error:
                             self.logger.log_error(
                                 f"PROFILE GUARD BIO FETCH FAILED user_id={getattr(profile_user, 'id', None)} error={profile_error!r}"
                             )
-                    profile_reason = access_profile_guard.reason(profile_user)
+                    profile_reason = access_profile_guard.reason(profile_user, profile_bio)
                     profile_id = getattr(profile_user, "id", getattr(_entry_sender, "id", None))
                     if profile_reason:
                         was_blocked = access_profile_guard.is_blocked(profile_id)

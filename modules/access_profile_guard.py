@@ -38,10 +38,12 @@ def _bio(user):
     return ""
 
 
-def reason(user):
+def reason(user, bio=None):
+    """Return the access-block reason from profile name/username/about."""
     text = _norm(" ".join(filter(None, [getattr(user, "first_name", ""),
                                            getattr(user, "last_name", ""),
-                                           getattr(user, "username", ""), _bio(user)])))
+                                           getattr(user, "username", ""),
+                                           bio if bio is not None else _bio(user)])))
     for term in BLOCKED_TERMS:
         if _norm(term) in text:
             return term
