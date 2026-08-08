@@ -15,6 +15,7 @@ from modules.fox_games import (
     laugh_or_lose,
     lucky_box,
     maemma,
+    sentence_guess,
     survival,
     vampire,
 )
@@ -34,6 +35,7 @@ FOX_GAME_COMMANDS = frozenset({
     "خون آشام",
     "خون‌آشام",
     "معما",
+    "حدس جمله",
     "بهترین جواب",
     "نبرد",
     "شرکت",
@@ -50,6 +52,7 @@ def any_active(chat_id):
         or best_answer.is_active(chat_id)
         or battle.is_active(chat_id)
         or maemma.is_active(chat_id)
+        or sentence_guess.is_active(chat_id)
     )
 
 
@@ -498,6 +501,43 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
 
 
 # ---------------------------------------------------------------------------
+# 🧩 حدس جمله — مستقل از «معما»
+# ---------------------------------------------------------------------------
+async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger):
+    state = sentence_guess.start(chat_id)
+    if state is None:
+        await _bold_reply(event, "⏳ یک حدس جمله در این گروه در جریان است؛ ابتدا همان را پاسخ دهید.")
+        return True
+    title = "🧩 حدس بزن:"
+    text = f"{title}\\n\\n> {state['question']}\\n\\n⏳ ۳۰ ثانیه فرصت دارید"
+    await _bold_reply(event, text, [title])
+
+    async def on_timeout():
+        result = sentence_guess.timeout(chat_id)
+        if result:
+            await _bold_reply(event, f"⏰ زمان تمام شد!\\n\\nجواب: {result['answer']}", ["جواب:"])
+
+    import asyncio
+    asyncio.create_task(asyncio.wait_for(on_timeout(), timeout=31))
+    return True
+
+
+async def _sentence_guess_message(bot, event, chat_id, user_id, sender, text, logger):
+    if not sentence_guess.is_active(chat_id):
+        return False
+    result = sentence_guess.answer(chat_id, text)
+    if result is None:
+        return True
+    name = display_name(sender)
+    paid = _coins(bot, chat_id, user_id, name, sentence_guess.REWARD, logger,
+                  reference=f"sentence_guess:{chat_id}:{result['started_at']}:{user_id}",
+                  game="maemma")
+    reward = f"\\n\\n🪙 +{to_persian_digits(sentence_guess.REWARD)} سکه برنز" if paid else ""
+    await event.reply(f"🎉 {name} پاسخ درست داد!{reward}")
+    return True
+
+
+# ---------------------------------------------------------------------------
 # 🧩 معما
 # ---------------------------------------------------------------------------
 async def _show_maemma_question(event, question, logger=None):
@@ -811,6 +851,8 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         return await _start_vampire(bot, event, chat_id, logger)
     if command == normalize_text("معما"):
         return await _start_maemma(bot, event, chat_id, user_id, sender, logger)
+    if command == normalize_text("حدس جمله"):
+        return await _start_sentence_guess(bot, event, chat_id, user_id, sender, logger)
     if command == normalize_text("بهترین جواب"):
         return await _start_best_answer(bot, event, chat_id, logger)
     if command == normalize_text("نبرد"):
@@ -819,7 +861,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     # پیام‌های درون‌بازی — هر بازی فقط session خودش را می‌بیند.
     for responder in (
         _laugh_message, _survival_message, _lucky_box_message, _vampire_message,
-        _maemma_message, _best_answer_message, _battle_message,
+        _maemma_message, _sentence_guess_message, _best_answer_message, _battle_message,
     ):
         if await responder(bot, event, chat_id, user_id, sender, text, logger):
             return True
@@ -832,5 +874,6 @@ def reset_all(chat_id=None):
     lucky_box.reset_all(chat_id)
     vampire.reset_all(chat_id)
     maemma.reset_all(chat_id)
+    sentence_guess.reset_all(chat_id)
     best_answer.reset_all(chat_id)
     battle.reset_all(chat_id)
