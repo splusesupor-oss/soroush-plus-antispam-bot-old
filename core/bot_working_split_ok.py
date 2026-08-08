@@ -687,7 +687,7 @@ class SoroushAntiSpamBot:
                 # Owner-first: privacy flags are advisory only for this
                 # workflow because the live SPlusthon stream has emitted
                 # private owner messages with is_private=False.
-                if True:
+                if private_event:
                     private_sender = await event.get_sender()
                     private_sender_id = getattr(private_sender, "id", None)
                     private_is_owner = is_global_owner(private_sender_id)
@@ -816,6 +816,22 @@ class SoroushAntiSpamBot:
                     f"event_chat_id={event_chat_id}\n"
                     f"chat_type={routing_type}\n"
                     f"peer_is_user={peer_is_user}\n"
+                    f"private_route={is_private_splus}"
+                )
+                _trace_sender = await event.get_sender()
+                _trace_sender_id = getattr(_trace_sender, "id", None)
+                _trace_owner_id = get_owner().get("user_id") if isinstance(get_owner(), dict) else None
+                _trace_owner = is_global_owner(_trace_sender_id)
+                self.logger.log_info(
+                    "PRIVATE BROADCAST TRACE "
+                    f"event_is_private={getattr(event, 'is_private', None)} "
+                    f"chat_type={routing_type} "
+                    f"sender_id={_trace_sender_id} "
+                    f"owner_id={_trace_owner_id} "
+                    f"is_owner={_trace_owner} "
+                    f"text={raw_text!r} "
+                    f"trigger={is_broadcast_command(raw_text)} "
+                    f"handler_called=False "
                     f"private_route={is_private_splus}"
                 )
                 if text in _broadcast_words:
