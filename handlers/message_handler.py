@@ -1152,7 +1152,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -2399,7 +2399,7 @@ async def handle_new_message(bot, event):
             return
 
         # راهنمای ربات
-        help_commands = {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی"}
+        help_commands = {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی"}
         if clean_text.strip() in help_commands:
             # متن راهنما برای همهٔ کاربران یکسان است؛ هیچ نام یا اطلاعات
             # شخصی‌ای داخل آن قرار نمی‌گیرد. دستور «شخصیت» منطق جداگانهٔ
@@ -2596,7 +2596,7 @@ async def handle_new_message(bot, event):
                     help_text = pre_admin[:gs] + games_intro + pre_admin[ge:]
                 else:
                     help_text = pre_admin
-            elif clean_text.strip() == "لیست ادمینی":
+            elif clean_text.strip() in {"لیست ادمین", "لیست ادمینی"}:
                 help_text = full_help_text[full_help_text.index(admin_marker):]
             else:
                 help_text = (
