@@ -3957,8 +3957,21 @@ async def handle_new_message(bot, event):
 
             save_user(chat_id, username, user_id)
 
-            print("AUTO:", repr(chat_id), type(chat_id), repr(user_id), type(user_id))
+            previous_warnings = bot.tracker.get_count(chat_id, user_id)
+            bot.logger.log_info(
+                "WARNING LOAD DEBUG\n"
+                f"user_id={user_id}\n"
+                f"group_id={chat_id}\n"
+                f"previous_warnings={previous_warnings}"
+            )
             count = bot.tracker.increment(chat_id, user_id)
+            bot.logger.log_info(
+                "WARNING LOAD DEBUG\n"
+                f"user_id={user_id}\n"
+                f"group_id={chat_id}\n"
+                f"previous_warnings={previous_warnings}\n"
+                f"new_warning_count={count}"
+            )
 
             threshold = bot.config_manager.get("spam_threshold", 3)
 
