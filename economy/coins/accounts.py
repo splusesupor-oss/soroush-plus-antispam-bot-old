@@ -40,6 +40,8 @@ def chat_key(chat_id):
         return str(chat_id)
     if value <= -_CHANNEL_ID_OFFSET:
         value = abs(value) - _CHANNEL_ID_OFFSET
+    elif value <= -1000000000 and str(value).startswith("-100"):
+        value = abs(value) - 10000000000
     elif value < 0:
         value = abs(value)
     return str(value)
