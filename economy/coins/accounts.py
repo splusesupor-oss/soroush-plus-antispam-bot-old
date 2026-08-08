@@ -260,13 +260,15 @@ def _convert(chat_id, user_id, source, target, cost, gain, times, reference, not
         if ledger.is_duplicate(data, key, reference):
             return _snapshot_balance(_user(data, key))
         user = _user(data, key)
-        current = int(user.get(source, 0))
+        special_owner = is_owner_silver_group(chat_id, user_id) and source == SILVER
+        current = OWNER_SILVER if special_owner else int(user.get(source, 0))
         if current < total_cost:
             raise EconomyError(
                 f"موجودی {settings.COIN_LABELS[source]} کافی نیست: "
                 f"{current} < {total_cost}"
             )
-        user[source] = current - total_cost
+        if not special_owner:
+            user[source] = current - total_cost
         user[target] = int(user.get(target, 0)) + total_gain
         total = _refresh_total(data, user)
         ledger.record(
@@ -322,14 +324,16 @@ def transfer(chat_id, sender_id, receiver_id, coin_type, amount, *,
             }
         from_user = _user(data, sender)
         to_user = _user(data, receiver)
-        current = int(from_user.get(coin_type, 0))
+        special_owner = is_owner_silver_group(chat_id, sender_id) and coin_type == SILVER
+        current = OWNER_SILVER if special_owner else int(from_user.get(coin_type, 0))
         if current < amount:
             raise EconomyError(
                 f"موجودی {settings.COIN_LABELS[coin_type]} کافی نیست: "
                 f"{current} < {amount}"
             )
 
-        from_user[coin_type] = current - int(amount)
+        if not special_owner:
+            from_user[coin_type] = current - int(amount)
         to_user[coin_type] = int(to_user.get(coin_type, 0)) + int(amount)
         from_total = _refresh_total(data, from_user)
         to_total = _refresh_total(data, to_user)
@@ -346,7 +350,8 @@ def transfer(chat_id, sender_id, receiver_id, coin_type, amount, *,
             balance_after=_snapshot_balance(to_user), total_value=to_total,
         )
         return {
-            "sender": _snapshot_balance(from_user),
+            "sender": (_owner_balance(chat_id, sender_id)
+                       if special_owner else _snapshot_balance(from_user)),
             "receiver": _snapshot_balance(to_user),
         }
 
