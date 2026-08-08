@@ -670,7 +670,7 @@ class SoroushAntiSpamBot:
                             f"PROFILE ACCESS BLOCK user_id={profile_id} reason={profile_reason!r}"
                         )
                         if not was_blocked:
-                            notice = "⚠️ دسترسی شما از ربات حذف شد.\\n\\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
+                            notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
                             try:
                                 from splusthon.tl.types import MessageEntityBold as _ProfileBold
                                 await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
