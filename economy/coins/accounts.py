@@ -7,6 +7,7 @@
   • ثبت تاریخچه در همان تراکنش انجام می‌گیرد.
 """
 from datetime import datetime, timezone
+import logging
 
 from economy import settings, storage
 from economy.transactions import ledger
@@ -16,7 +17,7 @@ SILVER = settings.SILVER
 GOLD = settings.GOLD
 COIN_TYPES = settings.COIN_TYPES
 
-MAIN_OWNER_ID = "68421"
+MAIN_OWNER_ID = "68074059"
 OWNER_SILVER = 200000
 OWNER_SILVER_GROUPS = frozenset({"22770700", "9429374"})
 
@@ -356,6 +357,10 @@ def transfer(chat_id, sender_id, receiver_id, coin_type, amount, *,
 def get_balance(chat_id, user_id):
     """موجودی هر سه سکه به‌همراه ارزش کل."""
     if is_owner_silver_group(chat_id, user_id):
+        logging.getLogger("economy").info(
+            "OWNER BONUS BALANCE DEBUG owner=True group_match=True silver=200000 "
+            f"user_id={user_id} chat_id={chat_id}"
+        )
         return _owner_balance(chat_id, user_id)
     data = storage.snapshot()
     user = data.get("users", {}).get(user_key(chat_id, user_id))
