@@ -941,7 +941,8 @@ async def handle_new_message(bot, event):
                     f"reason=bot_account chat_id={chat_id} user_id={user_id}"
                 )
             return
-        clean_text = message_text.strip()
+        # Normalize only the routing copy; keep message_text unchanged for filters.
+        clean_text = normalize_command(message_text)
 
         # ------------------------------------------------------------------
         # 🤖 تشخیصِ رباتِ دیگر در گروه و غیرفعال‌سازیِ خودکارِ روباه
