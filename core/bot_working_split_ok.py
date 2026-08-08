@@ -671,13 +671,11 @@ class SoroushAntiSpamBot:
                 # routed using event.is_private and its actual sender exactly
                 # as the original broadcast implementation did.
                 event_chat_id_hint = getattr(event, "chat_id", None)
-                private_event = bool(
-                    getattr(event, "is_private", False)
-                    or (
-                        isinstance(event_chat_id_hint, int)
-                        and event_chat_id_hint > 0
-                    )
-                )
+                # Positive numeric ids are not sufficient: SPlusthon may use
+                # them for channel peers. The early route is only for an
+                # explicit private event; unresolved peers are classified
+                # strictly after get_chat()/peer resolution below.
+                private_event = bool(getattr(event, "is_private", False))
                 self.logger.log_info(
                     "PRIVATE BROADCAST DEBUG\n"
                     f"event_is_private={getattr(event, 'is_private', None)}\n"
@@ -786,11 +784,7 @@ class SoroushAntiSpamBot:
                 # آخرین fallback: در سروش پلاس شناسهٔ مثبت یعنی کاربر و شناسهٔ منفی
                 # یعنی گروه/کانال. فقط وقتی استفاده می‌شود که chat اصلاً resolve نشده.
                 event_chat_id = getattr(event, "chat_id", None)
-                positive_chat_id = (
-                    routing_chat is None
-                    and isinstance(event_chat_id, int)
-                    and event_chat_id > 0
-                )
+                positive_chat_id = False
                 routing_type = routing_chat.__class__.__name__ if routing_chat is not None else "None"
                 routing_type_lower = routing_type.lower()
                 # SPlusthon has returned several private-peer class names over
