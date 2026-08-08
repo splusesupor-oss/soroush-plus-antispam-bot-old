@@ -16,6 +16,13 @@ SILVER = settings.SILVER
 GOLD = settings.GOLD
 COIN_TYPES = settings.COIN_TYPES
 
+MAIN_OWNER_ID = "68421"
+OWNER_SILVER = 200000
+
+
+def is_main_owner(user_id):
+    return str(user_id) == MAIN_OWNER_ID
+
 
 class EconomyError(Exception):
     """خطای قابل‌انتظار اقتصاد (موجودی کم، ورودی نامعتبر و…)."""
@@ -120,6 +127,14 @@ def _refresh_total(data, user):
     return current
 
 
+def _owner_balance(chat_id, user_id):
+    user = storage.snapshot().get("users", {}).get(user_key(chat_id, user_id), {})
+    balance = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
+    balance[SILVER] = OWNER_SILVER
+    balance["total_coin_value"] = compute_total_value({**user, SILVER: OWNER_SILVER})
+    return balance
+
+
 def _snapshot_balance(user):
     """موجودی فعلی به‌همراه ارزش کل.
 
@@ -147,6 +162,8 @@ def add(chat_id, user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
     """
     _validate_coin(coin_type)
     _validate_amount(amount)
+    if is_main_owner(user_id) and coin_type == SILVER:
+        return _owner_balance(chat_id, user_id)
     key = user_key(chat_id, user_id)
 
     with storage.transaction() as data:
@@ -172,6 +189,8 @@ def remove(chat_id, user_id, coin_type, amount, *, kind=ledger.KIND_SPEND,
     """کسر سکه. اگر موجودی کافی نباشد ``EconomyError`` می‌دهد."""
     _validate_coin(coin_type)
     _validate_amount(amount)
+    if is_main_owner(user_id) and coin_type == SILVER:
+        return _owner_balance(chat_id, user_id)
     key = user_key(chat_id, user_id)
 
     with storage.transaction() as data:
@@ -329,6 +348,8 @@ def transfer(chat_id, sender_id, receiver_id, coin_type, amount, *,
 # ---------------------------------------------------------------------------
 def get_balance(chat_id, user_id):
     """موجودی هر سه سکه به‌همراه ارزش کل."""
+    if is_main_owner(user_id):
+        return _owner_balance(chat_id, user_id)
     data = storage.snapshot()
     user = data.get("users", {}).get(user_key(chat_id, user_id))
     if not user:
