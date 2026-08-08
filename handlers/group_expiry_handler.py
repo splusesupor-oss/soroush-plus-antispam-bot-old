@@ -177,6 +177,11 @@ async def check_once(bot, deactivate, logger=None):
             except Exception as error:
                 _log_error(logger, f"GROUP EXPIRY NOTICE FAILED "
                                    f"chat_id={target} error={error!r}")
+                error_text = f"{error!r}".upper()
+                if "404" in error_text or "NOT_FOUND" in error_text:
+                    mark_notified(key)
+                    _log_error(logger, f"EXPIRY TARGET INVALID REMOVED chat_id={target}")
+                    break
         closed += 1
     return closed
 

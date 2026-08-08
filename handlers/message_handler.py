@@ -892,6 +892,19 @@ async def handle_new_message(bot, event):
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+        spam_lock_key = (chat_id, user_id)
+        if (not event.is_private
+                and spam_lock_key in getattr(bot, "spam_lock", set())):
+            try:
+                await bot.client.delete_messages(chat_id, [event.message.id])
+            except Exception as error:
+                bot.logger.log_error(
+                    f"SPAM LOCK DELETE FAILED chat_id={chat_id} user_id={user_id} error={error!r}"
+                )
+            bot.logger.log_info(
+                f"SPAM LOCK DROP chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
+            )
+            return
         profiler.mark("RECEIVE")
         # Independent advertising-name guard: runs before text moderation and
         # never contributes a warning or banned-word record.
@@ -1330,6 +1343,10 @@ async def handle_new_message(bot, event):
                         f"success={deleted_now == len(repeated_gif_ids)} deleted={deleted_now}"
                     )
                 if newly_flagged:
+                    bot.spam_lock.add((chat_id, user_id))
+                    bot.logger.log_info(
+                        f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} reason=duplicate_gif"
+                    )
                     async def gif_mute_succeeded(_result):
                         print("USER MUTED 3600")
                         notification_key = (chat_id, user_id)
@@ -3765,6 +3782,7 @@ async def handle_new_message(bot, event):
                 target_user = await reply_msg.get_sender()
 
                 async def unmute_succeeded(_result):
+                    bot.spam_lock.discard((chat_id, getattr(target_user, "id", None)))
                     add_mute(chat_id)
                     admin_tools.log_action(
                         chat_id, sender, "رفع سکوت کاربر", target=target_user)
@@ -4103,6 +4121,11 @@ async def handle_new_message(bot, event):
             )
 
             threshold = bot.config_manager.get("spam_threshold", 3)
+            if count >= threshold:
+                bot.spam_lock.add((chat_id, user_id))
+                bot.logger.log_info(
+                    f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} count={count}"
+                )
 
             # لاگ
             # لاگ
