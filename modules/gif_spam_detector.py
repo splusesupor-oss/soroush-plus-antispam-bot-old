@@ -129,7 +129,9 @@ def track_gif(chat_id, user_id, message_id):
         GIF_COUNTER.pop(key, None)
         flag_user(chat_id, user_id)
         _STATS["threshold_hits"] += 1
-        return batch, True
+        # Keep the first GIF as the representative; only duplicates are
+        # scheduled for deletion.
+        return batch[1:], True
 
     return [], False
 
@@ -161,37 +163,41 @@ async def flush_deletes(client, chat_id, logger=None):
 
     message_ids = sorted(pending)
     deleted = 0
-    for attempt in range(1, MAX_DELETE_ATTEMPTS + 1):
-        if not message_ids:
-            break
-        try:
-            await client.delete_messages(chat_id, message_ids)
-            deleted += len(message_ids)
-            _STATS["deleted"] += len(message_ids)
-            message_ids = []
-        except Exception as error:
-            if logger is not None:
-                logger.log_error(
-                    f"GIF DELETE ATTEMPT {attempt} FAILED chat_id={chat_id} "
-                    f"count={len(message_ids)} error={error!r}"
-                )
-            if attempt == MAX_DELETE_ATTEMPTS:
-                # آخرین تلاش: تک‌تک حذف می‌کنیم تا یک پیام خراب کل دسته را
-                # از بین نبرد.
-                survivors = []
-                for message_id in message_ids:
-                    try:
-                        await client.delete_messages(chat_id, [message_id])
-                        deleted += 1
-                        _STATS["deleted"] += 1
-                    except Exception:
-                        survivors.append(message_id)
-                if survivors:
-                    _DELETE_QUEUE[chat_id].update(survivors)
-                    _STATS["failed"] += len(survivors)
-                message_ids = []
-            else:
-                await asyncio.sleep(0.2 * attempt)
+    # The API accepts at most 100 ids per request. Process every chunk
+    # independently so one oversized/failed request cannot strand the tail.
+    for start in range(0, len(message_ids), 100):
+        batch = message_ids[start:start + 100]
+        remaining = list(batch)
+        for attempt in range(1, MAX_DELETE_ATTEMPTS + 1):
+            if not remaining:
+                break
+            try:
+                await client.delete_messages(chat_id, remaining)
+                deleted += len(remaining)
+                _STATS["deleted"] += len(remaining)
+                remaining = []
+            except Exception as error:
+                if logger is not None:
+                    logger.log_error(
+                        f"GIF DELETE ATTEMPT {attempt} FAILED chat_id={chat_id} "
+                        f"count={len(remaining)} error={error!r}"
+                    )
+                if attempt < MAX_DELETE_ATTEMPTS:
+                    await asyncio.sleep(0.2 * attempt)
+        if remaining:
+            # Isolate a bad id after batch retries; survivors stay queued for
+            # the next flush rather than being silently discarded.
+            survivors = []
+            for message_id in remaining:
+                try:
+                    await client.delete_messages(chat_id, [message_id])
+                    deleted += 1
+                    _STATS["deleted"] += 1
+                except Exception:
+                    survivors.append(message_id)
+            if survivors:
+                _DELETE_QUEUE[chat_id].update(survivors)
+                _STATS["failed"] += len(survivors)
     return deleted
 
 
