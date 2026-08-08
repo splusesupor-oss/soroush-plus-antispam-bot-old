@@ -3595,15 +3595,24 @@ async def handle_new_message(bot, event):
                     chat_id, sender, "اخطار", target=user,
                     note=f"تعداد {count}")
 
-                await bot.admin_actions.send_warning(
-                    chat_id=chat_id,
-                    username=getattr(user, "username", None),
-                    user=user,
-                    reason="اخطار دستی",
-                    count=count,
-                    threshold=threshold,
-                    reply_to=None,
+                manual_name = _format_group_member(user)
+                manual_header = f"⚠️ کاربر {manual_name}"
+                manual_text = (
+                    f"{manual_header}\n\n"
+                    "یک اخطار دستی دریافت کرد\n\n"
+                    f"تعداد اخطار: {_math_digits(count)}/{_math_digits(threshold)}"
                 )
+                header_u16 = len(manual_header.encode("utf-16-le")) // 2
+                try:
+                    await event.reply(
+                        manual_text,
+                        formatting_entities=[
+                            MessageEntityBlockquote(offset=0, length=header_u16)
+                        ]
+                    )
+                except Exception:
+                    # Formatting failure must not affect warning persistence.
+                    await event.reply(manual_text)
 
                 if bot.tracker.should_punish(chat_id, user.id):
                     async def warning_punish_succeeded(_result):
