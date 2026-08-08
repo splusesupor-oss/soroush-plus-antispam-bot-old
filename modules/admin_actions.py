@@ -239,8 +239,11 @@ class AdminActions:
                     else display or "کاربر ناشناس")
             raw_reason = str(reason or "نامشخص").strip()
             banned_match = re.match(r"^کلمه ممنوعه\s*\((.*?)\)$", raw_reason)
+            group_filter_match = re.match(r"^فیلتر گروه\s*\((.*?)\)$", raw_reason)
             if banned_match:
                 reason_line = f"دلیل کلمه ممنوعه : ({banned_match.group(1)})"
+            elif group_filter_match:
+                reason_line = f"دلیل فیلتر گروه : ({group_filter_match.group(1)})"
             else:
                 reason_line = f"دلیل فیلتر گروه : {raw_reason}"
             digits = str(count).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
