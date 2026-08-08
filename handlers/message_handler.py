@@ -3997,6 +3997,10 @@ async def handle_new_message(bot, event):
 
         profiler.mark("SPAM_CHECK")
         if is_spam:
+            bot.logger.log_info(
+                "SPAM DETECT TIME "
+                f"user={user_id} chat_id={chat_id} message_id={getattr(event.message, 'id', None)}"
+            )
             profiler.mark("AUTO_MODERATION")
             rejoin_state = getattr(bot, "rejoin_spam_state", {}).get(
                 (chat_id, user_id), {}
@@ -4106,7 +4110,14 @@ async def handle_new_message(bot, event):
 
             # حذف پیام
             if bot.config_manager.get("delete_spam", True):
+                bot.logger.log_info(
+                    "DELETE START "
+                    f"user={user_id} chat_id={chat_id} message_ids={[getattr(event.message, 'id', None)]}"
+                )
                 await bot.admin_actions.delete_message(chat_id, event=event)
+                bot.logger.log_info(
+                    f"DELETE FINISHED user={user_id} chat_id={chat_id} success=True"
+                )
 
             # هشدار فقط ۵ بار
             if count <= 5:
@@ -4132,7 +4143,12 @@ async def handle_new_message(bot, event):
                         f"⚠️ کاربر {username}({user_id}) به آستانه {threshold} رسید - اعمال مجازات"
                     )
 
+                    bot.logger.log_info(
+                        "PUNISH START "
+                        f"user={user_id} chat_id={chat_id} action={bot.config_manager.get('action_on_threshold')}"
+                    )
                     async def threshold_punish_succeeded(_result):
+                        bot.logger.log_info(f"MUTE FINISHED user={user_id} chat_id={chat_id} success=True")
                         permanent = bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
                         if count >= 5 and permanent:
                             await _send_moderation_notification_once(
@@ -4148,6 +4164,10 @@ async def handle_new_message(bot, event):
                     async def threshold_punish_failed(_error):
                         bot.punished_users.discard(punish_key)
 
+                    bot.logger.log_info(
+                        "MUTE START "
+                        f"user={user_id} chat_id={chat_id}"
+                    )
                     bot.moderation_queue.enqueue(
                         chat_id,
                         "punish",
