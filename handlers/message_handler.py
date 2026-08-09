@@ -3568,12 +3568,24 @@ async def handle_new_message(bot, event):
                 )
 
                 if ok:
+                    before_spam = bot.tracker.get_count(chat_id, user.id)
+                    before_warning = before_spam
+                    bot.logger.log_info(
+                        "UNBAN STATE BEFORE\n"
+                        f"user_id={user.id}\n"
+                        f"group_id={chat_id}\n"
+                        "is_banned=False\n"
+                        f"spam_count={before_spam}\n"
+                        f"warning_count={before_warning}"
+                    )
                     # Clear every in-memory moderation cache as well as the
                     # persistent banned storage. Otherwise a released user
                     # can still be treated as banned by a stale rejoin/spam
                     # state on their next message.
                     released_key = f"{chat_id}:{user.id}"
                     bot.punished_users.discard(released_key)
+                    bot.tracker.reset_count(chat_id, user.id)
+                    getattr(bot, "spam_lock", set()).discard((chat_id, user.id))
                     bot.tracker.banned_users.pop(released_key, None)
                     bot.tracker.muted_users.pop(released_key, None)
                     bot.rejoin_spam_state.pop((chat_id, user.id), None)
@@ -3581,6 +3593,15 @@ async def handle_new_message(bot, event):
                     bot.spam_burst_messages.pop((chat_id, user.id), None)
                     getattr(bot, "forward_spam_counts", {}).pop((chat_id, user.id), None)
                     getattr(bot, "forward_spam_processing", set()).discard((chat_id, user.id))
+                    after_spam = bot.tracker.get_count(chat_id, user.id)
+                    bot.logger.log_info(
+                        "UNBAN STATE AFTER\n"
+                        f"user_id={user.id}\n"
+                        f"group_id={chat_id}\n"
+                        "is_banned=False\n"
+                        f"spam_count={after_spam}\n"
+                        f"warning_count={after_spam}"
+                    )
                     bot.logger.log_info(
                         "USER RELEASED CACHE CLEARED "
                         f"chat_id={chat_id} user_id={user.id} "
