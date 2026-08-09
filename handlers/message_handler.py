@@ -114,7 +114,7 @@ from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.admin_storage import add_admin, remove_admin, is_admin, load_admins
-from modules.banned_storage import add_banned, load_banned, save_banned
+from modules.banned_storage import add_banned, load_banned, save_banned, is_banned
 from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
 from modules.owner_greetings import registered_owner_greeting_response
@@ -891,6 +891,16 @@ async def handle_new_message(bot, event):
         chat_id = getattr(event_chat, "id", event.chat_id)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
+        status_key = f"{chat_id}:{user_id}"
+        status_banned = is_banned(chat_id, user_id, getattr(sender, "username", None)) or bot.tracker.is_banned(chat_id, user_id) or ((chat_id, user_id) in getattr(bot, "spam_lock", set()))
+        status_muted = bot.tracker.is_muted(chat_id, user_id)
+        bot.logger.log_info(
+            "USER MODERATION STATUS "
+            f"user_id={user_id} group_id={chat_id} "
+            f"is_banned={status_banned} is_muted={status_muted} "
+            f"warning_count={bot.tracker.get_count(chat_id, user_id)} "
+            f"spam_count={bot.tracker.get_count(chat_id, user_id)}"
+        )
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
         spam_lock_key = (chat_id, user_id)
         if (not event.is_private
@@ -3803,7 +3813,23 @@ async def handle_new_message(bot, event):
                 target_user = await reply_msg.get_sender()
 
                 async def unmute_succeeded(_result):
-                    bot.spam_lock.discard((chat_id, getattr(target_user, "id", None)))
+                    target_id = getattr(target_user, "id", None)
+                    target_key = f"{chat_id}:{target_id}"
+                    getattr(bot, "spam_lock", set()).discard((chat_id, target_id))
+                    bot.punished_users.discard(target_key)
+                    bot.tracker.muted_users.pop(target_key, None)
+                    bot.tracker.banned_users.pop(target_key, None)
+                    bot.tracker.reset_count(chat_id, target_id)
+                    bot.rejoin_spam_state.pop((chat_id, target_id), None)
+                    bot.spam_burst_users.discard((chat_id, target_id))
+                    bot.spam_burst_messages.pop((chat_id, target_id), None)
+                    getattr(bot, "forward_spam_counts", {}).pop((chat_id, target_id), None)
+                    getattr(bot, "forward_spam_processing", set()).discard((chat_id, target_id))
+                    bot.logger.log_info(
+                        "UNMUTE STATE CLEARED "
+                        f"user_id={target_id} group_id={chat_id} "
+                        "is_banned=False is_muted=False warning_count=0 spam_count=0"
+                    )
                     add_mute(chat_id)
                     admin_tools.log_action(
                         chat_id, sender, "رفع سکوت کاربر", target=target_user)
