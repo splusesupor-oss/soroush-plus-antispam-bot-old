@@ -899,6 +899,8 @@ async def handle_new_message(bot, event):
         bot.logger.log_info(
             "MESSAGE HANDLER ENTER "
             f"chat_id={getattr(event, 'chat_id', None)} "
+            f"user_id={getattr(getattr(event, 'sender', None), 'id', None)} "
+            f"message_id={getattr(event.message, 'id', None)} "
             f"text={message_text!r}"
         )
         # برای کپشن عکس/فایل هم چک کن
@@ -950,6 +952,10 @@ async def handle_new_message(bot, event):
             bot.logger.log_info(
                 f"SPAM LOCK DROP chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
             )
+            bot.logger.log_info(
+                "EARLY RETURN DEBUG reason=spam_lock "
+                f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
+            )
             return
         profiler.mark("RECEIVE")
         # Independent advertising-name guard: runs before text moderation and
@@ -997,6 +1003,10 @@ async def handle_new_message(bot, event):
                         f"AD NAME KICK user_id={user_id} chat_id={chat_id} "
                         f"name={shown_name!r} reason={ad_reason!r}"
                     )
+                    bot.logger.log_info(
+                        "EARLY RETURN DEBUG reason=ad_name_guard "
+                        f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
+                    )
                     return
         # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
         is_bot_account = (
@@ -1011,6 +1021,10 @@ async def handle_new_message(bot, event):
                     "NAME FAMILY TRACE HANDLER_BLOCK "
                     f"reason=bot_account chat_id={chat_id} user_id={user_id}"
                 )
+            bot.logger.log_info(
+                "EARLY RETURN DEBUG reason=bot_account "
+                f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
+            )
             return
         # Normalize only the routing copy; keep message_text unchanged for filters.
         clean_text = normalize_command(message_text)
