@@ -952,6 +952,22 @@ async def handle_new_message(bot, event):
             bot.logger.log_info(
                 f"SPAM LOCK DROP chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
             )
+            locked_ids = message_tracker.spam_snapshot(
+                chat_id, user_id, getattr(event.message, "id", None)
+            )
+            deleted_locked, remaining_locked = await cleanup_spam_messages(
+                bot, chat_id, user_id, set(locked_ids)
+            )
+            finalize_spam_wave(
+                chat_id, user_id, len(locked_ids),
+                deleted_locked, remaining_locked
+            )
+            bot.logger.log_info(
+                "SPAM LOCK CLEANUP "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"requested={len(locked_ids)} deleted={deleted_locked} "
+                f"remaining={len(remaining_locked)}"
+            )
             bot.logger.log_info(
                 "EARLY RETURN DEBUG reason=spam_lock "
                 f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
