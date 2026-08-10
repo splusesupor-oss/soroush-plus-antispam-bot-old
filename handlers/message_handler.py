@@ -251,14 +251,19 @@ async def _reward_game_reply(event, chat_id, user_id, user, game,
 def _format_banned_user(user, user_id):
     username = getattr(user, "username", None) if user else None
     if username:
-        return f"@{username}"
-
+        # sanitize username: remove newlines and extra spaces
+        username = str(username).strip().lstrip("@").replace("\n", "").replace("\r", "").strip()
+        if username:
+            return f"@{username}"
     display_name = " ".join(
         part for part in (
             getattr(user, "first_name", None) if user else None,
             getattr(user, "last_name", None) if user else None,
         ) if part
-    ).strip()
+    )
+    # sanitize display_name: remove newlines, |, ☫ and extra spaces
+    display_name = display_name.replace("\n", " ").replace("\r", " ").replace("|", " ").replace("☫", " ").strip()
+    display_name = " ".join(display_name.split())
     return display_name or str(user_id)
 
 
@@ -1959,7 +1964,7 @@ async def handle_new_message(bot, event):
                             bot, chat_id, user_id, "spam_ban", event.message.id,
                             "⚠️ کاربر ⏌ "
                             f"{_format_banned_user(sender, user_id)}"
-                            " ⎾\\n\\nبه دلیل هرزنامه از گروه اخراج شد.",
+                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                         )
                         bot.logger.log_info(
                             "SPAM SNAPSHOT BEFORE CLEANUP "
@@ -2687,7 +2692,7 @@ async def handle_new_message(bot, event):
             return
 
         # راهنمای ربات
-        help_commands = {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی"}
+        help_commands = {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی"}
         if clean_text.strip() in help_commands:
             bot.logger.log_info(f"HANDLER CALLED handler=help command={clean_text!r}")
             # متن راهنما برای همهٔ کاربران یکسان است؛ هیچ نام یا اطلاعات
@@ -2886,7 +2891,7 @@ async def handle_new_message(bot, event):
                     help_text = pre_admin[:gs] + games_intro + pre_admin[ge:]
                 else:
                     help_text = pre_admin
-            elif clean_text.strip() in {"لیست ادمین", "لیست ادمینی"}:
+            elif clean_text.strip() == "لیست ادمینی":
                 help_text = full_help_text[full_help_text.index(admin_marker):]
             else:
                 help_text = (
