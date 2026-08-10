@@ -3795,6 +3795,56 @@ async def handle_new_message(bot, event):
                     bot.spam_burst_messages.pop((chat_id, user.id), None)
                     getattr(bot, "forward_spam_counts", {}).pop((chat_id, user.id), None)
                     getattr(bot, "forward_spam_processing", set()).discard((chat_id, user.id))
+                    # === FIX: robust clearing for already_punished / is_repeat / spam_history after unban ===
+                    # First spam flow is already correct, this only ensures second wave after unban is treated as new.
+                    try:
+                        from modules.group_id import normalize_group_id as _norm_gid
+                        _norm = _norm_gid(chat_id)
+                        _str_gid = str(chat_id)
+                        # clear punished_users for any representation of this user (raw, normalized, str)
+                        for _k in list(getattr(bot, "punished_users", set())):
+                            if _k.endswith(f":{user.id}") or _k.endswith(f":{str(user.id)}"):
+                                # keep only those matching this user, remove to allow re-punishment
+                                # To avoid clearing other groups unintentionally, only discard if chat part matches current group in any form
+                                _chat_part = _k.split(":")[0]
+                                if _chat_part in (str(chat_id), _norm, _str_gid):
+                                    bot.punished_users.discard(_k)
+                        for _gid in (chat_id, _norm, _str_gid):
+                            for _k in (f"{_gid}:{user.id}", f"{_gid}:{str(user.id)}", f"{str(_gid)}:{user.id}"):
+                                bot.tracker.banned_users.pop(_k, None)
+                                bot.tracker.muted_users.pop(_k, None)
+                            # tuples
+                            for _t in ((_gid, user.id), (_norm, user.id), (_str_gid, user.id), (str(_gid), user.id), (_gid, str(user.id))):
+                                try:
+                                    getattr(bot, "spam_lock", set()).discard(_t)
+                                except: pass
+                                bot.rejoin_spam_state.pop(_t, None)
+                                bot.spam_burst_users.discard(_t)
+                                bot.spam_burst_messages.pop(_t, None)
+                                getattr(bot, "forward_spam_counts", {}).pop(_t, None)
+                                try:
+                                    getattr(bot, "forward_spam_processing", set()).discard(_t)
+                                except: pass
+                        # also ensure spam_history and tracker history cleared for normalized variants
+                        try:
+                            clear_user(_norm, user.id)
+                        except: pass
+                        try:
+                            clear_user(_str_gid, user.id)
+                        except: pass
+                        try:
+                            message_tracker.clear_user_history(_norm, user.id)
+                        except: pass
+                        try:
+                            message_tracker.clear_user_history(_str_gid, user.id)
+                        except: pass
+                        try:
+                            bot.tracker.reset_count(_norm, user.id)
+                        except: pass
+                    except Exception as _e:
+                        try:
+                            bot.logger.log_error(f"UNBAN ROBUST CLEAR FAILED { _e!r}")
+                        except: pass
                     after_spam = bot.tracker.get_count(chat_id, user.id)
                     bot.logger.log_info(
                         "UNBAN STATE AFTER\n"
