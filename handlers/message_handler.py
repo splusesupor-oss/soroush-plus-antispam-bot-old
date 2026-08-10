@@ -1829,15 +1829,8 @@ async def handle_new_message(bot, event):
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
                     bot.spam_lock.add((chat_id, user_id))
-                    # Severe spam cleanup is based on the complete per-user
-                    # history, not only the current text or current message.
-                    tracked = message_tracker.get_user_recent_messages(
-                        chat_id, user_id
-                    )
-                    ids = [row["message_id"] for row in tracked]
-                    bot.logger.log_info(
-                        "SPAM LEVEL level=severe user="
-                        f"{user_id} chat_id={chat_id} detected_ids={len(ids)}"
+                    ids = message_tracker.spam_snapshot(
+                        chat_id, user_id, getattr(event.message, "id", None)
                     )
                     bot.logger.log_info(
                         "SPAM HISTORY SNAPSHOT "
@@ -1845,43 +1838,35 @@ async def handle_new_message(bot, event):
                         f"count={len(ids)} ids={ids!r}"
                     )
                     bot.logger.log_info(
-                        "SPAM DELETE START "
-                        f"chat_id={chat_id} user_id={user_id} "
-                        f"count={len(ids)} ids={ids!r}"
+                        "PUNISHMENT TRIGGERED user="
+                        f"{user_id} action=ban"
                     )
-                    # Start deletion immediately and independently; the ban
-                    # queue must not wait for the cleanup task.
-                    bot.logger.log_info(
-                        f"SPAM STORED IDS = {len(ids)} user={user_id} chat_id={chat_id}"
-                    )
-                    bot.logger.log_info(
-                        f"DELETE QUEUE SIZE user={user_id} size={len(ids)}"
-                    )
-                    # Preserve the legacy moderation notice before cleanup;
-                    # cleanup itself remains the single deletion path.
-                    await _send_moderation_notification_once(
-                        bot, chat_id, user_id, "spam_ban", event.message.id,
-                        "⚠️ کاربر ⏌ "
-                        f"{_format_banned_user(sender, user_id)}"
-                        " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
-                    )
-                    deleted_count, remaining_ids = await cleanup_spam_messages(
-                        bot, chat_id, user_id, set(ids)
-                    )
-                    finalize_spam_wave(
-                        chat_id, user_id, len(ids),
-                        deleted_count, remaining_ids
-                    )
-                    if remaining_ids:
-                        bot.logger.log_error(
-                            f"SPAM CLEANUP INCOMPLETE user={user_id} remaining={remaining_ids!r}"
-                        )
-                    if remaining_ids:
-                        return
+
                     async def repeat_history_ban_succeeded(_result):
                         bot.logger.log_info(
                             f"PUNISHMENT RESULT user={user_id} success=True"
                         )
+                        await _send_moderation_notification_once(
+                            bot, chat_id, user_id, "spam_ban", event.message.id,
+                            "⚠️ کاربر ⏌ "
+                            f"{_format_banned_user(sender, user_id)}"
+                            " ⎾\\n\\nبه دلیل هرزنامه از گروه اخراج شد.",
+                        )
+                        deleted_count, remaining_ids = await cleanup_spam_messages(
+                            bot, chat_id, user_id, set(ids)
+                        )
+                        finalize_spam_wave(
+                            chat_id, user_id, len(ids),
+                            deleted_count, remaining_ids
+                        )
+                        if deleted_count:
+                            await event.reply(
+                                f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
+                            )
+                        if remaining_ids:
+                            bot.logger.log_error(
+                                f"SPAM CLEANUP INCOMPLETE user={user_id} remaining={remaining_ids!r}"
+                            )
 
                     async def repeat_history_ban_failed(_error):
                         bot.punished_users.discard(punish_key)
@@ -4234,23 +4219,13 @@ async def handle_new_message(bot, event):
                         message_id=event.message.id
                     )
 
-                    repeated_rows = message_tracker.get_user_recent_messages(
-                        chat_id, user_id
+                    repeated_ids = message_tracker.spam_snapshot(
+                        chat_id, user_id, getattr(event.message, "id", None)
                     )
-                    repeated_ids = [
-                        row["message_id"] for row in repeated_rows
-                        if isinstance(row.get("message_id"), int)
-                        and row["message_id"] > 0
-                    ]
-                    if event.message.id not in repeated_ids:
-                        repeated_ids.append(event.message.id)
                     bot.logger.log_info(
                         "SPAM HISTORY SNAPSHOT "
                         f"chat_id={chat_id} user_id={user_id} "
                         f"count={len(repeated_ids)} ids={repeated_ids!r}"
-                    )
-                    await cleanup_spam_messages(
-                        bot, chat_id, user_id, set(repeated_ids)
                     )
 
                     if hasattr(bot.admin_actions, "ban_user"):
@@ -4265,6 +4240,17 @@ async def handle_new_message(bot, event):
                                     f"{_format_banned_user(sender, user_id)}"
                                     " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                                 )
+                                deleted_count, remaining_ids = await cleanup_spam_messages(
+                                    bot, chat_id, user_id, set(repeated_ids)
+                                )
+                                finalize_spam_wave(
+                                    chat_id, user_id, len(repeated_ids),
+                                    deleted_count, remaining_ids
+                                )
+                                if deleted_count:
+                                    await event.reply(
+                                        f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
+                                    )
 
                             async def repeat_ban_failed(_error):
                                 bot.punished_users.discard(punish_key)
