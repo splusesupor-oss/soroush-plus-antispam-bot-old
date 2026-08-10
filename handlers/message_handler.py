@@ -4304,14 +4304,11 @@ async def handle_new_message(bot, event):
 
             # حذف پیام
             if bot.config_manager.get("delete_spam", True):
-                # The unified source is the complete recent history for this
-                # user/group; do not narrow it to only the current text.
                 spam_rows = message_tracker.get_user_recent_messages(
                     chat_id, user_id
                 )
                 spam_ids = [
-                    row["message_id"]
-                    for row in spam_rows
+                    row["message_id"] for row in spam_rows
                     if isinstance(row.get("message_id"), int)
                     and row["message_id"] > 0
                 ]
@@ -4319,42 +4316,23 @@ async def handle_new_message(bot, event):
                 if current_message_id and current_message_id not in spam_ids:
                     spam_ids.append(current_message_id)
                 bot.logger.log_info(
-                    "SPAM DELETE DECISION "
+                    "SPAM CLEANUP IDS DEBUG "
                     f"chat_id={chat_id} user_id={user_id} "
-                    f"history_count={len(spam_ids)} "
-                    f"history_ids={spam_ids!r} "
-                    f"current_message_id={getattr(event.message, 'id', None)} "
-                    f"using_bulk={len(spam_ids) >= 3}"
+                    f"count={len(spam_ids)} ids={spam_ids!r}"
                 )
-                if len(spam_ids) >= 3:
-                    bot.logger.log_info(
-                        "SPAM HISTORY SNAPSHOT "
-                        f"chat_id={chat_id} user_id={user_id} "
-                        f"current_message_id={current_message_id} "
-                        f"history_count={len(spam_ids)} ids={spam_ids!r}"
+                deleted_count, remaining_ids = await _delete_spam_ids(
+                    bot, chat_id, user_id, set(spam_ids)
+                )
+                if remaining_ids:
+                    bot.logger.log_error(
+                        f"SPAM DELETE INCOMPLETE stored={len(spam_ids)} "
+                        f"deleted={deleted_count} remaining={len(remaining_ids)}"
                     )
-                    bot.logger.log_info(f"SPAM STORED IDS = {len(spam_ids)} user={user_id} chat_id={chat_id}")
-                    bot.logger.log_info(
-                        "SPAM DELETE START "
-                        f"chat_id={chat_id} user_id={user_id} "
-                        f"count={len(spam_ids)} ids={spam_ids!r}"
-                    )
-                    deleted_count, remaining_ids = await _delete_spam_ids(bot, chat_id, user_id, set(spam_ids))
-                    bot.logger.log_info(f"SPAM DELETE COUNT = {deleted_count} user={user_id} chat_id={chat_id}")
-                    if remaining_ids:
-                        bot.logger.log_error(f"SPAM DELETE INCOMPLETE stored={len(spam_ids)} deleted={deleted_count} remaining={len(remaining_ids)}")
-                    if deleted_count:
-                        await event.reply(f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد")
-                    if not remaining_ids and deleted_count == len(spam_ids):
-                        message_tracker.clear_user_history(chat_id, user_id)
-                else:
-                    bot.logger.log_info(
-                        "DELETE START "
-                        f"user={user_id} chat_id={chat_id} message_ids={[getattr(event.message, 'id', None)]}"
-                    )
-                    await bot.admin_actions.delete_message(chat_id, event=event)
-                    bot.logger.log_info(
-                        f"DELETE FINISHED user={user_id} chat_id={chat_id} success=True DELETE SUCCESS COUNT=1"
+                if not remaining_ids and deleted_count == len(spam_ids):
+                    message_tracker.clear_user_history(chat_id, user_id)
+                if deleted_count:
+                    await event.reply(
+                        f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
                     )
 
             # هشدار فقط ۵ بار
