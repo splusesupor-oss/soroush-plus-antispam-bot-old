@@ -4244,15 +4244,26 @@ async def handle_new_message(bot, event):
 
             # حذف پیام
             if bot.config_manager.get("delete_spam", True):
-                bot.logger.log_info(
-                    "DELETE START "
-                    f"user={user_id} chat_id={chat_id} message_ids={[getattr(event.message, 'id', None)]}"
-                )
-                await bot.admin_actions.delete_message(chat_id, event=event)
-                bot.logger.log_info(
-                    f"DELETE FINISHED user={user_id} chat_id={chat_id} success=True "
-                    "DELETE SUCCESS COUNT=1"
-                )
+                spam_rows = message_tracker.find_spam_messages(chat_id, user_id, message_text)
+                spam_ids = [row["message_id"] for row in spam_rows]
+                if len(spam_ids) >= 3:
+                    bot.logger.log_info(f"SPAM STORED IDS = {len(spam_ids)} user={user_id} chat_id={chat_id}")
+                    deleted_count, remaining_ids = await _delete_spam_ids(bot, chat_id, user_id, set(spam_ids))
+                    bot.logger.log_info(f"SPAM DELETE COUNT = {deleted_count} user={user_id} chat_id={chat_id}")
+                    if remaining_ids:
+                        bot.logger.log_error(f"SPAM DELETE INCOMPLETE stored={len(spam_ids)} deleted={deleted_count} remaining={len(remaining_ids)}")
+                    if deleted_count:
+                        await event.reply(f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد")
+                    message_tracker.clear_user_history(chat_id, user_id)
+                else:
+                    bot.logger.log_info(
+                        "DELETE START "
+                        f"user={user_id} chat_id={chat_id} message_ids={[getattr(event.message, 'id', None)]}"
+                    )
+                    await bot.admin_actions.delete_message(chat_id, event=event)
+                    bot.logger.log_info(
+                        f"DELETE FINISHED user={user_id} chat_id={chat_id} success=True DELETE SUCCESS COUNT=1"
+                    )
 
             # هشدار فقط ۵ بار
             if count <= 5:
