@@ -130,6 +130,7 @@ from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
 from modules import bot_detector
 from modules import ad_name_detector
+from modules import message_tracker
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -976,6 +977,10 @@ async def handle_new_message(bot, event):
                     f"reason=bot_account chat_id={chat_id} user_id={user_id}"
                 )
             return
+        # Fast in-memory tracking happens before routing/moderation.
+        message_tracker.add_message(
+            chat_id, user_id, getattr(event.message, "id", None), message_text
+        )
         # Normalize only the routing copy; keep message_text unchanged for filters.
         clean_text = normalize_command(message_text)
         bot.logger.log_info(
@@ -1767,7 +1772,10 @@ async def handle_new_message(bot, event):
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
                     bot.spam_lock.add((chat_id, user_id))
-                    ids = get_message_ids(chat_id, user_id)
+                    tracked = message_tracker.find_spam_messages(
+                        chat_id, user_id, message_text
+                    )
+                    ids = [row["message_id"] for row in tracked]
                     bot.logger.log_info(
                         "SPAM LEVEL level=severe user="
                         f"{user_id} chat_id={chat_id} detected_ids={len(ids)}"
@@ -1792,6 +1800,8 @@ async def handle_new_message(bot, event):
                             bot.logger.log_info(
                                 f"SPAM CLEANUP FINISHED = {not remaining_ids} user={user_id} chat_id={chat_id}"
                             )
+                            if not remaining_ids:
+                                message_tracker.clear_user_history(chat_id, user_id)
                         except Exception as cleanup_error:
                             bot.logger.log_error(
                                 f"SPAM CLEANUP CALLBACK FAILED user={user_id} error={cleanup_error!r}"
