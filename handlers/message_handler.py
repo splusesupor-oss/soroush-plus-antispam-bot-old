@@ -1766,9 +1766,21 @@ async def handle_new_message(bot, event):
                         return
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
+                    bot.spam_lock.add((chat_id, user_id))
                     ids = get_message_ids(chat_id, user_id)
+                    bot.logger.log_info(
+                        "SPAM LEVEL level=severe user="
+                        f"{user_id} chat_id={chat_id} detected_ids={len(ids)}"
+                    )
+                    # Start deletion immediately and independently; the ban
+                    # queue must not wait for the cleanup task.
+                    cleanup_task = _asyncio.create_task(
+                        _delete_spam_ids(bot, chat_id, user_id, set(ids))
+                    )
+                    bot.logger.log_info(
+                        f"DELETE QUEUE SIZE user={user_id} size={len(ids)}"
+                    )
                     async def repeat_history_ban_succeeded(_result):
-                        _queue_spam_burst_deletion(bot, chat_id, user_id, set(ids))
                         await _send_moderation_notification_once(
                             bot, chat_id, user_id, "spam_ban", event.message.id,
                             "⚠️ کاربر ⏌ "
@@ -1780,6 +1792,10 @@ async def handle_new_message(bot, event):
                         bot.punished_users.discard(punish_key)
                         bot.spam_burst_users.discard((chat_id, user_id))
 
+                    bot.logger.log_info(
+                        "PUNISHMENT TRIGGERED user="
+                        f"{user_id} action=ban"
+                    )
                     bot.moderation_queue.enqueue(
                         chat_id,
                         "ban",
