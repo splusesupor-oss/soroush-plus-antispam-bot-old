@@ -65,7 +65,7 @@ class AdminActions:
 
     async def mute_user(self, chat_id, user_id, duration_seconds=None):
         return await self._run_moderation_with_timeout(
-            "mute", user_id, 15, self._mute_user_rpc(chat_id, user_id, duration_seconds)
+            "mute", user_id, 45, self._mute_user_rpc(chat_id, user_id, duration_seconds)
         )
 
     async def _mute_user_rpc(self, chat_id, user_id, duration_seconds=None):
@@ -151,7 +151,7 @@ class AdminActions:
 
     async def ban_user(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:
         return await self._run_moderation_with_timeout(
-            "ban", user_id, 20, self._ban_user_rpc(chat_id, user_id, reason)
+            "ban", user_id, 45, self._ban_user_rpc(chat_id, user_id, reason)
         )
 
     async def _ban_user_rpc(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:

@@ -162,7 +162,11 @@ class ModerationQueue:
         """deadline هر کوشش و تنها یک retry پس از FloodWait در همان worker."""
         for attempt in range(_MAX_FLOOD_WAIT_RETRIES + 1):
             try:
-                return await asyncio.wait_for(job.operation(), timeout=job.timeout_seconds)
+                # Ban/mute RPCs often contain entity resolution plus two
+                # permission calls; the old 20s outer deadline cancelled a
+                # still-running punishment and left only the warning.
+                deadline = max(job.timeout_seconds, 45.0) if job.action in {"punish", "ban", "mute"} else job.timeout_seconds
+                return await asyncio.wait_for(job.operation(), timeout=deadline)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
