@@ -384,7 +384,7 @@ def finalize_spam_wave(chat_id, user_id, requested, deleted, remaining):
 
 
 async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
-    """Delete every tracked spam id independently; failed ids remain pending."""
+    """Delete every tracked spam id in batches of 100 for speed; failed ids remain pending."""
     pending = sorted({i for i in ids if isinstance(i, int) and i > 0})
     requested = len(pending)
     deleted = 0
@@ -395,34 +395,58 @@ async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
         f"current_message_id={pending[-1] if pending else None} source=cleanup_spam_messages"
     )
     bot.logger.log_info(
-        f"SPAM DELETE START total_ids={requested} ids={pending!r}"
+        f"SPAM DELETE START total_ids={requested} ids={pending!r} batch_size={batch_size}"
     )
-    for message_id in pending:
+    # Process in batches of batch_size (100) for speed when 100-500 messages
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start:start + batch_size]
         success = False
         last_error = None
         for attempt in range(1, 4):
             try:
-                await bot.client.delete_messages(chat_id, [message_id])
+                await bot.client.delete_messages(chat_id, batch)
                 success = True
-                deleted += 1
-                bot.logger.log_info(
-                    f"SPAM DELETE ITEM message_id={message_id} success=True"
-                )
+                deleted += len(batch)
+                for message_id in batch:
+                    bot.logger.log_info(
+                        f"SPAM DELETE ITEM message_id={message_id} success=True"
+                    )
                 break
             except Exception as error:
                 last_error = error
                 bot.logger.log_error(
-                    f"SPAM DELETE ITEM message_id={message_id} "
-                    f"attempt={attempt} error={error!r}"
+                    f"SPAM DELETE BATCH attempt={attempt} batch={batch!r} error={error!r}"
                 )
                 if attempt < 3:
                     await _asyncio.sleep(0.2 * attempt)
         if not success:
-            remaining.append(message_id)
-            bot.logger.log_error(
-                f"SPAM DELETE ITEM message_id={message_id} success=False "
-                f"error={last_error!r}"
-            )
+            # Fallback to individual deletes for this batch to isolate failures
+            for message_id in batch:
+                ind_success = False
+                ind_error = None
+                for attempt in range(1, 4):
+                    try:
+                        await bot.client.delete_messages(chat_id, [message_id])
+                        ind_success = True
+                        deleted += 1
+                        bot.logger.log_info(
+                            f"SPAM DELETE ITEM message_id={message_id} success=True"
+                        )
+                        break
+                    except Exception as error:
+                        ind_error = error
+                        bot.logger.log_error(
+                            f"SPAM DELETE ITEM message_id={message_id} "
+                            f"attempt={attempt} error={error!r}"
+                        )
+                        if attempt < 3:
+                            await _asyncio.sleep(0.2 * attempt)
+                if not ind_success:
+                    remaining.append(message_id)
+                    bot.logger.log_error(
+                        f"SPAM DELETE ITEM message_id={message_id} success=False "
+                        f"error={ind_error!r}"
+                    )
     bot.logger.log_info(
         f"SPAM DELETE FINISHED requested={requested} deleted={deleted} "
         f"remaining={len(remaining)}"

@@ -4,7 +4,7 @@ import re
 import time
 from modules.group_id import normalize_group_id
 
-_MAX = 100
+_MAX = 500
 _WINDOW = 120
 _HISTORY = defaultdict(lambda: deque(maxlen=_MAX))
 
