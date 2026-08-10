@@ -374,6 +374,15 @@ def _track_group_timer(bot, chat_id, task):
     return task
 
 
+def finalize_spam_wave(chat_id, user_id, requested, deleted, remaining):
+    """Clear both spam histories only after complete cleanup."""
+    if remaining or deleted != requested:
+        return False
+    message_tracker.clear_user_history(chat_id, user_id)
+    clear_user(chat_id, user_id)
+    return True
+
+
 async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
     """Delete every tracked spam id independently; failed ids remain pending."""
     pending = sorted({i for i in ids if isinstance(i, int) and i > 0})
@@ -505,7 +514,7 @@ async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
     )
     if deleted:
         await event.reply(f"🗑 {_math_digits(deleted)} پیام هرزنامه پاک شد")
-    clear_user(chat_id, user_id)
+    finalize_spam_wave(chat_id, user_id, len(ids), deleted, remaining)
 
 
 async def get_activation_admin_info(bot, chat_id):
@@ -1812,8 +1821,10 @@ async def handle_new_message(bot, event):
                             f"requested={len(existing_ids)} deleted={deleted_existing} "
                             f"remaining={len(remaining_existing)}"
                         )
-                        if not remaining_existing:
-                            message_tracker.clear_user_history(chat_id, user_id)
+                        finalize_spam_wave(
+                            chat_id, user_id, len(existing_ids),
+                            deleted_existing, remaining_existing
+                        )
                         return
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
@@ -1857,9 +1868,11 @@ async def handle_new_message(bot, event):
                     deleted_count, remaining_ids = await cleanup_spam_messages(
                         bot, chat_id, user_id, set(ids)
                     )
-                    if not remaining_ids:
-                        message_tracker.clear_user_history(chat_id, user_id)
-                    else:
+                    finalize_spam_wave(
+                        chat_id, user_id, len(ids),
+                        deleted_count, remaining_ids
+                    )
+                    if remaining_ids:
                         bot.logger.log_error(
                             f"SPAM CLEANUP INCOMPLETE user={user_id} remaining={remaining_ids!r}"
                         )
@@ -4336,8 +4349,10 @@ async def handle_new_message(bot, event):
                         f"SPAM DELETE INCOMPLETE stored={len(spam_ids)} "
                         f"deleted={deleted_count} remaining={len(remaining_ids)}"
                     )
-                if not remaining_ids and deleted_count == len(spam_ids):
-                    message_tracker.clear_user_history(chat_id, user_id)
+                finalize_spam_wave(
+                    chat_id, user_id, len(spam_ids),
+                    deleted_count, remaining_ids
+                )
                 if deleted_count:
                     await event.reply(
                         f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"

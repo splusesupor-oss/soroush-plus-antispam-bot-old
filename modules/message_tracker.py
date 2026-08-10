@@ -43,6 +43,17 @@ def find_spam_messages(chat_id, user_id, text=None, window=_WINDOW):
             and (target is None or row["text"] == target)]
 
 
+def spam_snapshot(chat_id, user_id, current_message_id=None):
+    """Return one authoritative recent ID snapshot for every spam branch."""
+    ids = [
+        row["message_id"] for row in get_user_recent_messages(chat_id, user_id)
+        if isinstance(row.get("message_id"), int) and row["message_id"] > 0
+    ]
+    if current_message_id and current_message_id not in ids:
+        ids.append(current_message_id)
+    return list(dict.fromkeys(ids))
+
+
 def clear_user_history(chat_id, user_id):
     _HISTORY.pop(_key(chat_id, user_id), None)
 
