@@ -1772,8 +1772,10 @@ async def handle_new_message(bot, event):
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
                     bot.spam_lock.add((chat_id, user_id))
-                    tracked = message_tracker.find_spam_messages(
-                        chat_id, user_id, message_text
+                    # Severe spam cleanup is based on the complete per-user
+                    # history, not only the current text or current message.
+                    tracked = message_tracker.get_user_recent_messages(
+                        chat_id, user_id
                     )
                     ids = [row["message_id"] for row in tracked]
                     bot.logger.log_info(
@@ -1796,6 +1798,9 @@ async def handle_new_message(bot, event):
                             deleted_count, remaining_ids = done.result()
                             bot.logger.log_info(
                                 f"SPAM DELETE COUNT = {deleted_count} user={user_id} chat_id={chat_id}"
+                            )
+                            bot.logger.log_info(
+                                f"SPAM CLEANUP user_id={user_id} deleted_messages={deleted_count}"
                             )
                             bot.logger.log_info(
                                 f"SPAM CLEANUP FINISHED = {not remaining_ids} user={user_id} chat_id={chat_id}"
