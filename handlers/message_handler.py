@@ -374,7 +374,7 @@ def _track_group_timer(bot, chat_id, task):
     return task
 
 
-async def _delete_spam_ids(bot, chat_id, user_id, ids, *, batch_size=100):
+async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
     """Delete every tracked spam id independently; failed ids remain pending."""
     pending = sorted({i for i in ids if isinstance(i, int) and i > 0})
     requested = len(pending)
@@ -383,7 +383,7 @@ async def _delete_spam_ids(bot, chat_id, user_id, ids, *, batch_size=100):
     bot.logger.log_info(
         "SPAM CLEANUP ENTRY "
         f"chat_id={chat_id} user_id={user_id} "
-        f"current_message_id={pending[-1] if pending else None} source=_delete_spam_ids"
+        f"current_message_id={pending[-1] if pending else None} source=cleanup_spam_messages"
     )
     bot.logger.log_info(
         f"SPAM DELETE START total_ids={requested} ids={pending!r}"
@@ -447,7 +447,7 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
                     "SPAM CLEANUP START "
                     f"group_id={chat_id} user_id={user_id} detected_count={detected}"
                 )
-                removed, remaining = await _delete_spam_ids(bot, chat_id, user_id, ids)
+                removed, remaining = await cleanup_spam_messages(bot, chat_id, user_id, ids)
                 deleted += removed
                 if remaining:
                     bot.spam_burst_messages.setdefault(key, set()).update(remaining)
@@ -486,13 +486,13 @@ async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
         f"group_id={chat_id} user_id={user_id} "
         f"first_message_id={min(ids)} detected_count={len(ids)}"
     )
-    deleted, remaining = await _delete_spam_ids(bot, chat_id, user_id, ids)
+    deleted, remaining = await cleanup_spam_messages(bot, chat_id, user_id, ids)
     # Messages arriving while the serial deletion was running are included by
     # the burst queue; drain them before clearing the user's history.
     key = (chat_id, user_id)
     queued = set(bot.spam_burst_messages.get(key, set()))
     if queued:
-        extra_deleted, extra_remaining = await _delete_spam_ids(
+        extra_deleted, extra_remaining = await cleanup_spam_messages(
             bot, chat_id, user_id, queued
         )
         deleted += extra_deleted
@@ -1804,7 +1804,7 @@ async def handle_new_message(bot, event):
                             f"chat_id={chat_id} user_id={user_id} "
                             f"ids_count={len(existing_ids)} ids={sorted(existing_ids)!r}"
                         )
-                        deleted_existing, remaining_existing = await _delete_spam_ids(
+                        deleted_existing, remaining_existing = await cleanup_spam_messages(
                             bot, chat_id, user_id, existing_ids
                         )
                         bot.logger.log_info(
@@ -1843,31 +1843,20 @@ async def handle_new_message(bot, event):
                     bot.logger.log_info(
                         f"SPAM STORED IDS = {len(ids)} user={user_id} chat_id={chat_id}"
                     )
-                    cleanup_task = _asyncio.create_task(
-                        _delete_spam_ids(bot, chat_id, user_id, set(ids))
-                    )
                     bot.logger.log_info(
                         f"DELETE QUEUE SIZE user={user_id} size={len(ids)}"
                     )
-                    def _spam_cleanup_done(done):
-                        try:
-                            deleted_count, remaining_ids = done.result()
-                            bot.logger.log_info(
-                                f"SPAM DELETE COUNT = {deleted_count} user={user_id} chat_id={chat_id}"
-                            )
-                            bot.logger.log_info(
-                                f"SPAM CLEANUP user_id={user_id} deleted_messages={deleted_count}"
-                            )
-                            bot.logger.log_info(
-                                f"SPAM CLEANUP FINISHED = {not remaining_ids} user={user_id} chat_id={chat_id}"
-                            )
-                            if not remaining_ids:
-                                message_tracker.clear_user_history(chat_id, user_id)
-                        except Exception as cleanup_error:
-                            bot.logger.log_error(
-                                f"SPAM CLEANUP CALLBACK FAILED user={user_id} error={cleanup_error!r}"
-                            )
-                    cleanup_task.add_done_callback(_spam_cleanup_done)
+                    deleted_count, remaining_ids = await cleanup_spam_messages(
+                        bot, chat_id, user_id, set(ids)
+                    )
+                    if not remaining_ids:
+                        message_tracker.clear_user_history(chat_id, user_id)
+                    else:
+                        bot.logger.log_error(
+                            f"SPAM CLEANUP INCOMPLETE user={user_id} remaining={remaining_ids!r}"
+                        )
+                    if remaining_ids:
+                        return
                     async def repeat_history_ban_succeeded(_result):
                         await _send_moderation_notification_once(
                             bot, chat_id, user_id, "spam_ban", event.message.id,
@@ -4240,7 +4229,7 @@ async def handle_new_message(bot, event):
                         f"chat_id={chat_id} user_id={user_id} "
                         f"count={len(repeated_ids)} ids={repeated_ids!r}"
                     )
-                    await _delete_spam_ids(
+                    await cleanup_spam_messages(
                         bot, chat_id, user_id, set(repeated_ids)
                     )
 
@@ -4334,7 +4323,7 @@ async def handle_new_message(bot, event):
                     f"chat_id={chat_id} user_id={user_id} "
                     f"count={len(spam_ids)} ids={spam_ids!r}"
                 )
-                deleted_count, remaining_ids = await _delete_spam_ids(
+                deleted_count, remaining_ids = await cleanup_spam_messages(
                     bot, chat_id, user_id, set(spam_ids)
                 )
                 if remaining_ids:
