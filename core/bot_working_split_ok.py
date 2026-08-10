@@ -622,6 +622,12 @@ class SoroushAntiSpamBot:
 
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
+            self.logger.log_info(
+                "RAW MESSAGE EVENT RECEIVED "
+                f"chat_id={getattr(event, 'chat_id', None)} "
+                f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
+                f"event_out={getattr(event, 'out', None)}"
+            )
             # ⛑️ نگهبان سراسری هندلر پیام.
             #
             # کل بدنهٔ این تابع بدون try بود؛ هر استثنا در همان خطوط اول
