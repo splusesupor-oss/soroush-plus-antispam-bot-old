@@ -978,9 +978,15 @@ async def handle_new_message(bot, event):
                 )
             return
         # Fast in-memory tracking happens before routing/moderation.
-        message_tracker.add_message(
+        tracked_ok = message_tracker.add_message(
             chat_id, user_id, getattr(event.message, "id", None), message_text
         )
+        if tracked_ok:
+            bot.logger.log_info(
+                "SPAM TRACK ADD "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"message_id={getattr(event.message, 'id', None)}"
+            )
         # Normalize only the routing copy; keep message_text unchanged for filters.
         clean_text = normalize_command(message_text)
         bot.logger.log_info(
@@ -4245,7 +4251,11 @@ async def handle_new_message(bot, event):
 
             # حذف پیام
             if bot.config_manager.get("delete_spam", True):
-                spam_rows = message_tracker.find_spam_messages(chat_id, user_id, message_text)
+                # The unified source is the complete recent history for this
+                # user/group; do not narrow it to only the current text.
+                spam_rows = message_tracker.get_user_recent_messages(
+                    chat_id, user_id
+                )
                 spam_ids = [row["message_id"] for row in spam_rows]
                 if len(spam_ids) >= 3:
                     bot.logger.log_info(f"SPAM STORED IDS = {len(spam_ids)} user={user_id} chat_id={chat_id}")
