@@ -381,6 +381,11 @@ async def _delete_spam_ids(bot, chat_id, user_id, ids, *, batch_size=100):
     deleted = 0
     remaining = []
     bot.logger.log_info(
+        "SPAM CLEANUP ENTRY "
+        f"chat_id={chat_id} user_id={user_id} "
+        f"current_message_id={pending[-1] if pending else None} source=_delete_spam_ids"
+    )
+    bot.logger.log_info(
         f"SPAM DELETE START total_ids={requested} ids={pending!r}"
     )
     for message_id in pending:
