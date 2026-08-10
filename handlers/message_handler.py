@@ -1775,6 +1775,31 @@ async def handle_new_message(bot, event):
                     punish_key = f"{chat_id}:{user_id}"
                     _log_ban_execution(bot, chat_id, user_id, "اسپم تکراری")
                     if punish_key in bot.punished_users:
+                        tracked_existing = message_tracker.get_user_recent_messages(
+                            chat_id, user_id
+                        )
+                        existing_ids = {
+                            row["message_id"] for row in tracked_existing
+                            if isinstance(row.get("message_id"), int)
+                            and row["message_id"] > 0
+                        }
+                        if event.message.id not in existing_ids:
+                            existing_ids.add(event.message.id)
+                        bot.logger.log_info(
+                            "SPAM BULK CLEANUP BEFORE PUNISH "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"ids_count={len(existing_ids)} ids={sorted(existing_ids)!r}"
+                        )
+                        deleted_existing, remaining_existing = await _delete_spam_ids(
+                            bot, chat_id, user_id, existing_ids
+                        )
+                        bot.logger.log_info(
+                            "SPAM BULK CLEANUP RESULT "
+                            f"requested={len(existing_ids)} deleted={deleted_existing} "
+                            f"remaining={len(remaining_existing)}"
+                        )
+                        if not remaining_existing:
+                            message_tracker.clear_user_history(chat_id, user_id)
                         return
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
