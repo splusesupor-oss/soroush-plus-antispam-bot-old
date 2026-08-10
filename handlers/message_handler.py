@@ -3990,6 +3990,20 @@ async def handle_new_message(bot, event):
 
                 if punish_key not in bot.punished_users:
                     bot.punished_users.add(punish_key)
+                    bot.logger.log_info(
+                        "SPAM DETECTED "
+                        f"user={user_id} chat_id={chat_id} reason=heavy_repeat"
+                    )
+                    await _cleanup_heavy_spam_history(bot, event, chat_id, user_id)
+                    await bot.admin_actions.send_warning(
+                        chat_id=chat_id,
+                        username=username,
+                        user=sender,
+                        reason="اسپم تکراری شدید",
+                        count=bot.tracker.get_count(chat_id, user_id),
+                        threshold=bot.config_manager.get("spam_threshold", 3),
+                        reply_to=None,
+                    )
 
                     async def heavy_repeat_succeeded(_result):
                         if bot.config_manager.get("action_on_threshold") in ["ban", "kick"]:
@@ -3999,8 +4013,6 @@ async def handle_new_message(bot, event):
                                 f"{_format_banned_user(sender, user_id)}"
                                 " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                             )
-                        await _cleanup_heavy_spam_history(bot, event, chat_id, user_id)
-
                     async def heavy_repeat_failed(_error):
                         bot.punished_users.discard(punish_key)
 
