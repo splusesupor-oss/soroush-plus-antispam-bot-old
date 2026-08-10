@@ -1774,12 +1774,29 @@ async def handle_new_message(bot, event):
                     )
                     # Start deletion immediately and independently; the ban
                     # queue must not wait for the cleanup task.
+                    bot.logger.log_info(
+                        f"SPAM STORED IDS = {len(ids)} user={user_id} chat_id={chat_id}"
+                    )
                     cleanup_task = _asyncio.create_task(
                         _delete_spam_ids(bot, chat_id, user_id, set(ids))
                     )
                     bot.logger.log_info(
                         f"DELETE QUEUE SIZE user={user_id} size={len(ids)}"
                     )
+                    def _spam_cleanup_done(done):
+                        try:
+                            deleted_count, remaining_ids = done.result()
+                            bot.logger.log_info(
+                                f"SPAM DELETE COUNT = {deleted_count} user={user_id} chat_id={chat_id}"
+                            )
+                            bot.logger.log_info(
+                                f"SPAM CLEANUP FINISHED = {not remaining_ids} user={user_id} chat_id={chat_id}"
+                            )
+                        except Exception as cleanup_error:
+                            bot.logger.log_error(
+                                f"SPAM CLEANUP CALLBACK FAILED user={user_id} error={cleanup_error!r}"
+                            )
+                    cleanup_task.add_done_callback(_spam_cleanup_done)
                     async def repeat_history_ban_succeeded(_result):
                         await _send_moderation_notification_once(
                             bot, chat_id, user_id, "spam_ban", event.message.id,
@@ -4011,14 +4028,10 @@ async def handle_new_message(bot, event):
                         f"user={user_id} chat_id={chat_id} reason=heavy_repeat"
                     )
                     await _cleanup_heavy_spam_history(bot, event, chat_id, user_id)
-                    await bot.admin_actions.send_warning(
-                        chat_id=chat_id,
-                        username=username,
-                        user=sender,
-                        reason="اسپم تکراری شدید",
-                        count=bot.tracker.get_count(chat_id, user_id),
-                        threshold=bot.config_manager.get("spam_threshold", 3),
-                        reply_to=None,
+                    bot.logger.log_info(
+                        "SPAM ACTION TYPE = severe\n"
+                        "WARNING_SKIPPED = true\n"
+                        "PUNISHMENT_STARTED = true"
                     )
 
                     async def heavy_repeat_succeeded(_result):
