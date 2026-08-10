@@ -463,8 +463,17 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
 
 
 async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
-    history = get_user_history(chat_id, user_id) or []
-    ids = {item.get("message_id") for item in history}
+    # Use the single authoritative runtime tracker; spam_history is retained
+    # for repeat detection but must not be the cleanup source.
+    history = message_tracker.get_user_recent_messages(chat_id, user_id)
+    ids = {
+        item.get("message_id") for item in history
+        if isinstance(item.get("message_id"), int)
+        and item.get("message_id") > 0
+    }
+    current_id = getattr(event.message, "id", None)
+    if current_id:
+        ids.add(current_id)
     if not ids:
         bot.logger.log_error(
             "SPAM CLEANUP VERIFY "
