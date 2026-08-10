@@ -386,7 +386,7 @@ async def _delete_spam_ids(bot, chat_id, user_id, ids, *, batch_size=100):
         for attempt in range(1, 4):
             try:
                 bot.logger.log_info(
-                    "SPAM CLEANUP BATCH "
+                    "SPAM DELETE BATCH "
                     f"group_id={chat_id} user_id={user_id} "
                     f"batch_number={batch_number} batch_size={len(batch)}"
                 )
@@ -1787,6 +1787,16 @@ async def handle_new_message(bot, event):
                     bot.logger.log_info(
                         "SPAM LEVEL level=severe user="
                         f"{user_id} chat_id={chat_id} detected_ids={len(ids)}"
+                    )
+                    bot.logger.log_info(
+                        "SPAM HISTORY SNAPSHOT "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"count={len(ids)} ids={ids!r}"
+                    )
+                    bot.logger.log_info(
+                        "SPAM DELETE START "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"count={len(ids)} ids={ids!r}"
                     )
                     # Start deletion immediately and independently; the ban
                     # queue must not wait for the cleanup task.
@@ -4258,7 +4268,17 @@ async def handle_new_message(bot, event):
                 )
                 spam_ids = [row["message_id"] for row in spam_rows]
                 if len(spam_ids) >= 3:
+                    bot.logger.log_info(
+                        "SPAM HISTORY SNAPSHOT "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"count={len(spam_ids)} ids={spam_ids!r}"
+                    )
                     bot.logger.log_info(f"SPAM STORED IDS = {len(spam_ids)} user={user_id} chat_id={chat_id}")
+                    bot.logger.log_info(
+                        "SPAM DELETE START "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"count={len(spam_ids)} ids={spam_ids!r}"
+                    )
                     deleted_count, remaining_ids = await _delete_spam_ids(bot, chat_id, user_id, set(spam_ids))
                     bot.logger.log_info(f"SPAM DELETE COUNT = {deleted_count} user={user_id} chat_id={chat_id}")
                     if remaining_ids:
