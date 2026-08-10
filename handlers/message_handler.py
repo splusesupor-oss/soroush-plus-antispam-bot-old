@@ -926,6 +926,18 @@ async def handle_new_message(bot, event):
             f"spam_count={bot.tracker.get_count(chat_id, user_id)}"
         )
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+        # Track every incoming group message before the spam-lock early drop;
+        # otherwise messages after the first threshold hit never enter history.
+        tracked_ok = message_tracker.add_message(
+            chat_id, user_id, getattr(event.message, "id", None), message_text
+        )
+        if tracked_ok:
+            bot.logger.log_info(
+                "SPAM TRACK ADD "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"message_id={getattr(event.message, 'id', None)} "
+                f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
+            )
         spam_lock_key = (chat_id, user_id)
         if (not event.is_private
                 and spam_lock_key in getattr(bot, "spam_lock", set())):
@@ -1000,17 +1012,6 @@ async def handle_new_message(bot, event):
                     f"reason=bot_account chat_id={chat_id} user_id={user_id}"
                 )
             return
-        # Fast in-memory tracking happens before routing/moderation.
-        tracked_ok = message_tracker.add_message(
-            chat_id, user_id, getattr(event.message, "id", None), message_text
-        )
-        if tracked_ok:
-            bot.logger.log_info(
-                "SPAM TRACK ADD "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"message_id={getattr(event.message, 'id', None)} "
-                f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
-            )
         # Normalize only the routing copy; keep message_text unchanged for filters.
         clean_text = normalize_command(message_text)
         bot.logger.log_info(
@@ -1851,6 +1852,15 @@ async def handle_new_message(bot, event):
                             "⚠️ کاربر ⏌ "
                             f"{_format_banned_user(sender, user_id)}"
                             " ⎾\\n\\nبه دلیل هرزنامه از گروه اخراج شد.",
+                        )
+                        bot.logger.log_info(
+                            "SPAM SNAPSHOT BEFORE CLEANUP "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"count={len(ids)} ids={ids!r}"
+                        )
+                        bot.logger.log_info(
+                            "SPAM SNAPSHOT BEFORE CLEANUP "
+                            f"chat_id={chat_id} user_id={user_id} count={len(ids)} ids={ids!r}"
                         )
                         deleted_count, remaining_ids = await cleanup_spam_messages(
                             bot, chat_id, user_id, set(ids)
@@ -4240,6 +4250,11 @@ async def handle_new_message(bot, event):
                                     f"{_format_banned_user(sender, user_id)}"
                                     " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
                                 )
+                                bot.logger.log_info(
+                                    "SPAM SNAPSHOT BEFORE CLEANUP "
+                                    f"chat_id={chat_id} user_id={user_id} "
+                                    f"count={len(repeated_ids)} ids={repeated_ids!r}"
+                                )
                                 deleted_count, remaining_ids = await cleanup_spam_messages(
                                     bot, chat_id, user_id, set(repeated_ids)
                                 )
@@ -4328,6 +4343,10 @@ async def handle_new_message(bot, event):
                     "SPAM CLEANUP IDS DEBUG "
                     f"chat_id={chat_id} user_id={user_id} "
                     f"count={len(spam_ids)} ids={spam_ids!r}"
+                )
+                bot.logger.log_info(
+                    "SPAM SNAPSHOT BEFORE CLEANUP "
+                    f"chat_id={chat_id} user_id={user_id} count={len(spam_ids)} ids={spam_ids!r}"
                 )
                 deleted_count, remaining_ids = await cleanup_spam_messages(
                     bot, chat_id, user_id, set(spam_ids)
