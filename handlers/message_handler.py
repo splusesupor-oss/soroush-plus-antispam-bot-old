@@ -928,10 +928,20 @@ async def handle_new_message(bot, event):
             f"spam_count={bot.tracker.get_count(chat_id, user_id)}"
         )
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+        # === SPAM FLOW TRACE: BEFORE_TRACKER ===
+        _trace_msg_id = getattr(event.message, "id", None)
+        _trace_hist_before = len(message_tracker.get_user_recent_messages(chat_id, user_id))
+        bot.logger.log_info(
+            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_TRACKER hist_before={_trace_hist_before} bot_id={id(bot)} lock_id={id(getattr(bot, 'spam_lock', set()))}"
+        )
         # Track every incoming group message before the spam-lock early drop;
         # otherwise messages after the first threshold hit never enter history.
         tracked_ok = message_tracker.add_message(
             chat_id, user_id, getattr(event.message, "id", None), message_text
+        )
+        _trace_hist_after = len(message_tracker.get_user_recent_messages(chat_id, user_id))
+        bot.logger.log_info(
+            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=AFTER_TRACKER tracked_ok={tracked_ok} hist_after={_trace_hist_after}"
         )
         if tracked_ok:
             bot.logger.log_info(
@@ -941,8 +951,16 @@ async def handle_new_message(bot, event):
                 f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
         spam_lock_key = (chat_id, user_id)
+        _is_locked = spam_lock_key in getattr(bot, "spam_lock", set())
+        _lock_size = len(getattr(bot, "spam_lock", set()))
+        bot.logger.log_info(
+            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_SPAM_LOCK key={spam_lock_key!r} is_locked={_is_locked} lock_size={_lock_size} chat_id_type={type(chat_id).__name__} user_id_type={type(user_id).__name__}"
+        )
         if (not event.is_private
                 and spam_lock_key in getattr(bot, "spam_lock", set())):
+            bot.logger.log_info(
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
+            )
             try:
                 await bot.client.delete_messages(chat_id, [event.message.id])
             except Exception as error:
@@ -955,12 +973,21 @@ async def handle_new_message(bot, event):
             locked_ids = message_tracker.spam_snapshot(
                 chat_id, user_id, getattr(event.message, "id", None)
             )
+            bot.logger.log_info(
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=SNAPSHOT_COUNT count={len(locked_ids)} ids={locked_ids!r} snapshot_source=spam_snapshot"
+            )
             deleted_locked, remaining_locked = await cleanup_spam_messages(
                 bot, chat_id, user_id, set(locked_ids)
             )
-            finalize_spam_wave(
+            bot.logger.log_info(
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=CLEANUP_RESULT requested={len(locked_ids)} deleted={deleted_locked} remaining={len(remaining_locked)} remaining_ids={remaining_locked!r} cleanup_deletes_all={len(locked_ids)==deleted_locked and not remaining_locked}"
+            )
+            _finalize_res = finalize_spam_wave(
                 chat_id, user_id, len(locked_ids),
                 deleted_locked, remaining_locked
+            )
+            bot.logger.log_info(
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=FINALIZE_RESULT result={_finalize_res} requested={len(locked_ids)} deleted={deleted_locked} remaining={len(remaining_locked)} will_clear={_finalize_res is True} hist_after_finalize={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
             bot.logger.log_info(
                 "SPAM LOCK CLEANUP "
@@ -1421,6 +1448,9 @@ async def handle_new_message(bot, event):
                 if newly_flagged:
                     bot.spam_lock.add((chat_id, user_id))
                     bot.logger.log_info(
+                        f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=duplicate_gif lock_size={len(getattr(bot, 'spam_lock', set()))}"
+                    )
+                    bot.logger.log_info(
                         f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} reason=duplicate_gif"
                     )
                     async def gif_mute_succeeded(_result):
@@ -1860,6 +1890,9 @@ async def handle_new_message(bot, event):
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
                     bot.spam_lock.add((chat_id, user_id))
+                    bot.logger.log_info(
+                        f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=is_repeat_severe lock_size={len(getattr(bot, 'spam_lock', set()))}"
+                    )
                     ids = message_tracker.spam_snapshot(
                         chat_id, user_id, getattr(event.message, "id", None)
                     )
@@ -4340,6 +4373,9 @@ async def handle_new_message(bot, event):
             threshold = bot.config_manager.get("spam_threshold", 3)
             if count >= threshold:
                 bot.spam_lock.add((chat_id, user_id))
+                bot.logger.log_info(
+                    f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=threshold count={count} lock_size={len(getattr(bot, 'spam_lock', set()))}"
+                )
                 bot.logger.log_info(
                     f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} count={count}"
                 )

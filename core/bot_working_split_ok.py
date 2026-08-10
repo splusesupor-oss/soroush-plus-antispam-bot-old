@@ -622,6 +622,15 @@ class SoroushAntiSpamBot:
 
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
+            # === SPAM FLOW TRACE: CORE ENTRY INSTANCE CHECK ===
+            try:
+                _core_trace_chat = getattr(event, 'chat_id', None)
+                _core_trace_msg = getattr(getattr(event, 'message', None), 'id', None)
+                self.logger.log_info(
+                    f"SPAM FLOW TRACE chat_id={_core_trace_chat} user_id=unknown message_id={_core_trace_msg} stage=CORE_RAW_ENTRY bot_id={id(self)} lock_id={id(getattr(self, 'spam_lock', set()))} lock_size={len(getattr(self, 'spam_lock', set()))} lock_keys={list(getattr(self, 'spam_lock', set()))[:5]!r}"
+                )
+            except Exception as _core_trace_err:
+                self.logger.log_error(f"SPAM FLOW TRACE CORE entry failed { _core_trace_err!r}")
             self.logger.log_info(
                 "RAW MESSAGE EVENT RECEIVED "
                 f"chat_id={getattr(event, 'chat_id', None)} "
