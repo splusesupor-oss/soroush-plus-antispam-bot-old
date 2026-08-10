@@ -4539,8 +4539,8 @@ async def handle_new_message(bot, event):
                     chat_id, user_id, len(spam_ids),
                     deleted_count, remaining_ids
                 )
-                # For filtered group words, suppress spam cleanup count notification (only delete, keep warning if exists)
-                if deleted_count and not group_word_spam:
+                # For filtered words (banned / group / bio etc), suppress spam cleanup count notification
+                if deleted_count and not group_word_spam and "کلمه ممنوعه" not in (reason or "") and "فیلتر گروه" not in (reason or ""):
                     await event.reply(
                         f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
                     )
