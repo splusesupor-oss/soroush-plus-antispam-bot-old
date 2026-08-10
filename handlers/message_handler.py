@@ -375,45 +375,45 @@ def _track_group_timer(bot, chat_id, task):
 
 
 async def _delete_spam_ids(bot, chat_id, user_id, ids, *, batch_size=100):
-    """Delete one user's spam ids serially, retrying each batch safely."""
-    pending = sorted({message_id for message_id in ids if isinstance(message_id, int) and message_id > 0})
+    """Delete every tracked spam id independently; failed ids remain pending."""
+    pending = sorted({i for i in ids if isinstance(i, int) and i > 0})
+    requested = len(pending)
     deleted = 0
-    batch_number = 0
-    while pending:
-        batch_number += 1
-        batch = pending[:batch_size]
+    remaining = []
+    bot.logger.log_info(
+        f"SPAM DELETE START total_ids={requested} ids={pending!r}"
+    )
+    for message_id in pending:
+        success = False
         last_error = None
         for attempt in range(1, 4):
             try:
+                await bot.client.delete_messages(chat_id, [message_id])
+                success = True
+                deleted += 1
                 bot.logger.log_info(
-                    "SPAM DELETE BATCH "
-                    f"group_id={chat_id} user_id={user_id} "
-                    f"batch_number={batch_number} batch_size={len(batch)}"
+                    f"SPAM DELETE ITEM message_id={message_id} success=True"
                 )
-                await bot.client.delete_messages(chat_id, batch)
-                deleted += len(batch)
-                pending = pending[len(batch):]
                 break
             except Exception as error:
                 last_error = error
                 bot.logger.log_error(
-                    "SPAM CLEANUP RETRY "
-                    f"group_id={chat_id} user_id={user_id} "
-                    f"message_id={batch[0] if batch else None} "
-                    f"attempt={attempt} reason={error!r}"
+                    f"SPAM DELETE ITEM message_id={message_id} "
+                    f"attempt={attempt} error={error!r}"
                 )
                 if attempt < 3:
-                    await _asyncio.sleep(0.5 * attempt)
-        else:
+                    await _asyncio.sleep(0.2 * attempt)
+        if not success:
+            remaining.append(message_id)
             bot.logger.log_error(
-                "SPAM CLEANUP BATCH FAILED "
-                f"group_id={chat_id} user_id={user_id} "
-                f"batch_number={batch_number} remaining={len(pending)} "
-                f"reason={last_error!r}"
+                f"SPAM DELETE ITEM message_id={message_id} success=False "
+                f"error={last_error!r}"
             )
-            break
-        await _asyncio.sleep(0.2)
-    return deleted, pending
+    bot.logger.log_info(
+        f"SPAM DELETE FINISHED requested={requested} deleted={deleted} "
+        f"remaining={len(remaining)}"
+    )
+    return deleted, remaining
 
 
 def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
@@ -985,7 +985,8 @@ async def handle_new_message(bot, event):
             bot.logger.log_info(
                 "SPAM TRACK ADD "
                 f"chat_id={chat_id} user_id={user_id} "
-                f"message_id={getattr(event.message, 'id', None)}"
+                f"message_id={getattr(event.message, 'id', None)} "
+                f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
         # Normalize only the routing copy; keep message_text unchanged for filters.
         clean_text = normalize_command(message_text)
@@ -4185,7 +4186,24 @@ async def handle_new_message(bot, event):
                         message_id=event.message.id
                     )
 
-                    await bot.admin_actions.delete_message(chat_id, event=event)
+                    repeated_rows = message_tracker.get_user_recent_messages(
+                        chat_id, user_id
+                    )
+                    repeated_ids = [
+                        row["message_id"] for row in repeated_rows
+                        if isinstance(row.get("message_id"), int)
+                        and row["message_id"] > 0
+                    ]
+                    if event.message.id not in repeated_ids:
+                        repeated_ids.append(event.message.id)
+                    bot.logger.log_info(
+                        "SPAM HISTORY SNAPSHOT "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"count={len(repeated_ids)} ids={repeated_ids!r}"
+                    )
+                    await _delete_spam_ids(
+                        bot, chat_id, user_id, set(repeated_ids)
+                    )
 
                     if hasattr(bot.admin_actions, "ban_user"):
                         punish_key = f"{chat_id}:{user_id}"
@@ -4266,12 +4284,29 @@ async def handle_new_message(bot, event):
                 spam_rows = message_tracker.get_user_recent_messages(
                     chat_id, user_id
                 )
-                spam_ids = [row["message_id"] for row in spam_rows]
+                spam_ids = [
+                    row["message_id"]
+                    for row in spam_rows
+                    if isinstance(row.get("message_id"), int)
+                    and row["message_id"] > 0
+                ]
+                current_message_id = getattr(event.message, "id", None)
+                if current_message_id and current_message_id not in spam_ids:
+                    spam_ids.append(current_message_id)
+                bot.logger.log_info(
+                    "SPAM DELETE DECISION "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"history_count={len(spam_ids)} "
+                    f"history_ids={spam_ids!r} "
+                    f"current_message_id={getattr(event.message, 'id', None)} "
+                    f"using_bulk={len(spam_ids) >= 3}"
+                )
                 if len(spam_ids) >= 3:
                     bot.logger.log_info(
                         "SPAM HISTORY SNAPSHOT "
                         f"chat_id={chat_id} user_id={user_id} "
-                        f"count={len(spam_ids)} ids={spam_ids!r}"
+                        f"current_message_id={current_message_id} "
+                        f"history_count={len(spam_ids)} ids={spam_ids!r}"
                     )
                     bot.logger.log_info(f"SPAM STORED IDS = {len(spam_ids)} user={user_id} chat_id={chat_id}")
                     bot.logger.log_info(
@@ -4285,7 +4320,8 @@ async def handle_new_message(bot, event):
                         bot.logger.log_error(f"SPAM DELETE INCOMPLETE stored={len(spam_ids)} deleted={deleted_count} remaining={len(remaining_ids)}")
                     if deleted_count:
                         await event.reply(f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد")
-                    message_tracker.clear_user_history(chat_id, user_id)
+                    if not remaining_ids and deleted_count == len(spam_ids):
+                        message_tracker.clear_user_history(chat_id, user_id)
                 else:
                     bot.logger.log_info(
                         "DELETE START "
