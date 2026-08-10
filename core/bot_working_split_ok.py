@@ -622,6 +622,22 @@ class SoroushAntiSpamBot:
 
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
+            # === SPAM DEBUG INCOMING — اولین خط NewMessage ===
+            try:
+                _sd_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
+                _sd_chat = getattr(event, 'chat_id', None)
+                _sd_mid = getattr(getattr(event, 'message', None), 'id', None)
+                _sd_sid_try = getattr(event, 'sender_id', None)
+                if _sd_sid_try is None:
+                    _sd_sender_obj = getattr(event, 'sender', None)
+                    _sd_sid_try = getattr(_sd_sender_obj, 'id', None) if _sd_sender_obj else None
+                import hashlib as _sd_hl
+                _sd_hash = _sd_hl.md5(str(_sd_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _sd_raw else "empty"
+                _sd_len = len(str(_sd_raw))
+                self.logger.log_info(f"SPAM DEBUG INCOMING chat_id={_sd_chat} message_id={_sd_mid} sender_id={_sd_sid_try} text_hash={_sd_hash} text_length={_sd_len}")
+            except Exception as _sd_e:
+                try: self.logger.log_error(f"SPAM DEBUG INCOMING failed { _sd_e!r}")
+                except: pass
             # === SPAM FLOW TRACE: CORE ENTRY INSTANCE CHECK ===
             try:
                 _core_trace_chat = getattr(event, 'chat_id', None)
@@ -714,6 +730,7 @@ class SoroushAntiSpamBot:
                                 await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
                             except Exception:
                                 await event.reply(notice)
+                        self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
                     if access_profile_guard.is_blocked(profile_id):
                         access_profile_guard.unblock(profile_id)
@@ -817,6 +834,7 @@ class SoroushAntiSpamBot:
                                 "BROADCAST READY "
                                 f"owner_id={private_sender_id} text={raw_text!r}"
                             )
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if handled:' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         self.logger.log_info(
                             "BROADCAST ROUTE SKIP "
@@ -959,6 +977,7 @@ class SoroushAntiSpamBot:
                                 "BROADCAST ROUTE HANDLED "
                                 f"owner_id={private_sender_id} text={text!r}"
                             )
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if handled:' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         self.logger.log_error(
                             "BROADCAST ROUTE NOT HANDLED "
@@ -971,6 +990,7 @@ class SoroushAntiSpamBot:
                     and event.message.id in getattr(self, "broadcast_bot_message_ids", set())
                 ):
                     self.broadcast_bot_message_ids.discard(event.message.id)
+                    self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_990' chat_id={_sd_chat} message_id={_sd_mid}")
                     return
 
                 is_mode_command = text in {"فعال", "غیر فعال"}
@@ -1014,6 +1034,7 @@ class SoroushAntiSpamBot:
                     )
                     if event.out and not is_global_owner_for_mode:
                         self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
+                        self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if event.out and not is_global_owner_for' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
                 elif event.out:
                     if is_private_splus:
@@ -1100,6 +1121,7 @@ class SoroushAntiSpamBot:
                             await send_activation_message(
                                 self, event, lock_id, title
                             )
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_1119' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         # ⏳ گروهی که با پایان مهلت بسته شده باید بتواند دوباره
                         # باز شود. بدون این استثنا، سه دستور انقضا هرگز به
@@ -1116,6 +1138,7 @@ class SoroushAntiSpamBot:
                             title = getattr(chat_lock, "title", "")
                             activate_group(lock_id, title)
                         else:
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_1135' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
 
                     if is_disable_command:
@@ -1130,6 +1153,7 @@ class SoroushAntiSpamBot:
                             await event.reply(
                                 f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
                             )
+                        self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_1149' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
 
                 # آزاد کردن کاربر محروم شده
@@ -1137,6 +1161,7 @@ class SoroushAntiSpamBot:
                     try:
                         if not event.reply_to:
                             await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if not event.reply_to:' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
 
                         reply_msg = await self.client.get_messages(
@@ -1147,6 +1172,7 @@ class SoroushAntiSpamBot:
                         user = await reply_msg.get_sender()
                         if not user:
                             await event.reply("❌ کاربر پیدا نشد")
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if not user:' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
 
                         async def unban_succeeded(_result):
@@ -1177,6 +1203,7 @@ class SoroushAntiSpamBot:
 
                     except Exception as e:
                         await event.reply(f"❌ خطا در آزاد کردن: {e}")
+                    self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_1196' chat_id={_sd_chat} message_id={_sd_mid}")
                     return
 
 
@@ -1232,6 +1259,7 @@ class SoroushAntiSpamBot:
                             self.logger.log_info(
                                 f"BROADCAST ROUTE HANDLED text={text!r}"
                             )
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if await handle_private_broadcast(self, ' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         if _is_broadcast_word:
                             self.logger.log_info(
@@ -1245,6 +1273,7 @@ class SoroushAntiSpamBot:
                             await event.reply(
                                 "❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد"
                             )
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason=core_not_global_owner chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         try:
                             import re
@@ -1253,6 +1282,7 @@ class SoroushAntiSpamBot:
                             m = re.search(r"@([A-Za-z0-9_]+)", text)
                             if not m:
                                 await event.reply("❌ آیدی کاربر پیدا نشد")
+                                self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if not m:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             username = m.group(1)
@@ -1260,6 +1290,7 @@ class SoroushAntiSpamBot:
                             groups = load_groups()
                             if not groups:
                                 await event.reply("❌ هیچ گروهی ثبت نشده")
+                                self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if not groups:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             import json
@@ -1279,6 +1310,7 @@ class SoroushAntiSpamBot:
 
                             if not user_id:
                                 await event.reply("❌ کاربر در لیست ثبت شده پیدا نشد")
+                                self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if not user_id:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             reset_groups = []
@@ -1301,6 +1333,7 @@ class SoroushAntiSpamBot:
 
                             if not reset_groups:
                                 await event.reply("❌ این کاربر هیچ تخلف ثبت شده‌ای ندارد")
+                                self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='if not reset_groups:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             await event.reply("✅ انجام شد")
@@ -1309,9 +1342,11 @@ class SoroushAntiSpamBot:
                             self.logger.log_error(
                                 f"خطای صفر کردن از پیوی: {e}"
                             )
+                        self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_1328' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
 
                     # پیام خصوصی پس از route اختصاصی هرگز وارد handler گروهی نمی‌شود.
+                    self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_1331' chat_id={_sd_chat} message_id={_sd_mid}")
                     return
 
             
@@ -1326,6 +1361,7 @@ class SoroushAntiSpamBot:
                                 getattr(sender, "id", 0),
                                 event.chat_id
                             )
+                            self.logger.log_info(f"SPAM DEBUG EARLY RETURN reason='core_line_1345' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         except Exception as e:
                             self.logger.log_error(f"خطای اجرای دستور مدیر: {e}")

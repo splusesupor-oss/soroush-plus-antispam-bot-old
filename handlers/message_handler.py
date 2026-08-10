@@ -890,8 +890,29 @@ async def handle_new_message(bot, event):
     response_token = begin_response_measurement()
     chat_id = getattr(event, "chat_id", None)
     try:
+        # SPAM DEBUG INCOMING — اولین خط handler قبل از هر فیلتر
+        try:
+            _dbg_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
+            _dbg_chat = getattr(event, 'chat_id', None)
+            _dbg_mid = getattr(getattr(event, 'message', None), 'id', None)
+            _dbg_sender_tmp = getattr(event, 'sender', None)
+            _dbg_sid = getattr(_dbg_sender_tmp, 'id', None) if _dbg_sender_tmp else getattr(event, 'sender_id', None)
+            # fallback: try event.get_sender not awaited, keep unknown
+            import hashlib as _hl_tmp
+            _dbg_hash = _hl_tmp.md5(str(_dbg_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _dbg_raw else "empty"
+            _dbg_len = len(str(_dbg_raw))
+            bot.logger.log_info(f"SPAM DEBUG INCOMING chat_id={_dbg_chat} message_id={_dbg_mid} sender_id={_dbg_sid} text_hash={_dbg_hash} text_length={_dbg_len}")
+        except Exception as _dbg_e:
+            try:
+                bot.logger.log_error(f"SPAM DEBUG INCOMING failed { _dbg_e!r}")
+            except: pass
         # اگر پیام متنی نیست رد کن (مثلا سرویس)
         if not event.message or not hasattr(event.message, 'message'):
+            try:
+                _er_chat = getattr(event, 'chat_id', None)
+                _er_mid = getattr(getattr(event, 'message', None), 'id', None)
+                bot.logger.log_info(f"SPAM DEBUG EARLY RETURN reason=no_message_attr chat_id={_er_chat} message_id={_er_mid}")
+            except: pass
             return
 
         # اطلاعات پیام
