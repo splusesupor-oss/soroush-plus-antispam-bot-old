@@ -3870,6 +3870,34 @@ async def handle_new_message(bot, event):
                         try:
                             bot.tracker.reset_count(_norm, user.id)
                         except: pass
+                        # Clear flood and spammer history for this user to prevent simple messages after unban being deleted as flood
+                        try:
+                            if hasattr(bot, "flood_messages") and chat_id in bot.flood_messages:
+                                bot.flood_messages[chat_id] = [x for x in bot.flood_messages[chat_id] if str(x[2]) != str(user.id)]
+                                if not bot.flood_messages[chat_id]:
+                                    bot.flood_messages.pop(chat_id, None)
+                            for _gid in (_norm, _str_gid):
+                                if hasattr(bot, "flood_messages") and _gid in bot.flood_messages:
+                                    bot.flood_messages[_gid] = [x for x in bot.flood_messages[_gid] if str(x[2]) != str(user.id)]
+                                    if not bot.flood_messages[_gid]:
+                                        bot.flood_messages.pop(_gid, None)
+                        except: pass
+                        try:
+                            if hasattr(bot, "spammer_messages"):
+                                bot.spammer_messages.pop(user.id, None)
+                                bot.spammer_messages.pop(str(user.id), None)
+                        except: pass
+                        try:
+                            if hasattr(bot, "user_messages"):
+                                bot.user_messages.pop(user.id, None)
+                                bot.user_messages.pop(str(user.id), None)
+                                bot.user_messages.pop((chat_id, user.id), None)
+                        except: pass
+                        try:
+                            if hasattr(bot, "repeat_messages"):
+                                bot.repeat_messages.pop(user.id, None)
+                                bot.repeat_messages.pop(str(user.id), None)
+                        except: pass
                     except Exception as _e:
                         try:
                             bot.logger.log_error(f"UNBAN ROBUST CLEAR FAILED { _e!r}")
