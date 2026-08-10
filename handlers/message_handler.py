@@ -1846,6 +1846,14 @@ async def handle_new_message(bot, event):
                     bot.logger.log_info(
                         f"DELETE QUEUE SIZE user={user_id} size={len(ids)}"
                     )
+                    # Preserve the legacy moderation notice before cleanup;
+                    # cleanup itself remains the single deletion path.
+                    await _send_moderation_notification_once(
+                        bot, chat_id, user_id, "spam_ban", event.message.id,
+                        "⚠️ کاربر ⏌ "
+                        f"{_format_banned_user(sender, user_id)}"
+                        " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
+                    )
                     deleted_count, remaining_ids = await cleanup_spam_messages(
                         bot, chat_id, user_id, set(ids)
                     )
@@ -1858,11 +1866,8 @@ async def handle_new_message(bot, event):
                     if remaining_ids:
                         return
                     async def repeat_history_ban_succeeded(_result):
-                        await _send_moderation_notification_once(
-                            bot, chat_id, user_id, "spam_ban", event.message.id,
-                            "⚠️ کاربر ⏌ "
-                            f"{_format_banned_user(sender, user_id)}"
-                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
+                        bot.logger.log_info(
+                            f"PUNISHMENT RESULT user={user_id} success=True"
                         )
 
                     async def repeat_history_ban_failed(_error):
