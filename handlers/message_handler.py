@@ -3706,6 +3706,8 @@ async def handle_new_message(bot, event):
                     released_key = f"{chat_id}:{user.id}"
                     bot.punished_users.discard(released_key)
                     bot.tracker.reset_count(chat_id, user.id)
+                    clear_user(chat_id, user.id)
+                    message_tracker.clear_user_history(chat_id, user.id)
                     getattr(bot, "spam_lock", set()).discard((chat_id, user.id))
                     bot.tracker.banned_users.pop(released_key, None)
                     bot.tracker.muted_users.pop(released_key, None)
