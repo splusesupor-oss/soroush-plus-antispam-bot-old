@@ -190,7 +190,7 @@ class SpamDetector:
 
     def analyze(self, text: str) -> dict:
         """تحلیل کامل برای لاگ"""
-        score, reasons = self.check_spam_score(text, chat_id)
+        score, reasons = self.check_spam_score(text)
         is_spam, reason_str = self.is_spam(text)
         return {
             "is_spam": is_spam,

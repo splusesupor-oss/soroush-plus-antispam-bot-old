@@ -971,8 +971,18 @@ async def handle_new_message(bot, event):
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
         status_key = f"{chat_id}:{user_id}"
-        status_banned = is_banned(chat_id, user_id, getattr(sender, "username", None)) or bot.tracker.is_banned(chat_id, user_id) or ((chat_id, user_id) in getattr(bot, "spam_lock", set()))
-        status_muted = bot.tracker.is_muted(chat_id, user_id)
+        tracker_is_banned = getattr(bot.tracker, "is_banned", None)
+        tracker_is_muted = getattr(bot.tracker, "is_muted", None)
+        status_banned = (
+            is_banned(chat_id, user_id, getattr(sender, "username", None))
+            or (tracker_is_banned(chat_id, user_id)
+                if callable(tracker_is_banned) else False)
+            or ((chat_id, user_id) in getattr(bot, "spam_lock", set()))
+        )
+        status_muted = (
+            tracker_is_muted(chat_id, user_id)
+            if callable(tracker_is_muted) else False
+        )
         bot.logger.log_info(
             "USER MODERATION STATUS "
             f"user_id={user_id} group_id={chat_id} "
