@@ -1494,9 +1494,3 @@ class SoroushAntiSpamBot:
         except Exception as e:
             print("delete spam error:", e)
 
-
-        await self.client.run_until_disconnected()
-
-
-
-
