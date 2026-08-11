@@ -1851,28 +1851,35 @@ async def handle_new_message(bot, event):
                     "مثال: «13:32»")
                 return
             if state.get("step") == "time":
-                time_str = admin_tools.parse_time(clean_text)
+                # یک snapshot واحد از تهران برای parse، مقایسه و ذخیره‌سازی
+                # استفاده می‌شود؛ چند now جدا نزدیک نیمه‌شب می‌توانند تاریخ
+                # متفاوت بدهند و پیام «گذشته است» را اشتباه کنند.
+                schedule_now = admin_tools.now_local()
+                time_str = admin_tools.parse_time(clean_text, now=schedule_now)
                 if time_str is None:
                     await event.reply(
                         "❌ ساعت نامعتبر است؛ مانند «15:12»، «۷ صبح»، "
                         "«۷ شب» یا «ساعت ۷» ارسال کنید.")
                     return
-                # اگر «امروز» و ساعت گذشته → اعلام و دریافتِ دوباره
                 scheduled = admin_tools.compute_scheduled_at(
-                    state.get("day"), time_str)
+                    state.get("day"), time_str, now=schedule_now)
                 if scheduled is None:
                     await event.reply("❌ ساعت نامعتبر است؛ دوباره تلاش کنید.")
                     return
                 hour = int(time_str.split(":")[0])
                 tod = admin_tools.time_of_day(hour)
-                if state.get("day") == "today" and scheduled.date() != \
-                        admin_tools.now_local().date():
+                rolled_to_tomorrow = (
+                    state.get("day") == "today"
+                    and scheduled.date() > schedule_now.date()
+                )
+                if rolled_to_tomorrow:
                     await event.reply(
                         f"⏰ ساعت {time_str} ({tod}) گذشته است و برای جلوگیری "
                         "از اشتباه، فردا لحاظ می‌شود.\n"
                         "اگر منظورتان همین امروز است، یک ساعتِ بعدی انتخاب "
                         "کنید؛ در غیر این صورت ادامه می‌دهیم.")
                 state["time"] = time_str
+                state["scheduled_at"] = scheduled.isoformat()
                 state["step"] = "count"
                 await event.reply(
                     "🗑️ چه تعداد پیام حذف شود؟\n"
@@ -1885,7 +1892,8 @@ async def handle_new_message(bot, event):
                         "❌ تعداد نامعتبر است؛ عددی بین ۱ تا ۳۰۰۰ ارسال کنید.")
                     return
                 result = admin_tools.set_cleanup(
-                    chat_id, state.get("day"), state["time"], count)
+                    chat_id, state.get("day"), state["time"], count,
+                    scheduled_at=state.get("scheduled_at"))
                 admin_tools._PENDING_CLEANUP.pop(chat_id, None)
                 if result is None:
                     await event.reply("❌ خطا در ذخیرهٔ تنظیم؛ دوباره تلاش کنید.")

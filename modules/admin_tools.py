@@ -523,12 +523,25 @@ def compute_scheduled_at(day, time_str, now=None):
     return target
 
 
-def set_cleanup(chat_id, day, time_str, count):
-    """تنظیماتِ پاکسازیِ این گروه را با زمانِ کامل ذخیره می‌کند (ماندگار)."""
-    now = now_local()
-    scheduled_at = compute_scheduled_at(day, time_str, now)
+def set_cleanup(chat_id, day, time_str, count, *, scheduled_at=None, now=None):
+    """تنظیماتِ پاکسازی را با همان زمانِ تأییدشده ذخیره می‌کند.
+
+    ``scheduled_at`` زمانِ ساخته‌شده در مرحلهٔ انتخاب ساعت است. نگه‌داشتن
+    همان مقدار مانعِ تغییر تصمیم «امروز/فردا» بین مرحلهٔ ساعت و شمارش،
+    خصوصاً نزدیک نیمه‌شب، می‌شود.
+    """
+    now = now_local() if now is None else now
+    if scheduled_at is None:
+        scheduled_at = compute_scheduled_at(day, time_str, now)
+    elif isinstance(scheduled_at, str):
+        try:
+            scheduled_at = datetime.fromisoformat(scheduled_at)
+        except (TypeError, ValueError):
+            return None
     if scheduled_at is None:
         return None
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=_TEHRAN)
     data = _load_cleanups()
     data[str(chat_id)] = {
         "set_at": now.isoformat(timespec="seconds"),
