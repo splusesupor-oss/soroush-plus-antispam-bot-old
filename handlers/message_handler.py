@@ -149,6 +149,22 @@ def _debug_log(bot, message):
         bot.logger.log_info(message)
 
 
+def _send_spam_cleanup_notice(trigger):
+    """Only genuine anti-spam detections may show the spam cleanup notice.
+
+    Content filters intentionally share deletion/moderation plumbing with spam,
+    but their own warning is the only user-facing notice they should produce.
+    """
+    return trigger == "spam"
+
+
+def _detector_moderation_trigger(reason):
+    """Classify an already-completed SpamDetector result for notification use."""
+    if str(reason or "").startswith("کلمه ممنوعه ("):
+        return "forbidden_word"
+    return "spam"
+
+
 def _math_digits(value):
     """نمایش عدد فقط برای متن اعلان‌ها، بدون تغییر مقدار منطقی."""
     return str(value).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
@@ -4519,6 +4535,10 @@ async def handle_new_message(bot, event):
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی تکرار داخلی: {e}")
 
+        # Keep the cause separate from the shared deletion path.  The
+        # ModerationQueue deletes both content-filter and spam messages, but
+        # only a real spam trigger is allowed to emit the spam cleanup notice.
+        moderation_trigger = "none"
         # بررسی کلمات فیلتر شده گروه
         group_word_spam = False
         group_word_reason = None
@@ -4560,8 +4580,13 @@ async def handle_new_message(bot, event):
         elif group_word_spam:
             is_spam = True
             reason = group_word_reason
+            moderation_trigger = "group_filter"
         else:
+            # `is_spam` remains the sole detector call.  Its existing reason
+            # only labels the notification route after the decision is made.
             is_spam, reason = bot.detector.is_spam(message_text, chat_id)
+            if is_spam:
+                moderation_trigger = _detector_moderation_trigger(reason)
 
         profiler.mark("SPAM_CHECK")
         if is_spam:
@@ -4745,8 +4770,8 @@ async def handle_new_message(bot, event):
                     chat_id, user_id, len(spam_ids),
                     deleted_count, remaining_ids
                 )
-                # For filtered words (banned / group / bio etc), suppress spam cleanup count notification
-                if deleted_count and not group_word_spam and "کلمه ممنوعه" not in (reason or "") and "فیلتر گروه" not in (reason or ""):
+                if deleted_count and _send_spam_cleanup_notice(
+                        moderation_trigger):
                     await event.reply(
                         f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
                     )
