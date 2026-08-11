@@ -3939,6 +3939,8 @@ async def handle_new_message(bot, event):
                     # can still be treated as banned by a stale rejoin/spam
                     # state on their next message.
                     released_key = f"{chat_id}:{user.id}"
+                    if hasattr(bot, "clear_released_user_state"):
+                        bot.clear_released_user_state(chat_id, user.id)
                     bot.punished_users.discard(released_key)
                     bot.tracker.reset_count(chat_id, user.id)
                     clear_user(chat_id, user.id)
@@ -4288,6 +4290,8 @@ async def handle_new_message(bot, event):
                 async def unmute_succeeded(_result):
                     target_id = getattr(target_user, "id", None)
                     target_key = f"{chat_id}:{target_id}"
+                    if hasattr(bot, "clear_released_user_state"):
+                        bot.clear_released_user_state(chat_id, target_id)
                     bot.clear_spam_lock((chat_id, target_id))
                     bot.punished_users.discard(target_key)
                     bot.tracker.muted_users.pop(target_key, None)

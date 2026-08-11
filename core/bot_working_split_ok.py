@@ -4,7 +4,9 @@ from modules.security.delete_queue import process_delete
 import asyncio
 from modules.admin_storage import is_admin, add_admin, remove_admin
 from modules.riddles import new_riddle, check_answer, get_answer
-from modules.spam_history import get_user_history
+from modules.spam_history import get_user_history, clear_user as clear_spam_history
+from modules import message_tracker
+from modules.group_id import normalize_group_id
 from modules.group_stats import add_message, add_deleted, add_kick, add_mute, make_report
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
 from modules.jorat_haghighat import get_jorat, get_haghighat
@@ -198,6 +200,108 @@ class SoroushAntiSpamBot:
 
     def clear_spam_lock(self, key):
         self.spam_lock.pop(key, None)
+
+    def clear_released_user_state(self, chat_id, user_id):
+        """Erase every prior punishment/delete cache for a released user.
+
+        A release is a fresh moderation lifecycle.  In particular, this must
+        not leave or recreate a rejoin marker that can make later messages
+        eligible for deletion.  Persistent ban removal remains the unban RPC's
+        responsibility; this method clears runtime and persisted spam counts.
+        """
+        canonical_group = normalize_group_id(chat_id)
+
+        def same_group(value):
+            return normalize_group_id(value) == canonical_group
+
+        def same_pair(key):
+            try:
+                return same_group(key[0]) and str(key[1]) == str(user_id)
+            except (IndexError, TypeError):
+                return False
+
+        # UserTracker's current keys and legacy raw group-id keys can coexist
+        # in spam_counts.json after a restart; remove both forms.
+        for group_key in list(getattr(self.tracker, "spam_counts", {})):
+            if not same_group(group_key):
+                continue
+            users = self.tracker.spam_counts.get(group_key, {})
+            for candidate_user in (str(user_id), user_id):
+                users.pop(candidate_user, None)
+            if not users:
+                self.tracker.spam_counts.pop(group_key, None)
+        self.tracker.save()
+
+        for mapping_name in ("banned_users", "muted_users"):
+            mapping = getattr(self.tracker, mapping_name, {})
+            for key in list(mapping):
+                try:
+                    group_key, stored_user_id = str(key).rsplit(":", 1)
+                except ValueError:
+                    continue
+                if same_group(group_key) and stored_user_id == str(user_id):
+                    mapping.pop(key, None)
+
+        for key in list(self.spam_lock):
+            if same_pair(key):
+                self.clear_spam_lock(key)
+        self.punished_users = {
+            key for key in self.punished_users
+            if not (":" in str(key)
+                    and same_group(str(key).rsplit(":", 1)[0])
+                    and str(key).rsplit(":", 1)[1] == str(user_id))
+        }
+        for mapping_name in (
+            "rejoin_spam_state", "spam_burst_messages", "spam_burst_tasks",
+            "forward_spam_counts",
+        ):
+            mapping = getattr(self, mapping_name, {})
+            for key in list(mapping):
+                if same_pair(key):
+                    task = mapping.get(key) if mapping_name == "spam_burst_tasks" else None
+                    if task is not None and not task.done():
+                        task.cancel()
+                    mapping.pop(key, None)
+        for key in list(getattr(self, "spam_burst_users", set())):
+            if same_pair(key):
+                self.spam_burst_users.discard(key)
+        for key in list(getattr(self, "forward_spam_processing", set())):
+            if same_pair(key):
+                self.forward_spam_processing.discard(key)
+        for bucket_key in list(getattr(self, "_temporary_state_touched", {})):
+            try:
+                _bucket, key = bucket_key
+            except (TypeError, ValueError):
+                continue
+            if same_pair(key):
+                self._temporary_state_touched.pop(bucket_key, None)
+
+        # spam_history used raw tuple keys in older versions; clear current,
+        # short, and legacy -100 forms. message_tracker canonicalizes itself.
+        group_forms = {chat_id, str(chat_id), canonical_group}
+        try:
+            group_forms.add(-1_000_000_000_000 - int(canonical_group))
+        except (TypeError, ValueError):
+            pass
+        for group_form in group_forms:
+            clear_spam_history(group_form, user_id)
+            message_tracker.clear_user_history(group_form, user_id)
+        for group_key, rows in list(getattr(self, "flood_messages", {}).items()):
+            if same_group(group_key):
+                kept = [row for row in rows if len(row) < 3 or str(row[2]) != str(user_id)]
+                if kept:
+                    self.flood_messages[group_key] = kept
+                else:
+                    self.flood_messages.pop(group_key, None)
+
+        for mapping_name in ("repeat_messages", "user_messages"):
+            mapping = getattr(self, mapping_name, {})
+            for key in list(mapping):
+                if key in (user_id, str(user_id)) or same_pair(key):
+                    mapping.pop(key, None)
+        for candidate_user in (user_id, str(user_id)):
+            self.spammer_messages.pop(candidate_user, None)
+            self._spammer_messages_touched.pop(candidate_user, None)
 
     def acquire_delete_notice_lock(self, chat_id, now=None):
         now = self._state_now() if now is None else now
@@ -581,23 +685,6 @@ class SoroushAntiSpamBot:
                 )
                 return True
 
-        def restore_rejoin_spam_state(chat_id, user_id):
-            punish_key = f"{chat_id}:{user_id}"
-            burst_key = (chat_id, user_id)
-            previous_violations = self.tracker.get_count(chat_id, user_id)
-            self.rejoin_spam_state[burst_key] = {
-                "previously_banned": True,
-                "previous_violations": previous_violations,
-                "_touched_at": self._state_now(),
-            }
-            self.punished_users.discard(punish_key)
-            burst_task = self.spam_burst_tasks.pop(burst_key, None)
-            if burst_task:
-                burst_task.cancel()
-            self.spam_burst_users.discard(burst_key)
-            self.spam_burst_messages.pop(burst_key, None)
-
-
         @self.client.on(events.Raw(types.UpdateChannelParticipant))
         async def manual_unban_update(update):
             previous = getattr(update, "prev_participant", None)
@@ -631,7 +718,7 @@ class SoroushAntiSpamBot:
                     display_name,
                 )
                 self.tracker.banned_users.pop(f"{chat_id}:{user_id}", None)
-                restore_rejoin_spam_state(chat_id, user_id)
+                self.clear_released_user_state(chat_id, user_id)
                 self.spammer_messages.pop(user_id, None)
                 self.logger.log_info(
                     "Detected manual release, removed user from permanent "
@@ -715,7 +802,7 @@ class SoroushAntiSpamBot:
                         self.tracker.banned_users.pop(
                             f"{chat_id}:{user_id}", None
                         )
-                        restore_rejoin_spam_state(chat_id, user_id)
+                        self.clear_released_user_state(chat_id, user_id)
                         self.spammer_messages.pop(user_id, None)
                         self.logger.log_info(
                             "Detected manual release, removed user from permanent "
@@ -1303,7 +1390,7 @@ class SoroushAntiSpamBot:
                             self.tracker.banned_users.pop(
                                 f"{event.chat_id}:{user.id}", None
                             )
-                            restore_rejoin_spam_state(event.chat_id, user.id)
+                            self.clear_released_user_state(event.chat_id, user.id)
                             self.spammer_messages.pop(user.id, None)
                             self.logger.log_info(
                                 f"UNBAN COMPLETE user_id={user.id} removed successfully"
