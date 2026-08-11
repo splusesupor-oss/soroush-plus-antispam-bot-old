@@ -10,11 +10,15 @@
 """
 from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 
+import contextvars
+import time
+
 import economy
 from economy import profiles
 from economy.ui import balance_menu, profile_menu, shop_menu
 
 CANCEL = "0"
+_COMMAND_TRACE = contextvars.ContextVar("economy_command_trace", default=None)
 
 
 def _entities(spans):
@@ -51,18 +55,33 @@ async def _send(event, payload, logger=None):
     می‌دهد)، همان متن بدون قالب‌بندی فرستاده می‌شود. قالب‌بندی یک تزئین
     است و نباید باعث شود کاربر «هیچ خروجی» ببیند.
     """
+    trace = _COMMAND_TRACE.get()
+
+    async def reply_timed(text, **kwargs):
+        started = time.perf_counter()
+        try:
+            return await event.reply(text, **kwargs)
+        finally:
+            rpc_ms = (time.perf_counter() - started) * 1000
+            if trace is not None:
+                command, command_started = trace
+                _log(logger,
+                     "ECONOMY COMMAND RESPONSE "
+                     f"command={command} rpc_ms={rpc_ms:.2f} "
+                     f"command_to_reply_done_ms={(time.perf_counter() - command_started) * 1000:.2f}")
+
     if not isinstance(payload, tuple):
-        await event.reply(payload)
+        await reply_timed(payload)
         return
 
     text, spans = payload
     try:
-        await event.reply(text, formatting_entities=_entities(spans))
+        await reply_timed(text, formatting_entities=_entities(spans))
     except Exception as error:
         _log_error(logger,
                    "ECONOMY SEND WITH ENTITIES FAILED -> retrying plain "
                    f"error={error!r}")
-        await event.reply(text)
+        await reply_timed(text)
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +421,14 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     # نکند. با این لاگ می‌توان فهمید پیام اصلاً به هندلر رسیده یا نه، و
     # اگر رسیده چرا تطبیق نکرده است.
     normalized = balance_menu.normalize(text)
+    if normalized == "موجودی":
+        _COMMAND_TRACE.set(("موجودی", time.perf_counter()))
+    elif normalized == "فروشگاه":
+        _COMMAND_TRACE.set(("فروشگاه", time.perf_counter()))
+    elif balance_menu.is_open(chat_id, user_id):
+        _COMMAND_TRACE.set(("موجودی/session", time.perf_counter()))
+    elif shop_menu.is_open(chat_id, user_id):
+        _COMMAND_TRACE.set(("فروشگاه/session", time.perf_counter()))
     if normalized in {"موجودی", "فروشگاه"} \
             or profile_menu.is_command(text) or balance_menu.is_open(
             chat_id, user_id) or shop_menu.is_open(chat_id, user_id) \
@@ -503,7 +530,10 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                  f"total_coin_value={balance['total_coin_value']} "
                  f"db_file={economy.storage.DATA_FILE}")
 
-            payload = balance_menu.render_menu(chat_id, user_id)
+            rank = economy.get_rank(chat_id, user_id)
+            payload = balance_menu.render_menu(
+                chat_id, user_id, balance=balance, rank=rank
+            )
             _log(logger,
                  "ECONOMY BALANCE RENDERED "
                  f"chat_id={chat_id} user_id={user_id} "

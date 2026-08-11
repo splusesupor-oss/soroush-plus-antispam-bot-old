@@ -367,8 +367,9 @@ def get_balance(chat_id, user_id):
             f"user_id={user_id} chat_id={chat_id}"
         )
         return _owner_balance(chat_id, user_id)
-    data = storage.snapshot()
-    user = data.get("users", {}).get(user_key(chat_id, user_id))
+    user = storage.user_fields(
+        user_key(chat_id, user_id), (*COIN_TYPES, "total_coin_value")
+    )
     if not user:
         return {BRONZE: 0, SILVER: 0, GOLD: 0, "total_coin_value": 0}
     balance = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
@@ -404,9 +405,15 @@ def set_name(chat_id, user_id, name):
     if not name:
         return None
     key = user_key(chat_id, user_id)
+    name = str(name)
+    # Opening «موجودی» calls this on every request.  Avoid a full atomic JSON
+    # rewrite/fsync when the display name has not changed.
+    current = storage.user_fields(key, ("name",))
+    if current is not None and current.get("name") == name:
+        return name
     with storage.transaction() as data:
         user = _user(data, key)
-        user["name"] = str(name)
+        user["name"] = name
         return user["name"]
 
 

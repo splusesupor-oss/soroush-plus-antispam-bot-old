@@ -12,9 +12,13 @@ from economy.coins import accounts
 def _rows(chat_id):
     """فقط کیف پول‌های همین گروه."""
     wanted = accounts.chat_key(chat_id)
-    data = storage.snapshot()
+    fields = (
+        accounts.BRONZE, accounts.SILVER, accounts.GOLD,
+        "total_coin_value", "name", "wins", "value_reached_seq",
+        "value_reached_at",
+    )
     rows = []
-    for key, user in data.get("users", {}).items():
+    for key, user in storage.user_records(fields):
         group, user_id = accounts.split_key(key)
         if group != wanted:
             continue

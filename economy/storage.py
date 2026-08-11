@@ -173,6 +173,27 @@ def snapshot():
 _MISSING = object()
 
 
+def user_fields(user_key, fields):
+    """Return only selected fields of one wallet without copying all wallets."""
+    with _LOCK:
+        data = _state.data if getattr(_state, "depth", 0) > 0 else _read()
+        user = data.get("users", {}).get(user_key)
+        if not isinstance(user, dict):
+            return None
+        return {field: copy.deepcopy(user.get(field)) for field in fields}
+
+
+def user_records(fields):
+    """Return selected scalar wallet fields for ranking, never ledgers/references."""
+    with _LOCK:
+        data = _state.data if getattr(_state, "depth", 0) > 0 else _read()
+        return [
+            (key, {field: copy.deepcopy(user.get(field)) for field in fields})
+            for key, user in data.get("users", {}).items()
+            if isinstance(user, dict)
+        ]
+
+
 def read_path(*keys, default=None):
     """فقط یک شاخهٔ کوچک از داده را کپی و برمی‌گرداند.
 

@@ -101,10 +101,12 @@ def reset_all():
 # ---------------------------------------------------------------------------
 # متن‌ها
 # ---------------------------------------------------------------------------
-def render_menu(chat_id, user_id):
+def render_menu(chat_id, user_id, *, balance=None, rank=None):
     """منوی اصلی به‌همراه موجودی زنده."""
-    balance = economy.get_balance(chat_id, user_id)
-    rank = economy.get_rank(chat_id, user_id)
+    if balance is None:
+        balance = economy.get_balance(chat_id, user_id)
+    if rank is None:
+        rank = economy.get_rank(chat_id, user_id)
     config = settings.load()
 
     header = "💰 کیف پول شما"
