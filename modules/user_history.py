@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 from modules.admin_tools import display_name
+from modules.group_id import normalize_group_id
 
 _BASE = Path(__file__).resolve().parent.parent / "config"
 _FILE = _BASE / "user_history.json"
@@ -61,6 +62,53 @@ NO_PERMISSION = "⛔️ این دستور فقط برای مالک و ادمین
 # ---------------------------------------------------------------------------
 #  ذخیره‌سازی
 # ---------------------------------------------------------------------------
+def _chat_key(chat_id):
+    """Return the canonical group key used by active SPlusthon storage."""
+    return normalize_group_id(chat_id)
+
+
+def _merge_legacy_chat_keys(data, chat_id):
+    """Merge raw legacy ``-100…``/short-id variants into one group bucket.
+
+    Older history versions used ``str(chat_id)`` directly.  SPlusthon may
+    expose the same channel as either a short positive id or a ``-100…`` id,
+    so direct string keys made a group's history appear missing.  This helper
+    migrates only aliases of the requested group and preserves all records.
+    """
+    canonical = _chat_key(chat_id)
+    aliases = [
+        key for key in list(data)
+        if _chat_key(key) == canonical and key != canonical
+    ]
+    if not aliases:
+        return False
+
+    target = data.setdefault(canonical, {})
+    if not isinstance(target, dict):
+        target = {}
+        data[canonical] = target
+    for alias in aliases:
+        users = data.pop(alias, {})
+        if not isinstance(users, dict):
+            continue
+        for user_key, entry in users.items():
+            if not isinstance(entry, dict):
+                continue
+            existing = target.get(user_key)
+            if not isinstance(existing, dict):
+                target[user_key] = entry
+                continue
+            # Same user may exist under both old key forms.  Keep every valid
+            # record, newest first on read, while retaining the normal cap.
+            merged = list(existing.get("records") or []) + list(entry.get("records") or [])
+            merged.sort(key=lambda record: record.get("_ts", 0)
+                          if isinstance(record, dict) else 0)
+            existing["records"] = merged[-MAX_RECORDS_PER_USER:]
+            if not existing.get("display") and entry.get("display"):
+                existing["display"] = entry["display"]
+    return True
+
+
 def _load():
     try:
         if _FILE.exists():
@@ -143,8 +191,9 @@ def add_record(chat_id, user, kind, reason="", user_id=None):
         display = display_name(user)
 
     data = _load()
+    _merge_legacy_chat_keys(data, chat_id)
     _prune(data)
-    users = data.setdefault(str(chat_id), {})
+    users = data.setdefault(_chat_key(chat_id), {})
     entry = users.setdefault(str(user_id), {"display": display, "records": []})
     if not isinstance(entry, dict):
         entry = {"display": display, "records": []}
@@ -161,6 +210,7 @@ def add_record(chat_id, user, kind, reason="", user_id=None):
     records.append(record)
     if len(records) > MAX_RECORDS_PER_USER:
         del records[:-MAX_RECORDS_PER_USER]
+    # Save even when only the key form changed, so future reads are stable.
     _save(data)
     return record
 
@@ -187,9 +237,10 @@ def get_history(chat_id, user_id=None):
     برمی‌گرداند (تازه‌ترین تخلف اول)؛ با ``user_id`` فقط رکوردهایِ همان کاربر.
     """
     data = _load()
-    if _prune(data):
+    migrated = _merge_legacy_chat_keys(data, chat_id)
+    if _prune(data) or migrated:
         _save(data)
-    users = data.get(str(chat_id), {})
+    users = data.get(_chat_key(chat_id), {})
     if user_id is not None:
         entry = users.get(str(user_id))
         if not isinstance(entry, dict):
@@ -215,7 +266,8 @@ def reset(chat_id=None):
         _save({})
         return True
     data = _load()
-    if data.pop(str(chat_id), None) is None:
+    _merge_legacy_chat_keys(data, chat_id)
+    if data.pop(_chat_key(chat_id), None) is None:
         return False
     _save(data)
     return True
@@ -234,7 +286,7 @@ def format_history(chat_id, limit=MAX_USERS_IN_REPORT):
         🚫 اخراج شده
         📝 دلیل: ...
     """
-    from splusthon.tl.types import MessageEntityBold
+    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 
     users = get_history(chat_id)
     if not users:
