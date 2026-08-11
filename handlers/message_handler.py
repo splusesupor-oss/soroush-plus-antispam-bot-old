@@ -379,6 +379,81 @@ def finalize_spam_wave(chat_id, user_id, requested, deleted, remaining):
     return True
 
 
+def _is_true_auto_spam_text(bot, chat_id, text):
+    """Keep content-filter deletions out of the automatic spam sweep."""
+    if not str(text or "").strip():
+        return False
+    is_spam, reason = bot.detector.is_spam(str(text), chat_id)
+    return is_spam and _detector_moderation_trigger(reason) == "spam"
+
+
+async def _same_sender(message, user_id):
+    sender_id = getattr(message, "sender_id", None)
+    if sender_id is None:
+        from_id = getattr(message, "from_id", None)
+        sender_id = getattr(from_id, "user_id", None)
+    if sender_id is None:
+        get_sender = getattr(message, "get_sender", None)
+        if callable(get_sender):
+            sender = await get_sender()
+            sender_id = getattr(sender, "id", None)
+    return sender_id is not None and str(sender_id) == str(user_id)
+
+
+async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
+    """Return every accessible *real-spam* message id for this user.
+
+    ``iter_messages(..., limit=None)`` is SPlusthon's paginated history API;
+    unlike the old tracker-only path it continues beyond 21/100/500 messages.
+    The seed contains messages already observed by the live tracker so an API
+    history gap cannot lose the triggering message.
+    """
+    ids = {message_id for message_id in seed_ids
+           if isinstance(message_id, int) and message_id > 0}
+    iterator_factory = getattr(bot.client, "iter_messages", None)
+    if not callable(iterator_factory):
+        bot.logger.log_error(
+            "SPAM HISTORY SWEEP UNAVAILABLE "
+            f"chat_id={chat_id} user_id={user_id}; using tracked ids={len(ids)}"
+        )
+        return ids
+
+    scanned = matched = 0
+    try:
+        # ``limit=None`` explicitly asks the client to paginate all messages
+        # it can access; no artificial cleanup cap is imposed here.
+        async for message in iterator_factory(chat_id, limit=None):
+            scanned += 1
+            if not await _same_sender(message, user_id):
+                continue
+            text = (getattr(message, "message", None)
+                    or getattr(message, "caption", None) or "")
+            if not _is_true_auto_spam_text(bot, chat_id, text):
+                continue
+            message_id = getattr(message, "id", None)
+            if isinstance(message_id, int) and message_id > 0:
+                before = len(ids)
+                ids.add(message_id)
+                matched += len(ids) - before
+    except _asyncio.CancelledError:
+        raise
+    except Exception as error:
+        # Do not discard successfully collected pages; cleanup still runs for
+        # them and the error remains visible instead of producing a false count.
+        bot.logger.log_error(
+            "SPAM HISTORY SWEEP PARTIAL "
+            f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
+            f"matched={matched} error={error!r}"
+        )
+    else:
+        bot.logger.log_info(
+            "SPAM HISTORY SWEEP COMPLETE "
+            f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
+            f"spam_ids={len(ids)}"
+        )
+    return ids
+
+
 async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
     """Delete every tracked spam id in batches of 100 for speed; failed ids remain pending."""
     pending = sorted({i for i in ids if isinstance(i, int) and i > 0})
@@ -4723,18 +4798,25 @@ async def handle_new_message(bot, event):
                 spam_rows = message_tracker.get_user_recent_messages(
                     chat_id, user_id
                 )
-                spam_ids = [
-                    row["message_id"] for row in spam_rows
+                # The current detection is authoritative. Older tracker rows
+                # are included only when they independently satisfy the real
+                # SpamDetector branch, never merely a forbidden/group word.
+                spam_ids = {
+                    row.get("message_id") for row in spam_rows
                     if isinstance(row.get("message_id"), int)
-                    and row["message_id"] > 0
-                ]
+                    and row.get("message_id") > 0
+                    and _is_true_auto_spam_text(bot, chat_id, row.get("text"))
+                }
                 current_message_id = getattr(event.message, "id", None)
-                if current_message_id and current_message_id not in spam_ids:
-                    spam_ids.append(current_message_id)
+                if current_message_id:
+                    spam_ids.add(current_message_id)
+                spam_ids = await collect_accessible_spam_ids(
+                    bot, chat_id, user_id, spam_ids
+                )
                 bot.logger.log_info(
                     "SPAM CLEANUP IDS DEBUG "
                     f"chat_id={chat_id} user_id={user_id} "
-                    f"count={len(spam_ids)} ids={spam_ids!r}"
+                    f"count={len(spam_ids)}"
                 )
                 bot.logger.log_info(
                     "SPAM SNAPSHOT BEFORE CLEANUP "
