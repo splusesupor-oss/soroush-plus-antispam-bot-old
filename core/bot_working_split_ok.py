@@ -133,10 +133,14 @@ class SoroushAntiSpamBot:
         self.admin_actions = None
         self.moderation_queue = ModerationQueue(self.logger)
         self.group_actions = None
-        self.delete_notice_lock = set()
+        # Transient moderation state.  All keys below are bounded by the
+        # periodic cleanup so a long-running account cannot retain a key per
+        # user/chat forever.
+        self.delete_notice_lock = {}
         self.punished_users = set()
         # Per-user/group fast gate set as soon as severe spam is detected.
-        self.spam_lock = set()
+        # Values are monotonic timestamps, not just set membership.
+        self.spam_lock = {}
         self.repeat_messages = {}
         self.flood_messages = {}
         self.user_messages = {}
@@ -146,6 +150,9 @@ class SoroushAntiSpamBot:
         self.spam_burst_tasks = {}
         self.rejoin_spam_state = {}
         self.forward_spam_counts = {}
+        self._temporary_state_touched = {}
+        self._spammer_messages_touched = {}
+        self._temporary_state_cleanup_task = None
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
 
@@ -154,6 +161,105 @@ class SoroushAntiSpamBot:
             f"📚 تعداد کلمات ممنوعه: {len(self.config_manager.banned_words)}")
         self.logger.log_info(
             f"🛡️ تعداد کاربران سفید: {len(self.config_manager.whitelisted_ids)}")
+
+    # TTLs affect only in-memory gates/caches.  They deliberately do not
+    # change spam scoring, moderation actions, bans, warnings, or storage.
+    SPAM_LOCK_TTL = 5 * 60
+    DELETE_NOTICE_LOCK_TTL = 5 * 60
+    BURST_STATE_TTL = 15 * 60
+    FORWARD_STATE_TTL = 15 * 60
+    REJOIN_STATE_TTL = 24 * 60 * 60
+    SPAMMER_MESSAGES_TTL = 15 * 60
+
+    def _state_now(self):
+        return time.monotonic()
+
+    def debug_message_log(self, message):
+        if self.config_manager.get("debug_message_pipeline", False):
+            self.logger.log_info(message)
+
+    def touch_temporary_state(self, bucket, key, now=None):
+        self._temporary_state_touched[(bucket, key)] = (
+            self._state_now() if now is None else now
+        )
+
+    def set_spam_lock(self, key, now=None):
+        self.spam_lock[key] = self._state_now() if now is None else now
+
+    def is_spam_locked(self, key, now=None):
+        now = self._state_now() if now is None else now
+        created = self.spam_lock.get(key)
+        if created is None:
+            return False
+        if now - created >= self.SPAM_LOCK_TTL:
+            self.spam_lock.pop(key, None)
+            return False
+        return True
+
+    def clear_spam_lock(self, key):
+        self.spam_lock.pop(key, None)
+
+    def acquire_delete_notice_lock(self, chat_id, now=None):
+        now = self._state_now() if now is None else now
+        created = self.delete_notice_lock.get(chat_id)
+        if created is not None and now - created < self.DELETE_NOTICE_LOCK_TTL:
+            return False
+        self.delete_notice_lock[chat_id] = now
+        return True
+
+    def cleanup_temporary_state(self, now=None):
+        """Prune only expired runtime caches; moderation policy is untouched."""
+        now = self._state_now() if now is None else now
+        for key, created in list(self.spam_lock.items()):
+            if now - created >= self.SPAM_LOCK_TTL:
+                self.spam_lock.pop(key, None)
+        for chat_id, created in list(self.delete_notice_lock.items()):
+            if now - created >= self.DELETE_NOTICE_LOCK_TTL:
+                self.delete_notice_lock.pop(chat_id, None)
+
+        def stale(bucket, key, ttl):
+            touched = self._temporary_state_touched.get((bucket, key))
+            return touched is not None and now - touched >= ttl
+
+        for key, task in list(self.spam_burst_tasks.items()):
+            if task.done():
+                self.spam_burst_tasks.pop(key, None)
+        for key in list(self.spam_burst_messages):
+            task = self.spam_burst_tasks.get(key)
+            if stale("burst", key, self.BURST_STATE_TTL) and (task is None or task.done()):
+                self.spam_burst_messages.pop(key, None)
+                self.spam_burst_users.discard(key)
+                self._temporary_state_touched.pop(("burst", key), None)
+        for key in list(self.spam_burst_users):
+            if stale("burst", key, self.BURST_STATE_TTL) and key not in self.spam_burst_tasks:
+                self.spam_burst_users.discard(key)
+                self._temporary_state_touched.pop(("burst", key), None)
+        for key in list(self.forward_spam_counts):
+            if stale("forward", key, self.FORWARD_STATE_TTL):
+                self.forward_spam_counts.pop(key, None)
+                self._temporary_state_touched.pop(("forward", key), None)
+        for key, state in list(self.rejoin_spam_state.items()):
+            touched = state.get("_touched_at") if isinstance(state, dict) else None
+            if touched is not None and now - touched >= self.REJOIN_STATE_TTL:
+                self.rejoin_spam_state.pop(key, None)
+        for chat_id, rows in list(self.flood_messages.items()):
+            fresh = [row for row in rows if row and now - row[0] <= 10]
+            if fresh:
+                self.flood_messages[chat_id] = fresh
+            else:
+                self.flood_messages.pop(chat_id, None)
+        for user_id, touched in list(self._spammer_messages_touched.items()):
+            if now - touched >= self.SPAMMER_MESSAGES_TTL:
+                self.spammer_messages.pop(user_id, None)
+                self._spammer_messages_touched.pop(user_id, None)
+        # These are legacy temporary maps.  When code populates them it can
+        # call touch_temporary_state; entries with no activity timestamp are
+        # not removed here to avoid changing an unknown legacy flow.
+        for bucket, mapping in (("repeat", self.repeat_messages), ("user", self.user_messages)):
+            for key in list(mapping):
+                if stale(bucket, key, self.BURST_STATE_TTL):
+                    mapping.pop(key, None)
+                    self._temporary_state_touched.pop((bucket, key), None)
 
     def _make_client(self):
         """یک ``SoroushClient`` کاملاً جدید با سشنِ تازه می‌سازد.
@@ -330,6 +436,21 @@ class SoroushAntiSpamBot:
             self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
         asyncio.create_task(process_delete(self))
 
+        async def temporary_state_cleanup_loop():
+            while True:
+                try:
+                    self.cleanup_temporary_state()
+                    # Tracker retention is independent from moderation state.
+                    from modules import message_tracker
+                    message_tracker.cleanup_expired()
+                except Exception as error:
+                    self.logger.log_error(f"TEMPORARY STATE CLEANUP FAILED: {error!r}")
+                await asyncio.sleep(60)
+
+        self._temporary_state_cleanup_task = asyncio.create_task(
+            temporary_state_cleanup_loop()
+        )
+
         # 🛡️ ناظر اتصال: اگر سشن خراب شد یا RPCها پشت سر هم timeout
         # خوردند، درخواست‌های معلق را لغو و کلاینت را بدون ری‌استارت
         # ربات بازسازی می‌کند.
@@ -467,6 +588,7 @@ class SoroushAntiSpamBot:
             self.rejoin_spam_state[burst_key] = {
                 "previously_banned": True,
                 "previous_violations": previous_violations,
+                "_touched_at": self._state_now(),
             }
             self.punished_users.discard(punish_key)
             burst_task = self.spam_burst_tasks.pop(burst_key, None)
@@ -634,7 +756,7 @@ class SoroushAntiSpamBot:
                 import hashlib as _sd_hl
                 _sd_hash = _sd_hl.md5(str(_sd_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _sd_raw else "empty"
                 _sd_len = len(str(_sd_raw))
-                self.logger.log_info(f"SPAM DEBUG INCOMING chat_id={_sd_chat} message_id={_sd_mid} sender_id={_sd_sid_try} text_hash={_sd_hash} text_length={_sd_len}")
+                self.debug_message_log(f"SPAM DEBUG INCOMING chat_id={_sd_chat} message_id={_sd_mid} sender_id={_sd_sid_try} text_hash={_sd_hash} text_length={_sd_len}")
             except Exception as _sd_e:
                 try: self.logger.log_error(f"SPAM DEBUG INCOMING failed { _sd_e!r}")
                 except: pass
@@ -642,7 +764,7 @@ class SoroushAntiSpamBot:
             try:
                 _core_trace_chat = getattr(event, 'chat_id', None)
                 _core_trace_msg = getattr(getattr(event, 'message', None), 'id', None)
-                self.logger.log_info(
+                self.debug_message_log(
                     f"SPAM FLOW TRACE chat_id={_core_trace_chat} user_id=unknown message_id={_core_trace_msg} stage=CORE_RAW_ENTRY bot_id={id(self)} lock_id={id(getattr(self, 'spam_lock', set()))} lock_size={len(getattr(self, 'spam_lock', set()))} lock_keys={list(getattr(self, 'spam_lock', set()))[:5]!r}"
                 )
             except Exception as _core_trace_err:
@@ -1475,6 +1597,7 @@ class SoroushAntiSpamBot:
                 self.spammer_messages[user_id] = []
 
             self.spammer_messages[user_id].append(message_id)
+            self._spammer_messages_touched[user_id] = self._state_now()
 
         except Exception as e:
             print("remember spam error:", e)

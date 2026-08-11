@@ -6,6 +6,8 @@ from modules.group_id import normalize_group_id
 
 _MAX = 500
 _WINDOW = 120
+# Retention is longer than every detection window; it only bounds stale cache.
+_RETENTION = 30 * 60
 _HISTORY = defaultdict(lambda: deque(maxlen=_MAX))
 
 
@@ -17,10 +19,24 @@ def _norm(text):
     return " ".join(re.sub(r"\s+", " ", str(text or "").lower()).split())
 
 
+def _prune_key(key, now=None, retention=_RETENTION):
+    now = time.time() if now is None else now
+    rows = _HISTORY.get(key)
+    if not rows:
+        return
+    fresh = [row for row in rows if now - row.get("timestamp", now) <= retention]
+    if fresh:
+        _HISTORY[key] = deque(fresh, maxlen=_MAX)
+    else:
+        _HISTORY.pop(key, None)
+
+
 def add_message(chat_id, user_id, message_id, text, timestamp=None):
     if message_id is None:
         return False
-    _HISTORY[_key(chat_id, user_id)].append({
+    key = _key(chat_id, user_id)
+    _prune_key(key)
+    _HISTORY[key].append({
         "chat_id": chat_id,
         "user_id": user_id,
         "message_id": message_id,
@@ -31,7 +47,9 @@ def add_message(chat_id, user_id, message_id, text, timestamp=None):
 
 
 def get_user_recent_messages(chat_id, user_id, limit=None):
-    rows = list(_HISTORY.get(_key(chat_id, user_id), ()))
+    key = _key(chat_id, user_id)
+    _prune_key(key)
+    rows = list(_HISTORY.get(key, ()))
     return rows[-limit:] if limit else rows
 
 
@@ -52,6 +70,13 @@ def spam_snapshot(chat_id, user_id, current_message_id=None):
     if current_message_id and current_message_id not in ids:
         ids.append(current_message_id)
     return list(dict.fromkeys(ids))
+
+
+def cleanup_expired(now=None, retention=_RETENTION):
+    """Drop inactive user histories without touching recent detection data."""
+    now = time.time() if now is None else now
+    for key in list(_HISTORY):
+        _prune_key(key, now=now, retention=retention)
 
 
 def clear_user_history(chat_id, user_id):

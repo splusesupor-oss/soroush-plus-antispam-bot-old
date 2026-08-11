@@ -139,6 +139,16 @@ from splusthon.tl import functions
 from splusthon import types
 
 
+def _message_debug_enabled(bot):
+    return bool(bot.config_manager.get("debug_message_pipeline", False))
+
+
+def _debug_log(bot, message):
+    """Keep detailed per-message diagnostics opt-in, not hot-path INFO."""
+    if _message_debug_enabled(bot):
+        bot.logger.log_info(message)
+
+
 def _math_digits(value):
     """نمایش عدد فقط برای متن اعلان‌ها، بدون تغییر مقدار منطقی."""
     return str(value).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
@@ -468,6 +478,7 @@ def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
     # messages arriving during cleanup were never queued.
     key = (chat_id, user_id)
     bot.spam_burst_messages.setdefault(key, set()).update(message_ids)
+    bot.touch_temporary_state("burst", key)
     existing_task = bot.spam_burst_tasks.get(key)
     if existing_task and not existing_task.done():
         return
@@ -933,7 +944,7 @@ async def handle_new_message(bot, event):
             import hashlib as _hl_tmp
             _dbg_hash = _hl_tmp.md5(str(_dbg_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _dbg_raw else "empty"
             _dbg_len = len(str(_dbg_raw))
-            bot.logger.log_info(f"SPAM DEBUG INCOMING chat_id={_dbg_chat} message_id={_dbg_mid} sender_id={_dbg_sid} text_hash={_dbg_hash} text_length={_dbg_len}")
+            _debug_log(bot, f"SPAM DEBUG INCOMING chat_id={_dbg_chat} message_id={_dbg_mid} sender_id={_dbg_sid} text_hash={_dbg_hash} text_length={_dbg_len}")
         except Exception as _dbg_e:
             try:
                 bot.logger.log_error(f"SPAM DEBUG INCOMING failed { _dbg_e!r}")
@@ -943,13 +954,13 @@ async def handle_new_message(bot, event):
             try:
                 _er_chat = getattr(event, 'chat_id', None)
                 _er_mid = getattr(getattr(event, 'message', None), 'id', None)
-                bot.logger.log_info(f"SPAM DEBUG EARLY RETURN reason=no_message_attr chat_id={_er_chat} message_id={_er_mid}")
+                _debug_log(bot, f"SPAM DEBUG EARLY RETURN reason=no_message_attr chat_id={_er_chat} message_id={_er_mid}")
             except: pass
             return
 
         # اطلاعات پیام
         message_text = getattr(event.message, "message", "") or ""
-        bot.logger.log_info(
+        _debug_log(bot,
             "MESSAGE HANDLER ENTER "
             f"chat_id={getattr(event, 'chat_id', None)} "
             f"user_id={getattr(getattr(event, 'sender', None), 'id', None)} "
@@ -970,6 +981,10 @@ async def handle_new_message(bot, event):
         chat_id = getattr(event_chat, "id", event.chat_id)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
+        # Never feed messages sent by this account into tracking or moderation.
+        # This is intentionally before tracker, spam, repeat and flood checks.
+        if user_id and user_id == getattr(bot, "bot_account_id", None):
+            return
         status_key = f"{chat_id}:{user_id}"
         tracker_is_banned = getattr(bot.tracker, "is_banned", None)
         tracker_is_muted = getattr(bot.tracker, "is_muted", None)
@@ -977,13 +992,13 @@ async def handle_new_message(bot, event):
             is_banned(chat_id, user_id, getattr(sender, "username", None))
             or (tracker_is_banned(chat_id, user_id)
                 if callable(tracker_is_banned) else False)
-            or ((chat_id, user_id) in getattr(bot, "spam_lock", set()))
+            or bot.is_spam_locked((chat_id, user_id))
         )
         status_muted = (
             tracker_is_muted(chat_id, user_id)
             if callable(tracker_is_muted) else False
         )
-        bot.logger.log_info(
+        _debug_log(bot,
             "USER MODERATION STATUS "
             f"user_id={user_id} group_id={chat_id} "
             f"is_banned={status_banned} is_muted={status_muted} "
@@ -994,7 +1009,7 @@ async def handle_new_message(bot, event):
         # === SPAM FLOW TRACE: BEFORE_TRACKER ===
         _trace_msg_id = getattr(event.message, "id", None)
         _trace_hist_before = len(message_tracker.get_user_recent_messages(chat_id, user_id))
-        bot.logger.log_info(
+        _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_TRACKER hist_before={_trace_hist_before} bot_id={id(bot)} lock_id={id(getattr(bot, 'spam_lock', set()))}"
         )
         # Track every incoming group message before the spam-lock early drop;
@@ -1003,7 +1018,7 @@ async def handle_new_message(bot, event):
             chat_id, user_id, getattr(event.message, "id", None), message_text
         )
         _trace_hist_after = len(message_tracker.get_user_recent_messages(chat_id, user_id))
-        bot.logger.log_info(
+        _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=AFTER_TRACKER tracked_ok={tracked_ok} hist_after={_trace_hist_after}"
         )
         if tracked_ok:
@@ -1014,14 +1029,14 @@ async def handle_new_message(bot, event):
                 f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
         spam_lock_key = (chat_id, user_id)
-        _is_locked = spam_lock_key in getattr(bot, "spam_lock", set())
+        _is_locked = bot.is_spam_locked(spam_lock_key)
         _lock_size = len(getattr(bot, "spam_lock", set()))
-        bot.logger.log_info(
+        _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_SPAM_LOCK key={spam_lock_key!r} is_locked={_is_locked} lock_size={_lock_size} chat_id_type={type(chat_id).__name__} user_id_type={type(user_id).__name__}"
         )
         if (not event.is_private
-                and spam_lock_key in getattr(bot, "spam_lock", set())):
-            bot.logger.log_info(
+                and bot.is_spam_locked(spam_lock_key)):
+            _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
             )
             try:
@@ -1036,20 +1051,20 @@ async def handle_new_message(bot, event):
             locked_ids = message_tracker.spam_snapshot(
                 chat_id, user_id, getattr(event.message, "id", None)
             )
-            bot.logger.log_info(
+            _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=SNAPSHOT_COUNT count={len(locked_ids)} ids={locked_ids!r} snapshot_source=spam_snapshot"
             )
             deleted_locked, remaining_locked = await cleanup_spam_messages(
                 bot, chat_id, user_id, set(locked_ids)
             )
-            bot.logger.log_info(
+            _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=CLEANUP_RESULT requested={len(locked_ids)} deleted={deleted_locked} remaining={len(remaining_locked)} remaining_ids={remaining_locked!r} cleanup_deletes_all={len(locked_ids)==deleted_locked and not remaining_locked}"
             )
             _finalize_res = finalize_spam_wave(
                 chat_id, user_id, len(locked_ids),
                 deleted_locked, remaining_locked
             )
-            bot.logger.log_info(
+            _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=FINALIZE_RESULT result={_finalize_res} requested={len(locked_ids)} deleted={deleted_locked} remaining={len(remaining_locked)} will_clear={_finalize_res is True} hist_after_finalize={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
             bot.logger.log_info(
@@ -1511,8 +1526,8 @@ async def handle_new_message(bot, event):
                         f"success={deleted_now == len(repeated_gif_ids)} deleted={deleted_now}"
                     )
                 if newly_flagged:
-                    bot.spam_lock.add((chat_id, user_id))
-                    bot.logger.log_info(
+                    bot.set_spam_lock((chat_id, user_id))
+                    _debug_log(bot,
                         f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=duplicate_gif lock_size={len(getattr(bot, 'spam_lock', set()))}"
                     )
                     bot.logger.log_info(
@@ -1573,6 +1588,7 @@ async def handle_new_message(bot, event):
                     forward_key, 0
                 ) + 1
                 bot.forward_spam_counts[forward_key] = forward_count
+                bot.touch_temporary_state("forward", forward_key)
                 try:
                     await bot.client.delete_messages(chat_id, [event.message.id])
                     deleted = True
@@ -1981,8 +1997,9 @@ async def handle_new_message(bot, event):
                         return
                     bot.punished_users.add(punish_key)
                     bot.spam_burst_users.add((chat_id, user_id))
-                    bot.spam_lock.add((chat_id, user_id))
-                    bot.logger.log_info(
+                    bot.touch_temporary_state("burst", (chat_id, user_id))
+                    bot.set_spam_lock((chat_id, user_id))
+                    _debug_log(bot,
                         f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=is_repeat_severe lock_size={len(getattr(bot, 'spam_lock', set()))}"
                     )
                     ids = message_tracker.spam_snapshot(
@@ -3902,7 +3919,7 @@ async def handle_new_message(bot, event):
                     bot.tracker.reset_count(chat_id, user.id)
                     clear_user(chat_id, user.id)
                     message_tracker.clear_user_history(chat_id, user.id)
-                    getattr(bot, "spam_lock", set()).discard((chat_id, user.id))
+                    bot.clear_spam_lock((chat_id, user.id))
                     bot.tracker.banned_users.pop(released_key, None)
                     bot.tracker.muted_users.pop(released_key, None)
                     bot.rejoin_spam_state.pop((chat_id, user.id), None)
@@ -3933,7 +3950,7 @@ async def handle_new_message(bot, event):
                             for _t in list(getattr(bot, "spam_lock", set())):
                                 try:
                                     if str(_t[0]) in (str(chat_id), _norm, _str_gid) and str(_t[1]) == str(user.id):
-                                        getattr(bot, "spam_lock", set()).discard(_t)
+                                        bot.clear_spam_lock(_t)
                                 except: pass
                         except: pass
                         try:
@@ -4247,7 +4264,7 @@ async def handle_new_message(bot, event):
                 async def unmute_succeeded(_result):
                     target_id = getattr(target_user, "id", None)
                     target_key = f"{chat_id}:{target_id}"
-                    getattr(bot, "spam_lock", set()).discard((chat_id, target_id))
+                    bot.clear_spam_lock((chat_id, target_id))
                     bot.punished_users.discard(target_key)
                     bot.tracker.muted_users.pop(target_key, None)
                     bot.tracker.banned_users.pop(target_key, None)
@@ -4378,8 +4395,7 @@ async def handle_new_message(bot, event):
 
                 bot.flood_messages[chat_id] = []
 
-                if chat_id not in bot.delete_notice_lock:
-                    bot.delete_notice_lock.add(chat_id)
+                if bot.acquire_delete_notice_lock(chat_id):
                     await event.reply(
                         "⚠️ ارسال پیام تکراری پشت سرهم حذف شد"
                     )
@@ -4658,14 +4674,14 @@ async def handle_new_message(bot, event):
             save_user(chat_id, username, user_id)
 
             previous_warnings = bot.tracker.get_count(chat_id, user_id)
-            bot.logger.log_info(
+            _debug_log(bot,
                 "WARNING LOAD DEBUG\n"
                 f"user_id={user_id}\n"
                 f"group_id={chat_id}\n"
                 f"previous_warnings={previous_warnings}"
             )
             count = bot.tracker.increment(chat_id, user_id)
-            bot.logger.log_info(
+            _debug_log(bot,
                 "WARNING LOAD DEBUG\n"
                 f"user_id={user_id}\n"
                 f"group_id={chat_id}\n"
@@ -4675,8 +4691,8 @@ async def handle_new_message(bot, event):
 
             threshold = bot.config_manager.get("spam_threshold", 3)
             if count >= threshold:
-                bot.spam_lock.add((chat_id, user_id))
-                bot.logger.log_info(
+                bot.set_spam_lock((chat_id, user_id))
+                _debug_log(bot,
                     f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=threshold count={count} lock_size={len(getattr(bot, 'spam_lock', set()))}"
                 )
                 bot.logger.log_info(
