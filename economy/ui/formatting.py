@@ -4,7 +4,7 @@
 می‌کند و لایهٔ هندلر آن را به entity واقعی تبدیل می‌کند.
 """
 
-_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+_DIGITS = str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵")
 
 
 def fa(value):

@@ -246,8 +246,8 @@ class AdminActions:
                 reason_line = f"دلیل فیلتر گروه : ({group_filter_match.group(1)})"
             else:
                 reason_line = f"دلیل فیلتر گروه : {raw_reason}"
-            digits = str(count).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
-            max_digits = str(threshold).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
+            digits = str(count).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
+            max_digits = str(threshold).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
             prefix = f"⚠️ کاربر {name}\n"
             body = f"پیام شما حذف شد | {reason_line}\n"
             warning_label = "تعداد اخطار:"

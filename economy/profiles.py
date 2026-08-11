@@ -27,7 +27,7 @@ class ProfileError(Exception):
     """خطای قابل‌انتظار پروفایل (ورودی نامعتبر، موجودی کم و…)."""
 
 
-_DIGIT_MAP = {ord(p): str(i) for i, p in enumerate("۰۱۲۳۴۵۶۷۸۹")}
+_DIGIT_MAP = {ord(p): str(i) for i, p in enumerate("𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵")}
 _DIGIT_MAP.update({ord(a): str(i) for i, a in enumerate("٠١٢٣٤٥٦٧٨٩")})
 
 
@@ -140,7 +140,7 @@ def validate_nickname(text, *, owned_titles=()):
     locked = catalog.title_item_for(value)
     if locked is not None and locked["id"] not in set(owned_titles):
         price = str(catalog.TITLE_PRICE).translate(
-            {ord(str(i)): p for i, p in enumerate("۰۱۲۳۴۵۶۷۸۹")})
+            {ord(str(i)): p for i, p in enumerate("𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵")})
         raise ProfileError(
             f"لقب «{locked['title']}» یکی از آیتم‌های فروشگاه است.\n"
             f"برای استفاده از آن باید ابتدا آن را بخرید ({price} برنز)."

@@ -284,7 +284,7 @@ def format_history(chat_id, limit=MAX_USERS_IN_REPORT):
     return full_text, entities
 
 
-_PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
+_PERSIAN_DIGITS = "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"
 
 
 def _fa(value):

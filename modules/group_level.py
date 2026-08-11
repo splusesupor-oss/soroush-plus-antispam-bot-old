@@ -24,7 +24,7 @@ MAX_LEVEL = 15
 # کشِ درون‌حافظه‌ای تا مسیرِ داغِ پیام‌ها برایِ هر پیام فایل نخواند.
 _MEM_LEVEL = {}
 
-_PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
+_PERSIAN_DIGITS = "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"
 
 
 def fa(value):

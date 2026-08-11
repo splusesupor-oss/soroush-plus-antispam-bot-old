@@ -208,7 +208,7 @@ def format_datetime(moment):
         f"({jd} {_JALALI_MONTHS[jm - 1]} {jy}) "
         f"- ساعت {local.hour:02d}:{local.minute:02d}"
     )
-    return text.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+    return text.translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
 
 
 # ---------------------------------------------------------------------------
