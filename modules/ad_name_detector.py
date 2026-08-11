@@ -1,6 +1,8 @@
 """تشخیص مستقل نام‌های تبلیغاتی؛ جدا از فیلتر متن گروه."""
 import re
 
+from modules.user_display import format_user
+
 _TERMS = (
     r"بیو\s*چک", r"چک\s*بیو", r"بیوگرافی\s*چک", r"بیومو\s*(?:چک|ببینید|ببین)",
     r"بیو.*(?:فیلم|لینک|چک|ببین)", r"(?:نود|پیوی)\s*رایگان",
@@ -16,11 +18,7 @@ def _norm(value):
 
 
 def display_name(user):
-    name = " ".join(x for x in (getattr(user, "first_name", None), getattr(user, "last_name", None)) if x).strip()
-    if name:
-        return name
-    username = getattr(user, "username", None)
-    return f"@{str(username).lstrip('@')}" if username else "کاربر ناشناس"
+    return format_user(user)
 
 
 def reason(user):

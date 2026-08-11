@@ -133,6 +133,7 @@ from modules import user_history
 from modules import group_level
 from modules import bot_detector
 from modules import ad_name_detector
+from modules.user_display import format_user
 from modules import message_tracker
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
@@ -194,36 +195,11 @@ def _jalali_today():
 
 
 def _format_group_member(user):
-    """Display name first; username is only a fallback, never an ID."""
-    name = " ".join(
-        part.strip(" |")
-        for part in (
-            getattr(user, "first_name", None),
-            getattr(user, "last_name", None),
-        )
-        if part and part.strip(" |")
-    ).replace("|", "").replace("☫", "").strip()
-    if name:
-        return name
-    username = getattr(user, "username", None)
-    if username and not str(username).strip().isdigit():
-        return f"@{str(username).lstrip('@')}"
-    return "کاربر ناشناس"
+    return format_user(user)
 
 
 def _format_admin_display(user):
-    """نمایش امن ادمین بدون افشای شناسهٔ عددی."""
-    username = getattr(user, "username", None)
-    if username and not str(username).strip().isdigit():
-        return f"@{str(username).lstrip('@')}"
-
-    display_name = " ".join(
-        part for part in (
-            getattr(user, "first_name", None),
-            getattr(user, "last_name", None),
-        ) if part
-    ).strip()
-    return display_name or "Unknown User"
+    return format_user(user)
 
 
 async def _reward_game_reply(event, chat_id, user_id, user, game,
@@ -278,22 +254,8 @@ async def _reward_game_reply(event, chat_id, user_id, user, game,
 
 
 def _format_banned_user(user, user_id):
-    username = getattr(user, "username", None) if user else None
-    if username:
-        # sanitize username: remove newlines and extra spaces
-        username = str(username).strip().lstrip("@").replace("\n", "").replace("\r", "").strip()
-        if username:
-            return f"@{username}"
-    display_name = " ".join(
-        part for part in (
-            getattr(user, "first_name", None) if user else None,
-            getattr(user, "last_name", None) if user else None,
-        ) if part
-    )
-    # sanitize display_name: remove newlines, |, ☫ and extra spaces
-    display_name = display_name.replace("\n", " ").replace("\r", " ").replace("|", " ").replace("☫", " ").strip()
-    display_name = " ".join(display_name.split())
-    return display_name or str(user_id)
+    # ``user_id`` is intentionally not a display fallback.
+    return format_user(user)
 
 
 def _get_forward_metadata(message):

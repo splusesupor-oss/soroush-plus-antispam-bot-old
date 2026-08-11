@@ -231,12 +231,11 @@ class AdminActions:
         try:
             from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 
-            actual_username = getattr(user, "username", None) if user is not None else username
-            first = getattr(user, "first_name", None) if user is not None else None
-            last = getattr(user, "last_name", None) if user is not None else None
-            display = " ".join(x for x in (first, last) if x).strip()
-            name = (f"@{str(actual_username).lstrip('@')}" if actual_username
-                    else display or "کاربر ناشناس")
+            from modules.user_display import format_user
+            # A complete entity is preferred; legacy callers may only provide
+            # a username, which is still rendered with the same policy.
+            display_source = user if user is not None else {"username": username}
+            name = format_user(display_source)
             raw_reason = str(reason or "نامشخص").strip()
             banned_match = re.match(r"^کلمه ممنوعه\s*\((.*?)\)$", raw_reason)
             group_filter_match = re.match(r"^فیلتر گروه\s*\((.*?)\)$", raw_reason)

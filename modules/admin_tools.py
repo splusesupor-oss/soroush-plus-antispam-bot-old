@@ -28,6 +28,7 @@ _TEHRAN = TEHRAN
 from modules.owner_check import is_global_owner
 from modules.admin_storage import is_admin
 from modules.group_storage import get_group_owner
+from modules.user_display import format_user
 
 _BASE = Path(__file__).resolve().parent.parent / "config"
 _ADMIN_LOG_FILE = _BASE / "admin_log.json"
@@ -43,28 +44,8 @@ LOG_TTL_SECONDS = 24 * 60 * 60
 #  نمایشِ امنِ کاربر (هرگز شناسهٔ عددی)
 # ---------------------------------------------------------------------------
 def display_name(user):
-    """@username یا نامِ نمایشی یا «کاربر ناشناس» — بدونِ ID عددی.
-
-    ``user`` می‌تواند شیءِ کاملِ SPlusthon یا dict باشد.
-    """
-    username = None
-    first = None
-    last = None
-    if isinstance(user, dict):
-        username = user.get("username")
-        first = user.get("first_name")
-        last = user.get("last_name")
-    elif user is not None:
-        username = getattr(user, "username", None)
-        first = getattr(user, "first_name", None)
-        last = getattr(user, "last_name", None)
-
-    uname = str(username or "").strip().lstrip("@")
-    if uname and not uname.isdigit():
-        return "@" + uname
-
-    full = " ".join(part for part in (first, last) if part).strip()
-    return full or "کاربر ناشناس"
+    """نمایشِ عمومیِ کاربر با اولویت username و بدون ID عددی."""
+    return format_user(user)
 
 
 def has_admin_permission(chat_id, user_id, username=None):

@@ -7,6 +7,7 @@
 import asyncio
 import time
 from itertools import count
+from modules.user_display import format_user
 
 
 class SessionStore:
@@ -116,25 +117,8 @@ class SessionStore:
 
 
 def display_name(user):
-    """نام نمایشی: ابتدا Display Name، سپس Username، سپس جایگزین مناسب."""
-    if user is None:
-        return "بازیکن ناشناس"
-    parts = [
-        str(part).strip()
-        for part in (
-            getattr(user, "first_name", None),
-            getattr(user, "last_name", None),
-        )
-        if part and str(part).strip()
-    ]
-    name = " ".join(parts).replace("|", "").replace("☫", "").strip()
-    if name:
-        return name
-    username = getattr(user, "username", None)
-    if username:
-        return f"@{str(username).lstrip('@')}"
-    # Never expose numeric ids in player-facing game messages.
-    return "کاربر ناشناس"
+    """نام بازیکن با سیاست مشترک username-first."""
+    return format_user(user)
 
 
 def username_tag(user):

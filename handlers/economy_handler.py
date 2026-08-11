@@ -16,6 +16,7 @@ import time
 import economy
 from economy import profiles
 from economy.ui import balance_menu, profile_menu, shop_menu
+from modules.user_display import format_user
 
 CANCEL = "0"
 _COMMAND_TRACE = contextvars.ContextVar("economy_command_trace", default=None)
@@ -616,18 +617,7 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
 
 
 def _display_name(user):
-    if user is None:
-        return None
-    parts = [
-        str(part).strip() for part in
-        (getattr(user, "first_name", None), getattr(user, "last_name", None))
-        if part and str(part).strip()
-    ]
-    name = " ".join(parts).strip()
-    if name:
-        return name
-    username = getattr(user, "username", None)
-    return f"@{str(username).lstrip('@')}" if username else None
+    return format_user(user)
 
 
 def reset_all():
