@@ -3848,21 +3848,52 @@ async def handle_new_message(bot, event):
                                 if _chat_part in (str(chat_id), _norm, _str_gid):
                                     bot.punished_users.discard(_k)
                         for _gid in (chat_id, _norm, _str_gid):
-                            for _k in (f"{_gid}:{user.id}", f"{_gid}:{str(user.id)}", f"{str(_gid)}:{user.id}"):
+                            for _k in (f"{_gid}:{user.id}", f"{_gid}:{str(user.id)}", f"{str(_gid)}:{user.id}", f"{str(_gid)}:{str(user.id)}"):
                                 bot.tracker.banned_users.pop(_k, None)
                                 bot.tracker.muted_users.pop(_k, None)
-                            # tuples
-                            for _t in ((_gid, user.id), (_norm, user.id), (_str_gid, user.id), (str(_gid), user.id), (_gid, str(user.id))):
+                        # robust iterative clearing for tuple-based states (handle any string/int mismatch)
+                        try:
+                            for _t in list(getattr(bot, "spam_lock", set())):
                                 try:
-                                    getattr(bot, "spam_lock", set()).discard(_t)
+                                    if str(_t[0]) in (str(chat_id), _norm, _str_gid) and str(_t[1]) == str(user.id):
+                                        getattr(bot, "spam_lock", set()).discard(_t)
                                 except: pass
-                                bot.rejoin_spam_state.pop(_t, None)
-                                bot.spam_burst_users.discard(_t)
-                                bot.spam_burst_messages.pop(_t, None)
-                                getattr(bot, "forward_spam_counts", {}).pop(_t, None)
+                        except: pass
+                        try:
+                            for _k in list(bot.rejoin_spam_state.keys()):
                                 try:
-                                    getattr(bot, "forward_spam_processing", set()).discard(_t)
+                                    if str(_k[0]) in (str(chat_id), _norm, _str_gid) and str(_k[1]) == str(user.id):
+                                        bot.rejoin_spam_state.pop(_k, None)
                                 except: pass
+                        except: pass
+                        try:
+                            for _t in list(getattr(bot, "spam_burst_users", set())):
+                                try:
+                                    if str(_t[0]) in (str(chat_id), _norm, _str_gid) and str(_t[1]) == str(user.id):
+                                        getattr(bot, "spam_burst_users", set()).discard(_t)
+                                except: pass
+                        except: pass
+                        try:
+                            for _k in list(getattr(bot, "spam_burst_messages", {}).keys()):
+                                try:
+                                    if str(_k[0]) in (str(chat_id), _norm, _str_gid) and str(_k[1]) == str(user.id):
+                                        bot.spam_burst_messages.pop(_k, None)
+                                except: pass
+                        except: pass
+                        try:
+                            for _k in list(getattr(bot, "forward_spam_counts", {}).keys()):
+                                try:
+                                    if str(_k[0]) in (str(chat_id), _norm, _str_gid) and str(_k[1]) == str(user.id):
+                                        getattr(bot, "forward_spam_counts", {}).pop(_k, None)
+                                except: pass
+                        except: pass
+                        try:
+                            for _t in list(getattr(bot, "forward_spam_processing", set())):
+                                try:
+                                    if str(_t[0]) in (str(chat_id), _norm, _str_gid) and str(_t[1]) == str(user.id):
+                                        getattr(bot, "forward_spam_processing", set()).discard(_t)
+                                except: pass
+                        except: pass
                         # also ensure spam_history and tracker history cleared for normalized variants
                         try:
                             clear_user(_norm, user.id)
