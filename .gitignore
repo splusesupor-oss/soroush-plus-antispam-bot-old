@@ -25,3 +25,9 @@ config/fox_lucky_box.json
 config/economy.json
 config/economy_shop.json
 config/economy_settings.json
+
+# قابلیت‌های جدید: state runtime — روی هر دستگاه جدا ساخته می‌شود
+config/fox_minesweeper.json
+config/sentence_guess_state.json
+config/group_level.json
+config/user_history.json
