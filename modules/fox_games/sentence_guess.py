@@ -158,10 +158,12 @@ def _pick(chat_id, user_id, used):
     return _RANDOM.choice(pool)
 
 
-def start(chat_id, user_id=None):
+def start(chat_id, user_id=None, mode="guess"):
     """یک جملهٔ تازه برای این کاربر شروع می‌کند.
 
     اگر همین کاربر نشستِ باز داشته باشد ``None`` برمی‌گردد.
+    ``mode`` یکی از ``"guess"`` (حدس جمله) یا ``"build"`` (ساخت جمله) است.
+    در حالت ``"build"`` کلماتِ پاسخ به‌هم‌ریخته نمایش داده می‌شوند.
     """
     if _recover(chat_id, user_id) is not None:
         return None
@@ -182,6 +184,12 @@ def start(chat_id, user_id=None):
             number = 1
 
     question, answer_value = _pick(chat_id, user_id, used)
+    display_question = question
+    if mode == "build":
+        words = str(answer_value).split()
+        _RANDOM.shuffle(words)
+        display_question = " ".join(words)
+    question = display_question
     if user_id is not None:
         try:
             from economy import game_progress as _gp

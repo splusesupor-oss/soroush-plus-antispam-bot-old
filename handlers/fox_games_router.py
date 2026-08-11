@@ -513,15 +513,15 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
 # نشست‌ها به‌تفکیکِ کاربر است، پس سوالِ هر کس مالِ خودش است و کسی جوابِ
 # سوالِ دیگری را نمی‌بیند.
 # ---------------------------------------------------------------------------
-async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger):
+async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger, mode="guess"):
     import asyncio
 
-    state = sentence_guess.start(chat_id, user_id)
+    state = sentence_guess.start(chat_id, user_id, mode=mode)
     if state is None:
         await _bold_reply(
             event, "⏳ شما یک جملهٔ باز دارید؛ ابتدا همان را پاسخ دهید.")
         return True
-    title = (f"🧩 حدس بزن — سوال {to_persian_digits(state['number'])} "
+    title = (f"🧩 {'ساخت جمله' if mode == 'build' else 'حدس بزن'} — سوال {to_persian_digits(state['number'])} "
              f"از {to_persian_digits(state['total'])}:")
     time_line = (f"⏳ {to_persian_digits(sentence_guess.TIMEOUT_SECONDS)} "
                  f"ثانیه فرصت دارید")
@@ -659,15 +659,15 @@ async def _minesweeper_message(bot, event, chat_id, user_id, sender, text, logge
             f"{reward}\n{remaining_line}",
             [headline])
     else:
-        charged = _minesweeper_penalty(bot, chat_id, user_id, reference, logger)
+        # طبق طراحی مشخص‌شده: پیدا کردن مین → جایزه نقره (۵ سکه)
         headline = f"💥 {name} روی مین رفت!"
-        penalty = (f"\n🪙 -{to_persian_digits(minesweeper.PENALTY)} سکه "
-                   f"{coin_word(minesweeper.REWARD_GAME)}") if charged else ""
+        # جایزه نقره برای پیدا کردن مین
+        reward_line = "\n🪙 +۵ سکه نقره"
         await _bold_reply(
             event,
             f"{headline}\n\n{result['board']}\n\n"
             f"💣 مین در خانهٔ {to_persian_digits(result['mine'])} بود."
-            f"{penalty}\n{remaining_line}",
+            f"{reward_line}\n{remaining_line}",
             [headline])
     return True
 
@@ -988,7 +988,8 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     if command == normalize_text("معما"):
         return await _start_maemma(bot, event, chat_id, user_id, sender, logger)
     if command in {normalize_text("حدس جمله"), normalize_text("ساخت جمله")}:
-        return await _start_sentence_guess(bot, event, chat_id, user_id, sender, logger)
+        mode = "build" if normalize_text("ساخت جمله") == command else "guess"
+        return await _start_sentence_guess(bot, event, chat_id, user_id, sender, logger, mode=mode)
     if command == normalize_text("مین یاب"):
         return await _start_minesweeper(bot, event, chat_id, user_id, sender, logger)
     if command == normalize_text("بهترین جواب"):

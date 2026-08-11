@@ -270,9 +270,18 @@ def format_history(chat_id, limit=MAX_USERS_IN_REPORT):
     footer = "⏳ سابقه‌ها هر ۲۴ ساعت به‌صورت خودکار ریست می‌شوند."
     footer_start = _u16_len("".join(lines))
     lines.append(footer)
+    full_text = "".join(lines)
+    # کل گزارش داخل نقل قول شیشه‌ای (Blockquote) و با newline واقعی
+    entities = [MessageEntityBlockquote(
+        offset=0, length=_u16_len(full_text))]
+    # Bold برای عنوان اصلی و پاورقی
     entities.append(MessageEntityBold(
-        offset=footer_start, length=_u16_len(footer)))
-    return "".join(lines), entities
+        offset=0, length=_u16_len("🗂 سابقهٔ کاربران این گروه:")))
+    footer_pos = full_text.find(footer)
+    if footer_pos != -1:
+        entities.append(MessageEntityBold(
+            offset=_u16_len(full_text[:footer_pos]), length=_u16_len(footer)))
+    return full_text, entities
 
 
 _PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
