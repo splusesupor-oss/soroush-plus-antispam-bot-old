@@ -1001,6 +1001,18 @@ async def handle_new_message(bot, event):
         # This is intentionally before tracker, spam, repeat and flood checks.
         if user_id and user_id == getattr(bot, "bot_account_id", None):
             return
+
+        # A captionless ordinary media message has no text to inspect.  Return
+        # before the tracker and every text-only route (commands, word filters,
+        # repeat/flood text checks and SpamDetector).  GIFs and forwards keep
+        # their dedicated anti-abuse paths below, because those checks inspect
+        # media/forward metadata rather than text.
+        has_text_content = bool(message_text.strip())
+        is_forwarded_media = _get_forward_metadata(event.message)[0]
+        is_gif_media = is_gif_message(event.message)
+        if not has_text_content and not is_forwarded_media and not is_gif_media:
+            return
+
         status_key = f"{chat_id}:{user_id}"
         tracker_is_banned = getattr(bot.tracker, "is_banned", None)
         tracker_is_muted = getattr(bot.tracker, "is_muted", None)
@@ -1498,11 +1510,7 @@ async def handle_new_message(bot, event):
                 await event.reply("🧠 حافظه‌ای برای این کاربر ثبت نشده است.")
             return
 
-        if (
-            not message_text
-            and not _get_forward_metadata(event.message)[0]
-            and not is_gif_message(event.message)
-        ):
+        if not has_text_content and not is_forwarded_media and not is_gif_media:
             return
 
         if not fast_command:
