@@ -211,7 +211,7 @@ def start(chat_id, user_id, logger=None):
         "finished": False,
     }
     _ACTIVE[key] = session
-    remaining = _consume_chance(user_id)
+    remaining = remaining_chances(user_id)
     log(logger, f"MINESWEEPER START chat_id={chat_id} user_id={user_id} "
                 f"session_id={session['session_id']} mine={mine} "
                 f"remaining={remaining}")
@@ -243,6 +243,7 @@ def pick(chat_id, user_id, text, logger=None):
 
     mine = session["mine"]
     safe = number != mine
+    remaining = _consume_chance(user_id)
     log(logger, f"MINESWEEPER PICK chat_id={chat_id} user_id={user_id} "
                 f"cell={number} mine={mine} safe={safe}")
     return {
@@ -251,7 +252,7 @@ def pick(chat_id, user_id, text, logger=None):
         "safe": safe,
         "board": board_text({number, mine} if not safe else {number}, mine),
         "session_id": session["session_id"],
-        "remaining": remaining_chances(user_id),
+        "remaining": remaining,
     }, None
 
 
@@ -269,12 +270,13 @@ def abandon(chat_id, user_id, session_id=None, logger=None):
         task.cancel()
     _TASKS.pop(key, None)
     _ACTIVE.pop(key, None)
+    remaining = _consume_chance(user_id)
     log(logger, f"MINESWEEPER TIMEOUT chat_id={chat_id} user_id={user_id}")
     return {
         "mine": session["mine"],
         "board": board_text({session["mine"]}, session["mine"]),
         "session_id": session["session_id"],
-        "remaining": remaining_chances(user_id),
+        "remaining": remaining,
     }
 
 
