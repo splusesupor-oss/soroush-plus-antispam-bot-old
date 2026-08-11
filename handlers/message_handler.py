@@ -2089,16 +2089,25 @@ async def handle_new_message(bot, event):
             if _chat_game_busy(chat_id):
                 await event.reply(GAME_BUSY_MESSAGE)
                 return
-            game = start_name_family(chat_id)
+            bot.logger.log_info(f"NAME FAMILY HANDLER START TRY chat_id={chat_id} user_id={user_id}")
+            game = start_name_family(chat_id, logger=bot.logger)
+            if not game:
+                bot.logger.log_info(f"NAME FAMILY HANDLER START FAILED chat_id={chat_id} reason=already_active_or_no_letter")
+                await event.reply(GAME_BUSY_MESSAGE)
+                return
+            bot.logger.log_info(f"NAME FAMILY HANDLER START SUCCESS chat_id={chat_id} round_id={game['round_id']} letter={game['letter']}")
             await event.reply(
                 "🎮 اسم فامیل\n\n"
                 f"حرف: {game['letter']}\n\n"
                 "⏳ زمان: 90 ثانیه\n\n"
                 "👤 نام\n👤 فامیل\n🌍 شهر\n🍇 میوه\n📦 وسیله\n🐶 حیوان\n🎵 خواننده"
             )
+            bot.logger.log_info(f"NAME FAMILY HANDLER REPLY SENT chat_id={chat_id} round_id={game['round_id']}")
             async def name_family_results(ranking):
                 """نمایش نتایج؛ توسط مسیر اختصاصی همین بازی فراخوانی می‌شود."""
+                bot.logger.log_info(f"NAME FAMILY HANDLER RESULTS CALLBACK ENTER chat_id={chat_id} round_id={game['round_id']} ranking_len={len(ranking) if ranking else 0}")
                 if not ranking:
+                    bot.logger.log_info(f"NAME FAMILY HANDLER RESULTS EMPTY chat_id={chat_id} round_id={game['round_id']}")
                     await event.reply("🏆 نتایج\n\nشرکت‌کننده‌ای پاسخ صحیح ثبت نکرد.")
                     return
                 medals = ("🥇", "🥈", "🥉")
