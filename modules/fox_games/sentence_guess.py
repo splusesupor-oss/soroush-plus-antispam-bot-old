@@ -288,8 +288,20 @@ def answer(chat_id, text, user_id=None):
 
 
 def timeout(chat_id, user_id=None):
-    state = _recover(chat_id, user_id)
+    key = _key(chat_id, user_id)
+    # مستقیماً از حافظه یا فایل بدون بررسی انقضا می‌خوانیم تا پاسخ حفظ شود
+    state = _ACTIVE.get(key)
     if state is None:
+        data = _load()
+        state = data.get(key)
+    if not isinstance(state, dict):
+        # اگر کلید قدیمی چت‌محور باشد
+        if user_id is not None:
+            data = _load()
+            state = data.get(str(chat_id))
+        else:
+            state = _ACTIVE.get(str(chat_id)) or _load().get(str(chat_id))
+    if not isinstance(state, dict):
         return None
     result = dict(state)
     _clear(chat_id, user_id)

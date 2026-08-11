@@ -544,9 +544,11 @@ async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger, mo
         await asyncio.sleep(sentence_guess.TIMEOUT_SECONDS)
         result = sentence_guess.timeout(chat_id, user_id)
         if result:
+            answer_text = result.get('answer', '') or ''
+            text = f"⏰ زمان تمام شد!\n\n✅ پاسخ درست:\n{answer_text}"
             await _bold_reply(
                 event,
-                f"⏰ زمان تمام شد!\n\nجواب: {result['answer']}", ["جواب:"])
+                text, ["⏰ زمان تمام شد!", "✅ پاسخ درست:"])
 
     log(logger, f"SENTENCE GUESS START chat_id={chat_id} user_id={user_id} "
                 f"number={state['number']}")
