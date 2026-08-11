@@ -8,6 +8,7 @@
 """
 from economy import award_game as economy_award_game
 from economy import rewards as economy_rewards
+from economy import spend as economy_spend
 from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 from modules.fox_games import (
     battle,
@@ -15,6 +16,7 @@ from modules.fox_games import (
     laugh_or_lose,
     lucky_box,
     maemma,
+    minesweeper,
     sentence_guess,
     survival,
     vampire,
@@ -36,6 +38,9 @@ FOX_GAME_COMMANDS = frozenset({
     "خون‌آشام",
     "معما",
     "حدس جمله",
+    # همان بازی «حدس جمله» است، فقط با دستور دوم — بازی جدیدی ساخته نشده.
+    "ساخت جمله",
+    "مین یاب",
     "بهترین جواب",
     "نبرد",
     "شرکت",
@@ -53,6 +58,7 @@ def any_active(chat_id):
         or battle.is_active(chat_id)
         or maemma.is_active(chat_id)
         or sentence_guess.is_active(chat_id)
+        or minesweeper.is_active(chat_id)
     )
 
 
@@ -501,17 +507,27 @@ async def _vampire_message(bot, event, chat_id, user_id, sender, text, logger):
 
 
 # ---------------------------------------------------------------------------
-# 🧩 حدس جمله — مستقل از «معما»
+# 🧩 حدس جمله / ساخت جمله — یک بازی، دو دستور
+#
+# «ساخت جمله» بازی تازه‌ای نیست: همان بازی حدس جمله است، فقط با نامِ دوم.
+# نشست‌ها به‌تفکیکِ کاربر است، پس سوالِ هر کس مالِ خودش است و کسی جوابِ
+# سوالِ دیگری را نمی‌بیند.
 # ---------------------------------------------------------------------------
 async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger):
-    state = sentence_guess.start(chat_id)
+    import asyncio
+
+    state = sentence_guess.start(chat_id, user_id)
     if state is None:
-        await _bold_reply(event, "⏳ یک حدس جمله در این گروه در جریان است؛ ابتدا همان را پاسخ دهید.")
+        await _bold_reply(
+            event, "⏳ شما یک جملهٔ باز دارید؛ ابتدا همان را پاسخ دهید.")
         return True
-    title = "🧩 حدس بزن:"
-    text = f"{title}\n\n{state['question']}\n\n⏳ ۳۰ ثانیه فرصت دارید"
-    # Quote the complete clue with Soroush Plus Blockquote, not a literal >.
+    title = (f"🧩 حدس بزن — سوال {to_persian_digits(state['number'])} "
+             f"از {to_persian_digits(state['total'])}:")
+    time_line = (f"⏳ {to_persian_digits(sentence_guess.TIMEOUT_SECONDS)} "
+                 f"ثانیه فرصت دارید")
     question = state["question"]
+    text = f"{title}\n\n{question}\n\n{time_line}"
+    # Quote the complete clue with Soroush Plus Blockquote, not a literal >.
     entities = [
         MessageEntityBold(offset=0, length=_u16(title)),
         MessageEntityBlockquote(
@@ -526,28 +542,133 @@ async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger):
 
     async def on_timeout():
         await asyncio.sleep(sentence_guess.TIMEOUT_SECONDS)
-        result = sentence_guess.timeout(chat_id)
+        result = sentence_guess.timeout(chat_id, user_id)
         if result:
-            await _bold_reply(event, f"⏰ زمان تمام شد!\n\nجواب: {result['answer']}", ["جواب:"])
+            await _bold_reply(
+                event,
+                f"⏰ زمان تمام شد!\n\nجواب: {result['answer']}", ["جواب:"])
 
-    import asyncio
+    log(logger, f"SENTENCE GUESS START chat_id={chat_id} user_id={user_id} "
+                f"number={state['number']}")
     # The timer starts only after the question has been sent.
     asyncio.create_task(on_timeout())
     return True
 
 
 async def _sentence_guess_message(bot, event, chat_id, user_id, sender, text, logger):
-    if not sentence_guess.is_active(chat_id):
+    # فقط نشستِ خودِ همین کاربر بررسی می‌شود؛ پیامِ او روی بازی دیگران اثر ندارد.
+    if not sentence_guess.is_active(chat_id, user_id):
         return False
-    result = sentence_guess.answer(chat_id, text)
+    result = sentence_guess.answer(chat_id, text, user_id)
     if result is None:
         return True
     name = display_name(sender)
     paid = _coins(bot, chat_id, user_id, name, sentence_guess.REWARD, logger,
                   reference=f"sentence_guess:{chat_id}:{result['started_at']}:{user_id}",
-                  game="maemma")
-    reward = f"\\n\\n🪙 +{to_persian_digits(sentence_guess.REWARD)} سکه برنز" if paid else ""
-    await event.reply(f"🎉 {name} پاسخ درست داد!{reward}")
+                  game="sentence_guess")
+    reward = (f"\n\n🪙 +{to_persian_digits(sentence_guess.REWARD)} سکه "
+              f"{coin_word('sentence_guess')}") if paid else ""
+    win_text = f"🎉 {name} پاسخ درست داد!"
+    log(logger, f"SENTENCE GUESS CORRECT chat_id={chat_id} user_id={user_id} "
+                f"answer={result['answer']!r} paid={paid}")
+    await _bold_reply(event, f"{win_text}{reward}", [win_text])
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 💣 مین یاب
+#
+# تختهٔ ۳×۳، یک مینِ تصادفی در هر دور، بازیِ مستقل برای هر کاربر،
+# ۲ شانس در روز با ریستِ ۰۰:۰۰ به وقتِ ایران.
+# ---------------------------------------------------------------------------
+def _minesweeper_penalty(bot, chat_id, user_id, reference, logger=None):
+    """کسرِ سکه وقتی کاربر روی مین می‌رود. خروجی: کسر شد یا نه."""
+    if minesweeper.PENALTY <= 0:
+        return False
+    try:
+        economy_spend(chat_id, user_id, minesweeper.PENALTY,
+                      economy_rewards.coin_for(minesweeper.REWARD_GAME),
+                      reference=reference, note="مین یاب")
+        log(logger, f"MINESWEEPER PENALTY chat_id={chat_id} "
+                    f"user_id={user_id} amount={minesweeper.PENALTY}")
+        return True
+    except Exception as error:
+        log_error(logger, f"MINESWEEPER PENALTY FAILED chat_id={chat_id} "
+                          f"user_id={user_id} error={error!r}")
+        return False
+
+
+async def _start_minesweeper(bot, event, chat_id, user_id, sender, logger):
+    session, error = minesweeper.start(chat_id, user_id, logger)
+    if error == "active":
+        await _bold_reply(event, minesweeper.ALREADY_RUNNING)
+        return True
+    if error == "quota":
+        await _bold_reply(event, minesweeper.quota_message(user_id))
+        return True
+
+    title = "💣 مین یاب"
+    hint = "یک خانه انتخاب کنید (۱ تا ۹)"
+    remaining_line = (f"🎟 شانس باقی‌ماندهٔ امروز: "
+                      f"{to_persian_digits(session['remaining'])} از "
+                      f"{to_persian_digits(minesweeper.DAILY_CHANCES)}")
+    text = (f"{title}\n\n{minesweeper.board_text()}\n\n"
+            f"{hint}\n{remaining_line}")
+    await _bold_reply(event, text, [title, hint])
+
+    async def on_timeout(result):
+        await _bold_reply(
+            event,
+            f"⏰ زمان تمام شد!\n\n{result['board']}\n\n"
+            f"💣 مین در خانهٔ {to_persian_digits(result['mine'])} بود.",
+            ["⏰ زمان تمام شد!"])
+
+    minesweeper.schedule(chat_id, user_id, session["session_id"], on_timeout,
+                         logger=logger)
+    return True
+
+
+async def _minesweeper_message(bot, event, chat_id, user_id, sender, text, logger):
+    if not minesweeper.is_active(chat_id, user_id):
+        return False
+    result, error = minesweeper.pick(chat_id, user_id, text, logger)
+    if error == "bad_number":
+        return False
+    if error == "done":
+        return True
+    if result is None:
+        return False
+
+    name = display_name(sender)
+    reference = f"minesweeper:{chat_id}:{result['session_id']}:{user_id}"
+    remaining_line = (f"🎟 شانس باقی‌ماندهٔ امروز: "
+                      f"{to_persian_digits(result['remaining'])} از "
+                      f"{to_persian_digits(minesweeper.DAILY_CHANCES)}")
+
+    if result["safe"]:
+        amount = economy_rewards.amount_for(minesweeper.REWARD_GAME)
+        paid = _coins(bot, chat_id, user_id, name, amount, logger,
+                      reference=reference, game=minesweeper.REWARD_GAME)
+        headline = f"✅ {name} جان سالم به در برد!"
+        reward = (f"\n🪙 +{to_persian_digits(amount)} سکه "
+                  f"{coin_word(minesweeper.REWARD_GAME)}") if paid else ""
+        await _bold_reply(
+            event,
+            f"{headline}\n\n{result['board']}\n\n"
+            f"خانهٔ {to_persian_digits(result['cell'])} امن بود."
+            f"{reward}\n{remaining_line}",
+            [headline])
+    else:
+        charged = _minesweeper_penalty(bot, chat_id, user_id, reference, logger)
+        headline = f"💥 {name} روی مین رفت!"
+        penalty = (f"\n🪙 -{to_persian_digits(minesweeper.PENALTY)} سکه "
+                   f"{coin_word(minesweeper.REWARD_GAME)}") if charged else ""
+        await _bold_reply(
+            event,
+            f"{headline}\n\n{result['board']}\n\n"
+            f"💣 مین در خانهٔ {to_persian_digits(result['mine'])} بود."
+            f"{penalty}\n{remaining_line}",
+            [headline])
     return True
 
 
@@ -866,8 +987,10 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         return await _start_vampire(bot, event, chat_id, logger)
     if command == normalize_text("معما"):
         return await _start_maemma(bot, event, chat_id, user_id, sender, logger)
-    if command == normalize_text("حدس جمله"):
+    if command in {normalize_text("حدس جمله"), normalize_text("ساخت جمله")}:
         return await _start_sentence_guess(bot, event, chat_id, user_id, sender, logger)
+    if command == normalize_text("مین یاب"):
+        return await _start_minesweeper(bot, event, chat_id, user_id, sender, logger)
     if command == normalize_text("بهترین جواب"):
         return await _start_best_answer(bot, event, chat_id, logger)
     if command == normalize_text("نبرد"):
@@ -876,7 +999,8 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     # پیام‌های درون‌بازی — هر بازی فقط session خودش را می‌بیند.
     for responder in (
         _laugh_message, _survival_message, _lucky_box_message, _vampire_message,
-        _maemma_message, _sentence_guess_message, _best_answer_message, _battle_message,
+        _maemma_message, _sentence_guess_message, _minesweeper_message,
+        _best_answer_message, _battle_message,
     ):
         if await responder(bot, event, chat_id, user_id, sender, text, logger):
             return True
@@ -890,5 +1014,6 @@ def reset_all(chat_id=None):
     vampire.reset_all(chat_id)
     maemma.reset_all(chat_id)
     sentence_guess.reset_all(chat_id)
+    minesweeper.reset_all(chat_id)
     best_answer.reset_all(chat_id)
     battle.reset_all(chat_id)

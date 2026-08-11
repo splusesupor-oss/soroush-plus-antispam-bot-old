@@ -1,15 +1,43 @@
-"""بازی مستقل «حدس جمله» با بانک و state جداگانه."""
+"""بازی مستقل «حدس جمله / ساخت جمله» با بانک و state جداگانه.
+
+این همان بازیِ قبلی است — بازیِ دومی ساخته نشده. فقط سه چیز اضافه شده:
+
+1. دستورِ دومِ «ساخت جمله» کنارِ «حدس جمله» (هر دو همین بازی).
+2. نشستِ **به‌تفکیکِ کاربر**: کلیدِ state از ``chat_id`` به
+   ``(chat_id, user_id)`` تغییر کرده، پس هر کاربر سوالِ خودش را دارد و
+   سوالِ یک نفر به دستِ دیگری نمی‌افتد.
+3. **عدمِ تکرار برای هر کاربر** با ``economy.game_progress`` (همان
+   سازوکاری که «معما» استفاده می‌کند): جمله‌ای که کاربر قبلاً درست جواب
+   داده دوباره به او داده نمی‌شود و وقتی بانک تمام شد، دورِ تازه شروع
+   می‌شود.
+
+امضایِ توابع سازگار با قبل مانده است (``user_id`` اختیاری) تا هیچ
+فراخوانیِ قدیمی نشکند.
+"""
 import json
 import random
 import time
 from pathlib import Path
+
 from .sentence_guess_puzzles import PUZZLES
 
+GAME = "sentence_guess"
 COMMAND = "حدس جمله"
+# دستورِ خواسته‌شده در کنارِ دستورِ قدیمی؛ هر دو همین بازی را اجرا می‌کنند.
+ALT_COMMAND = "ساخت جمله"
+COMMANDS = (COMMAND, ALT_COMMAND)
+
 TIMEOUT_SECONDS = 30
-REWARD = 4
+# جایزه: ۳ سکهٔ برنز (مطابقِ «sentence_guess» در economy/rewards.py).
+REWARD = 3
+
+# چند جملهٔ اخیرِ گروه کنار گذاشته می‌شود تا کاربرِ بعدی جمله‌ای را نگیرد
+# که همین حالا جلوی چشمِ همه جواب داده شد.
+RECENT_WINDOW = 15
+
 FILE = Path(__file__).resolve().parents[2] / "config" / "sentence_guess_state.json"
 _ACTIVE = {}
+_RANDOM = random.SystemRandom()
 
 
 def _load():
@@ -25,27 +53,56 @@ def _save(data):
     FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _key(chat_id):
-    return str(chat_id)
+def _key(chat_id, user_id=None):
+    """کلیدِ نشست. بدونِ ``user_id`` کلیدِ قدیمیِ چت‌محور ساخته می‌شود."""
+    if user_id is None:
+        return str(chat_id)
+    return f"{chat_id}:{user_id}"
 
 
-def _recover(chat_id):
-    key = _key(chat_id)
+def _chat_keys(chat_id, data=None):
+    """همهٔ کلیدهایِ متعلق به این چت (چه چت‌محورِ قدیمی، چه کاربرمحور)."""
+    prefix = f"{chat_id}:"
+    plain = str(chat_id)
+    source = data if data is not None else _ACTIVE
+    return [k for k in source if k == plain or k.startswith(prefix)]
+
+
+def _expired(state):
+    return time.time() - float(state.get("started_at", 0)) >= TIMEOUT_SECONDS
+
+
+def _recover(chat_id, user_id=None):
+    key = _key(chat_id, user_id)
     state = _ACTIVE.get(key)
-    if state:
+    if state is None and user_id is not None:
+        # سازگاری با نشست‌هایی که پیش از این تغییر، چت‌محور ذخیره شده‌اند.
+        legacy = _ACTIVE.get(str(chat_id))
+        if legacy is not None:
+            state = legacy
+            key = str(chat_id)
+    if state is not None:
+        if _expired(state):
+            _clear_key(key)
+            return None
         return state
-    state = _load().get(key)
+
+    stored = _load()
+    state = stored.get(key)
+    if not isinstance(state, dict) and user_id is not None:
+        state = stored.get(str(chat_id))
+        if isinstance(state, dict):
+            key = str(chat_id)
     if not isinstance(state, dict):
         return None
-    if time.time() - float(state.get("started_at", 0)) >= TIMEOUT_SECONDS:
-        _clear(chat_id)
+    if _expired(state):
+        _clear_key(key)
         return None
     _ACTIVE[key] = state
     return state
 
 
-def _clear(chat_id):
-    key = _key(chat_id)
+def _clear_key(key):
     _ACTIVE.pop(key, None)
     data = _load()
     if key in data:
@@ -53,24 +110,103 @@ def _clear(chat_id):
         _save(data)
 
 
-def is_active(chat_id):
-    return _recover(chat_id) is not None
+def _clear(chat_id, user_id=None):
+    if user_id is None:
+        # پاک‌کردنِ کلِ چت (رفتارِ قبلی).
+        data = _load()
+        changed = False
+        for key in set(_chat_keys(chat_id)) | set(_chat_keys(chat_id, data)):
+            _ACTIVE.pop(key, None)
+            if key in data:
+                data.pop(key, None)
+                changed = True
+        if changed:
+            _save(data)
+        return
+    _clear_key(_key(chat_id, user_id))
+    # نشستِ قدیمیِ چت‌محور هم اگر مانده بود پاک شود.
+    if str(chat_id) in _ACTIVE or str(chat_id) in _load():
+        _clear_key(str(chat_id))
 
 
-def start(chat_id):
-    if _recover(chat_id) is not None:
+def is_active(chat_id, user_id=None):
+    """با ``user_id`` یعنی «آیا همین کاربر جمله دارد»؛ بدون آن یعنی گروه."""
+    if user_id is not None:
+        return _recover(chat_id, user_id) is not None
+    for key in set(_chat_keys(chat_id)) | set(_chat_keys(chat_id, _load())):
+        state = _ACTIVE.get(key) or _load().get(key)
+        if isinstance(state, dict) and not _expired(state):
+            return True
+        _clear_key(key)
+    return False
+
+
+def _pick(chat_id, user_id, used):
+    """جمله‌ای که این کاربر ندیده و به‌تازگی در گروه استفاده نشده."""
+    remaining = [p for p in PUZZLES if p[1] not in used]
+    if not remaining:
+        remaining = list(PUZZLES)
+    recent = set()
+    if user_id is not None:
+        try:
+            from economy import game_progress as _gp
+            recent = set(_gp.recent(chat_id, GAME))
+        except Exception:
+            recent = set()
+    preferred = [p for p in remaining if p[1] not in recent]
+    pool = preferred or remaining
+    return _RANDOM.choice(pool)
+
+
+def start(chat_id, user_id=None):
+    """یک جملهٔ تازه برای این کاربر شروع می‌کند.
+
+    اگر همین کاربر نشستِ باز داشته باشد ``None`` برمی‌گردد.
+    """
+    if _recover(chat_id, user_id) is not None:
         return None
-    index = random.randrange(len(PUZZLES))
-    question, answer = PUZZLES[index]
-    state = {"index": index, "question": question, "answer": answer,
+
+    used = set()
+    number = 1
+    if user_id is not None:
+        try:
+            from economy import game_progress as _gp
+            seen = _gp.seen(chat_id, user_id, GAME)
+            if len(seen) >= len(PUZZLES):
+                _gp.start_new_cycle(chat_id, user_id, GAME)
+                seen = _gp.seen(chat_id, user_id, GAME)
+            used = set(seen)
+            number = len(seen) + 1
+        except Exception:
+            used = set()
+            number = 1
+
+    question, answer_value = _pick(chat_id, user_id, used)
+    if user_id is not None:
+        try:
+            from economy import game_progress as _gp
+            _gp.mark_recent(chat_id, GAME, answer_value, RECENT_WINDOW)
+        except Exception:
+            pass
+
+    try:
+        index = PUZZLES.index((question, answer_value))
+    except ValueError:
+        index = -1
+    state = {"index": index, "question": question, "answer": answer_value,
+             "number": number, "total": len(PUZZLES),
+             "user_id": user_id, "chat_id": chat_id,
              "started_at": time.time()}
-    _ACTIVE[_key(chat_id)] = state
-    data = _load(); data[_key(chat_id)] = state; _save(data)
+    key = _key(chat_id, user_id)
+    _ACTIVE[key] = state
+    data = _load()
+    data[key] = state
+    _save(data)
     return dict(state)
 
 
-def current(chat_id):
-    state = _recover(chat_id)
+def current(chat_id, user_id=None):
+    state = _recover(chat_id, user_id)
     return dict(state) if state else None
 
 
@@ -78,29 +214,41 @@ def _norm(value):
     return " ".join(str(value or "").lower().replace("‌", " ").split())
 
 
-def answer(chat_id, text):
-    state = _recover(chat_id)
+def answer(chat_id, text, user_id=None):
+    """پاسخِ کاربر؛ فقط روی نشستِ خودِ او اثر می‌گذارد.
+
+    در صورتِ درستی، پاسخ برایِ همان کاربر «دیده‌شده» ثبت می‌شود تا دوباره
+    به او داده نشود.
+    """
+    state = _recover(chat_id, user_id)
     if state is None:
         return None
     if _norm(text) != _norm(state["answer"]):
         return None
     result = dict(state)
-    _clear(chat_id)
+    if user_id is not None:
+        try:
+            from economy import game_progress as _gp
+            _gp.mark_seen(chat_id, user_id, GAME, state["answer"])
+        except Exception:
+            pass
+    _clear(chat_id, user_id)
     return result
 
 
-def timeout(chat_id):
-    state = _recover(chat_id)
+def timeout(chat_id, user_id=None):
+    state = _recover(chat_id, user_id)
     if state is None:
         return None
     result = dict(state)
-    _clear(chat_id)
+    _clear(chat_id, user_id)
     return result
 
 
-def reset_all(chat_id=None):
+def reset_all(chat_id=None, user_id=None):
     if chat_id is None:
         _ACTIVE.clear()
-        if FILE.exists(): FILE.unlink()
+        if FILE.exists():
+            FILE.unlink()
     else:
-        _clear(chat_id)
+        _clear(chat_id, user_id)

@@ -9,7 +9,8 @@ from modules.fox_games import (  # noqa: F401
     laugh_or_lose,
     survival,
     lucky_box,
+    minesweeper,
     vampire,
 )
 
-__all__ = ["laugh_or_lose", "survival", "lucky_box", "vampire"]
+__all__ = ["laugh_or_lose", "survival", "lucky_box", "minesweeper", "vampire"]

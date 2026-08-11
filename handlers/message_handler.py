@@ -128,6 +128,9 @@ from modules.outgoing_profiler import (
 )
 from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
+# 🗂 سیستم سابقه‌ها و 🏆 سطح گروه — دو قابلیتِ مستقل با فایل و ماژولِ جدا.
+from modules import user_history
+from modules import group_level
 from modules import bot_detector
 from modules import ad_name_detector
 from modules import message_tracker
@@ -1057,7 +1060,8 @@ async def handle_new_message(bot, event):
             "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
             "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",
             "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز", "اخطار",
-            "حدس ایموجی", "حدس جمله", "معما", "حدس پرچم",
+            "حدس ایموجی", "حدس جمله", "ساخت جمله", "معما", "حدس پرچم",
+            "مین یاب", "سابقه ها", "سابقه‌ها", "سطح گروه",
         }
         if (sender and not event.is_private and not command_priority
                 and not is_global_owner(user_id)):
@@ -1130,6 +1134,7 @@ async def handle_new_message(bot, event):
             "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
             "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",
             "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز", "اخطار",
+            "سابقه ها", "سابقه‌ها", "سطح گروه",
         }
         bot.logger.log_info(
             "COMMAND MATCH CHECK "
@@ -1347,7 +1352,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "سنجاق", "قفل", "باز"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -1731,6 +1736,33 @@ async def handle_new_message(bot, event):
                 return
             text, entities = admin_tools.format_log(chat_id)
             await event.reply(text, formatting_entities=entities or None)
+            return
+
+        # 🗂 سابقه ها — پروندهٔ تخلفِ کاربران (فقط مالک و ادمین‌ها)
+        if clean_text in {"سابقه ها", "سابقه‌ها"}:
+            sender_username = getattr(sender, "username", None)
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, sender_username
+            ):
+                await event.reply(user_history.NO_PERMISSION)
+                return
+            text, entities = user_history.format_history(chat_id)
+            await event.reply(text, formatting_entities=entities or None)
+            return
+
+        # 🏆 سطح گروه — یک سطح به ازای هر ۵۰۰ پیام تا سطح ۱۵ (برای همه)
+        if clean_text == "سطح گروه":
+            if event.is_private:
+                await event.reply("ℹ️ این دستور فقط داخل گروه کار می‌کند.")
+                return
+            await event.reply(group_level.format_level(chat_id))
+            # اگر همین حالا گروه ارتقا یافته، تبریک هم فرستاده می‌شود.
+            congrats = group_level.check_level_up(chat_id)
+            if congrats:
+                try:
+                    await event.reply(congrats)
+                except Exception as error:
+                    bot.logger.log_error(f"GROUP LEVEL CONGRATS FAILED: {error}")
             return
 
         # پاکسازی خودکار — جریانِ مرحله‌به‌مرحله
@@ -2502,6 +2534,12 @@ async def handle_new_message(bot, event):
                 record_coin_message(
                     chat_id, user_id, _format_admin_display(sender),
                 )
+                # 🏆 ارتقایِ سطحِ گروه (هر ۵۰۰ پیام). فقط وقتی سطح واقعاً
+                # عوض شود پیام تبریک فرستاده می‌شود؛ بقیهٔ پیام‌ها فقط یک
+                # مقایسهٔ ساده در حافظه هزینه دارند.
+                congrats = group_level.maybe_level_up(chat_id)
+                if congrats:
+                    await event.reply(congrats)
 
         except Exception as e:
             bot.logger.log_error(
@@ -2648,6 +2686,10 @@ async def handle_new_message(bot, event):
                 "هر بار با ارسال «معما» یک معمای فکری پرسیده می‌شود؛ بعد از پاسخ صحیح یا پایان زمان، بازی تمام می‌شود.\n\n"
                 "🧩 حدس کلمه\n"
                 "یک سرنخ شامل جمله و ایموجی به شما داده می‌شود، ۳۰ ثانیه زمان دارید.\n\n"
+                "✏️ ساخت جمله\n"
+                "کلمه‌های به‌هم‌ریخته را مرتب کن و جملهٔ درست را بساز؛ سوال هر نفر جداگانه است.\n\n"
+                "💣 مین یاب\n"
+                "از بین ۹ خانه یکی را انتخاب کن؛ اگر روی مین نروی جایزه می‌گیری. روزی ۲ شانس.\n\n"
                 "🎯 بهترین جواب\n"
                 "به فکری‌ترین و دقیق‌ترین پاسخ برس و جایزه بگیر.\n\n"
                 "⚔️ نبرد\n"
@@ -2678,6 +2720,8 @@ async def handle_new_message(bot, event):
                 "🧛 خون‌آشام",
                 "🧩 معما",
                 "🧩 حدس کلمه",
+                "✏️ ساخت جمله",
+                "💣 مین یاب",
                 "🎯 بهترین جواب",
                 "⚔️ نبرد",
                 "🎭 جرأت حقیقت",
@@ -2787,6 +2831,11 @@ async def handle_new_message(bot, event):
                 "برای دریافت یک دانستنی:\n"
                 "دانستنی\n\n"
 
+                "🏆 سطح گروه:\n\n"
+                "هر ۵۰۰ پیام یک سطح؛ تا سطح ۱۵.\n"
+                "برای دیدن سطح گروه و فعال‌ترین عضو بنویسید:\n"
+                "سطح گروه\n\n"
+
                 "🛒 اقتصاد و آیتم‌ها:\n\n"
                 "برای دیدن لیست خرید و آیتم‌ها بنویسید:\n"
                 "فروشگاه\n\n"
@@ -2867,6 +2916,9 @@ async def handle_new_message(bot, event):
                 "🧾 لاگ مدیریتی:\n"
                 "برای دیدن اینکه ادمین‌ها چه کسی و چه پیامی را حذف کردند\n"
                 "«🧾 \"لاگ مدیریتی\"»\n\n"
+                "🗂 سابقه‌ها:\n"
+                "برای دیدن سابقهٔ اخراج، سکوت و اخطار کاربران (۲۴ ساعت اخیر)\n"
+                "«🗂 \"سابقه ها\"»\n\n"
                 "🧹 پاکسازی خودکار:\n"
                 "برای پاکسازی خودکار پیام‌ها\n"
                 "«🧹 \"پاکسازی خودکار\"»\n\n"
@@ -2944,6 +2996,7 @@ async def handle_new_message(bot, event):
                 "🧠 حافظه گروه:",
                 "🧩 تحلیل نام:",
                 "📚 دانستنی:",
+                "🏆 سطح گروه:",
                 "🛒 اقتصاد و آیتم‌ها:",
                 "🛡️ امنیت گروه:",
                 # جمله‌های توضیحی
@@ -2973,6 +3026,8 @@ async def handle_new_message(bot, event):
                 "مشاهده حافظه:",
                 "حذف اسم:",
                 "برای دریافت یک دانستنی:",
+                "هر ۵۰۰ پیام یک سطح؛ تا سطح ۱۵.",
+                "برای دیدن سطح گروه و فعال‌ترین عضو بنویسید:",
                 "برای دیدن لیست خرید و آیتم‌ها بنویسید:",
                 "برای انتقال سکه، تبدیل سکه‌ها و مشاهده امکانات مالی بنویسید:",
                 "برای ثبت و مدیریت پروفایل خود بنویسید:",
@@ -3011,6 +3066,8 @@ async def handle_new_message(bot, event):
                 # قابلیت‌های مدیریتی جدید
                 "🧾 لاگ مدیریتی:",
                 "برای دیدن اینکه ادمین‌ها چه کسی و چه پیامی را حذف کردند",
+                "🗂 سابقه‌ها:",
+                "برای دیدن سابقهٔ اخراج، سکوت و اخطار کاربران (۲۴ ساعت اخیر)",
                 "🧹 پاکسازی خودکار:",
                 "برای پاکسازی خودکار پیام‌ها",
                 "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه",
@@ -3060,6 +3117,7 @@ async def handle_new_message(bot, event):
             quote_sections = [
                 "لیست کاربران",
                 "لیست ادمینی",
+                "🏆 سطح گروه:\n\nهر ۵۰۰ پیام یک سطح؛ تا سطح ۱۵.\nبرای دیدن سطح گروه و فعال‌ترین عضو بنویسید:\nسطح گروه",
                 # کل بخش قوانین گروه باید یک نقل قول شیشه‌ای یکپارچه باشد.
                 "📜 قوانین گروه (مدیر)\n"
                 "ثبت قوانین  |  قوانین  |  حذف قوانین\n\n"
@@ -3080,6 +3138,7 @@ async def handle_new_message(bot, event):
                 "⚠️ صفر کردن تخلفات:\nبا سازنده ربات تماس بگیرید:\n@osine1",
                 # قابلیت‌های مدیریتی جدید
                 "🧾 لاگ مدیریتی:\nبرای دیدن اینکه ادمین‌ها چه کسی و چه پیامی را حذف کردند\n«🧾 \"لاگ مدیریتی\"»",
+                "🗂 سابقه‌ها:\nبرای دیدن سابقهٔ اخراج، سکوت و اخطار کاربران (۲۴ ساعت اخیر)\n«🗂 \"سابقه ها\"»",
                 "🧹 پاکسازی خودکار:\nبرای پاکسازی خودکار پیام‌ها\n«🧹 \"پاکسازی خودکار\"»",
                 "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه\n«روی کاربر ریپلای کنید و بنویسید \"صفر\"»",
                 "🗑️ حذف اخطار:\nبرای حذف اخطار داده‌شده به یک کاربر\n«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»",
@@ -3752,6 +3811,14 @@ async def handle_new_message(bot, event):
                     )
                     admin_tools.log_action(
                         chat_id, sender, "اخراج کاربر", target=target_user)
+                    # 🗂 ثبت در سابقه‌ها (فایل جدا؛ سیستم اخراج دست‌نخورده).
+                    try:
+                        user_history.add_kick(
+                            chat_id, target_user,
+                            "اخراج دستی توسط مالک یا ادمین")
+                    except Exception as history_error:
+                        bot.logger.log_error(
+                            f"USER HISTORY KICK FAILED: {history_error}")
                     await event.reply("✅ کاربر اخراج شد")
 
                 async def kick_failed(_error):
@@ -3999,6 +4066,14 @@ async def handle_new_message(bot, event):
                 admin_tools.log_action(
                     chat_id, sender, "اخطار", target=user,
                     note=f"تعداد {count}")
+                # 🗂 ثبت در سابقه‌ها (فایل جدا؛ سیستم اخطار دست‌نخورده).
+                try:
+                    user_history.add_warn(
+                        chat_id, user,
+                        f"اخطار دستی توسط مالک یا ادمین (اخطار شمارهٔ {count})")
+                except Exception as history_error:
+                    bot.logger.log_error(
+                        f"USER HISTORY WARN FAILED: {history_error}")
 
                 manual_name = _format_group_member(user)
                 manual_header = f"⚠️ کاربر {manual_name}"
@@ -4099,6 +4174,14 @@ async def handle_new_message(bot, event):
                     add_mute(chat_id)
                     admin_tools.log_action(
                         chat_id, sender, "سکوت کاربر", target=target_user)
+                    # 🗂 ثبت در سابقه‌ها (فایل جدا؛ سیستم سکوت دست‌نخورده).
+                    try:
+                        user_history.add_mute(
+                            chat_id, target_user,
+                            "سکوت دستی توسط مالک یا ادمین")
+                    except Exception as history_error:
+                        bot.logger.log_error(
+                            f"USER HISTORY MUTE FAILED: {history_error}")
                     await event.reply(
                         f"🔕 کاربر 『 {_format_banned_user(target_user, target_user.id)} 』 سکوت شد"
                     )

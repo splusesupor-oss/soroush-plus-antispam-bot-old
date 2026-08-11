@@ -33,6 +33,8 @@ _REWARDS = {
     "maemma":          (3, BRONZE, "معما"),
     "best_answer":     (2, BRONZE, "بهترین جواب"),
     "battle":          (2, BRONZE, "نبرد"),
+    "sentence_guess":  (3, BRONZE, "ساخت جمله"),
+    "minesweeper":     (3, BRONZE, "مین یاب"),
     # --- بازی‌های سخت → نقره --------------------------------------------
     "survival":        (8, SILVER, "بقا"),
     "survival_step":   (1, SILVER, "بقا — پاسخ صحیح"),
