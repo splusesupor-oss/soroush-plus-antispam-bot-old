@@ -66,18 +66,18 @@ ALREADY_RUNNING = "💣 شما یک مین یاب باز دارید؛ اول ه�
 # ---------------------------------------------------------------------------
 # تختهٔ بازی
 # ---------------------------------------------------------------------------
-def board_text(revealed=None, mine=None):
+def board_text(revealed=None, safe_cell=None, is_win=None):
     """تختهٔ ۳×۳ را می‌سازد.
 
-    ``revealed`` مجموعهٔ خانه‌های بازشده و ``mine`` شمارهٔ مین است؛ اگر
-    داده نشوند، تختهٔ دست‌نخورده (۱️⃣۲️⃣۳️⃣ / ۴️⃣۵️⃣۶️⃣ / ۷️⃣۸️⃣۹️⃣)
-    برگردانده می‌شود.
+    ``revealed`` مجموعهٔ خانه‌های بازشده، ``safe_cell`` شمارهٔ خانه امن
+    و ``is_win`` نشان‌دهندهٔ برد (True) یا باخت (False) است.
+    اگر داده نشوند، تختهٔ دست‌نخورده برگردانده می‌شود.
     """
     revealed = set(revealed or ())
     cells = []
     for number in range(1, CELL_COUNT + 1):
         if number in revealed:
-            cells.append(MINE_EMOJI if number == mine else SAFE_EMOJI)
+            cells.append(SAFE_EMOJI if is_win else MINE_EMOJI)
         else:
             cells.append(CELL_EMOJI[number - 1])
     return "\n".join("".join(cells[row:row + 3]) for row in (0, 3, 6))
@@ -200,12 +200,12 @@ def start(chat_id, user_id, logger=None):
                     f"user_id={user_id}")
         return None, "quota"
 
-    # جای مین در هر دور از نو انتخاب می‌شود.
-    mine = _RANDOM.randint(1, CELL_COUNT)
+    # در هر دور یک خانه امن تصادفی انتخاب می‌شود و بقیه مین دارند.
+    safe = _RANDOM.randint(1, CELL_COUNT)
     session = {
         "chat_id": chat_id,
         "user_id": user_id,
-        "mine": mine,
+        "safe": safe,
         "session_id": f"{int(time.time() * 1000)}:{_RANDOM.randrange(10 ** 6)}",
         "created_at": time.monotonic(),
         "finished": False,
@@ -213,7 +213,7 @@ def start(chat_id, user_id, logger=None):
     _ACTIVE[key] = session
     remaining = remaining_chances(user_id)
     log(logger, f"MINESWEEPER START chat_id={chat_id} user_id={user_id} "
-                f"session_id={session['session_id']} mine={mine} "
+                f"session_id={session['session_id']} safe={session['safe']} "
                 f"remaining={remaining}")
     result = dict(session)
     result["remaining"] = remaining
@@ -241,16 +241,17 @@ def pick(chat_id, user_id, text, logger=None):
     _cancel_task(key)
     _ACTIVE.pop(key, None)
 
-    mine = session["mine"]
-    safe = number != mine
+    safe_cell = session["safe"]
+    is_win = (number == safe_cell)
+    is_lose = (number != safe_cell)
     remaining = _consume_chance(user_id)
     log(logger, f"MINESWEEPER PICK chat_id={chat_id} user_id={user_id} "
-                f"cell={number} mine={mine} safe={safe}")
+                f"cell={number} safe_cell={safe_cell} win={is_win}")
     return {
         "cell": number,
-        "mine": mine,
-        "safe": safe,
-        "board": board_text({number, mine} if not safe else {number}, mine),
+        "safe_cell": safe_cell,
+        "safe": is_win,
+        "board": board_text({number}, safe_cell, is_win),
         "session_id": session["session_id"],
         "remaining": remaining,
     }, None
@@ -272,9 +273,10 @@ def abandon(chat_id, user_id, session_id=None, logger=None):
     _ACTIVE.pop(key, None)
     remaining = _consume_chance(user_id)
     log(logger, f"MINESWEEPER TIMEOUT chat_id={chat_id} user_id={user_id}")
+    safe_cell = session.get("safe")
     return {
-        "mine": session["mine"],
-        "board": board_text({session["mine"]}, session["mine"]),
+        "mine": safe_cell,
+        "board": board_text({safe_cell}, safe_cell, True),
         "session_id": session["session_id"],
         "remaining": remaining,
     }

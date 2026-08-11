@@ -622,7 +622,7 @@ async def _start_minesweeper(bot, event, chat_id, user_id, sender, logger):
         await _bold_reply(
             event,
             f"⏰ زمان تمام شد!\n\n{result['board']}\n\n"
-            f"💣 مین در خانهٔ {to_persian_digits(result['mine'])} بود.",
+            f"✅ خانهٔ امن در {to_persian_digits(result['mine'])} بود.",
             ["⏰ زمان تمام شد!"])
 
     minesweeper.schedule(chat_id, user_id, session["session_id"], on_timeout,
@@ -674,7 +674,7 @@ async def _minesweeper_message(bot, event, chat_id, user_id, sender, text, logge
         await _bold_reply(
             event,
             f"{headline}\n\n{result['board']}\n\n"
-            f"💣 مین در خانهٔ {to_persian_digits(result['mine'])} بود."
+            f"💣 مین در خانهٔ {to_persian_digits(result['cell'])} بود."
             f"{penalty_line}\n{remaining_line}",
             [headline])
     return True
