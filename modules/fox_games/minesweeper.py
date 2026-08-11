@@ -39,7 +39,7 @@ COMMAND = "مین یاب"
 # شناسهٔ بازی در جدول جایزهٔ اقتصاد (economy/rewards.py).
 REWARD_GAME = "minesweeper"
 # سکهٔ کسرشده وقتی کاربر روی مین می‌رود.
-PENALTY = 2
+PENALTY = 10
 
 CELL_COUNT = 9
 DAILY_CHANCES = 2

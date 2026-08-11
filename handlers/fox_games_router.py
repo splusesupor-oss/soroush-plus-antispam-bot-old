@@ -661,15 +661,21 @@ async def _minesweeper_message(bot, event, chat_id, user_id, sender, text, logge
             f"{reward}\n{remaining_line}",
             [headline])
     else:
-        # طبق طراحی مشخص‌شده: پیدا کردن مین → جایزه نقره (۵ سکه)
-        headline = f"💥 {name} روی مین رفت!"
-        # جایزه نقره برای پیدا کردن مین
-        reward_line = "\n🪙 +۵ سکه نقره"
+        # طبق طراحی مشخص‌شده: پیدا کردن مین → کسر ۱۰ سکه برنز
+        headline = f"🧨 حدس اشتباه بود، مین منفجر شد!"
+        paid_penalty = _minesweeper_penalty(
+            bot, chat_id, user_id,
+            reference=f"minesweeper:penalty:{chat_id}:{result['session_id']}:{user_id}",
+            logger=logger)
+        if paid_penalty:
+            penalty_line = "\n🪙 ۱۰ سکه برنز از شما کم شد"
+        else:
+            penalty_line = "\n۱۰ سکه برنز نداری، بعد از جمع کردن سکه‌ها ازت کسر می‌شود."
         await _bold_reply(
             event,
             f"{headline}\n\n{result['board']}\n\n"
             f"💣 مین در خانهٔ {to_persian_digits(result['mine'])} بود."
-            f"{reward_line}\n{remaining_line}",
+            f"{penalty_line}\n{remaining_line}",
             [headline])
     return True
 
