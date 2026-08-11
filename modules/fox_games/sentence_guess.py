@@ -189,14 +189,31 @@ def start(chat_id, user_id=None, mode="guess"):
             from .sentence_build_puzzles import PUZZLES as BUILD_PUZZLES
         except Exception:
             BUILD_PUZZLES = []
-        if BUILD_PUZZLES:
-            remaining = [p for p in BUILD_PUZZLES if p[1] not in used]
+        build_pool = BUILD_PUZZLES if BUILD_PUZZLES else []
+        if build_pool:
+            remaining = [p for p in build_pool if p[1] not in used]
             if not remaining:
-                remaining = list(BUILD_PUZZLES)
+                remaining = list(build_pool)
             preferred = remaining
             pool = preferred if preferred else remaining
             question, answer_value = _RANDOM.choice(pool)
+            # در ساخت جمله، پیشرفت کاربر بر اساس بانک ساخت جمله سنجیده می‌شود
+            if user_id is not None:
+                try:
+                    from economy import game_progress as _gp
+                    # اگر تعداد دیده‌شده‌ها از بانک ساخت جمله بیشتر یا مساوی بود، دور تازه
+                    seen_for_build = set()
+                    if len(used) >= len(build_pool):
+                        _gp.start_new_cycle(chat_id, user_id, GAME)
+                        seen_for_build = set()
+                    else:
+                        seen_for_build = set(used)
+                    used = seen_for_build
+                    number = len(seen_for_build) + 1
+                except Exception:
+                    pass
         else:
+            build_pool = []
             # اگر بانک جداگانه نبود، از بانک اصلی فقط چندکلمه‌ای‌ها انتخاب شود
             multi_word_pool = [p for p in PUZZLES if len(str(p[1]).split()) >= 2]
             effective_pool = multi_word_pool if multi_word_pool else PUZZLES
@@ -221,12 +238,14 @@ def start(chat_id, user_id=None, mode="guess"):
         except Exception:
             pass
 
+    # تعیین طول بانک بر اساس حالت
+    total_puzzles = len(build_pool) if mode == "build" and build_pool else len(PUZZLES)
     try:
         index = PUZZLES.index((question, answer_value))
     except ValueError:
         index = -1
     state = {"index": index, "question": question, "answer": answer_value,
-             "number": number, "total": len(PUZZLES),
+             "number": number, "total": total_puzzles,
              "user_id": user_id, "chat_id": chat_id,
              "started_at": time.time()}
     key = _key(chat_id, user_id)
