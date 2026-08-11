@@ -183,24 +183,36 @@ def start(chat_id, user_id=None, mode="guess"):
             used = set()
             number = 1
 
-    # در حالت ساخت جمله فقط پاسخ‌های چندکلمه‌ای (جملهٔ واقعی) انتخاب می‌شوند
+    # در حالت ساخت جمله از بانک جداگانه (جمله‌های واقعی حداقل ۴ کلمه) استفاده می‌شود
     if mode == "build":
-        multi_word_pool = [p for p in PUZZLES if len(str(p[1]).split()) >= 2]
-        # اگر هیچ جملهٔ چندکلمه‌ای در بانک نبود، به بانک اصلی برمی‌گردیم
-        effective_pool = multi_word_pool if multi_word_pool else PUZZLES
-        remaining = [p for p in effective_pool if p[1] not in used]
-        if not remaining:
-            remaining = list(effective_pool)
-        preferred = remaining
-        pool = preferred if preferred else remaining
-        question, answer_value = _RANDOM.choice(pool)
+        try:
+            from .sentence_build_puzzles import PUZZLES as BUILD_PUZZLES
+        except Exception:
+            BUILD_PUZZLES = []
+        if BUILD_PUZZLES:
+            remaining = [p for p in BUILD_PUZZLES if p[1] not in used]
+            if not remaining:
+                remaining = list(BUILD_PUZZLES)
+            preferred = remaining
+            pool = preferred if preferred else remaining
+            question, answer_value = _RANDOM.choice(pool)
+        else:
+            # اگر بانک جداگانه نبود، از بانک اصلی فقط چندکلمه‌ای‌ها انتخاب شود
+            multi_word_pool = [p for p in PUZZLES if len(str(p[1]).split()) >= 2]
+            effective_pool = multi_word_pool if multi_word_pool else PUZZLES
+            remaining = [p for p in effective_pool if p[1] not in used]
+            if not remaining:
+                remaining = list(effective_pool)
+            preferred = remaining
+            pool = preferred if preferred else remaining
+            question, answer_value = _RANDOM.choice(pool)
     else:
         question, answer_value = _pick(chat_id, user_id, used)
     display_question = question
     if mode == "build":
         words = str(answer_value).split()
         _RANDOM.shuffle(words)
-        display_question = " ".join(words)
+        display_question = " / ".join(words)
     question = display_question
     if user_id is not None:
         try:
