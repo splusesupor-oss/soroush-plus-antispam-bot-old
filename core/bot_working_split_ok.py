@@ -723,9 +723,9 @@ class SoroushAntiSpamBot:
                         getattr(user, "last_name", None),
                     ) if part
                 ).strip()
-                if not is_banned(chat_id, user_id, username, data=load_banned()):
-                    return
-
+                # The raw update itself proves the member was released.  Do
+                # not require a banned_users.json record: it may already have
+                # been removed while stale runtime spam state still exists.
                 removed_count, _, remaining_records = remove_banned_everywhere(
                     user_id,
                     username,

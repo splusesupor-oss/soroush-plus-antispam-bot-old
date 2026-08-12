@@ -1380,8 +1380,15 @@ async def handle_new_message(bot, event):
             tracker_is_muted(chat_id, user_id)
             if callable(tracker_is_muted) else False
         )
-        _debug_log(bot,
+        history_count = 0 if admin_bypass else len(get_user_history(chat_id, user_id) or [])
+        bot.logger.log_info(
             "USER MODERATION STATUS "
+            f"user_id={user_id} is_banned={status_banned} "
+            f"spam_score={bot.tracker.get_count(chat_id, user_id)} "
+            f"history_count={history_count} group_id={chat_id}"
+        )
+        _debug_log(bot,
+            "USER MODERATION STATUS DETAIL "
             f"user_id={user_id} group_id={chat_id} "
             f"is_banned={status_banned} is_muted={status_muted} "
             f"warning_count={bot.tracker.get_count(chat_id, user_id)} "
