@@ -1170,8 +1170,8 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             f"SEARCH ACCESS COMMAND chat_id={chat_id} user_id={user_id} enabled={enabled}"
         )
         await event.reply(
-            "✅ جستجوی گوگل این گروه فعال شد." if enabled
-            else "✅ جستجوی گوگل این گروه خاموش شد."
+            "✅ هوش مصنوعی گوگل این گروه فعال شد." if enabled
+            else "✅ هوش مصنوعی گوگل این گروه خاموش شد."
         )
         return True
 
@@ -1211,14 +1211,14 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             if saved and allowed_now:
                 await event.reply(
                     f"✅ کاربر : {format_user(target)}\n\n"
-                    "به لیست کاربران مجاز جستجوی گوگل اضافه شد."
+                    "به لیست کاربران مجاز هوش مصنوعی گوگل اضافه شد."
                 )
             else:
-                await event.reply("❌ ذخیره دسترسی جستجوی گوگل انجام نشد.")
+                await event.reply("❌ ذخیره دسترسی هوش مصنوعی گوگل انجام نشد.")
         elif is_revoke_command and search_access.disallow(chat_id, target.id):
-            await event.reply("✅ دسترسی جستجوی گوگل کاربر حذف شد.")
+            await event.reply("✅ دسترسی هوش مصنوعی گوگل کاربر حذف شد.")
         else:
-            await event.reply("⚠️ این کاربر در لیست کاربران مجاز جستجوی گوگل نیست.")
+            await event.reply("⚠️ این کاربر در لیست کاربران مجاز هوش مصنوعی گوگل نیست.")
         return True
 
     if clean_text == "لیست هوش مصنوعی":
@@ -3357,7 +3357,7 @@ async def handle_new_message(bot, event):
                 "🧹 پاکسازی خودکار:\n"
                 "برای پاکسازی خودکار پیام‌ها\n"
                 "«🧹 \"پاکسازی خودکار\"»\n\n"
-                "🤖 سیستم جستجوی گوگل ربات\n\n"
+                "🤖 سیستم هوش مصنوعی گوگل ربات\n\n"
                 "برای فعال کردن: هوش مصنوعی فعال\n"
                 "برای خاموش کردن: هوش مصنوعی خاموش\n"
                 "برای انتخاب کاربری که بتواند از هوش مصنوعی استفاده کند: روی پیام کاربر ریپلای کنید و بنویسید: مجاز\n"
@@ -3580,7 +3580,7 @@ async def handle_new_message(bot, event):
                 "🔊 رفع سکوت کاربر:\nروی پیام ریپلای کنید و بنویسید:\nرفع سکوت",
                 "🚪 اخراج کاربر:\nروی پیام ریپلای کنید و بنویسید:\nاخراج",
                 "♻️ آزاد کردن کاربر:\nبرای آزاد کردن کاربر محروم شده بنویسید:\nآزاد",
-                "🤖 سیستم جستجوی گوگل ربات\n\n"
+                "🤖 سیستم هوش مصنوعی گوگل ربات\n\n"
                 "برای فعال کردن: هوش مصنوعی فعال\n"
                 "برای خاموش کردن: هوش مصنوعی خاموش\n"
                 "برای انتخاب کاربری که بتواند از هوش مصنوعی استفاده کند: روی پیام کاربر ریپلای کنید و بنویسید: مجاز\n"
