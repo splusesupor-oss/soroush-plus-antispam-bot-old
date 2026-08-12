@@ -633,6 +633,32 @@ def get_group_lock(chat_id):
     return lock
 
 
+async def _snapshot_cleanup_message_ids(bot, chat_id, count, log):
+    """Freeze the IDs that existed when cleanup began; never chase new posts."""
+    ids = []
+    iterator_factory = getattr(bot.client, "iter_messages", None)
+    try:
+        if callable(iterator_factory):
+            async for message in iterator_factory(chat_id, limit=count):
+                message_id = getattr(message, "id", None)
+                if isinstance(message_id, int) and message_id > 0:
+                    ids.append(message_id)
+        else:
+            # Compatibility fallback for older clients. It may return fewer
+            # than requested, which is still a completed snapshot.
+            messages = await bot.client.get_messages(chat_id, limit=count)
+            ids = [getattr(message, "id", None) for message in messages]
+            ids = [message_id for message_id in ids
+                   if isinstance(message_id, int) and message_id > 0]
+    except Exception as error:
+        log(f"SNAPSHOT FAILED chat_id={chat_id} error={error!r}")
+        return []
+    # History APIs can overlap a page on reconnect; one ID must be deleted once.
+    ids = list(dict.fromkeys(ids))
+    log(f"SNAPSHOT chat_id={chat_id} requested={count} found={len(ids)}")
+    return ids
+
+
 async def execute_cleanup(bot, chat_id, count, logger=None):
     """اجرای پاکسازیِ خودکار برای یک گروه.
 
@@ -653,6 +679,11 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
     async with lock:
         _log(f"START chat_id={chat_id} count={count}")
         try:
+            # Freeze the complete pre-cleanup history *before* our own lock/
+            # notice messages are sent.  The delete phase receives this fixed
+            # list and therefore can never wait for or consume new messages.
+            ids = await _snapshot_cleanup_message_ids(bot, chat_id, count, _log)
+
             # ۱) قفلِ گروه
             try:
                 await bot.group_actions.lock_group(chat_id)
@@ -666,28 +697,25 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
             except Exception:
                 pass
 
-            # ۲) جمع‌آوری و حذفِ دسته‌ایِ پیام‌ها (حداکثر ۱۰۰ در هر درخواست)
+            # ۲) Delete only the frozen snapshot.  The common delete queue
+            # keeps this background job from monopolising message handlers.
             deleted = 0
-            fetched = 0
-            while fetched < count:
-                remaining = count - fetched
-                limit = min(100, remaining)
-                try:
-                    messages = await bot.client.get_messages(
-                        chat_id, limit=limit)
-                except Exception as e:
-                    _log(f"GET FAILED chat_id={chat_id} error={e!r}")
-                    break
-                ids = [m.id for m in messages if getattr(m, "id", None)]
-                if not ids:
-                    break
-                fetched += len(ids)
-                try:
-                    await bot.client.delete_messages(chat_id, ids)
-                    deleted += len(ids)
-                except Exception as e:
-                    _log(f"DELETE FAILED chat_id={chat_id} error={e!r}")
-                await asyncio.sleep(0.15)
+            remaining = []
+            queue = getattr(bot, "message_delete_queue", None)
+            if ids and queue is not None:
+                deleted, remaining = await queue.enqueue(chat_id, ids)
+            elif ids:
+                for start in range(0, len(ids), 100):
+                    batch = ids[start:start + 100]
+                    try:
+                        await bot.client.delete_messages(chat_id, batch)
+                        deleted += len(batch)
+                    except Exception as e:
+                        remaining.extend(batch)
+                        _log(f"DELETE FAILED chat_id={chat_id} error={e!r}")
+                    await asyncio.sleep(0)
+            if remaining:
+                _log(f"DELETE INCOMPLETE chat_id={chat_id} deleted={deleted} remaining={len(remaining)}")
 
             # ۳) بازکردنِ گروه
             try:
