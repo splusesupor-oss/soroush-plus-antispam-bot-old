@@ -14,25 +14,48 @@ DAILY_LIMIT = 27
 _LEGACY_FILE = Path(__file__).resolve().parent.parent / "config" / "ai_groups.json"
 
 
+def _merge_legacy(data):
+    """Merge old AI-named records even if new storage already exists."""
+    if not _LEGACY_FILE.exists():
+        return data, False
+    try:
+        legacy = json.loads(_LEGACY_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return data, False
+    if not isinstance(legacy, dict):
+        return data, False
+    changed = False
+    for group_key, old_group in legacy.items():
+        if not isinstance(old_group, dict):
+            continue
+        target = data.setdefault(group_key, {"enabled": False, "allowed": {}, "usage": {}})
+        if old_group.get("enabled") and not target.get("enabled"):
+            target["enabled"] = True; changed = True
+        for bucket in ("allowed", "usage"):
+            old_bucket = old_group.get(bucket) or {}
+            target_bucket = target.setdefault(bucket, {})
+            for key, value in old_bucket.items():
+                if key not in target_bucket:
+                    target_bucket[key] = value; changed = True
+    return data, changed
+
+
 def _load():
     try:
         if FILE.exists():
             data = json.loads(FILE.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        # One-time migration preserves group permissions while retiring the
-        # old AI-named storage. The legacy file is removed after success.
-        if _LEGACY_FILE.exists():
-            data = json.loads(_LEGACY_FILE.read_text(encoding="utf-8"))
             data = data if isinstance(data, dict) else {}
+        else:
+            data = {}
+        data, merged = _merge_legacy(data)
+        if merged:
             _save(data)
-            try:
-                _LEGACY_FILE.unlink()
-            except OSError:
-                pass
-            return data
+            logging.getLogger("SoroushAntiSpam").info(
+                f"SEARCH ACCESS MIGRATION storage_path={FILE} legacy_path={_LEGACY_FILE}"
+            )
+        return data
     except (OSError, ValueError):
-        pass
-    return {}
+        return {}
 
 
 def _save(data):

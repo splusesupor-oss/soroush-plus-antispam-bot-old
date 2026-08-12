@@ -1164,6 +1164,9 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             return True
         enabled = clean_text == "هوش مصنوعی فعال"
         search_access.set_enabled(chat_id, enabled)
+        bot.logger.log_info(
+            f"SEARCH ACCESS COMMAND chat_id={chat_id} user_id={user_id} enabled={enabled}"
+        )
         await event.reply(
             "✅ جستجوی گوگل این گروه فعال شد." if enabled
             else "✅ جستجوی گوگل این گروه خاموش شد."
@@ -1185,6 +1188,9 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             return True
         if clean_text == "مجاز":
             search_access.allow(chat_id, target)
+            bot.logger.log_info(
+                f"SEARCH ACCESS COMMAND chat_id={chat_id} target_user_id={target.id} allowed=True"
+            )
             await event.reply(
                 f"✅ کاربر : {format_user(target)}\n\n"
                 "به لیست کاربران مجاز جستجوی گوگل اضافه شد."
