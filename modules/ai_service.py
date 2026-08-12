@@ -6,9 +6,15 @@ import requests
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
-_DEFAULT_MODEL = "openrouter/free"
-_TIMEOUT = (5, 30)
+_DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
+_TIMEOUT = (5, 20)
 _SESSION = requests.Session()
+_SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات مدیریت گروه سروش پلاس هستی.
+خودت را جایگزین ربات اصلی نکن و هیچ دستور مدیریتی، بازی یا عملیاتی اجرا نکن.
+برای سوالات عمومی کوتاه، دقیق و مودبانه به فارسی پاسخ بده.
+اطلاعات ساختگی تولید نکن؛ اگر مطمئن نیستی صریح بگو نمی‌دانی.
+سروش پلاس یک پیام‌رسان ایرانی است؛ درباره آن یا قابلیت‌های ربات فقط اطلاعات
+مطمئن و مرتبط بده و ادعاهای بی‌ربط یا غیرمستند نساز."""
 
 
 class AIServiceError(RuntimeError):
@@ -41,10 +47,11 @@ def _request(prompt):
         json={
             "model": model,
             "messages": [
-                {"role": "system", "content": "به فارسی، کوتاه، مفید و مودب پاسخ بده."},
+                {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.7,
+            "temperature": 0.3,
+            "max_tokens": 350,
         },
         timeout=_TIMEOUT,
     )

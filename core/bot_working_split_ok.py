@@ -84,7 +84,7 @@ _ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 _AI_ENV_DEFAULTS = {
     "AI_API_KEY": "",
     "AI_BASE_URL": "https://openrouter.ai/api/v1",
-    "AI_MODEL": "openrouter/free",
+    "AI_MODEL": "google/gemma-4-26b-a4b-it:free",
 }
 
 
