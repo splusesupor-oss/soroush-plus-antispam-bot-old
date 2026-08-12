@@ -5118,29 +5118,11 @@ async def handle_new_message(bot, event):
                 current_message_id = getattr(event.message, "id", None)
                 if current_message_id:
                     spam_ids.add(current_message_id)
-                # History pagination and every delete RPC run in the
-                # per-group background queue; commands in any chat continue
-                # immediately while this spam wave is drained.
-                _schedule_auto_spam_cleanup(
-                    bot, event, chat_id, user_id, spam_ids,
-                    announce_cleanup=_send_spam_cleanup_notice(moderation_trigger),
-                )
-                bot.logger.log_info(
-                    "SPAM CLEANUP QUEUED "
-                    f"chat_id={chat_id} user_id={user_id} seed_ids={len(spam_ids)}"
-                )
-
-            # هشدار فقط ۵ بار
-            if count <= 5:
-                await bot.admin_actions.send_warning(
-                    chat_id=chat_id,
-                    username=username,
-                    user=sender,
-                    reason=reason,
-                    count=count,
-                    threshold=threshold,
-                    reply_to=None
-                )
+                # Keep IDs ready, but do not start history/delete work until
+                # the immediate punish job below has been queued.
+                pending_spam_cleanup_ids = spam_ids
+            else:
+                pending_spam_cleanup_ids = set()
 
             # بررسی مجازات
             if bot.tracker.should_punish(chat_id, user_id):
@@ -5189,6 +5171,23 @@ async def handle_new_message(bot, event):
                         on_success=threshold_punish_succeeded,
                         on_failure=threshold_punish_failed,
                     )
+
+            # Warning and deletion are non-critical side effects.  Start them
+            # after the urgent punish job is queued, never before it.
+            if count <= 5:
+                _asyncio.create_task(bot.admin_actions.send_warning(
+                    chat_id=chat_id, username=username, user=sender,
+                    reason=reason, count=count, threshold=threshold, reply_to=None
+                ))
+            if pending_spam_cleanup_ids:
+                _schedule_auto_spam_cleanup(
+                    bot, event, chat_id, user_id, pending_spam_cleanup_ids,
+                    announce_cleanup=_send_spam_cleanup_notice(moderation_trigger),
+                )
+                bot.logger.log_info(
+                    "SPAM CLEANUP QUEUED "
+                    f"chat_id={chat_id} user_id={user_id} seed_ids={len(pending_spam_cleanup_ids)}"
+                )
             # پیام سالم - می‌توان برای آنالیز بیشتر لاگ کرد
             pass
 

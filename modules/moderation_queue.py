@@ -45,6 +45,7 @@ class ModerationQueue:
         self._workers = {}
         self._pending_keys = set()
         self._closed = False
+        self._sequence = 0
         self._completed = 0
         self._queue_wait_total_ms = 0.0
         self._rpc_total_ms = 0.0
@@ -76,7 +77,7 @@ class ModerationQueue:
 
         queue = self._queues.get(chat_id)
         if queue is None:
-            queue = asyncio.Queue()
+            queue = asyncio.PriorityQueue()
             self._queues[chat_id] = queue
         self._pending_keys.add(key)
         job = ModerationJob(
@@ -88,7 +89,10 @@ class ModerationQueue:
             on_success=on_success,
             on_failure=on_failure,
         )
-        queue.put_nowait(job)
+        # Punish/ban jobs must pass ordinary moderation work for this chat.
+        priority = 0 if action in {"punish", "ban"} else 1
+        self._sequence += 1
+        queue.put_nowait((priority, self._sequence, job))
         self.logger.log_info(
             "MODERATION QUEUE ENQUEUED "
             f"chat_id={chat_id} action={action} user_id={user_id} pending={queue.qsize()}"
@@ -102,7 +106,7 @@ class ModerationQueue:
         self.logger.log_info(f"MODERATION WORKER START chat_id={chat_id}")
         try:
             while True:
-                job = await queue.get()
+                _priority, _sequence, job = await queue.get()
                 rpc_started_at = time.perf_counter()
                 queue_wait_ms = (rpc_started_at - job.enqueued_at) * 1000
                 started_wall = time.time()
@@ -119,7 +123,11 @@ class ModerationQueue:
                         raise RuntimeError("moderation operation returned False")
                     result = "success"
                     if job.on_success:
-                        await self._run_callback(job.on_success, value, chat_id, job.action)
+                        # Cleanup/notifications can involve slow delete/send
+                        # RPCs. They must never hold this chat's punish worker.
+                        asyncio.create_task(
+                            self._run_callback(job.on_success, value, chat_id, job.action)
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception as caught:
