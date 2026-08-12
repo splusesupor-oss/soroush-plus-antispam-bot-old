@@ -1138,8 +1138,13 @@ def _delete_cooldown_allowed(chat_id):
 
 
 def _ai_reply_message_id(event):
+    message = getattr(event, "message", None)
+    message_reply = getattr(message, "reply_to", None)
     return (
-        getattr(getattr(event, "message", None), "reply_to_msg_id", None)
+        getattr(message, "reply_to_msg_id", None)
+        or getattr(message_reply, "reply_to_msg_id", None)
+        or getattr(message_reply, "reply_to_top_id", None)
+        or getattr(event, "reply_to_msg_id", None)
         or getattr(getattr(event, "reply_to", None), "reply_to_msg_id", None)
     )
 
@@ -1205,26 +1210,40 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         await event.reply("\n".join(lines))
         return True
 
-    if not ai_access.is_enabled(chat_id) or not ai_access.is_allowed(chat_id, user_id):
-        return False
+    enabled = ai_access.is_enabled(chat_id)
+    allowed_user = ai_access.is_allowed(chat_id, user_id) if enabled else False
     reply_id = _ai_reply_message_id(event)
-    if not reply_id:
+    bot.logger.log_info(
+        "GOOGLE AI CHECK "
+        f"chat_id={chat_id} user_id={user_id} enabled={enabled} "
+        f"allowed={allowed_user} reply_id={reply_id or 'none'}"
+    )
+    if not enabled or not allowed_user:
         return False
-    # This lookup is performed only for enabled/allowed users and only on a
-    # reply; ordinary group messages never reach it or web search.
-    reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
-    if not reply_message:
-        return False
-    replied_text = (
-        getattr(reply_message, "message", None)
-        or getattr(reply_message, "caption", None)
-        or ""
-    ).strip()
-    # Search is based on both the original context and the new user request.
-    # This permits a reply to any user's message, not only a bot message.
+
+    replied_text = ""
+    if reply_id:
+        bot.logger.log_info(
+            f"GOOGLE AI REPLY DETECTED chat_id={chat_id} user_id={user_id} reply_id={reply_id}"
+        )
+        try:
+            reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
+        except Exception as error:
+            bot.logger.log_error(
+                f"GOOGLE AI REPLY LOAD FAILED chat_id={chat_id} reply_id={reply_id} error={error!r}"
+            )
+            reply_message = None
+        if reply_message:
+            replied_text = (
+                getattr(reply_message, "message", None)
+                or getattr(reply_message, "caption", None)
+                or ""
+            ).strip()
+
+    # A direct allowed question is also supported; a reply enriches it with
+    # context but is no longer a mandatory transport-specific condition.
     search_query = (
-        f"زمینه: {replied_text}\n"
-        f"درخواست کاربر: {message_text.strip()}"
+        f"زمینه: {replied_text}\nدرخواست کاربر: {message_text.strip()}"
         if replied_text else message_text.strip()
     )
     if not ai_search_service.looks_information_seeking(search_query):
@@ -1243,8 +1262,18 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         try:
             # Search runs in a worker so neither requests nor Google parsing
             # blocks incoming group messages.
+            bot.logger.log_info(
+                f"GOOGLE SEARCH REQUEST chat_id={chat_id} user_id={user_id} "
+                f"query_length={len(search_query)} has_reply_context={bool(replied_text)}"
+            )
             answer = await _asyncio.to_thread(ai_search_service.search_answer, search_query)
+            bot.logger.log_info(
+                f"GOOGLE SEARCH RESPONSE chat_id={chat_id} user_id={user_id} chars={len(answer)}"
+            )
             await event.reply(answer)
+            bot.logger.log_info(
+                f"GOOGLE AI RESPONSE chat_id={chat_id} user_id={user_id} sent=True"
+            )
         except ai_search_service.SearchAssistantError as error:
             bot.logger.log_error(
                 "AI SEARCH ERROR "

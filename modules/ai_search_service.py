@@ -6,6 +6,7 @@ from urllib.parse import quote
 import requests
 
 _SEARCH_URL = "https://www.google.com/search?q={query}&hl=fa"
+_GOOGLE_CSE_URL = "https://www.googleapis.com/customsearch/v1"
 _BING_URL = "https://www.bing.com/search?q={query}"
 _SESSION = requests.Session()
 _SESSION.headers.update({
@@ -91,8 +92,40 @@ def _answer_from_results(results, query):
     return f"{snippet}\n\nمنبع: {title}" if snippet else None
 
 
+def _google_custom_search(query):
+    """Use official Google Custom Search when local API credentials exist."""
+    import os
+    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    search_cx = os.getenv("GOOGLE_SEARCH_CX", "").strip()
+    if not api_key or not search_cx:
+        return None
+    try:
+        response = _SESSION.get(
+            _GOOGLE_CSE_URL,
+            params={"key": api_key, "cx": search_cx, "q": query, "hl": "fa"},
+            timeout=(4, 12),
+        )
+    except requests.Timeout as error:
+        raise SearchAssistantError("google_timeout") from error
+    except requests.RequestException as error:
+        raise SearchAssistantError("google_transport") from error
+    if response.status_code != 200:
+        raise SearchAssistantError(f"google_http_{response.status_code}")
+    try:
+        data = response.json()
+        results = [(str(item.get("title") or ""), str(item.get("snippet") or ""))
+                   for item in data.get("items", [])]
+    except (ValueError, TypeError, AttributeError) as error:
+        raise SearchAssistantError("google_invalid_response") from error
+    return _answer_from_results(results, query)
+
+
 def search_answer(query):
     """Return a short evidence-backed answer, never raw Google result links."""
+    official_answer = _google_custom_search(query)
+    if official_answer:
+        return official_answer
+
     url = _SEARCH_URL.format(query=quote(query))
     try:
         response = _SESSION.get(url, timeout=(4, 12))
