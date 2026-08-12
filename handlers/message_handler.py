@@ -135,7 +135,7 @@ from modules import bot_detector
 from modules import ad_name_detector
 from modules.user_display import format_user
 from modules import message_tracker
-from modules import search_access
+from modules import search_access, wiki_search_service
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -1214,16 +1214,53 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     reply_id = _search_reply_message_id(event)
     request_text = message_text.strip()
     bot.logger.log_info(
-        "GOOGLE SEARCH CHECK "
-        f"chat_id={chat_id} user_id={user_id} enabled={enabled} "
+        "AI ACCESS CHECK "
+        f"user_id={user_id} chat_id={chat_id} enabled={enabled} "
         f"allowed={allowed_user} reply_id={reply_id or 'none'} "
         f"text_length={len(request_text)}"
     )
-    if not enabled or not allowed_user:
+    if not enabled or not allowed_user or not reply_id or len(request_text) <= 6:
         return False
-    # Search access remains configured for future local-search handlers.
-    # No external Google API or web request is performed by this bot.
-    return False
+    try:
+        reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
+    except Exception as error:
+        bot.logger.log_error(
+            f"SEARCH REPLY LOAD FAILED chat_id={chat_id} reply_id={reply_id} error={error!r}"
+        )
+        return False
+    if not reply_message:
+        return False
+    reply_sender_id = getattr(reply_message, "sender_id", None)
+    if reply_sender_id is None:
+        reply_sender = await reply_message.get_sender()
+        reply_sender_id = getattr(reply_sender, "id", None)
+    if str(reply_sender_id) != str(getattr(bot, "bot_account_id", None)):
+        return False
+    replied_text = (getattr(reply_message, "message", None) or getattr(reply_message, "caption", None) or "").strip()
+    query = f"{replied_text} {request_text}".strip()
+
+    async def answer_from_public_source():
+        try:
+            bot.logger.log_info(
+                f"AI REQUEST PROCESS START chat_id={chat_id} user_id={user_id} query_length={len(query)}"
+            )
+            answer = await _asyncio.to_thread(wiki_search_service.answer, query)
+            await event.reply(answer)
+            bot.logger.log_info(
+                f"AI RESPONSE SENT chat_id={chat_id} user_id={user_id} chars={len(answer)}"
+            )
+        except wiki_search_service.WikiSearchError as error:
+            bot.logger.log_error(
+                f"SEARCH RESPONSE ERROR chat_id={chat_id} user_id={user_id} reason={error!s}"
+            )
+            await event.reply("ℹ️ اطلاعات کافی و قابل‌اعتمادی برای پاسخ پیدا نشد.")
+        except Exception as error:
+            bot.logger.log_error(
+                f"SEARCH RESPONSE ERROR chat_id={chat_id} user_id={user_id} error={error!r}"
+            )
+
+    _asyncio.create_task(answer_from_public_source())
+    return True
 
 
 async def handle_new_message(bot, event):
