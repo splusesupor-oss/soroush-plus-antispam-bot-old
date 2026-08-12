@@ -114,14 +114,59 @@ class FactualSearchError(RuntimeError):
     pass
 
 
-def search_factual(query):
-    """Use the same DuckDuckGo provider for a concise factual response.
+def _extract_factual_results(html):
+    """Read title/snippet pairs for factual summaries; do not expose links."""
+    if not html or "<html" not in html.lower():
+        return []
+    blocks = re.findall(r'<div class="result[^>]*>.*?</div>\s*</div>', html, re.I | re.S)
+    results = []
+    for block in blocks:
+        title_match = re.search(r'class="result__a"[^>]*>(.*?)</a>', block, re.I | re.S)
+        snippet_match = re.search(r'class="result__snippet"[^>]*>(.*?)</(?:a|div)>', block, re.I | re.S)
+        title = re.sub(r"<.*?>", "", title_match.group(1)).strip() if title_match else ""
+        snippet = re.sub(r"<.*?>", "", snippet_match.group(1)).strip() if snippet_match else ""
+        if title and snippet:
+            results.append((title, snippet))
+    # Fallback pairing for DuckDuckGo markup variants.
+    if not results:
+        titles = [re.sub(r"<.*?>", "", value).strip() for value in re.findall(r'class="result__a"[^>]*>(.*?)</a>', html, re.I | re.S)]
+        snippets = [re.sub(r"<.*?>", "", value).strip() for value in re.findall(r'class="result__snippet"[^>]*>(.*?)</(?:a|div)>', html, re.I | re.S)]
+        results = [(title, snippets[index]) for index, title in enumerate(titles) if title and index < len(snippets) and snippets[index]]
+    return results
 
-    The public ``search_web`` function remains unchanged for the ``جستجو``
-    command.  This adapter turns its successful result block into a concise
-    provider response for allowed factual users without new APIs.
-    """
-    result = search_web(query)
-    if result in {SEARCH_UNAVAILABLE, NO_RESULTS}:
-        raise FactualSearchError("unavailable" if result == SEARCH_UNAVAILABLE else "no_results")
-    return result
+
+def _factual_text(results):
+    if not results:
+        return None
+    # Two independent snippets are enough for a short response without
+    # dumping raw search links. Source titles are retained as provenance only.
+    selected = results[:2]
+    facts = []
+    titles = []
+    for title, snippet in selected:
+        snippet = " ".join(snippet.split())[:420]
+        if snippet and snippet not in facts:
+            facts.append(snippet)
+            titles.append(title)
+    if not facts:
+        return None
+    return "\n\n".join(facts) + "\n\nمنابع: " + " | ".join(titles)
+
+
+def search_factual(query):
+    """DuckDuckGo factual summary; public ``جستجو`` output remains unchanged."""
+    query = (query or "").strip()
+    if not query:
+        raise FactualSearchError("no_results")
+    url = "https://html.duckduckgo.com/html/?q=" + quote(query)
+    try:
+        with _search_session() as session:
+            response = session.get(url, timeout=(10, 20))
+    except (ConnectionError, ReadTimeout, ConnectionResetError, RequestException) as error:
+        raise FactualSearchError("unavailable") from error
+    if response.status_code != 200:
+        raise FactualSearchError("unavailable" if response.status_code >= 500 or response.status_code == 429 else "no_results")
+    answer = _factual_text(_extract_factual_results(response.text))
+    if not answer:
+        raise FactualSearchError("no_results")
+    return answer
