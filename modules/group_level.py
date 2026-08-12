@@ -1,4 +1,4 @@
-"""🏆 سطح گروه — یک سطح به ازای هر ۵۰۰ پیام، تا سقفِ سطح ۱۵.
+"""🏆 سطح گروه — یک سطح به ازای هر ۱۰۰۰ پیام، تا سقفِ سطح ۲۰.
 
 ماژولِ کاملاً مستقل:
 
@@ -18,8 +18,12 @@ _FILE = _BASE / "group_level.json"
 
 COMMAND = "سطح گروه"
 
-MESSAGES_PER_LEVEL = 500
-MAX_LEVEL = 15
+MESSAGES_PER_LEVEL = 1000
+MAX_LEVEL = 20
+# Old persisted levels were calculated with 500-message tiers.  They are not
+# comparable with this scheme and are reset lazily on the first new write.
+_LEVEL_SCHEMA_KEY = "_level_system_version"
+_LEVEL_SCHEMA_VERSION = 2
 
 # کشِ درون‌حافظه‌ای تا مسیرِ داغِ پیام‌ها برایِ هر پیام فایل نخواند.
 _MEM_LEVEL = {}
@@ -40,7 +44,8 @@ def level_for(messages):
         messages = max(0, int(messages))
     except (TypeError, ValueError):
         messages = 0
-    return min(MAX_LEVEL, messages // MESSAGES_PER_LEVEL + 1)
+    # Level 6 means 6000–6999 messages; level 20 is reached at 20000.
+    return min(MAX_LEVEL, messages // MESSAGES_PER_LEVEL)
 
 
 def message_count(chat_id):
@@ -59,8 +64,9 @@ def progress(chat_id):
         needed = 0
         done = MESSAGES_PER_LEVEL
     else:
-        needed = level * MESSAGES_PER_LEVEL - messages
-        done = MESSAGES_PER_LEVEL - needed
+        next_threshold = (level + 1) * MESSAGES_PER_LEVEL
+        needed = next_threshold - messages
+        done = messages - level * MESSAGES_PER_LEVEL
     return {
         "messages": messages,
         "level": level,
@@ -115,6 +121,10 @@ def _save(data):
 
 def last_level(chat_id):
     data = _load()
+    # Values written by the 500-message/15-level system are ignored. They
+    # would otherwise suppress new level-up notifications until 15000+ msgs.
+    if data.get(_LEVEL_SCHEMA_KEY) != _LEVEL_SCHEMA_VERSION:
+        return 0
     try:
         return int(data.get(normalize_group_id(chat_id), 0))
     except (TypeError, ValueError):
@@ -123,6 +133,9 @@ def last_level(chat_id):
 
 def set_level(chat_id, level):
     data = _load()
+    if data.get(_LEVEL_SCHEMA_KEY) != _LEVEL_SCHEMA_VERSION:
+        # One-time migration: old numeric levels belong to a different scale.
+        data = {_LEVEL_SCHEMA_KEY: _LEVEL_SCHEMA_VERSION}
     key = normalize_group_id(chat_id)
     data[key] = int(level)
     _MEM_LEVEL[key] = int(level)
@@ -165,7 +178,7 @@ def check_level_up(chat_id):
 def reset(chat_id=None):
     if chat_id is None:
         _MEM_LEVEL.clear()
-        _save({})
+        _save({_LEVEL_SCHEMA_KEY: _LEVEL_SCHEMA_VERSION})
         return True
     key = normalize_group_id(chat_id)
     _MEM_LEVEL.pop(key, None)
