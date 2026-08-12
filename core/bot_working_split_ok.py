@@ -81,6 +81,41 @@ from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 # Load the project .env by an absolute path.  A service/restart may launch
 # from another working directory, where bare ``load_dotenv()`` misses it.
 _ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+_AI_ENV_DEFAULTS = {
+    "AI_API_KEY": "",
+    "AI_BASE_URL": "https://openrouter.ai/api/v1",
+    "AI_MODEL": "openrouter/free",
+}
+
+
+def ensure_ai_env_template(env_path=_ENV_FILE):
+    """Add only missing AI keys to a local .env; never write a secret value."""
+    try:
+        existing = []
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as stream:
+                existing = stream.read().splitlines()
+        present = {
+            line.split("=", 1)[0].strip()
+            for line in existing
+            if line.strip() and not line.lstrip().startswith("#") and "=" in line
+        }
+        missing = [key for key in _AI_ENV_DEFAULTS if key not in present]
+        if missing:
+            with open(env_path, "a", encoding="utf-8") as stream:
+                if existing and existing[-1].strip():
+                    stream.write("\n")
+                stream.write("# OpenAI-compatible AI (set AI_API_KEY locally; never commit .env)\n")
+                for key in missing:
+                    stream.write(f"{key}={_AI_ENV_DEFAULTS[key]}\n")
+        return missing
+    except OSError:
+        # Startup must continue even if a deployment intentionally has a
+        # read-only env file; external environment variables still work.
+        return []
+
+
+_AI_ENV_ADDED = ensure_ai_env_template()
 load_dotenv(dotenv_path=_ENV_FILE, override=False)
 
 # اگر پوشه ماژول‌ها در مسیر نیست اضافه کن
@@ -125,12 +160,16 @@ class SoroushAntiSpamBot:
         self.logger = BotLogger(
             log_file=self.config_manager.get(
                 "log_file", "logs/deleted_messages.log"))
+        ai_key_present = bool(os.getenv("AI_API_KEY", "").strip())
         self.logger.log_info(
             "AI ENV STATUS "
-            f"api_key_present={bool(os.getenv('AI_API_KEY', '').strip())} "
+            f"api_key_present={ai_key_present} "
             f"base_url_present={bool(os.getenv('AI_BASE_URL', '').strip())} "
-            f"model_present={bool(os.getenv('AI_MODEL', '').strip())}"
+            f"model_present={bool(os.getenv('AI_MODEL', '').strip())} "
+            f"template_keys_added={','.join(_AI_ENV_ADDED) or 'none'}"
         )
+        if not ai_key_present:
+            print("[AI CONFIG] AI_API_KEY is missing. Add it to the local .env file; AI remains disabled until configured.")
         self.detector = SpamDetector(self.config_manager)
         self.tracker = UserTracker(
             spam_counts_file=self.config_manager.get(
