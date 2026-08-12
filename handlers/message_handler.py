@@ -1211,13 +1211,23 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
     if not reply_id:
         return False
     # This lookup is performed only for enabled/allowed users and only on a
-    # reply; ordinary group messages never reach it or the external API.
+    # reply; ordinary group messages never reach it or web search.
     reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
-    reply_sender_id = getattr(reply_message, "sender_id", None) if reply_message else None
-    if reply_sender_id is None and reply_message is not None:
-        reply_sender = await reply_message.get_sender()
-        reply_sender_id = getattr(reply_sender, "id", None)
-    if str(reply_sender_id) != str(getattr(bot, "bot_account_id", None)):
+    if not reply_message:
+        return False
+    replied_text = (
+        getattr(reply_message, "message", None)
+        or getattr(reply_message, "caption", None)
+        or ""
+    ).strip()
+    # Search is based on both the original context and the new user request.
+    # This permits a reply to any user's message, not only a bot message.
+    search_query = (
+        f"زمینه: {replied_text}\n"
+        f"درخواست کاربر: {message_text.strip()}"
+        if replied_text else message_text.strip()
+    )
+    if not ai_search_service.looks_information_seeking(search_query):
         return False
 
     allowed, count, notify_quota = ai_access.reserve_request(chat_id, user_id)
@@ -1233,9 +1243,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         try:
             # Search runs in a worker so neither requests nor Google parsing
             # blocks incoming group messages.
-            if not ai_search_service.looks_information_seeking(message_text):
-                return
-            answer = await _asyncio.to_thread(ai_search_service.search_answer, message_text)
+            answer = await _asyncio.to_thread(ai_search_service.search_answer, search_query)
             await event.reply(answer)
         except ai_search_service.SearchAssistantError as error:
             bot.logger.log_error(
