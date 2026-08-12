@@ -98,7 +98,13 @@ def access_state(chat_id, user_id):
     group = _group(_load(), chat_id)
     enabled = bool(group and group.get("enabled"))
     allowed = bool(enabled and str(user_id) in group.get("allowed", {}))
+    loaded_users = sorted(str(value) for value in (group.get("allowed", {}) if group else {}))
     _log_load(chat_id, user_id, enabled, allowed)
+    logging.getLogger("SoroushAntiSpam").info(
+        "SEARCH ACCESS CHECK DEBUG "
+        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} user_id={user_id} "
+        f"storage_path={FILE} loaded_users={loaded_users!r}"
+    )
     return enabled, allowed
 
 
@@ -130,7 +136,19 @@ def allow(chat_id, user):
         "display": format_user(user),
     }
     _save(data)
-    _log_save(chat_id, user_id=user_id, enabled=bool(group.get("enabled")), allowed=True)
+    # Verify the on-disk record through the same read path used by requests.
+    verified = _group(_load(), chat_id) or {}
+    saved_data = {
+        "enabled": bool(verified.get("enabled")),
+        "allowed_users": sorted(str(value) for value in verified.get("allowed", {})),
+    }
+    logging.getLogger("SoroushAntiSpam").info(
+        "SEARCH ACCESS SAVE DEBUG "
+        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} user_id={user_id} "
+        f"username={getattr(user, 'username', None)!r} storage_path={FILE} "
+        f"saved_data={saved_data!r}"
+    )
+    _log_save(chat_id, user_id=user_id, enabled=saved_data["enabled"], allowed=str(user_id) in verified.get("allowed", {}))
     return True
 
 

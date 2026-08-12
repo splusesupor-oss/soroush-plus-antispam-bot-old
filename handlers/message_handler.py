@@ -1188,8 +1188,11 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             return True
         if clean_text == "مجاز":
             search_access.allow(chat_id, target)
+            enabled_now, allowed_now = search_access.access_state(chat_id, target.id)
             bot.logger.log_info(
-                f"SEARCH ACCESS COMMAND chat_id={chat_id} target_user_id={target.id} allowed=True"
+                "SEARCH ACCESS COMMAND "
+                f"chat_id={chat_id} target_user_id={target.id} "
+                f"enabled={enabled_now} allowed={allowed_now}"
             )
             await event.reply(
                 f"✅ کاربر : {format_user(target)}\n\n"
