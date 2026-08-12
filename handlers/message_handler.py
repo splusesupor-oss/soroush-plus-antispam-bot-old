@@ -440,57 +440,77 @@ async def _same_sender(message, user_id):
     return sender_id is not None and str(sender_id) == str(user_id)
 
 
-async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
-    """Return every accessible *real-spam* message id for this user.
+SPAM_HISTORY_SWEEP_LIMIT = 300
 
-    ``iter_messages(..., limit=None)`` is SPlusthon's paginated history API;
-    unlike the old tracker-only path it continues beyond 21/100/500 messages.
-    The seed contains messages already observed by the live tracker so an API
-    history gap cannot lose the triggering message.
+
+async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
+    """Use tracked IDs first; history sweep is bounded and background-only.
+
+    A non-empty seed is authoritative for the current spam wave, so no
+    GetHistory request is needed on the hot path.  Only a seedless recovery
+    sweep reads a small, rate-limited history window.
     """
     ids = {message_id for message_id in seed_ids
            if isinstance(message_id, int) and message_id > 0}
+    if ids:
+        bot.logger.log_info(
+            "SPAM HISTORY SWEEP SKIPPED "
+            f"chat_id={chat_id} user_id={user_id} seed_ids={len(ids)}"
+        )
+        return ids
+
     iterator_factory = getattr(bot.client, "iter_messages", None)
     if not callable(iterator_factory):
         bot.logger.log_error(
             "SPAM HISTORY SWEEP UNAVAILABLE "
-            f"chat_id={chat_id} user_id={user_id}; using tracked ids={len(ids)}"
+            f"chat_id={chat_id} user_id={user_id}"
         )
         return ids
 
-    scanned = matched = 0
-    try:
-        # ``limit=None`` explicitly asks the client to paginate all messages
-        # it can access; no artificial cleanup cap is imposed here.
-        async for message in iterator_factory(chat_id, limit=None):
-            scanned += 1
-            if not await _same_sender(message, user_id):
+    for attempt in range(2):
+        scanned = matched = 0
+        try:
+            # SPlusthon throttles history pages; cap recovery to a recent
+            # window and use its page wait_time rather than flooding RPCs.
+            async for message in iterator_factory(
+                    chat_id, limit=SPAM_HISTORY_SWEEP_LIMIT, wait_time=1):
+                scanned += 1
+                if not await _same_sender(message, user_id):
+                    continue
+                text = (getattr(message, "message", None)
+                        or getattr(message, "caption", None) or "")
+                if not _is_true_auto_spam_text(bot, chat_id, text):
+                    continue
+                message_id = getattr(message, "id", None)
+                if isinstance(message_id, int) and message_id > 0:
+                    before = len(ids)
+                    ids.add(message_id)
+                    matched += len(ids) - before
+        except _asyncio.CancelledError:
+            raise
+        except Exception as error:
+            wait = getattr(error, "seconds", None)
+            if wait and attempt == 0:
+                delay = min(max(float(wait), 1.0), 30.0)
+                bot.logger.log_error(
+                    "SPAM HISTORY SWEEP FLOODWAIT "
+                    f"chat_id={chat_id} user_id={user_id} wait_s={delay:.1f}"
+                )
+                await _asyncio.sleep(delay)
                 continue
-            text = (getattr(message, "message", None)
-                    or getattr(message, "caption", None) or "")
-            if not _is_true_auto_spam_text(bot, chat_id, text):
-                continue
-            message_id = getattr(message, "id", None)
-            if isinstance(message_id, int) and message_id > 0:
-                before = len(ids)
-                ids.add(message_id)
-                matched += len(ids) - before
-    except _asyncio.CancelledError:
-        raise
-    except Exception as error:
-        # Do not discard successfully collected pages; cleanup still runs for
-        # them and the error remains visible instead of producing a false count.
-        bot.logger.log_error(
-            "SPAM HISTORY SWEEP PARTIAL "
-            f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
-            f"matched={matched} error={error!r}"
-        )
-    else:
-        bot.logger.log_info(
-            "SPAM HISTORY SWEEP COMPLETE "
-            f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
-            f"spam_ids={len(ids)}"
-        )
+            bot.logger.log_error(
+                "SPAM HISTORY SWEEP FAILED "
+                f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
+                f"matched={matched} error={error!r}"
+            )
+            return ids
+        else:
+            bot.logger.log_info(
+                "SPAM HISTORY SWEEP COMPLETE "
+                f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
+                f"spam_ids={len(ids)}"
+            )
+            return ids
     return ids
 
 
@@ -2306,21 +2326,14 @@ async def handle_new_message(bot, event):
                         if event.message.id not in existing_ids:
                             existing_ids.add(event.message.id)
                         bot.logger.log_info(
-                            "SPAM BULK CLEANUP BEFORE PUNISH "
+                            "SPAM BULK CLEANUP QUEUED "
                             f"chat_id={chat_id} user_id={user_id} "
-                            f"ids_count={len(existing_ids)} ids={sorted(existing_ids)!r}"
+                            f"seed_ids={len(existing_ids)}"
                         )
-                        deleted_existing, remaining_existing = await cleanup_spam_messages(
-                            bot, chat_id, user_id, existing_ids
-                        )
-                        bot.logger.log_info(
-                            "SPAM BULK CLEANUP RESULT "
-                            f"requested={len(existing_ids)} deleted={deleted_existing} "
-                            f"remaining={len(remaining_existing)}"
-                        )
-                        finalize_spam_wave(
-                            chat_id, user_id, len(existing_ids),
-                            deleted_existing, remaining_existing
+                        # Never await bulk delete/get-history from a received
+                        # message. The per-user cleanup task owns it instead.
+                        _schedule_auto_spam_cleanup(
+                            bot, event, chat_id, user_id, existing_ids
                         )
                         return
                     bot.punished_users.add(punish_key)
