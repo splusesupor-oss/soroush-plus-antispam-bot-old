@@ -26,10 +26,12 @@ _SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات
 
 
 class AIServiceError(RuntimeError):
-    def __init__(self, message, *, status_code=None, response_body=None, kind="api"):
+    def __init__(self, message, *, status_code=None, response_body=None,
+                 response_headers=None, kind="api"):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
+        self.response_headers = response_headers or {}
         self.kind = kind
 
 
@@ -72,6 +74,13 @@ def _clean_answer(content):
     if not answer:
         raise AIServiceError("پاسخ سرویس فقط شامل اطلاعات داخلی بود.", kind="content")
     return answer
+
+
+def _safe_response_headers(response):
+    """Keep only diagnostics useful for support; never include credentials."""
+    wanted = ("x-request-id", "request-id", "cf-ray", "retry-after", "server", "date")
+    headers = getattr(response, "headers", {}) or {}
+    return {key: headers.get(key) for key in wanted if headers.get(key) is not None}
 
 
 def _headers(api_key):
@@ -118,11 +127,13 @@ def _request(prompt):
                 f"OpenRouter/OpenAI-compatible HTTP {response.status_code} "
                 f"endpoint={url} model={selected_model} response={body!r}",
                 status_code=response.status_code, response_body=body,
-                kind="forbidden" if response.status_code == 403 else "http"
+                response_headers=_safe_response_headers(response),
+                kind=("forbidden" if response.status_code == 403 else
+                      "rate_limited" if response.status_code == 429 else "http")
             )
-            # Shared free pools frequently return 429.  A single named
-            # fallback keeps the reply useful without routing arbitrary models.
-            if response.status_code == 429 and index + 1 < len(models):
+            # A provider/security rejection can be model-specific. Try the
+            # one explicit fallback, never an arbitrary router-selected model.
+            if response.status_code in (403, 429, 500, 502, 503, 504) and index + 1 < len(models):
                 continue
             raise last_error
         try:
@@ -133,7 +144,8 @@ def _request(prompt):
                 body = (response.text or "").strip().replace("\n", " ")[:2000]
                 last_error = AIServiceError(
                     f"OpenRouter provider error endpoint={url} model={selected_model} response={body!r}",
-                    status_code=provider_status, response_body=body, kind="provider_error"
+                    status_code=provider_status, response_body=body,
+                    response_headers=_safe_response_headers(response), kind="provider_error"
                 )
                 if index + 1 < len(models):
                     continue
@@ -146,7 +158,8 @@ def _request(prompt):
             last_error = AIServiceError(
                 f"OpenRouter/OpenAI-compatible invalid response endpoint={url} "
                 f"model={selected_model} response={body!r}",
-                status_code=response.status_code, response_body=body, kind="invalid_response"
+                status_code=response.status_code, response_body=body,
+                response_headers=_safe_response_headers(response), kind="invalid_response"
             )
             if index + 1 < len(models):
                 continue

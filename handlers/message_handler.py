@@ -1206,9 +1206,19 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
                 f"type={error.__class__.__name__} kind={error.kind} "
                 f"status={error.status_code if error.status_code is not None else 'none'} "
                 f"message={str(error)!r} "
-                f"response_body={error.response_body!r}"
+                f"response_body={error.response_body!r} "
+                f"response_headers={error.response_headers!r}"
             )
-            await event.reply("❌ پاسخ هوش مصنوعی در دسترس نیست. بعداً دوباره تلاش کنید.")
+            if error.kind == "config":
+                await event.reply("❌ تنظیمات هوش مصنوعی کامل نیست.")
+            elif error.kind == "forbidden":
+                await event.reply("❌ دسترسی این درخواست توسط سرویس هوش مصنوعی رد شد.")
+            elif error.kind == "rate_limited":
+                await event.reply("⏳ سرویس هوش مصنوعی موقتاً شلوغ است. کمی بعد دوباره تلاش کنید.")
+            elif error.kind in {"timeout", "transport"}:
+                await event.reply("❌ ارتباط با سرویس هوش مصنوعی در دسترس نیست. بعداً دوباره تلاش کنید.")
+            else:
+                await event.reply("❌ پاسخ هوش مصنوعی معتبر دریافت نشد. بعداً دوباره تلاش کنید.")
         except Exception as error:
             bot.logger.log_error(
                 "AI REQUEST ERROR "
