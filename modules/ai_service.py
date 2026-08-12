@@ -4,9 +4,9 @@ import os
 
 import requests
 
-_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
-_DEFAULT_MODEL = "gpt-4o-mini"
+_DEFAULT_MODEL = "openrouter/free"
 _TIMEOUT = (5, 30)
 _SESSION = requests.Session()
 
