@@ -135,7 +135,7 @@ from modules import bot_detector
 from modules import ad_name_detector
 from modules.user_display import format_user
 from modules import message_tracker
-from modules import ai_access, ai_service
+from modules import ai_access, ai_search_service
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -1231,33 +1231,25 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
 
     async def answer_in_background():
         try:
-            answer = await ai_service.ask(message_text)
+            # Search runs in a worker so neither requests nor Google parsing
+            # blocks incoming group messages.
+            if not ai_search_service.looks_information_seeking(message_text):
+                return
+            answer = await _asyncio.to_thread(ai_search_service.search_answer, message_text)
             await event.reply(answer)
-        except ai_service.AIServiceError as error:
+        except ai_search_service.SearchAssistantError as error:
             bot.logger.log_error(
-                "AI REQUEST ERROR "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"type={error.__class__.__name__} kind={error.kind} "
-                f"status={error.status_code if error.status_code is not None else 'none'} "
-                f"message={str(error)!r} "
-                f"response_body={error.response_body!r} "
-                f"response_headers={error.response_headers!r}"
+                "AI SEARCH ERROR "
+                f"chat_id={chat_id} user_id={user_id} reason={error!s}"
             )
-            if error.kind == "config":
-                await event.reply("❌ تنظیمات هوش مصنوعی کامل نیست.")
-            elif error.kind == "forbidden":
-                await event.reply("❌ دسترسی درخواست Groq رد شد. معتبر بودن GROQ_API_KEY و دسترسی حساب Groq را بررسی کنید.")
-            elif error.kind == "rate_limited":
-                await event.reply("⏳ سرویس هوش مصنوعی موقتاً شلوغ است. کمی بعد دوباره تلاش کنید.")
-            elif error.kind in {"timeout", "transport"}:
-                await event.reply("❌ ارتباط با سرویس هوش مصنوعی در دسترس نیست. بعداً دوباره تلاش کنید.")
+            if str(error) == "no_results":
+                await event.reply("ℹ️ اطلاعات کافی و قابل‌اعتمادی برای پاسخ پیدا نشد.")
             else:
-                await event.reply("❌ پاسخ هوش مصنوعی معتبر دریافت نشد. بعداً دوباره تلاش کنید.")
+                await event.reply("❌ جستجوی اطلاعات موقتاً در دسترس نیست. بعداً دوباره تلاش کنید.")
         except Exception as error:
             bot.logger.log_error(
-                "AI REQUEST ERROR "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"type={error.__class__.__name__} message={str(error)!r}"
+                "AI SEARCH ERROR "
+                f"chat_id={chat_id} user_id={user_id} type={error.__class__.__name__} error={error!r}"
             )
         finally:
             if notify_quota:
