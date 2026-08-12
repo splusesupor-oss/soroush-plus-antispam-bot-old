@@ -140,16 +140,25 @@ from splusthon.tl import functions
 from splusthon import types
 
 
-def _warm_reply_input_chat(event, chat):
-    """Populate Message.input_chat from the already-resolved chat entity.
+def _warm_reply_input_chat(bot, event, chat=None):
+    """Populate a reply InputPeer from the per-bot chat cache when possible.
 
-    SPlusthon's ``Message.reply`` otherwise falls back to ``iter_dialogs(100)``
-    when an event missed the entity cache.  That extra lookup can add a whole
-    RPC before the actual send; this is a local cache fill and never sends a
-    request itself.
+    A cached InputPeer makes ``Message.reply`` skip SPlusthon's expensive
+    ``iter_dialogs(100)`` fallback.  The cache is capped because group IDs are
+    unbounded over the lifetime of a userbot.
     """
     message = getattr(event, "message", None)
     if message is None or getattr(message, "input_chat", None) is not None:
+        return False
+    chat_id = getattr(event, "chat_id", None)
+    cache = getattr(bot, "reply_input_peer_cache", None)
+    if cache is None:
+        cache = bot.reply_input_peer_cache = {}
+    input_chat = cache.get(chat_id)
+    if input_chat is not None:
+        message._input_chat = input_chat
+        return True
+    if chat is None:
         return False
     try:
         from splusthon import utils
@@ -157,6 +166,9 @@ def _warm_reply_input_chat(event, chat):
         if input_chat is None:
             return False
         message._input_chat = input_chat
+        cache[chat_id] = input_chat
+        if len(cache) > 500:
+            cache.pop(next(iter(cache)), None)
         return True
     except Exception:
         return False
@@ -1140,14 +1152,17 @@ async def handle_new_message(bot, event):
             except BaseException:
                 pass
 
-        # Core may have resolved these already; prefer event-local cache and
-        # fields before asking SPlusthon to resolve entities again.
+        # Core may have resolved these already; prefer the per-bot InputPeer
+        # cache and event fields before asking SPlusthon to resolve a chat.
         event_chat = (getattr(event, "_bot_cached_chat", None)
                       or getattr(event, "chat", None))
-        if event_chat is None:
+        cached_peer = getattr(bot, "reply_input_peer_cache", {}).get(
+            getattr(event, "chat_id", None)
+        )
+        if event_chat is None and cached_peer is None:
             event_chat = await event.get_chat()
-        chat_id = getattr(event_chat, "id", event.chat_id)
-        _warm_reply_input_chat(event, event_chat)
+        chat_id = getattr(event_chat, "id", event.chat_id) if event_chat else event.chat_id
+        _warm_reply_input_chat(bot, event, event_chat)
         sender = (getattr(event, "_bot_cached_sender", None)
                   or getattr(event, "sender", None))
         if sender is None:

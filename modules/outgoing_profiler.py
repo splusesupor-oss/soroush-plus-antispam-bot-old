@@ -9,6 +9,8 @@ import time
 _RESPONSE_RPC_MS = contextvars.ContextVar("response_rpc_ms", default=0.0)
 _RPC_DEPTH = contextvars.ContextVar("outgoing_rpc_depth", default=0)
 _RPC_DEBUG = os.getenv("BOT_RPC_DEBUG", "").strip() == "1"
+# 400–800ms is normal successful Soroush server RTT, not a local failure.
+_RPC_SLOW_WARNING_MS = float(os.getenv("BOT_RPC_SLOW_WARNING_MS", "1500"))
 
 
 def begin_response_measurement():
@@ -68,7 +70,7 @@ def _wrap(owner, attribute, operation, logger):
                     f"started_at={started_wall:.3f} finished_at={time.time():.3f} "
                     f"rpc_ms={elapsed_ms:.2f} result={result} nested={depth > 0}"
                 )
-            if elapsed_ms > 50:
+            if elapsed_ms > _RPC_SLOW_WARNING_MS:
                 logger.log_error(
                     "OUTGOING RPC WARNING "
                     f"request_id={request_id} operation={operation} "

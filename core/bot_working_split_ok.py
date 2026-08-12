@@ -133,6 +133,9 @@ class SoroushAntiSpamBot:
                 3))
 
         self.client = None
+        # InputPeer cache used by ordinary replies; avoids per-message dialog
+        # lookup while staying bounded for long-running multi-group sessions.
+        self.reply_input_peer_cache = {}
         self.admin_actions = None
         self.moderation_queue = ModerationQueue(self.logger)
         self.group_actions = None
