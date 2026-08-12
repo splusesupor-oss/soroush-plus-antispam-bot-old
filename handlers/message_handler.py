@@ -1,5 +1,5 @@
 import asyncio as _asyncio
-from collections import deque
+from collections import Counter, deque
 from datetime import date
 
 from modules.fill_blank import check_fill, get_token as get_fill_token
@@ -548,9 +548,11 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
         return existing
 
     async def run():
+        total_deleted = 0
+        total_remaining = []
         try:
             # A second small pass picks up messages received while the first
-            # paginated sweep was deleting, without blocking any command.
+            # batch was deleting, but produces one combined notification.
             for _ in range(2):
                 seeds = pending.pop(key, set())
                 if not seeds:
@@ -559,39 +561,38 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                     bot, chat_id, user_id, seeds
                 )
                 deleted, remaining = await cleanup_spam_messages(
-                    bot, chat_id, user_id, spam_ids
-                )
+                    bot, chat_id, user_id, spam_ids)
+                total_deleted += deleted
+                total_remaining.extend(remaining)
                 finalized = finalize_spam_wave(
-                    chat_id, user_id, len(spam_ids), deleted, remaining
-                )
+                    chat_id, user_id, len(spam_ids), deleted, remaining)
                 if remaining:
                     bot.logger.log_error(
                         "SPAM DELETE INCOMPLETE "
                         f"chat_id={chat_id} user_id={user_id} "
                         f"selected={len(spam_ids)} deleted={deleted} "
-                        f"remaining={len(remaining)}"
-                    )
-                if announce_cleanup:
-                    punish_key = f"{chat_id}:{user_id}"
-                    action = getattr(bot, "config_manager", None)
-                    action = action.get("action_on_threshold") if action is not None else None
-                    if (punish_key in getattr(bot, "punished_users", set())
-                            and action in {"ban", "kick"}):
-                        await _send_moderation_notification_once(
-                            bot, chat_id, user_id, "spam_ban_cleanup",
-                            getattr(event.message, "id", None),
-                            "⚠️ کاربر ⏌ "
-                            f"{format_user(getattr(event, 'sender', None))}"
-                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
-                            f"🗑 {_fullwidth_digits(deleted)} پیام هرزنامه پاک شد",
-                        )
-                    elif deleted:
-                        await event.reply(
-                            f"🗑 {_fullwidth_digits(deleted)} پیام هرزنامه پاک شد"
-                        )
+                        f"remaining={len(remaining)}")
                 if not finalized:
                     break
                 await _asyncio.sleep(0)
+
+            if announce_cleanup:
+                punish_key = f"{chat_id}:{user_id}"
+                action = getattr(bot, "config_manager", None)
+                action = action.get("action_on_threshold") if action is not None else None
+                if (punish_key in getattr(bot, "punished_users", set())
+                        and action in {"ban", "kick"}):
+                    await _send_moderation_notification_once(
+                        bot, chat_id, user_id, "spam_ban_cleanup",
+                        getattr(event.message, "id", None),
+                        "⚠️ کاربر ⏌ "
+                        f"{format_user(getattr(event, 'sender', None))}"
+                        " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
+                        f"🗑 {_fullwidth_digits(total_deleted)} پیام هرزنامه پاک شد")
+                elif total_deleted:
+                    await event.reply(
+                        f"🗑 {_fullwidth_digits(total_deleted)} پیام هرزنامه پاک شد")
+
         except _asyncio.CancelledError:
             raise
         except Exception as error:
@@ -4774,10 +4775,12 @@ async def handle_new_message(bot, event):
 
                 bot.flood_messages[chat_id] = []
 
+                bot.logger.log_info(
+                    "DUPLICATE FLOOD DETECTED "
+                    f"chat_id={chat_id} user_id={user_id} count={len(ids)}"
+                )
                 if bot.acquire_delete_notice_lock(chat_id):
-                    await event.reply(
-                        "⚠️ ارسال پیام تکراری پشت سرهم حذف شد"
-                    )
+                    await event.reply("پیام‌های پشت سر هم حذف شدند")
 
                 return
 
@@ -4797,15 +4800,16 @@ async def handle_new_message(bot, event):
         try:
             import re
 
-            words = re.findall(r"\\w+|[آ-ی]+", message_text.lower())
-            repeat_found = False
-
-            for w in set(words):
-                if len(w) >= 3 and words.count(w) >= 8:
-                    repeat_found = True
-                    break
+            words = re.findall(r"\w+|[آ-ی]+", message_text.lower())
+            counts = Counter(word for word in words if len(word) >= 3)
+            repeat_word, repeat_count = (max(counts.items(), key=lambda item: item[1]) if counts else (None, 0))
+            repeat_found = repeat_count >= 8
 
             if repeat_found and not is_group_moderator:
+                bot.logger.log_info(
+                    "SPAM HEAVY DETECTED "
+                    f"chat_id={chat_id} user_id={user_id} word={repeat_word!r} count={repeat_count}"
+                )
                 from modules.user_map import save_user
 
                 save_user(chat_id, username, user_id)

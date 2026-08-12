@@ -57,6 +57,9 @@ class MessageDeleteQueue:
         remaining = []
         for start in range(0, len(ids), self.batch_size):
             batch = ids[start:start + self.batch_size]
+            self.logger.log_info(
+                f"BATCH DELETE START chat_id={chat_id} count={len(batch)}"
+            )
             succeeded = False
             for attempt in range(1, 4):
                 started = time.perf_counter()
@@ -82,6 +85,9 @@ class MessageDeleteQueue:
                     if attempt < 3:
                         await asyncio.sleep(0.2 * attempt)
             if succeeded:
+                self.logger.log_info(
+                    f"BATCH DELETE FINISHED chat_id={chat_id} count={len(batch)}"
+                )
                 # Let command-response tasks run before this chat's next batch.
                 await asyncio.sleep(0)
                 continue
