@@ -193,6 +193,11 @@ def _math_digits(value):
     return str(value).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
 
 
+def _fullwidth_digits(value):
+    """فونت شمارندهٔ پیام‌های پاک‌شده، فقط برای پیام‌های cleanup."""
+    return str(value).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
+
+
 def _jalali_today():
     """تاریخ امروز ایران در تقویم جلالی، بدون وابستگی خارجی."""
     gy, gm, gd = date.today().year, date.today().month, date.today().day
@@ -535,7 +540,7 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids):
                     )
                 if deleted:
                     await event.reply(
-                        f"🗑 {_math_digits(deleted)} پیام هرزنامه پاک شد"
+                        f"🗑 {_fullwidth_digits(deleted)} پیام هرزنامه پاک شد"
                     )
                 if not finalized:
                     break
@@ -714,7 +719,7 @@ async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
         f"deleted={deleted} remaining={len(remaining)}"
     )
     if deleted:
-        await event.reply(f"🗑 {_math_digits(deleted)} پیام هرزنامه پاک شد")
+        await event.reply(f"🗑 {_fullwidth_digits(deleted)} پیام هرزنامه پاک شد")
     finalize_spam_wave(chat_id, user_id, len(ids), deleted, remaining)
 
 
@@ -2209,7 +2214,7 @@ async def handle_new_message(bot, event):
                         )
                         if deleted_count:
                             await event.reply(
-                                f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
+                                f"🗑 {_fullwidth_digits(deleted_count)} پیام هرزنامه پاک شد"
                             )
                         if remaining_ids:
                             bot.logger.log_error(
@@ -3913,8 +3918,12 @@ async def handle_new_message(bot, event):
                             f"MANUAL DELETE INCOMPLETE chat_id={chat_id} "
                             f"deleted={deleted_count} remaining={len(remaining)}"
                         )
+                    # Report only after the queue has completed, using the
+                    # real successful count rather than the requested count.
+                    await event.reply(
+                        f"{_fullwidth_digits(deleted_count)} پیام پاک شد 💣"
+                    )
                 _asyncio.create_task(finish_manual_bulk_delete())
-                await event.reply(f"{len(message_ids)} پیام در صف پاکسازی قرار گرفت 💣")
                 return
 
             except Exception as e:
@@ -4486,9 +4495,20 @@ async def handle_new_message(bot, event):
                 )
 
                 if reply_id:
-                    _queue_message_deletes(bot, chat.id, [reply_id])
+                    delete_future = _queue_message_deletes(bot, chat.id, [reply_id])
                     _asyncio.create_task(event.delete())
-                    await event.reply("✅ پیام در صف پاکسازی قرار گرفت")
+
+                    async def finish_single_delete():
+                        deleted, remaining = await delete_future
+                        if deleted:
+                            await event.reply("✅ با موفقیت پاک شد")
+                        else:
+                            bot.logger.log_error(
+                                f"SINGLE DELETE INCOMPLETE chat_id={chat.id} "
+                                f"remaining={remaining!r}"
+                            )
+                            await event.reply("❌ پاک کردن پیام انجام نشد")
+                    _asyncio.create_task(finish_single_delete())
 
                 return
 
@@ -4661,7 +4681,7 @@ async def handle_new_message(bot, event):
                         finalize_spam_wave(chat_id, user_id, len(ids), deleted, remaining)
                         # 4) send deleted count
                         if deleted:
-                            await event.reply(f"🗑 {_math_digits(deleted)} پیام هرزنامه پاک شد")
+                            await event.reply(f"🗑 {_fullwidth_digits(deleted)} پیام هرزنامه پاک شد")
 
                     async def heavy_repeat_failed(_error):
                         bot.punished_users.discard(punish_key)
@@ -4819,7 +4839,7 @@ async def handle_new_message(bot, event):
                                 )
                                 if deleted_count:
                                     await event.reply(
-                                        f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
+                                        f"🗑 {_fullwidth_digits(deleted_count)} پیام هرزنامه پاک شد"
                                     )
 
                             async def repeat_ban_failed(_error):

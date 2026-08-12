@@ -623,6 +623,11 @@ def format_cleanup(chat_id):
 
 # قفلِ مشترکِ per-group برایِ پاکسازی (دستی و خودکار با هم تداخل نکنند).
 _GROUP_DELETE_LOCKS = {}
+_FULLWIDTH_DIGITS = str.maketrans("0123456789", "０１２３４５６７８９")
+
+
+def _fullwidth_digits(value):
+    return str(value).translate(_FULLWIDTH_DIGITS)
 
 
 def get_group_lock(chat_id):
@@ -728,7 +733,7 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
                 await bot.client.send_message(
                     chat_id,
                     "🔓 پاکسازی به پایان رسید و گروه دوباره باز شد.\n"
-                    f"🗑️ تعداد پیام‌های پاک‌شده: {deleted}",
+                    f"🗑️ تعداد پیام‌های پاک‌شده: {_fullwidth_digits(deleted)}",
                 )
             except Exception:
                 pass
