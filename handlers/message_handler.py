@@ -135,7 +135,8 @@ from modules import bot_detector
 from modules import ad_name_detector
 from modules.user_display import format_user
 from modules import message_tracker
-from modules import search_access, wiki_search_service
+from modules import search_access
+from modules import web_search, wiki_search_service
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -1270,12 +1271,19 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             bot.logger.log_info(
                 f"AI REQUEST PROCESS START chat_id={chat_id} user_id={user_id} query_length={len(query)}"
             )
-            answer = await _asyncio.to_thread(wiki_search_service.answer, query)
+            try:
+                answer = await _asyncio.to_thread(web_search.search_factual, query)
+            except web_search.FactualSearchError as primary_error:
+                # Wikipedia remains a secondary factual fallback only.
+                bot.logger.log_info(
+                    f"SEARCH PROVIDER FALLBACK provider=DuckDuckGo reason={primary_error!s}"
+                )
+                answer = await _asyncio.to_thread(wiki_search_service.answer, query)
             await event.reply(answer)
             bot.logger.log_info(
                 f"AI RESPONSE SENT chat_id={chat_id} user_id={user_id} chars={len(answer)}"
             )
-        except wiki_search_service.WikiSearchError as error:
+        except (web_search.FactualSearchError, wiki_search_service.WikiSearchError) as error:
             bot.logger.log_error(
                 f"SEARCH RESPONSE ERROR chat_id={chat_id} user_id={user_id} reason={error!s}"
             )

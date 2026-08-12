@@ -108,3 +108,20 @@ def search_web(query):
     for index, (title, link) in enumerate(results[:5], 1):
         output += f"{index}- {title}\n🔗 {link}\n\n"
     return output
+
+
+class FactualSearchError(RuntimeError):
+    pass
+
+
+def search_factual(query):
+    """Use the same DuckDuckGo provider for a concise factual response.
+
+    The public ``search_web`` function remains unchanged for the ``جستجو``
+    command.  This adapter turns its successful result block into a concise
+    provider response for allowed factual users without new APIs.
+    """
+    result = search_web(query)
+    if result in {SEARCH_UNAVAILABLE, NO_RESULTS}:
+        raise FactualSearchError("unavailable" if result == SEARCH_UNAVAILABLE else "no_results")
+    return result
