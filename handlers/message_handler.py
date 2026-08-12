@@ -1213,41 +1213,47 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
     enabled = ai_access.is_enabled(chat_id)
     allowed_user = ai_access.is_allowed(chat_id, user_id) if enabled else False
     reply_id = _ai_reply_message_id(event)
+    request_text = message_text.strip()
     bot.logger.log_info(
         "GOOGLE AI CHECK "
         f"chat_id={chat_id} user_id={user_id} enabled={enabled} "
-        f"allowed={allowed_user} reply_id={reply_id or 'none'}"
+        f"allowed={allowed_user} reply_id={reply_id or 'none'} "
+        f"text_length={len(request_text)}"
     )
     if not enabled or not allowed_user:
         return False
-
-    replied_text = ""
-    if reply_id:
-        bot.logger.log_info(
-            f"GOOGLE AI REPLY DETECTED chat_id={chat_id} user_id={user_id} reply_id={reply_id}"
-        )
-        try:
-            reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
-        except Exception as error:
-            bot.logger.log_error(
-                f"GOOGLE AI REPLY LOAD FAILED chat_id={chat_id} reply_id={reply_id} error={error!r}"
-            )
-            reply_message = None
-        if reply_message:
-            replied_text = (
-                getattr(reply_message, "message", None)
-                or getattr(reply_message, "caption", None)
-                or ""
-            ).strip()
-
-    # A direct allowed question is also supported; a reply enriches it with
-    # context but is no longer a mandatory transport-specific condition.
-    search_query = (
-        f"زمینه: {replied_text}\nدرخواست کاربر: {message_text.strip()}"
-        if replied_text else message_text.strip()
-    )
-    if not ai_search_service.looks_information_seeking(search_query):
+    # A search request is counted only for a meaningful (>6 chars) question
+    # replying to a message sent by the bot itself.
+    if not reply_id or len(request_text) <= 6 or not ai_search_service.looks_information_seeking(request_text):
         return False
+
+    bot.logger.log_info(
+        f"GOOGLE AI REPLY DETECTED chat_id={chat_id} user_id={user_id} reply_id={reply_id}"
+    )
+    try:
+        reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
+    except Exception as error:
+        bot.logger.log_error(
+            f"GOOGLE AI REPLY LOAD FAILED chat_id={chat_id} reply_id={reply_id} error={error!r}"
+        )
+        return False
+    if not reply_message:
+        return False
+    reply_sender_id = getattr(reply_message, "sender_id", None)
+    if reply_sender_id is None:
+        reply_sender = await reply_message.get_sender()
+        reply_sender_id = getattr(reply_sender, "id", None)
+    if str(reply_sender_id) != str(getattr(bot, "bot_account_id", None)):
+        return False
+    replied_text = (
+        getattr(reply_message, "message", None)
+        or getattr(reply_message, "caption", None)
+        or ""
+    ).strip()
+    search_query = (
+        f"زمینه: {replied_text}\nدرخواست کاربر: {request_text}"
+        if replied_text else request_text
+    )
 
     allowed, count, notify_quota = ai_access.reserve_request(chat_id, user_id)
     if not allowed:
@@ -1279,7 +1285,9 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
                 "AI SEARCH ERROR "
                 f"chat_id={chat_id} user_id={user_id} reason={error!s}"
             )
-            if str(error) == "no_results":
+            if str(error) == "google_search_not_configured_or_no_results":
+                await event.reply("ℹ️ اطلاعات کافی پیدا نشد یا Google Search برای ربات تنظیم نشده است.")
+            elif str(error) == "no_results":
                 await event.reply("ℹ️ اطلاعات کافی و قابل‌اعتمادی برای پاسخ پیدا نشد.")
             else:
                 await event.reply("❌ جستجوی اطلاعات موقتاً در دسترس نیست. بعداً دوباره تلاش کنید.")
