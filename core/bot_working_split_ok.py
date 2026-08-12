@@ -78,8 +78,10 @@ import time
 from dotenv import load_dotenv
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 
-# لود env
-load_dotenv()
+# Load the project .env by an absolute path.  A service/restart may launch
+# from another working directory, where bare ``load_dotenv()`` misses it.
+_ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+load_dotenv(dotenv_path=_ENV_FILE, override=False)
 
 # اگر پوشه ماژول‌ها در مسیر نیست اضافه کن
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -123,6 +125,12 @@ class SoroushAntiSpamBot:
         self.logger = BotLogger(
             log_file=self.config_manager.get(
                 "log_file", "logs/deleted_messages.log"))
+        self.logger.log_info(
+            "AI ENV STATUS "
+            f"api_key_present={bool(os.getenv('AI_API_KEY', '').strip())} "
+            f"base_url_present={bool(os.getenv('AI_BASE_URL', '').strip())} "
+            f"model_present={bool(os.getenv('AI_MODEL', '').strip())}"
+        )
         self.detector = SpamDetector(self.config_manager)
         self.tracker = UserTracker(
             spam_counts_file=self.config_manager.get(
