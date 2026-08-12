@@ -114,6 +114,35 @@ class FactualSearchError(RuntimeError):
     pass
 
 
+_INTENT_MARKERS = (
+    "?", "چیست", "چیه", "کجاست", "کیست", "کیه", "چگونه", "چطور", "چرا",
+    "معرفی", "توضیح", "در مورد", "درباره", "چندتا", "چند مدل", "بهترین",
+    "فرق", "تاریخ", "اطلاعات", "برنامه نویسی", "جستجو کن", "سرچ کن",
+)
+_INTENT_FILLERS = re.compile(r"^(?:لطفاً|لطفا|میشه|می شه|میتونی|می تونی|جستجو کن|سرچ کن|در مورد|درباره|چندتا|چند مدل)\s+|\s+(?:توضیح بده|معرفی کن|بگو|رو بگو|رو سرچ کن)$")
+
+
+def factual_intent(text):
+    """Return (is_information_request, focused_topic) from natural Persian text."""
+    value = " ".join(str(text or "").strip().split())
+    normalized = value.replace("؟", "?").lower()
+    if len(value) < 3 or normalized in {"سلام", "خوبی", "چه خبر", "عجب", "مرسی", "ممنون"}:
+        return False, ""
+    is_request = any(marker in normalized for marker in _INTENT_MARKERS) or len(value) >= 12
+    if not is_request:
+        return False, ""
+    topic = _INTENT_FILLERS.sub("", value).strip(" ؟?،")
+    return True, topic or value
+
+
+def _clean_factual_text(value):
+    value = re.sub(r"\[\s*\d+(?:\s*,\s*\d+)*\s*\]", "", str(value or ""))
+    value = value.replace("\u200c", "‌")
+    value = re.sub(r"\s+([،؛:,.!?؟])", r"\1", value)
+    value = re.sub(r"([،؛:,.!?؟])(?=\S)", r"\1 ", value)
+    return " ".join(value.split())
+
+
 def _extract_factual_results(html):
     """Read title/snippet pairs for factual summaries; do not expose links."""
     if not html or "<html" not in html.lower():
@@ -140,14 +169,19 @@ def _factual_text(results):
         return None
     # Two independent snippets are enough for a short response without
     # dumping raw search links. Source titles are retained as provenance only.
-    selected = results[:2]
     facts = []
     titles = []
-    for title, snippet in selected:
-        snippet = " ".join(snippet.split())[:420]
-        if snippet and snippet not in facts:
-            facts.append(snippet)
-            titles.append(title)
+    seen = set()
+    for title, snippet in results[:5]:
+        snippet = _clean_factual_text(snippet)[:420]
+        marker = re.sub(r"\W+", "", snippet.lower())
+        if not snippet or marker in seen:
+            continue
+        seen.add(marker)
+        facts.append(snippet)
+        titles.append(_clean_factual_text(title))
+        if len(facts) == 2:
+            break
     if not facts:
         return None
     return "\n\n".join(facts) + "\n\nمنابع: " + " | ".join(titles)

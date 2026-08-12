@@ -1246,7 +1246,8 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
         f"allowed={allowed_user} reply_id={reply_id or 'none'} "
         f"text_length={len(request_text)}"
     )
-    if not enabled or not allowed_user or not reply_id or len(request_text) <= 6:
+    is_information_request, topic = web_search.factual_intent(request_text)
+    if not enabled or not allowed_user or not reply_id or not is_information_request:
         return False
     try:
         reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
@@ -1264,7 +1265,7 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     if str(reply_sender_id) != str(getattr(bot, "bot_account_id", None)):
         return False
     replied_text = (getattr(reply_message, "message", None) or getattr(reply_message, "caption", None) or "").strip()
-    query = f"{replied_text} {request_text}".strip()
+    query = f"{replied_text} {topic}".strip()
 
     async def answer_from_public_source():
         try:
