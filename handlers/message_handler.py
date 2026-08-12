@@ -140,6 +140,28 @@ from splusthon.tl import functions
 from splusthon import types
 
 
+def _warm_reply_input_chat(event, chat):
+    """Populate Message.input_chat from the already-resolved chat entity.
+
+    SPlusthon's ``Message.reply`` otherwise falls back to ``iter_dialogs(100)``
+    when an event missed the entity cache.  That extra lookup can add a whole
+    RPC before the actual send; this is a local cache fill and never sends a
+    request itself.
+    """
+    message = getattr(event, "message", None)
+    if message is None or getattr(message, "input_chat", None) is not None:
+        return False
+    try:
+        from splusthon import utils
+        input_chat = utils.get_input_peer(chat)
+        if input_chat is None:
+            return False
+        message._input_chat = input_chat
+        return True
+    except Exception:
+        return False
+
+
 def _message_debug_enabled(bot):
     return bool(bot.config_manager.get("debug_message_pipeline", False))
 
@@ -1115,6 +1137,7 @@ async def handle_new_message(bot, event):
 
         event_chat = await event.get_chat()
         chat_id = getattr(event_chat, "id", event.chat_id)
+        _warm_reply_input_chat(event, event_chat)
         sender = await event.get_sender()
         user_id = sender.id if sender else 0
         # Never feed messages sent by this account into tracking or moderation.
