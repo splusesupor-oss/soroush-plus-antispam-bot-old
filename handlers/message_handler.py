@@ -1210,8 +1210,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         await event.reply("\n".join(lines))
         return True
 
-    enabled = ai_access.is_enabled(chat_id)
-    allowed_user = ai_access.is_allowed(chat_id, user_id) if enabled else False
+    enabled, allowed_user = ai_access.access_state(chat_id, user_id)
     reply_id = _ai_reply_message_id(event)
     request_text = message_text.strip()
     bot.logger.log_info(

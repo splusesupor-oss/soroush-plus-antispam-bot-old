@@ -1,5 +1,6 @@
 """Persistent per-group AI access, allow-list, and daily quota state."""
 import json
+import logging
 from pathlib import Path
 
 from modules.group_id import normalize_group_id
@@ -27,12 +28,39 @@ def _key(chat_id):
     return normalize_group_id(chat_id)
 
 
+def _log_save(chat_id, user_id=None, enabled=None, allowed=None):
+    logging.getLogger("SoroushAntiSpam").info(
+        "AI ACCESS SAVE "
+        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} "
+        f"user_id={user_id if user_id is not None else 'none'} "
+        f"enabled={enabled} allowed={allowed} storage_path={FILE}"
+    )
+
+
+def _log_load(chat_id, user_id, enabled, allowed):
+    logging.getLogger("SoroushAntiSpam").info(
+        "AI ACCESS LOAD "
+        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} "
+        f"user_id={user_id} enabled={enabled} allowed={allowed} "
+        f"storage_path={FILE}"
+    )
+
+
 def _group(data, chat_id, create=False):
     key = _key(chat_id)
     if create:
         return data.setdefault(key, {"enabled": False, "allowed": {}, "usage": {}})
     group = data.get(key)
     return group if isinstance(group, dict) else None
+
+
+def access_state(chat_id, user_id):
+    """Single authoritative enabled/allowed read used by AI Search."""
+    group = _group(_load(), chat_id)
+    enabled = bool(group and group.get("enabled"))
+    allowed = bool(enabled and str(user_id) in group.get("allowed", {}))
+    _log_load(chat_id, user_id, enabled, allowed)
+    return enabled, allowed
 
 
 def is_enabled(chat_id):
@@ -47,6 +75,7 @@ def set_enabled(chat_id, enabled):
     group.setdefault("allowed", {})
     group.setdefault("usage", {})
     _save(data)
+    _log_save(chat_id, enabled=group["enabled"], allowed=None)
     return group["enabled"]
 
 
@@ -62,6 +91,7 @@ def allow(chat_id, user):
         "display": format_user(user),
     }
     _save(data)
+    _log_save(chat_id, user_id=user_id, enabled=bool(group.get("enabled")), allowed=True)
     return True
 
 
@@ -72,6 +102,7 @@ def disallow(chat_id, user_id):
         return False
     del group["allowed"][str(user_id)]
     _save(data)
+    _log_save(chat_id, user_id=user_id, enabled=bool(group.get("enabled")), allowed=False)
     return True
 
 
@@ -115,7 +146,7 @@ def reserve_request(chat_id, user_id):
         return False, count, send_notice
     new_count = count + 1
     entry["count"] = new_count
-    # The 50th request is served, then the user is informed once that the
+    # The final allowed request is served, then the user is informed once that the
     # next message will not reach the API until tomorrow.
     send_notice = new_count >= DAILY_LIMIT and not bool(entry.get("notified"))
     if send_notice:
