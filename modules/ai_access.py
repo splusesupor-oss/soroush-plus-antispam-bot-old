@@ -7,7 +7,7 @@ from modules.user_display import format_user
 from modules.time_utils import now_local
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "ai_groups.json"
-DAILY_LIMIT = 50
+DAILY_LIMIT = 27
 
 
 def _load():

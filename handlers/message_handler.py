@@ -1189,7 +1189,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
             await event.reply("⚠️ این کاربر در لیست مجازهای هوش مصنوعی نیست.")
         return True
 
-    if clean_text == "لیست مجازهای هوش مصنوعی":
+    if clean_text == "لیست هوش مصنوعی":
         if not can_manage:
             await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مشاهده این لیست را دارند")
             return True
@@ -1197,7 +1197,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         if not rows:
             await event.reply("📋 هنوز کاربری برای هوش مصنوعی مجاز نشده است.")
             return True
-        lines = ["📋 لیست مجازهای هوش مصنوعی:\n"]
+        lines = ["✅ کاربران مجاز هوش مصنوعی:\n"]
         for index, row in enumerate(rows, 1):
             username = str(row.get("username") or "").strip().lstrip("@")
             shown = "@" + username if username else row.get("display", "کاربر ناشناس")
@@ -1225,7 +1225,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         # Keep normal bot routes alive; only AI is exhausted.
         if notify_quota:
             _asyncio.create_task(event.reply(
-                "⛔ سهمیه روزانه هوش مصنوعی شما (۵۰ پیام) تمام شد. فردا دوباره فعال می‌شود."
+                "⏳ شما امروز به سقف استفاده از هوش مصنوعی رسیدید. فردا دوباره امکان استفاده دارید."
             ))
         return False
 
@@ -1262,7 +1262,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         finally:
             if notify_quota:
                 await event.reply(
-                    "⛔ سهمیه روزانه هوش مصنوعی شما (۵۰ پیام) تمام شد. فردا دوباره فعال می‌شود."
+                    "⏳ شما امروز به سقف استفاده از هوش مصنوعی رسیدید. فردا دوباره امکان استفاده دارید."
                 )
 
     _asyncio.create_task(answer_in_background())
