@@ -195,9 +195,10 @@ def _send_spam_cleanup_notice(trigger):
 
 
 def _detector_moderation_trigger(reason):
-    """Classify an already-completed SpamDetector result for notification use."""
-    if str(reason or "").startswith("کلمه ممنوعه ("):
-        return "forbidden_word"
+    """Separate content/link filters from genuine spam-wave notifications."""
+    value = str(reason or "")
+    if value.startswith("کلمه ممنوعه (") or value.startswith("لینک مشکوک ("):
+        return "filter_group"
     return "spam"
 
 
@@ -5000,6 +5001,10 @@ async def handle_new_message(bot, event):
             if is_spam:
                 moderation_trigger = _detector_moderation_trigger(reason)
 
+        bot.logger.log_info(
+            f"MODERATION TYPE={'SPAM' if moderation_trigger == 'spam' else 'FILTER_GROUP'} "
+            f"chat_id={chat_id} user_id={user_id} reason={reason!r}"
+        )
         profiler.mark("SPAM_CHECK")
         if is_spam:
             bot.logger.log_info(
