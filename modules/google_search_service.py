@@ -1,4 +1,4 @@
-"""Search-backed textual assistant without an external generative-AI provider."""
+"""Official Google Search service with no generative-AI provider."""
 import re
 from html import unescape
 from urllib.parse import quote

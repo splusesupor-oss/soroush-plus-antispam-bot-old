@@ -135,7 +135,7 @@ from modules import bot_detector
 from modules import ad_name_detector
 from modules.user_display import format_user
 from modules import message_tracker
-from modules import ai_access, ai_search_service
+from modules import search_access, google_search_service
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -1137,7 +1137,7 @@ def _delete_cooldown_allowed(chat_id):
     return True
 
 
-def _ai_reply_message_id(event):
+def _search_reply_message_id(event):
     message = getattr(event, "message", None)
     message_reply = getattr(message, "reply_to", None)
     return (
@@ -1149,9 +1149,9 @@ def _ai_reply_message_id(event):
     )
 
 
-async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
+async def _handle_google_search_group_message(bot, event, chat_id, user_id, sender,
                                    clean_text, message_text):
-    """Handle AI administration and eligible reply-only prompts for one group."""
+    """Handle Google Search administration and eligible prompts for one group."""
     if event.is_private:
         return False
     sender_username = getattr(sender, "username", None)
@@ -1162,10 +1162,10 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
             await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مدیریت هوش مصنوعی را دارند")
             return True
         enabled = clean_text == "هوش مصنوعی فعال"
-        ai_access.set_enabled(chat_id, enabled)
+        search_access.set_enabled(chat_id, enabled)
         await event.reply(
-            "✅ هوش مصنوعی این گروه فعال شد." if enabled
-            else "✅ هوش مصنوعی این گروه خاموش شد."
+            "✅ جستجوی گوگل این گروه فعال شد." if enabled
+            else "✅ جستجوی گوگل این گروه خاموش شد."
         )
         return True
 
@@ -1173,7 +1173,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         if not can_manage:
             await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مدیریت هوش مصنوعی را دارند")
             return True
-        reply_id = _ai_reply_message_id(event)
+        reply_id = _search_reply_message_id(event)
         if not reply_id:
             await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
             return True
@@ -1183,26 +1183,26 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
             await event.reply("❌ کاربر پیدا نشد")
             return True
         if clean_text == "مجاز":
-            ai_access.allow(chat_id, target)
+            search_access.allow(chat_id, target)
             await event.reply(
                 f"✅ کاربر : {format_user(target)}\n\n"
-                "به لیست مجازهای هوش مصنوعی اضافه شد."
+                "به لیست کاربران مجاز جستجوی گوگل اضافه شد."
             )
-        elif clean_text in {"غیرمجاز", "غیر مجاز"} and ai_access.disallow(chat_id, target.id):
-            await event.reply("✅ دسترسی هوش مصنوعی کاربر حذف شد.")
+        elif clean_text in {"غیرمجاز", "غیر مجاز"} and search_access.disallow(chat_id, target.id):
+            await event.reply("✅ دسترسی جستجوی گوگل کاربر حذف شد.")
         else:
-            await event.reply("⚠️ این کاربر در لیست مجازهای هوش مصنوعی نیست.")
+            await event.reply("⚠️ این کاربر در لیست کاربران مجاز جستجوی گوگل نیست.")
         return True
 
     if clean_text == "لیست هوش مصنوعی":
         if not can_manage:
             await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مشاهده این لیست را دارند")
             return True
-        rows = ai_access.allowed_users(chat_id)
+        rows = search_access.allowed_users(chat_id)
         if not rows:
             await event.reply("📋 هنوز کاربری برای هوش مصنوعی مجاز نشده است.")
             return True
-        lines = ["✅ کاربران مجاز هوش مصنوعی:\n"]
+        lines = ["✅ کاربران مجاز جستجوی گوگل:\n"]
         for index, row in enumerate(rows, 1):
             username = str(row.get("username") or "").strip().lstrip("@")
             shown = "@" + username if username else row.get("display", "کاربر ناشناس")
@@ -1210,11 +1210,11 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         await event.reply("\n".join(lines))
         return True
 
-    enabled, allowed_user = ai_access.access_state(chat_id, user_id)
-    reply_id = _ai_reply_message_id(event)
+    enabled, allowed_user = search_access.access_state(chat_id, user_id)
+    reply_id = _search_reply_message_id(event)
     request_text = message_text.strip()
     bot.logger.log_info(
-        "GOOGLE AI CHECK "
+        "GOOGLE SEARCH CHECK "
         f"chat_id={chat_id} user_id={user_id} enabled={enabled} "
         f"allowed={allowed_user} reply_id={reply_id or 'none'} "
         f"text_length={len(request_text)}"
@@ -1223,11 +1223,11 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         return False
     # A search request is counted only for a meaningful (>6 chars) question
     # replying to a message sent by the bot itself.
-    if not reply_id or len(request_text) <= 6 or not ai_search_service.looks_information_seeking(request_text):
+    if not reply_id or len(request_text) <= 6 or not google_search_service.looks_information_seeking(request_text):
         return False
 
     bot.logger.log_info(
-        f"GOOGLE AI REPLY DETECTED chat_id={chat_id} user_id={user_id} reply_id={reply_id}"
+        f"GOOGLE SEARCH REPLY DETECTED chat_id={chat_id} user_id={user_id} reply_id={reply_id}"
     )
     try:
         reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
@@ -1254,12 +1254,12 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         if replied_text else request_text
     )
 
-    allowed, count, notify_quota = ai_access.reserve_request(chat_id, user_id)
+    allowed, count, notify_quota = search_access.reserve_request(chat_id, user_id)
     if not allowed:
         # Keep normal bot routes alive; only AI is exhausted.
         if notify_quota:
             _asyncio.create_task(event.reply(
-                "⏳ شما امروز به سقف استفاده از هوش مصنوعی رسیدید. فردا دوباره امکان استفاده دارید."
+                "⏳ شما امروز به سقف استفاده از جستجوی گوگل رسیدید. فردا دوباره امکان استفاده دارید."
             ))
         return False
 
@@ -1271,15 +1271,15 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
                 f"GOOGLE SEARCH REQUEST chat_id={chat_id} user_id={user_id} "
                 f"query_length={len(search_query)} has_reply_context={bool(replied_text)}"
             )
-            answer = await _asyncio.to_thread(ai_search_service.search_answer, search_query)
+            answer = await _asyncio.to_thread(google_search_service.search_answer, search_query)
             bot.logger.log_info(
                 f"GOOGLE SEARCH RESPONSE chat_id={chat_id} user_id={user_id} chars={len(answer)}"
             )
             await event.reply(answer)
             bot.logger.log_info(
-                f"GOOGLE AI RESPONSE chat_id={chat_id} user_id={user_id} sent=True"
+                f"GOOGLE SEARCH RESPONSE chat_id={chat_id} user_id={user_id} sent=True"
             )
-        except ai_search_service.SearchAssistantError as error:
+        except google_search_service.SearchAssistantError as error:
             bot.logger.log_error(
                 "AI SEARCH ERROR "
                 f"chat_id={chat_id} user_id={user_id} reason={error!s}"
@@ -1298,7 +1298,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         finally:
             if notify_quota:
                 await event.reply(
-                    "⏳ شما امروز به سقف استفاده از هوش مصنوعی رسیدید. فردا دوباره امکان استفاده دارید."
+                    "⏳ شما امروز به سقف استفاده از جستجوی گوگل رسیدید. فردا دوباره امکان استفاده دارید."
                 )
 
     _asyncio.create_task(answer_in_background())
@@ -1684,10 +1684,10 @@ async def handle_new_message(bot, event):
                 return
 
         # ------------------------------------------------------------------
-        # 🤖 هوش مصنوعی گروه — فقط مدیریت ادمین یا reply مجاز به پیام ربات.
+        # 🔎 جستجوی گوگل گروه — فقط مدیریت ادمین یا reply مجاز به پیام ربات.
         # درخواست HTTPS خودش در task جدا اجرا می‌شود.
         # ------------------------------------------------------------------
-        if await _handle_ai_group_message(
+        if await _handle_google_search_group_message(
             bot, event, chat_id, user_id, sender, clean_text, message_text
         ):
             return
@@ -3340,7 +3340,7 @@ async def handle_new_message(bot, event):
                 "🧹 پاکسازی خودکار:\n"
                 "برای پاکسازی خودکار پیام‌ها\n"
                 "«🧹 \"پاکسازی خودکار\"»\n\n"
-                "🤖 سیستم هوش مصنوعی ربات\n\n"
+                "🤖 سیستم جستجوی گوگل ربات\n\n"
                 "برای فعال کردن: هوش مصنوعی فعال\n"
                 "برای خاموش کردن: هوش مصنوعی خاموش\n"
                 "برای انتخاب کاربری که بتواند از هوش مصنوعی استفاده کند: روی پیام کاربر ریپلای کنید و بنویسید: مجاز\n"
@@ -3563,7 +3563,7 @@ async def handle_new_message(bot, event):
                 "🔊 رفع سکوت کاربر:\nروی پیام ریپلای کنید و بنویسید:\nرفع سکوت",
                 "🚪 اخراج کاربر:\nروی پیام ریپلای کنید و بنویسید:\nاخراج",
                 "♻️ آزاد کردن کاربر:\nبرای آزاد کردن کاربر محروم شده بنویسید:\nآزاد",
-                "🤖 سیستم هوش مصنوعی ربات\n\n"
+                "🤖 سیستم جستجوی گوگل ربات\n\n"
                 "برای فعال کردن: هوش مصنوعی فعال\n"
                 "برای خاموش کردن: هوش مصنوعی خاموش\n"
                 "برای انتخاب کاربری که بتواند از هوش مصنوعی استفاده کند: روی پیام کاربر ریپلای کنید و بنویسید: مجاز\n"

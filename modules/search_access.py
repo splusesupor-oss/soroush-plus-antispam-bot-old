@@ -1,4 +1,4 @@
-"""Persistent per-group AI access, allow-list, and daily quota state."""
+"""Persistent per-group Google Search access, allow-list, and daily quota state."""
 import json
 import logging
 from pathlib import Path
@@ -7,16 +7,32 @@ from modules.group_id import normalize_group_id
 from modules.user_display import format_user
 from modules.time_utils import now_local
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "ai_groups.json"
+FILE = Path(__file__).resolve().parent.parent / "config" / "search_access.json"
 DAILY_LIMIT = 27
+
+
+_LEGACY_FILE = Path(__file__).resolve().parent.parent / "config" / "ai_groups.json"
 
 
 def _load():
     try:
-        data = json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
-        return data if isinstance(data, dict) else {}
+        if FILE.exists():
+            data = json.loads(FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        # One-time migration preserves group permissions while retiring the
+        # old AI-named storage. The legacy file is removed after success.
+        if _LEGACY_FILE.exists():
+            data = json.loads(_LEGACY_FILE.read_text(encoding="utf-8"))
+            data = data if isinstance(data, dict) else {}
+            _save(data)
+            try:
+                _LEGACY_FILE.unlink()
+            except OSError:
+                pass
+            return data
     except (OSError, ValueError):
-        return {}
+        pass
+    return {}
 
 
 def _save(data):
@@ -30,7 +46,7 @@ def _key(chat_id):
 
 def _log_save(chat_id, user_id=None, enabled=None, allowed=None):
     logging.getLogger("SoroushAntiSpam").info(
-        "AI ACCESS SAVE "
+        "SEARCH ACCESS SAVE "
         f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} "
         f"user_id={user_id if user_id is not None else 'none'} "
         f"enabled={enabled} allowed={allowed} storage_path={FILE}"
@@ -39,7 +55,7 @@ def _log_save(chat_id, user_id=None, enabled=None, allowed=None):
 
 def _log_load(chat_id, user_id, enabled, allowed):
     logging.getLogger("SoroushAntiSpam").info(
-        "AI ACCESS LOAD "
+        "SEARCH ACCESS LOAD "
         f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} "
         f"user_id={user_id} enabled={enabled} allowed={allowed} "
         f"storage_path={FILE}"
@@ -55,7 +71,7 @@ def _group(data, chat_id, create=False):
 
 
 def access_state(chat_id, user_id):
-    """Single authoritative enabled/allowed read used by AI Search."""
+    """Single authoritative enabled/allowed read used by Google Search."""
     group = _group(_load(), chat_id)
     enabled = bool(group and group.get("enabled"))
     allowed = bool(enabled and str(user_id) in group.get("allowed", {}))
