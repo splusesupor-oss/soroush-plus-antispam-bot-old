@@ -8,7 +8,9 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 _TIMEOUT = (5, 20)
-_DEFAULT_FALLBACK_MODEL = "openai/gpt-oss-20b:free"
+_DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+_DEFAULT_HTTP_REFERER = "https://github.com/splusesupor-oss/soroush-plus-antispam-bot-old"
+_DEFAULT_APP_TITLE = "Soroush Plus Bot"
 _SESSION = requests.Session()
 _SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات گروهی هستی.
 به سوال کاربر دقیق، مرتبط و کوتاه پاسخ بده.
@@ -71,6 +73,16 @@ def _clean_answer(content):
     return answer
 
 
+def _headers(api_key):
+    """Standard OpenRouter attribution headers; values remain env-overridable."""
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": os.getenv("AI_HTTP_REFERER", _DEFAULT_HTTP_REFERER).strip() or _DEFAULT_HTTP_REFERER,
+        "X-Title": os.getenv("AI_APP_TITLE", _DEFAULT_APP_TITLE).strip() or _DEFAULT_APP_TITLE,
+    }
+
+
 def _request(prompt):
     api_key = os.getenv("AI_API_KEY", "").strip()
     if not api_key:
@@ -83,7 +95,7 @@ def _request(prompt):
     for index, selected_model in enumerate(models):
         response = _SESSION.post(
             url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=_headers(api_key),
             json={
                 "model": selected_model,
                 "messages": [
@@ -100,7 +112,8 @@ def _request(prompt):
             last_error = AIServiceError(
                 f"OpenRouter/OpenAI-compatible HTTP {response.status_code} "
                 f"endpoint={url} model={selected_model} response={body!r}",
-                status_code=response.status_code, response_body=body, kind="http"
+                status_code=response.status_code, response_body=body,
+                kind="forbidden" if response.status_code == 403 else "http"
             )
             # Shared free pools frequently return 429.  A single named
             # fallback keeps the reply useful without routing arbitrary models.
