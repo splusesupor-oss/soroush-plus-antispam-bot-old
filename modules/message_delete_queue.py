@@ -10,10 +10,11 @@ class MessageDeleteQueue:
     simultaneous delete RPCs, while one chat's hundreds of IDs never become a
     synchronous loop in another chat's message handler.
     """
-    def __init__(self, client, logger, *, batch_size=100, max_concurrent=2):
+    def __init__(self, client, logger, *, batch_size=50, max_concurrent=1, inter_batch_delay=0.08):
         self.client = client
         self.logger = logger
         self.batch_size = batch_size
+        self.inter_batch_delay = inter_batch_delay
         self._queues = {}
         self._workers = {}
         self._pending_ids = set()
@@ -88,8 +89,9 @@ class MessageDeleteQueue:
                 self.logger.log_info(
                     f"BATCH DELETE FINISHED chat_id={chat_id} count={len(batch)}"
                 )
-                # Let command-response tasks run before this chat's next batch.
-                await asyncio.sleep(0)
+                # A small fair pause prevents a spammed chat from filling the
+                # shared SPlusthon sender ahead of replies in other groups.
+                await asyncio.sleep(self.inter_batch_delay)
                 continue
 
             # Isolate invalid/deleted IDs; successful individual deletions are
