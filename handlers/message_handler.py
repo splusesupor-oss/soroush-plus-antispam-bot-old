@@ -1198,12 +1198,19 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
             await event.reply(answer)
         except ai_service.AIServiceError as error:
             bot.logger.log_error(
-                f"AI REQUEST FAILED chat_id={chat_id} user_id={user_id} error={error!r}"
+                "AI REQUEST ERROR "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"type={error.__class__.__name__} kind={error.kind} "
+                f"status={error.status_code if error.status_code is not None else 'none'} "
+                f"message={str(error)!r} "
+                f"response_body={error.response_body!r}"
             )
             await event.reply("❌ پاسخ هوش مصنوعی در دسترس نیست. بعداً دوباره تلاش کنید.")
         except Exception as error:
             bot.logger.log_error(
-                f"AI BACKGROUND FAILED chat_id={chat_id} user_id={user_id} error={error!r}"
+                "AI REQUEST ERROR "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"type={error.__class__.__name__} message={str(error)!r}"
             )
         finally:
             if notify_quota:

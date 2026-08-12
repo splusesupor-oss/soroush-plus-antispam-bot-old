@@ -8,7 +8,7 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 _TIMEOUT = (5, 20)
-_DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+_DEFAULT_FALLBACK_MODEL = "openai/gpt-oss-20b:free"
 _SESSION = requests.Session()
 _SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات گروهی هستی.
 به سوال کاربر دقیق، مرتبط و کوتاه پاسخ بده.
@@ -23,7 +23,11 @@ _SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات
 
 
 class AIServiceError(RuntimeError):
-    pass
+    def __init__(self, message, *, status_code=None, response_body=None, kind="api"):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
+        self.kind = kind
 
 
 def endpoint_url(base_url=None):
@@ -63,14 +67,14 @@ def _clean_answer(content):
             lines.append(line)
     answer = "\n".join(lines).strip()
     if not answer:
-        raise AIServiceError("پاسخ سرویس فقط شامل اطلاعات داخلی بود.")
+        raise AIServiceError("پاسخ سرویس فقط شامل اطلاعات داخلی بود.", kind="content")
     return answer
 
 
 def _request(prompt):
     api_key = os.getenv("AI_API_KEY", "").strip()
     if not api_key:
-        raise AIServiceError("کلید هوش مصنوعی تنظیم نشده است.")
+        raise AIServiceError("کلید هوش مصنوعی تنظیم نشده است.", kind="config")
     url = endpoint_url()
     model = os.getenv("AI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
     fallback = os.getenv("AI_FALLBACK_MODEL", _DEFAULT_FALLBACK_MODEL).strip()
@@ -95,7 +99,8 @@ def _request(prompt):
             body = (response.text or "").strip().replace("\n", " ")[:2000]
             last_error = AIServiceError(
                 f"OpenRouter/OpenAI-compatible HTTP {response.status_code} "
-                f"endpoint={url} model={selected_model} response={body!r}"
+                f"endpoint={url} model={selected_model} response={body!r}",
+                status_code=response.status_code, response_body=body, kind="http"
             )
             # Shared free pools frequently return 429.  A single named
             # fallback keeps the reply useful without routing arbitrary models.
@@ -104,13 +109,30 @@ def _request(prompt):
             raise last_error
         try:
             data = response.json()
+            provider_error = data.get("error") if isinstance(data, dict) else None
+            if provider_error:
+                provider_status = provider_error.get("code", response.status_code) if isinstance(provider_error, dict) else response.status_code
+                body = (response.text or "").strip().replace("\n", " ")[:2000]
+                last_error = AIServiceError(
+                    f"OpenRouter provider error endpoint={url} model={selected_model} response={body!r}",
+                    status_code=provider_status, response_body=body, kind="provider_error"
+                )
+                if index + 1 < len(models):
+                    continue
+                raise last_error
             content = data["choices"][0]["message"]["content"]
+        except AIServiceError:
+            raise
         except (ValueError, KeyError, IndexError, TypeError) as error:
             body = (response.text or "").strip().replace("\n", " ")[:2000]
-            raise AIServiceError(
+            last_error = AIServiceError(
                 f"OpenRouter/OpenAI-compatible invalid response endpoint={url} "
-                f"model={selected_model} response={body!r}"
-            ) from error
+                f"model={selected_model} response={body!r}",
+                status_code=response.status_code, response_body=body, kind="invalid_response"
+            )
+            if index + 1 < len(models):
+                continue
+            raise last_error from error
         return _clean_answer(content)
     raise last_error or AIServiceError("پاسخ سرویس هوش مصنوعی ناموفق بود.")
 
@@ -122,6 +144,7 @@ async def ask(prompt):
     except AIServiceError:
         raise
     except requests.RequestException as error:
+        kind = "timeout" if isinstance(error, requests.Timeout) else "transport"
         raise AIServiceError(
-            f"OpenRouter/OpenAI-compatible transport error {error!r}"
+            f"OpenRouter/OpenAI-compatible {kind} error {error!r}", kind=kind
         ) from error

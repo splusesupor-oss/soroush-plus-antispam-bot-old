@@ -85,7 +85,7 @@ _AI_ENV_DEFAULTS = {
     "AI_API_KEY": "",
     "AI_BASE_URL": "https://openrouter.ai/api/v1",
     "AI_MODEL": "google/gemma-4-26b-a4b-it:free",
-    "AI_FALLBACK_MODEL": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "AI_FALLBACK_MODEL": "openai/gpt-oss-20b:free",
 }
 
 
@@ -165,8 +165,8 @@ class SoroushAntiSpamBot:
         self.logger.log_info(
             "AI ENV STATUS "
             f"api_key_present={ai_key_present} "
-            f"base_url_present={bool(os.getenv('AI_BASE_URL', '').strip())} "
-            f"model_present={bool(os.getenv('AI_MODEL', '').strip())} "
+            f"base_url={os.getenv('AI_BASE_URL', '').strip() or 'missing'} "
+            f"model={os.getenv('AI_MODEL', '').strip() or 'missing'} "
             f"template_keys_added={','.join(_AI_ENV_ADDED) or 'none'}"
         )
         if not ai_key_present:
