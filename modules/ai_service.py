@@ -1,4 +1,4 @@
-"""Async OpenAI-compatible text API client; no group policy is kept here."""
+"""Async official Groq text API client; no group policy is kept here."""
 import asyncio
 import os
 import re
@@ -7,18 +7,8 @@ import time
 
 import requests
 
-_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-_CHAT_COMPLETIONS_PATH = "/chat/completions"
-_DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
-_TIMEOUT = (5, 20)
-_DEFAULT_FALLBACK_MODELS = (
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "openai/gpt-oss-20b:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
-)
+_DEFAULT_MODEL = "llama-3.3-70b-versatile"
 _DEFAULT_MAX_TOKENS = 300
-_DEFAULT_HTTP_REFERER = "https://github.com/splusesupor-oss/soroush-plus-antispam-bot-old"
-_DEFAULT_APP_TITLE = "Soroush Plus Bot"
 _SESSION = requests.Session()
 _SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات گروهی هستی.
 فقط پاسخ نهایی مناسب برای کاربر را تولید کن. فرایند فکر کردن، تحلیل داخلی،
@@ -40,20 +30,6 @@ class AIServiceError(RuntimeError):
         self.response_body = response_body
         self.response_headers = response_headers or {}
         self.kind = kind
-
-
-def endpoint_url(base_url=None):
-    """Build the OpenAI-compatible chat-completions endpoint once.
-
-    ``AI_BASE_URL`` is normally a base URL such as ``https://host/v1``.
-    The old full-endpoint form is accepted for a safe zero-downtime upgrade,
-    but no suffix is ever duplicated.
-    """
-    base = (base_url or os.getenv("AI_BASE_URL", _DEFAULT_BASE_URL)).strip()
-    base = base.rstrip("/")
-    if base.endswith(_CHAT_COMPLETIONS_PATH):
-        return base
-    return base + _CHAT_COMPLETIONS_PATH
 
 
 _INTERNAL_LINE_MARKERS = (
@@ -128,163 +104,80 @@ def _safe_response_headers(response):
     return {key: headers.get(key) for key in wanted if headers.get(key) is not None}
 
 
-def _headers(api_key):
-    """Standard OpenRouter attribution headers; values remain env-overridable."""
+GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def _groq_headers(api_key):
     return {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": os.getenv("AI_HTTP_REFERER", _DEFAULT_HTTP_REFERER).strip() or _DEFAULT_HTTP_REFERER,
-        "X-Title": os.getenv("AI_APP_TITLE", _DEFAULT_APP_TITLE).strip() or _DEFAULT_APP_TITLE,
     }
 
 
-def _model_chain():
-    primary = os.getenv("AI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
-    configured = os.getenv("AI_FALLBACK_MODELS", "").strip()
-    fallbacks = [item.strip() for item in configured.split(",") if item.strip()]
-    # Backward-compatible single fallback remains accepted in existing .env.
-    legacy = os.getenv("AI_FALLBACK_MODEL", "").strip()
-    if legacy:
-        fallbacks.append(legacy)
-    if not fallbacks:
-        fallbacks = list(_DEFAULT_FALLBACK_MODELS)
-    chain = []
-    for model in [primary, *fallbacks]:
-        if model and model not in chain:
-            chain.append(model)
-    return chain
+def _request(prompt):
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise AIServiceError("کلید Groq تنظیم نشده است.", kind="config")
+    model = os.getenv("AI_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile"
+    try:
+        max_tokens = max(1, int(os.getenv("AI_MAX_TOKENS", "300")))
+    except ValueError:
+        max_tokens = 300
+    try:
+        response = _SESSION.post(
+            GROQ_CHAT_COMPLETIONS_URL,
+            headers=_groq_headers(api_key),
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens": max_tokens,
+            },
+            timeout=(4, 15),
+        )
+    except requests.Timeout as error:
+        raise AIServiceError(f"Groq timeout error {error!r}", kind="timeout") from error
+    except requests.RequestException as error:
+        raise AIServiceError(f"Groq transport error {error!r}", kind="transport") from error
 
-
-def _log_attempt(model, attempt, status, error, fallback_next):
-    logging.getLogger("SoroushAntiSpam").info(
-        "AI MODEL ATTEMPT "
-        f"model={model} attempt={attempt} status={status} "
-        f"error={error!r} fallback_next={fallback_next}"
-    )
-
-
-def _error_from_response(response, url, model):
     body = (response.text or "").strip().replace("\n", " ")[:2000]
     headers = _safe_response_headers(response)
-    status = response.status_code
-    kind = "forbidden" if status == 403 else "rate_limited" if status == 429 else "http"
+    if response.status_code >= 400:
+        kind = "forbidden" if response.status_code == 403 else "rate_limited" if response.status_code == 429 else "http"
+        raise AIServiceError(
+            f"Groq HTTP {response.status_code} model={model} response={body!r}",
+            status_code=response.status_code, response_body=body,
+            response_headers=headers, kind=kind
+        )
     try:
         data = response.json()
-    except ValueError:
-        data = None
-    provider_error = data.get("error") if isinstance(data, dict) else None
-    if provider_error:
-        status = provider_error.get("code", status) if isinstance(provider_error, dict) else status
-        kind = "provider_error"
-        headers["shape"] = _response_shape(data)
-        message = f"OpenRouter provider error endpoint={url} model={model} response={body!r}"
-    else:
-        message = f"OpenRouter/OpenAI-compatible HTTP {status} endpoint={url} model={model} response={body!r}"
-    return AIServiceError(message, status_code=status, response_body=body,
-                          response_headers=headers, kind=kind), data
-
-
-def _request(prompt):
-    api_key = os.getenv("AI_API_KEY", "").strip()
-    if not api_key:
-        raise AIServiceError("کلید هوش مصنوعی تنظیم نشده است.", kind="config")
-    url = endpoint_url()
-    try:
-        max_tokens = max(1, int(os.getenv("AI_MAX_TOKENS", _DEFAULT_MAX_TOKENS)))
-    except ValueError:
-        max_tokens = _DEFAULT_MAX_TOKENS
-    models = _model_chain()
-    last_error = None
-    retryable_statuses = {429, 500, 502, 503, 504}
-
-    for model_index, selected_model in enumerate(models):
-        for attempt in range(1, 3):  # one short retry at most
-            try:
-                response = _SESSION.post(
-                    url,
-                    headers=_headers(api_key),
-                    json={
-                        "model": selected_model,
-                        "messages": [
-                            {"role": "system", "content": _SYSTEM_PROMPT},
-                            {"role": "user", "content": prompt},
-                        ],
-                        "temperature": 0.3,
-                        "max_tokens": max_tokens,
-                    },
-                    timeout=(4, 12),
-                )
-            except requests.Timeout as error:
-                last_error = AIServiceError(
-                    f"OpenRouter timeout endpoint={url} model={selected_model} error={error!r}",
-                    kind="timeout"
-                )
-                _log_attempt(selected_model, attempt, "timeout", str(error), model_index + 1 < len(models))
-                break  # move immediately to next model
-            except requests.RequestException as error:
-                last_error = AIServiceError(
-                    f"OpenRouter transport error endpoint={url} model={selected_model} error={error!r}",
-                    kind="transport"
-                )
-                _log_attempt(selected_model, attempt, "transport", str(error), model_index + 1 < len(models))
-                break
-
-            if response.status_code >= 400:
-                last_error, _ = _error_from_response(response, url, selected_model)
-                retryable = last_error.status_code in retryable_statuses
-                fallback_next = model_index + 1 < len(models)
-                _log_attempt(selected_model, attempt, last_error.status_code, str(last_error), fallback_next)
-                if retryable and attempt == 1:
-                    time.sleep(0.5)
-                    continue
-                break
-
-            try:
-                data = response.json()
-                provider_error = data.get("error") if isinstance(data, dict) else None
-                if provider_error:
-                    # OpenRouter can encode an upstream 504 in a HTTP 200 body.
-                    provider_status = provider_error.get("code", 200) if isinstance(provider_error, dict) else 200
-                    body = (response.text or "")[:2000]
-                    last_error = AIServiceError(
-                        f"OpenRouter provider error endpoint={url} model={selected_model} response={body!r}",
-                        status_code=provider_status, response_body=body,
-                        response_headers={**_safe_response_headers(response), "shape": _response_shape(data)},
-                        kind="provider_error"
-                    )
-                    _log_attempt(selected_model, attempt, provider_status, str(last_error), model_index + 1 < len(models))
-                    if provider_status in retryable_statuses and attempt == 1:
-                        time.sleep(0.5)
-                        continue
-                    break
-                choices = data.get("choices") if isinstance(data, dict) else None
-                choice = choices[0] if isinstance(choices, list) and choices else None
-                message = choice.get("message") if isinstance(choice, dict) else None
-                content = message.get("content") if isinstance(message, dict) else None
-                if not _content_text(content) and isinstance(choice, dict):
-                    content = choice.get("text") or (message.get("text") if isinstance(message, dict) else None)
-                answer = _clean_answer(content)
-                _log_attempt(selected_model, attempt, 200, "success", False)
-                return answer
-            except AIServiceError as error:
-                last_error = AIServiceError(
-                    f"OpenRouter parse/content error endpoint={url} model={selected_model} error={error!r}",
-                    status_code=200, response_body=(response.text or "")[:2000],
-                    response_headers={**_safe_response_headers(response), "shape": _response_shape(data) if 'data' in locals() else {}},
-                    kind=error.kind
-                )
-                _log_attempt(selected_model, attempt, 200, str(last_error), model_index + 1 < len(models))
-                break
-            except (ValueError, KeyError, IndexError, TypeError) as error:
-                last_error = AIServiceError(
-                    f"OpenRouter invalid response endpoint={url} model={selected_model} error={error!r}",
-                    status_code=200, response_body=(response.text or "")[:2000],
-                    response_headers={**_safe_response_headers(response), "shape": _response_shape(data) if 'data' in locals() else {}},
-                    kind="invalid_response"
-                )
-                _log_attempt(selected_model, attempt, 200, str(last_error), model_index + 1 < len(models))
-                break
-    raise last_error or AIServiceError("پاسخ سرویس هوش مصنوعی ناموفق بود.")
+        provider_error = data.get("error") if isinstance(data, dict) else None
+        if provider_error:
+            status = provider_error.get("code", response.status_code) if isinstance(provider_error, dict) else response.status_code
+            raise AIServiceError(
+                f"Groq provider error model={model} response={body!r}",
+                status_code=status, response_body=body,
+                response_headers={**headers, "shape": _response_shape(data)}, kind="provider_error"
+            )
+        choices = data.get("choices") if isinstance(data, dict) else None
+        choice = choices[0] if isinstance(choices, list) and choices else None
+        message = choice.get("message") if isinstance(choice, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not _content_text(content) and isinstance(choice, dict):
+            content = choice.get("text") or (message.get("text") if isinstance(message, dict) else None)
+        return _clean_answer(content)
+    except AIServiceError:
+        raise
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        raise AIServiceError(
+            f"Groq invalid response model={model} response={body!r}",
+            status_code=response.status_code, response_body=body,
+            response_headers={**headers, "shape": _response_shape(data) if 'data' in locals() else {}},
+            kind="invalid_response"
+        ) from error
 
 
 async def ask(prompt):
@@ -296,5 +189,5 @@ async def ask(prompt):
     except requests.RequestException as error:
         kind = "timeout" if isinstance(error, requests.Timeout) else "transport"
         raise AIServiceError(
-            f"OpenRouter/OpenAI-compatible {kind} error {error!r}", kind=kind
+            f"Groq {kind} error {error!r}", kind=kind
         ) from error

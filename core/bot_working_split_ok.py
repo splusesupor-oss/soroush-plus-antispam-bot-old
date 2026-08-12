@@ -82,11 +82,8 @@ from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 # from another working directory, where bare ``load_dotenv()`` misses it.
 _ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 _AI_ENV_DEFAULTS = {
-    "AI_API_KEY": "",
-    "AI_BASE_URL": "https://openrouter.ai/api/v1",
-    "AI_MODEL": "google/gemma-4-26b-a4b-it:free",
-    "AI_FALLBACK_MODEL": "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "AI_FALLBACK_MODELS": "nvidia/nemotron-3-ultra-550b-a55b:free,openai/gpt-oss-20b:free,nvidia/nemotron-3-super-120b-a12b:free",
+    "GROQ_API_KEY": "",
+    "AI_MODEL": "llama-3.3-70b-versatile",
     "AI_MAX_TOKENS": "300",
 }
 
@@ -108,7 +105,7 @@ def ensure_ai_env_template(env_path=_ENV_FILE):
             with open(env_path, "a", encoding="utf-8") as stream:
                 if existing and existing[-1].strip():
                     stream.write("\n")
-                stream.write("# OpenAI-compatible AI (set AI_API_KEY locally; never commit .env)\n")
+                stream.write("# Groq AI (set GROQ_API_KEY locally; never commit .env)\n")
                 for key in missing:
                     stream.write(f"{key}={_AI_ENV_DEFAULTS[key]}\n")
         return missing
@@ -163,16 +160,16 @@ class SoroushAntiSpamBot:
         self.logger = BotLogger(
             log_file=self.config_manager.get(
                 "log_file", "logs/deleted_messages.log"))
-        ai_key_present = bool(os.getenv("AI_API_KEY", "").strip())
+        ai_key_present = bool(os.getenv("GROQ_API_KEY", "").strip())
         self.logger.log_info(
             "AI ENV STATUS "
             f"api_key_present={ai_key_present} "
-            f"base_url={os.getenv('AI_BASE_URL', '').strip() or 'missing'} "
+            f"provider=Groq "
             f"model={os.getenv('AI_MODEL', '').strip() or 'missing'} "
             f"template_keys_added={','.join(_AI_ENV_ADDED) or 'none'}"
         )
         if not ai_key_present:
-            print("[AI CONFIG] AI_API_KEY is missing. Add it to the local .env file; AI remains disabled until configured.")
+            print("[AI CONFIG] GROQ_API_KEY is missing. Add it to the local .env file; AI remains disabled until configured.")
         self.detector = SpamDetector(self.config_manager)
         self.tracker = UserTracker(
             spam_counts_file=self.config_manager.get(
