@@ -1135,10 +1135,18 @@ async def handle_new_message(bot, event):
             except BaseException:
                 pass
 
-        event_chat = await event.get_chat()
+        # Core may have resolved these already; prefer event-local cache and
+        # fields before asking SPlusthon to resolve entities again.
+        event_chat = (getattr(event, "_bot_cached_chat", None)
+                      or getattr(event, "chat", None))
+        if event_chat is None:
+            event_chat = await event.get_chat()
         chat_id = getattr(event_chat, "id", event.chat_id)
         _warm_reply_input_chat(event, event_chat)
-        sender = await event.get_sender()
+        sender = (getattr(event, "_bot_cached_sender", None)
+                  or getattr(event, "sender", None))
+        if sender is None:
+            sender = await event.get_sender()
         user_id = sender.id if sender else 0
         # Never feed messages sent by this account into tracking or moderation.
         # This is intentionally before tracker, spam, repeat and flood checks.
@@ -1193,7 +1201,7 @@ async def handle_new_message(bot, event):
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=AFTER_TRACKER tracked_ok={tracked_ok} hist_after={_trace_hist_after}"
         )
         if tracked_ok:
-            bot.logger.log_info(
+            _debug_log(bot,
                 "SPAM TRACK ADD "
                 f"chat_id={chat_id} user_id={user_id} "
                 f"message_id={getattr(event.message, 'id', None)} "

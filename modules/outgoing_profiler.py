@@ -2,11 +2,13 @@
 import asyncio
 import contextvars
 import functools
+import os
 import time
 
 
 _RESPONSE_RPC_MS = contextvars.ContextVar("response_rpc_ms", default=0.0)
 _RPC_DEPTH = contextvars.ContextVar("outgoing_rpc_depth", default=0)
+_RPC_DEBUG = os.getenv("BOT_RPC_DEBUG", "").strip() == "1"
 
 
 def begin_response_measurement():
@@ -39,11 +41,12 @@ def _wrap(owner, attribute, operation, logger):
         started = time.perf_counter()
         depth = _RPC_DEPTH.get()
         depth_token = _RPC_DEPTH.set(depth + 1)
-        logger.log_info(
-            "OUTGOING RPC START "
-            f"request_id={request_id} operation={operation} chat_id={chat_id} "
-            f"started_at={started_wall:.3f}"
-        )
+        if _RPC_DEBUG:
+            logger.log_info(
+                "OUTGOING RPC START "
+                f"request_id={request_id} operation={operation} chat_id={chat_id} "
+                f"started_at={started_wall:.3f}"
+            )
         result = "success"
         try:
             return await original(*args, **kwargs)
@@ -58,12 +61,13 @@ def _wrap(owner, attribute, operation, logger):
             if depth == 0:
                 _RESPONSE_RPC_MS.set(_RESPONSE_RPC_MS.get() + elapsed_ms)
             _RPC_DEPTH.reset(depth_token)
-            logger.log_info(
-                "OUTGOING RPC FINISHED "
-                f"request_id={request_id} operation={operation} chat_id={chat_id} "
-                f"started_at={started_wall:.3f} finished_at={time.time():.3f} "
-                f"rpc_ms={elapsed_ms:.2f} result={result} nested={depth > 0}"
-            )
+            if _RPC_DEBUG:
+                logger.log_info(
+                    "OUTGOING RPC FINISHED "
+                    f"request_id={request_id} operation={operation} chat_id={chat_id} "
+                    f"started_at={started_wall:.3f} finished_at={time.time():.3f} "
+                    f"rpc_ms={elapsed_ms:.2f} result={result} nested={depth > 0}"
+                )
             if elapsed_ms > 50:
                 logger.log_error(
                     "OUTGOING RPC WARNING "

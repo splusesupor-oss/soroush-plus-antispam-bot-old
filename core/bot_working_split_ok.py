@@ -862,7 +862,7 @@ class SoroushAntiSpamBot:
                 )
             except Exception as _core_trace_err:
                 self.logger.log_error(f"SPAM FLOW TRACE CORE entry failed { _core_trace_err!r}")
-            self.logger.log_info(
+            self.debug_message_log(
                 "RAW MESSAGE EVENT RECEIVED "
                 f"chat_id={getattr(event, 'chat_id', None)} "
                 f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
@@ -880,8 +880,12 @@ class SoroushAntiSpamBot:
                 # routing/gates so Bot-originated messages cannot disappear
                 # silently before message_handler.py.
                 try:
-                    _entry_sender = await event.get_sender()
-                    self.logger.log_info(
+                    _entry_sender = getattr(event, "sender", None) or await event.get_sender()
+                    try:
+                        event._bot_cached_sender = _entry_sender
+                    except Exception:
+                        pass
+                    self.debug_message_log(
                         "BOT EVENT ENTRY DEBUG\n"
                         f"event_out={getattr(event, 'out', None)}\n"
                         f"is_private={getattr(event, 'is_private', None)}\n"
@@ -910,7 +914,7 @@ class SoroushAntiSpamBot:
                     "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
                     "جعبه شانسی", "خون آشام", "خون‌آشام",
                 }
-                self.logger.log_info(
+                self.debug_message_log(
                     "COMMAND PRIORITY CHECK "
                     f"text={raw_text!r} normalized={command_priority_text!r} "
                     f"priority={command_priority}"

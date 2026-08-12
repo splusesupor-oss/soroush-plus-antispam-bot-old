@@ -1,5 +1,8 @@
 """پروفایل سبک مسیر پیام؛ فقط پیام‌های کند را لاگ می‌کند."""
+import os
 import time
+
+_PERF_DEBUG = os.getenv("BOT_PERF_DEBUG", "").strip() == "1"
 
 
 class MessagePerformance:
@@ -42,6 +45,7 @@ class MessagePerformance:
                 logger.log_error(
                     f"PERF WARNING chat_id={chat_id} stage={stage} elapsed_ms={value:.2f}"
                 )
-        logger.log_info(
-            "PERF " + " ".join(parts) + f" TOTAL={total_ms:.2f}ms"
-        )
+        if _PERF_DEBUG:
+            logger.log_info(
+                "PERF " + " ".join(parts) + f" TOTAL={total_ms:.2f}ms"
+            )
