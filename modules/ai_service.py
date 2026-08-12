@@ -9,6 +9,7 @@ _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 _TIMEOUT = (5, 20)
 _DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+_DEFAULT_MAX_TOKENS = 300
 _DEFAULT_HTTP_REFERER = "https://github.com/splusesupor-oss/soroush-plus-antispam-bot-old"
 _DEFAULT_APP_TITLE = "Soroush Plus Bot"
 _SESSION = requests.Session()
@@ -90,6 +91,10 @@ def _request(prompt):
     url = endpoint_url()
     model = os.getenv("AI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
     fallback = os.getenv("AI_FALLBACK_MODEL", _DEFAULT_FALLBACK_MODEL).strip()
+    try:
+        max_tokens = max(1, int(os.getenv("AI_MAX_TOKENS", _DEFAULT_MAX_TOKENS)))
+    except ValueError:
+        max_tokens = _DEFAULT_MAX_TOKENS
     models = [model] + ([fallback] if fallback and fallback != model else [])
     last_error = None
     for index, selected_model in enumerate(models):
@@ -103,7 +108,7 @@ def _request(prompt):
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.3,
-                "max_tokens": 350,
+                "max_tokens": max_tokens,
             },
             timeout=_TIMEOUT,
         )

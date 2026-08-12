@@ -1145,7 +1145,10 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
             return True
         if clean_text == "مجاز":
             ai_access.allow(chat_id, target)
-            await event.reply("✅ کاربر به لیست مجازهای هوش مصنوعی اضافه شد.")
+            await event.reply(
+                f"✅ کاربر : {format_user(target)}\n\n"
+                "به لیست مجازهای هوش مصنوعی اضافه شد."
+            )
         elif ai_access.disallow(chat_id, target.id):
             await event.reply("✅ دسترسی هوش مصنوعی کاربر حذف شد.")
         else:
@@ -1164,7 +1167,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
         for index, row in enumerate(rows, 1):
             username = str(row.get("username") or "").strip().lstrip("@")
             shown = "@" + username if username else row.get("display", "کاربر ناشناس")
-            lines.append(f"{index}. {shown} — {row['count']}/{ai_access.DAILY_LIMIT}")
+            lines.append(f"{index}- {shown}")
         await event.reply("\n".join(lines))
         return True
 
