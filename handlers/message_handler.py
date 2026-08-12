@@ -1173,20 +1173,32 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
         )
         return True
 
-    if clean_text in {"مجاز", "غیرمجاز", "غیر مجاز"}:
+    is_grant_command = clean_text == "مجاز" or clean_text.startswith("مجاز @")
+    is_revoke_command = clean_text in {"غیرمجاز", "غیر مجاز"} or clean_text.startswith("غیر مجاز @") or clean_text.startswith("غیرمجاز @")
+    if is_grant_command or is_revoke_command:
         if not can_manage:
             await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مدیریت هوش مصنوعی را دارند")
             return True
         reply_id = _search_reply_message_id(event)
-        if not reply_id:
-            await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
-            return True
-        reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
-        target = await reply_message.get_sender() if reply_message else None
+        target = None
+        if reply_id:
+            reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
+            target = await reply_message.get_sender() if reply_message else None
+        else:
+            # Support the documented direct form: «مجاز @username».
+            parts = message_text.strip().split()
+            username_arg = next((part for part in parts[1:] if part.startswith("@")), None)
+            if username_arg:
+                try:
+                    target = await bot.client.get_entity(username_arg)
+                except Exception as error:
+                    bot.logger.log_error(
+                        f"SEARCH ACCESS USER RESOLVE FAILED chat_id={chat_id} username={username_arg!r} error={error!r}"
+                    )
         if not target:
-            await event.reply("❌ کاربر پیدا نشد")
+            await event.reply("❌ باید روی پیام کاربر ریپلای کنید یا @username وارد کنید")
             return True
-        if clean_text == "مجاز":
+        if is_grant_command:
             saved = search_access.allow(chat_id, target)
             enabled_now, allowed_now = search_access.access_state(chat_id, target.id)
             bot.logger.log_info(
@@ -1201,7 +1213,7 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
                 )
             else:
                 await event.reply("❌ ذخیره دسترسی جستجوی گوگل انجام نشد.")
-        elif clean_text in {"غیرمجاز", "غیر مجاز"} and search_access.disallow(chat_id, target.id):
+        elif is_revoke_command and search_access.disallow(chat_id, target.id):
             await event.reply("✅ دسترسی جستجوی گوگل کاربر حذف شد.")
         else:
             await event.reply("⚠️ این کاربر در لیست کاربران مجاز جستجوی گوگل نیست.")

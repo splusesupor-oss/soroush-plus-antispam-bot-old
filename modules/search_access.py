@@ -1,4 +1,4 @@
-"""Persistent per-group Google Search access, allow-list, and daily quota state."""
+"""Single persistent per-group access store for Google Search users."""
 import json
 import logging
 from pathlib import Path
@@ -11,48 +11,31 @@ FILE = Path(__file__).resolve().parent.parent / "config" / "search_access.json"
 DAILY_LIMIT = 27
 
 
-_LEGACY_FILE = Path(__file__).resolve().parent.parent / "config" / "ai_groups.json"
+def _key(chat_id):
+    return normalize_group_id(chat_id)
 
 
-def _merge_legacy(data):
-    """Merge old AI-named records even if new storage already exists."""
-    if not _LEGACY_FILE.exists():
-        return data, False
-    try:
-        legacy = json.loads(_LEGACY_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return data, False
-    if not isinstance(legacy, dict):
-        return data, False
+def _normalize(data):
+    """Keep the one supported schema: enabled, allowed_users, usage."""
     changed = False
-    for group_key, old_group in legacy.items():
-        if not isinstance(old_group, dict):
+    for group in data.values():
+        if not isinstance(group, dict):
             continue
-        target = data.setdefault(group_key, {"enabled": False, "allowed": {}, "usage": {}})
-        if old_group.get("enabled") and not target.get("enabled"):
-            target["enabled"] = True; changed = True
-        for bucket in ("allowed", "usage"):
-            old_bucket = old_group.get(bucket) or {}
-            target_bucket = target.setdefault(bucket, {})
-            for key, value in old_bucket.items():
-                if key not in target_bucket:
-                    target_bucket[key] = value; changed = True
-    return data, changed
+        if "allowed" in group and "allowed_users" not in group:
+            group["allowed_users"] = group.pop("allowed")
+            changed = True
+        group.setdefault("enabled", False)
+        group.setdefault("allowed_users", {})
+        group.setdefault("usage", {})
+    return changed
 
 
 def _load():
     try:
-        if FILE.exists():
-            data = json.loads(FILE.read_text(encoding="utf-8"))
-            data = data if isinstance(data, dict) else {}
-        else:
-            data = {}
-        data, merged = _merge_legacy(data)
-        if merged:
+        data = json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
+        data = data if isinstance(data, dict) else {}
+        if _normalize(data):
             _save(data)
-            logging.getLogger("SoroushAntiSpam").info(
-                f"SEARCH ACCESS MIGRATION storage_path={FILE} legacy_path={_LEGACY_FILE}"
-            )
         return data
     except (OSError, ValueError):
         return {}
@@ -63,64 +46,43 @@ def _save(data):
     FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _key(chat_id):
-    return normalize_group_id(chat_id)
-
-
-def _log_save(chat_id, user_id=None, enabled=None, allowed=None):
-    logging.getLogger("SoroushAntiSpam").info(
-        "SEARCH ACCESS SAVE "
-        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} "
-        f"user_id={user_id if user_id is not None else 'none'} "
-        f"enabled={enabled} allowed={allowed} storage_path={FILE}"
-    )
-
-
-def _log_load(chat_id, user_id, enabled, allowed):
-    logging.getLogger("SoroushAntiSpam").info(
-        "SEARCH ACCESS LOAD "
-        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} "
-        f"user_id={user_id} enabled={enabled} allowed={allowed} "
-        f"storage_path={FILE}"
-    )
-
-
 def _group(data, chat_id, create=False):
     key = _key(chat_id)
     if create:
-        return data.setdefault(key, {"enabled": False, "allowed": {}, "usage": {}})
+        return data.setdefault(key, {"enabled": False, "allowed_users": {}, "usage": {}})
     group = data.get(key)
     return group if isinstance(group, dict) else None
 
 
+def _log(kind, chat_id, user_id=None, **fields):
+    payload = " ".join(f"{key}={value!r}" for key, value in fields.items())
+    logging.getLogger("SoroushAntiSpam").info(
+        f"SEARCH ACCESS {kind} chat_id={chat_id} canonical_chat_id={_key(chat_id)} "
+        f"target_user_id={user_id if user_id is not None else 'none'} "
+        f"storage_path={FILE} {payload}"
+    )
+
+
 def access_state(chat_id, user_id):
-    """Single authoritative enabled/allowed read used by Google Search."""
     group = _group(_load(), chat_id)
     enabled = bool(group and group.get("enabled"))
-    allowed = bool(enabled and str(user_id) in group.get("allowed", {}))
-    loaded_users = sorted(str(value) for value in (group.get("allowed", {}) if group else {}))
-    _log_load(chat_id, user_id, enabled, allowed)
-    logging.getLogger("SoroushAntiSpam").info(
-        "SEARCH ACCESS CHECK DEBUG "
-        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} user_id={user_id} "
-        f"storage_path={FILE} loaded_users={loaded_users!r}"
-    )
+    users = group.get("allowed_users", {}) if group else {}
+    allowed = bool(enabled and str(user_id) in users)
+    _log("LOAD", chat_id, user_id, enabled=enabled,
+         allowed=allowed, loaded_users=sorted(str(value) for value in users))
+    _log("CHECK DEBUG", chat_id, user_id,
+         enabled=enabled, allowed=allowed,
+         loaded_users=sorted(str(value) for value in users))
     return enabled, allowed
-
-
-def is_enabled(chat_id):
-    group = _group(_load(), chat_id)
-    return bool(group and group.get("enabled"))
 
 
 def set_enabled(chat_id, enabled):
     data = _load()
     group = _group(data, chat_id, create=True)
     group["enabled"] = bool(enabled)
-    group.setdefault("allowed", {})
-    group.setdefault("usage", {})
     _save(data)
-    _log_save(chat_id, enabled=group["enabled"], allowed=None)
+    _log("SAVE", chat_id, enabled=group["enabled"],
+         allowed_users=sorted(str(value) for value in group["allowed_users"]))
     return group["enabled"]
 
 
@@ -130,45 +92,38 @@ def allow(chat_id, user):
         return False
     data = _load()
     group = _group(data, chat_id, create=True)
-    allowed = group.setdefault("allowed", {})
-    before = sorted(str(value) for value in allowed)
-    allowed[str(user_id)] = {
+    users = group["allowed_users"]
+    before = sorted(str(value) for value in users)
+    users[str(user_id)] = {
         "username": getattr(user, "username", None),
         "display": format_user(user),
     }
     _save(data)
-    # Re-open the exact persisted file, not the in-memory dict, before the
-    # command reports success. This catches write/path failures immediately.
-    persisted = _load()
-    persisted_group = _group(persisted, chat_id) or {}
-    persisted_allowed = persisted_group.get("allowed", {})
-    after = sorted(str(value) for value in persisted_allowed)
-    verified = str(user_id) in persisted_allowed
-    logging.getLogger("SoroushAntiSpam").info(
-        "SEARCH ACCESS SAVE DEBUG "
-        f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} user_id={user_id} "
-        f"username={getattr(user, 'username', None)!r} before={before!r} "
-        f"after={after!r} file_path={FILE} verified={verified}"
-    )
-    _log_save(chat_id, user_id=user_id,
-              enabled=bool(persisted_group.get("enabled")), allowed=verified)
+    persisted = _group(_load(), chat_id) or {}
+    persisted_users = persisted.get("allowed_users", {})
+    verified = str(user_id) in persisted_users
+    _log("SAVE DEBUG", chat_id, user_id,
+         username=getattr(user, "username", None), before=before,
+         after=sorted(str(value) for value in persisted_users),
+         saved_data={"enabled": bool(persisted.get("enabled")),
+                     "allowed_users": sorted(str(value) for value in persisted_users)},
+         verified=verified)
+    _log("SAVE", chat_id, user_id,
+         allowed_users=sorted(str(value) for value in persisted_users))
     return verified
 
 
 def disallow(chat_id, user_id):
     data = _load()
     group = _group(data, chat_id)
-    if not group or str(user_id) not in group.get("allowed", {}):
+    users = group.get("allowed_users", {}) if group else {}
+    if str(user_id) not in users:
         return False
-    del group["allowed"][str(user_id)]
+    del users[str(user_id)]
     _save(data)
-    _log_save(chat_id, user_id=user_id, enabled=bool(group.get("enabled")), allowed=False)
+    _log("SAVE", chat_id, user_id,
+         allowed_users=sorted(str(value) for value in users))
     return True
-
-
-def is_allowed(chat_id, user_id):
-    group = _group(_load(), chat_id)
-    return bool(group and str(user_id) in group.get("allowed", {}))
 
 
 def _today():
@@ -178,8 +133,6 @@ def _today():
 def _usage_bucket(group, day=None):
     usage = group.setdefault("usage", {})
     day = day or _today()
-    # Only today's usage matters.  Pruning makes daily reset persistent and
-    # prevents the configuration file growing forever.
     for key in list(usage):
         if key != day:
             usage.pop(key, None)
@@ -187,14 +140,10 @@ def _usage_bucket(group, day=None):
 
 
 def reserve_request(chat_id, user_id):
-    """Atomically reserve one daily request.
-
-    Returns ``(allowed, count, send_notice)``.  The one-time notice flag is
-    persisted, while membership in the allow-list is intentionally retained.
-    """
     data = _load()
     group = _group(data, chat_id)
-    if not group or not group.get("enabled") or str(user_id) not in group.get("allowed", {}):
+    users = group.get("allowed_users", {}) if group else {}
+    if not group or not group.get("enabled") or str(user_id) not in users:
         return False, 0, False
     bucket = _usage_bucket(group)
     entry = bucket.setdefault(str(user_id), {"count": 0, "notified": False})
@@ -206,8 +155,6 @@ def reserve_request(chat_id, user_id):
         return False, count, send_notice
     new_count = count + 1
     entry["count"] = new_count
-    # The final allowed request is served, then the user is informed once that the
-    # next message will not reach the API until tomorrow.
     send_notice = new_count >= DAILY_LIMIT and not bool(entry.get("notified"))
     if send_notice:
         entry["notified"] = True
@@ -216,15 +163,12 @@ def reserve_request(chat_id, user_id):
 
 
 def allowed_users(chat_id):
-    data = _load()
-    group = _group(data, chat_id)
+    group = _group(_load(), chat_id)
     if not group:
         return []
-    before_days = set((group.get("usage") or {}).keys())
     bucket = _usage_bucket(group)
-    changed = set((group.get("usage") or {}).keys()) != before_days
     rows = []
-    for user_id, profile in group.get("allowed", {}).items():
+    for user_id, profile in group.get("allowed_users", {}).items():
         profile = profile if isinstance(profile, dict) else {}
         usage = bucket.get(str(user_id), {})
         rows.append({
@@ -233,8 +177,6 @@ def allowed_users(chat_id):
             "username": profile.get("username"),
             "count": int(usage.get("count", 0)),
         })
-    if changed:
-        _save(data)
     return rows
 
 
