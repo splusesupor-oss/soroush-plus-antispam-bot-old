@@ -107,6 +107,17 @@ def _safe_response_headers(response):
 GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
+def _groq_key_kind(api_key):
+    """Safe diagnostic only: identifies key family, never the key itself."""
+    if api_key.startswith("gsk_"):
+        return "gsk"
+    if api_key.startswith("sk-or-"):
+        return "openrouter_key"
+    if api_key.startswith("sk-"):
+        return "openai_style_key"
+    return "unknown"
+
+
 def _groq_headers(api_key):
     return {
         "Authorization": f"Bearer {api_key}",
@@ -138,7 +149,7 @@ def _request(prompt):
     logging.getLogger("SoroushAntiSpam").info(
         "AI GROQ REQUEST "
         f"endpoint={GROQ_CHAT_COMPLETIONS_URL} model={model} "
-        f"api_key_present={bool(api_key)} "
+        f"api_key_present={bool(api_key)} key_kind={_groq_key_kind(api_key)} "
         "authorization=Bearer [redacted] "
         f"header_keys={sorted(request_headers)} "
         f"payload_keys={sorted(request_payload)} "
@@ -158,6 +169,12 @@ def _request(prompt):
 
     body = (response.text or "").strip().replace("\n", " ")[:2000]
     headers = _safe_response_headers(response)
+    logging.getLogger("SoroushAntiSpam").info(
+        "AI GROQ RESPONSE "
+        f"endpoint={GROQ_CHAT_COMPLETIONS_URL} model={model} "
+        f"status={response.status_code} response_headers={headers!r} "
+        f"response_body={body!r}"
+    )
     if response.status_code >= 400:
         kind = "forbidden" if response.status_code == 403 else "rate_limited" if response.status_code == 429 else "http"
         raise AIServiceError(
