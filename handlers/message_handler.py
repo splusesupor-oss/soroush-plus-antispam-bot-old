@@ -1187,17 +1187,20 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             await event.reply("❌ کاربر پیدا نشد")
             return True
         if clean_text == "مجاز":
-            search_access.allow(chat_id, target)
+            saved = search_access.allow(chat_id, target)
             enabled_now, allowed_now = search_access.access_state(chat_id, target.id)
             bot.logger.log_info(
                 "SEARCH ACCESS COMMAND "
                 f"chat_id={chat_id} target_user_id={target.id} "
-                f"enabled={enabled_now} allowed={allowed_now}"
+                f"enabled={enabled_now} allowed={allowed_now} saved={saved}"
             )
-            await event.reply(
-                f"✅ کاربر : {format_user(target)}\n\n"
-                "به لیست کاربران مجاز جستجوی گوگل اضافه شد."
-            )
+            if saved and allowed_now:
+                await event.reply(
+                    f"✅ کاربر : {format_user(target)}\n\n"
+                    "به لیست کاربران مجاز جستجوی گوگل اضافه شد."
+                )
+            else:
+                await event.reply("❌ ذخیره دسترسی جستجوی گوگل انجام نشد.")
         elif clean_text in {"غیرمجاز", "غیر مجاز"} and search_access.disallow(chat_id, target.id):
             await event.reply("✅ دسترسی جستجوی گوگل کاربر حذف شد.")
         else:

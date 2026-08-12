@@ -131,25 +131,28 @@ def allow(chat_id, user):
     data = _load()
     group = _group(data, chat_id, create=True)
     allowed = group.setdefault("allowed", {})
+    before = sorted(str(value) for value in allowed)
     allowed[str(user_id)] = {
         "username": getattr(user, "username", None),
         "display": format_user(user),
     }
     _save(data)
-    # Verify the on-disk record through the same read path used by requests.
-    verified = _group(_load(), chat_id) or {}
-    saved_data = {
-        "enabled": bool(verified.get("enabled")),
-        "allowed_users": sorted(str(value) for value in verified.get("allowed", {})),
-    }
+    # Re-open the exact persisted file, not the in-memory dict, before the
+    # command reports success. This catches write/path failures immediately.
+    persisted = _load()
+    persisted_group = _group(persisted, chat_id) or {}
+    persisted_allowed = persisted_group.get("allowed", {})
+    after = sorted(str(value) for value in persisted_allowed)
+    verified = str(user_id) in persisted_allowed
     logging.getLogger("SoroushAntiSpam").info(
         "SEARCH ACCESS SAVE DEBUG "
         f"chat_id={chat_id} canonical_chat_id={_key(chat_id)} user_id={user_id} "
-        f"username={getattr(user, 'username', None)!r} storage_path={FILE} "
-        f"saved_data={saved_data!r}"
+        f"username={getattr(user, 'username', None)!r} before={before!r} "
+        f"after={after!r} file_path={FILE} verified={verified}"
     )
-    _log_save(chat_id, user_id=user_id, enabled=saved_data["enabled"], allowed=str(user_id) in verified.get("allowed", {}))
-    return True
+    _log_save(chat_id, user_id=user_id,
+              enabled=bool(persisted_group.get("enabled")), allowed=verified)
+    return verified
 
 
 def disallow(chat_id, user_id):
