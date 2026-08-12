@@ -1232,7 +1232,7 @@ async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
             if error.kind == "config":
                 await event.reply("❌ تنظیمات هوش مصنوعی کامل نیست.")
             elif error.kind == "forbidden":
-                await event.reply("❌ دسترسی این درخواست توسط سرویس هوش مصنوعی رد شد.")
+                await event.reply("❌ دسترسی درخواست Groq رد شد. تنظیمات GROQ_API_KEY یا محدودیت حساب را بررسی کنید.")
             elif error.kind == "rate_limited":
                 await event.reply("⏳ سرویس هوش مصنوعی موقتاً شلوغ است. کمی بعد دوباره تلاش کنید.")
             elif error.kind in {"timeout", "transport"}:

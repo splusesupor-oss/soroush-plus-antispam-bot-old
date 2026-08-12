@@ -123,19 +123,32 @@ def _request(prompt):
         max_tokens = max(1, int(os.getenv("AI_MAX_TOKENS", "300")))
     except ValueError:
         max_tokens = 300
+    request_headers = _groq_headers(api_key)
+    request_payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": max_tokens,
+    }
+    # Full request diagnostics without the secret itself. This makes a Groq
+    # 403 actionable while remaining safe for shared bot logs.
+    logging.getLogger("SoroushAntiSpam").info(
+        "AI GROQ REQUEST "
+        f"endpoint={GROQ_CHAT_COMPLETIONS_URL} model={model} "
+        f"api_key_present={bool(api_key)} "
+        "authorization=Bearer [redacted] "
+        f"header_keys={sorted(request_headers)} "
+        f"payload_keys={sorted(request_payload)} "
+        f"max_tokens={max_tokens}"
+    )
     try:
         response = _SESSION.post(
             GROQ_CHAT_COMPLETIONS_URL,
-            headers=_groq_headers(api_key),
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.3,
-                "max_tokens": max_tokens,
-            },
+            headers=request_headers,
+            json=request_payload,
             timeout=(4, 15),
         )
     except requests.Timeout as error:
