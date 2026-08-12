@@ -16,9 +16,15 @@ def _key(chat_id):
 
 
 def _normalize(data):
-    """Keep the one supported schema: enabled, allowed_users, usage."""
+    """Migrate direct legacy group keys to the single ``groups`` root."""
     changed = False
-    for group in data.values():
+    if "groups" not in data or not isinstance(data.get("groups"), dict):
+        legacy_groups = {key: value for key, value in data.items() if isinstance(value, dict)}
+        data.clear()
+        data["groups"] = legacy_groups
+        changed = True
+    groups = data["groups"]
+    for group in groups.values():
         if not isinstance(group, dict):
             continue
         if "allowed" in group and "allowed_users" not in group:
@@ -47,10 +53,12 @@ def _save(data):
 
 
 def _group(data, chat_id, create=False):
+    _normalize(data)
+    groups = data["groups"]
     key = _key(chat_id)
     if create:
-        return data.setdefault(key, {"enabled": False, "allowed_users": {}, "usage": {}})
-    group = data.get(key)
+        return groups.setdefault(key, {"enabled": False, "allowed_users": {}, "usage": {}})
+    group = groups.get(key)
     return group if isinstance(group, dict) else None
 
 
