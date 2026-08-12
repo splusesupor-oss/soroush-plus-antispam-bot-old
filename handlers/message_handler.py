@@ -454,9 +454,92 @@ async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
     return ids
 
 
+def _queue_message_deletes(bot, chat_id, message_ids):
+    """Queue deletion immediately; never await a delete RPC in this handler."""
+    queue = getattr(bot, "message_delete_queue", None)
+    if queue is not None:
+        return queue.enqueue(chat_id, message_ids)
+
+    async def fallback():
+        ids = list(message_ids)
+        try:
+            await bot.client.delete_messages(chat_id, ids)
+            return len(ids), []
+        except Exception as error:
+            bot.logger.log_error(
+                f"DELETE BACKGROUND FALLBACK FAILED chat_id={chat_id} error={error!r}"
+            )
+            return 0, ids
+    return _asyncio.create_task(fallback())
+
+
+def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids):
+    """Move history sweep + deletion off the incoming-message critical path."""
+    key = (chat_id, user_id)
+    pending = getattr(bot, "_auto_spam_cleanup_pending", None)
+    if pending is None:
+        pending = bot._auto_spam_cleanup_pending = {}
+    pending.setdefault(key, set()).update(seed_ids)
+    tasks = getattr(bot, "_auto_spam_cleanup_tasks", None)
+    if tasks is None:
+        tasks = bot._auto_spam_cleanup_tasks = {}
+    existing = tasks.get(key)
+    if existing is not None and not existing.done():
+        return existing
+
+    async def run():
+        try:
+            # A second small pass picks up messages received while the first
+            # paginated sweep was deleting, without blocking any command.
+            for _ in range(2):
+                seeds = pending.pop(key, set())
+                if not seeds:
+                    break
+                spam_ids = await collect_accessible_spam_ids(
+                    bot, chat_id, user_id, seeds
+                )
+                deleted, remaining = await cleanup_spam_messages(
+                    bot, chat_id, user_id, spam_ids
+                )
+                finalized = finalize_spam_wave(
+                    chat_id, user_id, len(spam_ids), deleted, remaining
+                )
+                if remaining:
+                    bot.logger.log_error(
+                        "SPAM DELETE INCOMPLETE "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"selected={len(spam_ids)} deleted={deleted} "
+                        f"remaining={len(remaining)}"
+                    )
+                if deleted:
+                    await event.reply(
+                        f"🗑 {_math_digits(deleted)} پیام هرزنامه پاک شد"
+                    )
+                if not finalized:
+                    break
+                await _asyncio.sleep(0)
+        except _asyncio.CancelledError:
+            raise
+        except Exception as error:
+            bot.logger.log_error(
+                f"SPAM CLEANUP BACKGROUND FAILED chat_id={chat_id} "
+                f"user_id={user_id} error={error!r}"
+            )
+        finally:
+            pending.pop(key, None)
+            tasks.pop(key, None)
+
+    task = _asyncio.create_task(run())
+    tasks[key] = task
+    return task
+
+
 async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
     """Delete every tracked spam id in batches of 100 for speed; failed ids remain pending."""
     pending = sorted({i for i in ids if isinstance(i, int) and i > 0})
+    queue = getattr(bot, "message_delete_queue", None)
+    if queue is not None:
+        return await queue.enqueue(chat_id, pending)
     requested = len(pending)
     deleted = 0
     remaining = []
@@ -1104,14 +1187,9 @@ async def handle_new_message(bot, event):
             _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
             )
-            try:
-                await bot.client.delete_messages(chat_id, [event.message.id])
-            except Exception as error:
-                bot.logger.log_error(
-                    f"SPAM LOCK DELETE FAILED chat_id={chat_id} user_id={user_id} error={error!r}"
-                )
+            _queue_message_deletes(bot, chat_id, [event.message.id])
             bot.logger.log_info(
-                f"SPAM LOCK DROP chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
+                f"SPAM LOCK DROP QUEUED chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
             )
             locked_ids = message_tracker.spam_snapshot(
                 chat_id, user_id, getattr(event.message, "id", None)
@@ -1119,24 +1197,13 @@ async def handle_new_message(bot, event):
             _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=SNAPSHOT_COUNT count={len(locked_ids)} ids={locked_ids!r} snapshot_source=spam_snapshot"
             )
-            deleted_locked, remaining_locked = await cleanup_spam_messages(
-                bot, chat_id, user_id, set(locked_ids)
+            _schedule_auto_spam_cleanup(
+                bot, event, chat_id, user_id, set(locked_ids)
             )
             _debug_log(bot,
-                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=CLEANUP_RESULT requested={len(locked_ids)} deleted={deleted_locked} remaining={len(remaining_locked)} remaining_ids={remaining_locked!r} cleanup_deletes_all={len(locked_ids)==deleted_locked and not remaining_locked}"
-            )
-            _finalize_res = finalize_spam_wave(
-                chat_id, user_id, len(locked_ids),
-                deleted_locked, remaining_locked
-            )
-            _debug_log(bot,
-                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=FINALIZE_RESULT result={_finalize_res} requested={len(locked_ids)} deleted={deleted_locked} remaining={len(remaining_locked)} will_clear={_finalize_res is True} hist_after_finalize={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
-            )
-            bot.logger.log_info(
-                "SPAM LOCK CLEANUP "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"requested={len(locked_ids)} deleted={deleted_locked} "
-                f"remaining={len(remaining_locked)}"
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} "
+                f"message_id={_trace_msg_id} stage=CLEANUP_QUEUED "
+                f"requested={len(locked_ids)}"
             )
             bot.logger.log_info(
                 "EARLY RETURN DEBUG reason=spam_lock "
@@ -1177,10 +1244,9 @@ async def handle_new_message(bot, event):
                             f"⚠️ کاربر\n{shown_name}\n\n"
                             "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
                         )
-                    try:
-                        await bot.admin_actions.delete_message(chat_id, event=event)
-                    except Exception as error:
-                        bot.logger.log_error(f"AD NAME DELETE FAILED user_id={user_id} error={error!r}")
+                    _queue_message_deletes(
+                        bot, chat_id, [getattr(event.message, "id", None)]
+                    )
                     try:
                         await bot.admin_actions.ban_user(
                             chat_id, user_id, reason="نام تبلیغاتی")
@@ -1651,7 +1717,7 @@ async def handle_new_message(bot, event):
                 bot.forward_spam_counts[forward_key] = forward_count
                 bot.touch_temporary_state("forward", forward_key)
                 try:
-                    await bot.client.delete_messages(chat_id, [event.message.id])
+                    _queue_message_deletes(bot, chat_id, [event.message.id])
                     deleted = True
                     if forward_count >= 3:
                         processing = getattr(bot, "forward_spam_processing", set())
@@ -3799,21 +3865,26 @@ async def handle_new_message(bot, event):
                         if getattr(message, "id", None)
                     ]
 
-                    deleted_count = 0
-                    for start_index in range(0, len(message_ids), 100):
-                        batch = message_ids[start_index:start_index + 100]
-                        await bot.client.delete_messages(chat_id, batch)
-                        deleted_count += len(batch)
+                    delete_future = _queue_message_deletes(
+                        bot, chat_id, message_ids
+                    )
 
+                async def finish_manual_bulk_delete():
+                    deleted_count, remaining = await delete_future
                     if deleted_count:
                         add_deleted_count(
                             chat_id, user_id, sender_username or "", deleted_count
                         )
-
-                admin_tools.log_action(
-                    chat_id, sender, "حذف دسته‌ای پیام",
-                    note=f"{deleted_count} پیام")
-                await event.reply(f"{deleted_count} پیام پاک شد 💣")
+                    admin_tools.log_action(
+                        chat_id, sender, "حذف دسته‌ای پیام",
+                        note=f"درخواست {len(message_ids)}، حذف واقعی {deleted_count}")
+                    if remaining:
+                        bot.logger.log_error(
+                            f"MANUAL DELETE INCOMPLETE chat_id={chat_id} "
+                            f"deleted={deleted_count} remaining={len(remaining)}"
+                        )
+                _asyncio.create_task(finish_manual_bulk_delete())
+                await event.reply(f"{len(message_ids)} پیام در صف پاکسازی قرار گرفت 💣")
                 return
 
             except Exception as e:
@@ -3843,9 +3914,8 @@ async def handle_new_message(bot, event):
 
                 lock = _delete_group_lock(chat_id)
                 async with lock:
-                    await bot.client.delete_messages(
-                        chat_id,
-                        event.reply_to.reply_to_msg_id
+                    _queue_message_deletes(
+                        bot, chat_id, [event.reply_to.reply_to_msg_id]
                     )
                 try:
                     reply_msg = await bot.client.get_messages(
@@ -4386,19 +4456,9 @@ async def handle_new_message(bot, event):
                 )
 
                 if reply_id:
-                    await bot.client.delete_messages(
-                        chat.id,
-                        [reply_id]
-                    )
-
-                    try:
-                        await event.delete()
-                    except Exception:
-                        pass
-
-                    await event.reply(
-                        "✅ با موفقیت پاک شد"
-                    )
+                    _queue_message_deletes(bot, chat.id, [reply_id])
+                    _asyncio.create_task(event.delete())
+                    await event.reply("✅ پیام در صف پاکسازی قرار گرفت")
 
                 return
 
@@ -4461,10 +4521,11 @@ async def handle_new_message(bot, event):
                     for x in user_msgs
                 ]
 
-                await bot.client.delete_messages(
-                    chat_id,
-                    ids
-                )
+                queue = getattr(bot, "message_delete_queue", None)
+                if queue is not None:
+                    queue.enqueue(chat_id, ids)
+                else:
+                    _asyncio.create_task(bot.client.delete_messages(chat_id, ids))
 
                 bot.flood_messages[chat_id] = []
 
@@ -4810,35 +4871,16 @@ async def handle_new_message(bot, event):
                 current_message_id = getattr(event.message, "id", None)
                 if current_message_id:
                     spam_ids.add(current_message_id)
-                spam_ids = await collect_accessible_spam_ids(
-                    bot, chat_id, user_id, spam_ids
+                # History pagination and every delete RPC run in the
+                # per-group background queue; commands in any chat continue
+                # immediately while this spam wave is drained.
+                _schedule_auto_spam_cleanup(
+                    bot, event, chat_id, user_id, spam_ids
                 )
                 bot.logger.log_info(
-                    "SPAM CLEANUP IDS DEBUG "
-                    f"chat_id={chat_id} user_id={user_id} "
-                    f"count={len(spam_ids)}"
+                    "SPAM CLEANUP QUEUED "
+                    f"chat_id={chat_id} user_id={user_id} seed_ids={len(spam_ids)}"
                 )
-                bot.logger.log_info(
-                    "SPAM SNAPSHOT BEFORE CLEANUP "
-                    f"chat_id={chat_id} user_id={user_id} count={len(spam_ids)} ids={spam_ids!r}"
-                )
-                deleted_count, remaining_ids = await cleanup_spam_messages(
-                    bot, chat_id, user_id, set(spam_ids)
-                )
-                if remaining_ids:
-                    bot.logger.log_error(
-                        f"SPAM DELETE INCOMPLETE stored={len(spam_ids)} "
-                        f"deleted={deleted_count} remaining={len(remaining_ids)}"
-                    )
-                finalize_spam_wave(
-                    chat_id, user_id, len(spam_ids),
-                    deleted_count, remaining_ids
-                )
-                if deleted_count and _send_spam_cleanup_notice(
-                        moderation_trigger):
-                    await event.reply(
-                        f"🗑 {_math_digits(deleted_count)} پیام هرزنامه پاک شد"
-                    )
 
             # هشدار فقط ۵ بار
             if count <= 5:

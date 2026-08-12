@@ -40,6 +40,7 @@ from modules.user_activity import flush as flush_user_activity
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
+from modules.message_delete_queue import MessageDeleteQueue
 from modules import connection_guard
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
@@ -477,6 +478,8 @@ class SoroushAntiSpamBot:
 
             # سوئیچ مرجع‌های ربات به کلاینت جدید
             self.client = new_client
+            if getattr(self, "message_delete_queue", None) is not None:
+                self.message_delete_queue.client = new_client
             self.admin_actions = AdminActions(
                 new_client, self.logger, self.config_manager)
             self.group_actions = GroupActions(new_client, self.logger)
@@ -539,6 +542,9 @@ class SoroushAntiSpamBot:
             self.bot_account_id = None
             self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
         asyncio.create_task(process_delete(self))
+        # Automatic deletions have their own per-group workers and never run
+        # synchronously in the incoming-message handler.
+        self.message_delete_queue = MessageDeleteQueue(self.client, self.logger)
 
         async def temporary_state_cleanup_loop():
             while True:
@@ -1591,6 +1597,10 @@ class SoroushAntiSpamBot:
                         "MESSAGE PROCESS TIME "
                         f"receive={started:.6f} total={elapsed:.4f}s "
                         f"chat_id={event.chat_id} text={text!r}"
+                    )
+                    self.logger.log_info(
+                        "MESSAGE RESPONSE TIME "
+                        f"chat_id={event.chat_id} total_ms={elapsed * 1000:.2f}"
                     )
             except Exception as handler_error:
                 import traceback as _tb
