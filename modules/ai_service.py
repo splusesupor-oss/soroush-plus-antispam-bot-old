@@ -49,12 +49,22 @@ def _request(prompt):
         timeout=_TIMEOUT,
     )
     if response.status_code >= 400:
-        raise AIServiceError(f"خطای سرویس هوش مصنوعی ({response.status_code})")
+        # This detail is propagated only to the bot logger by the caller; the
+        # user-facing handler keeps its short generic error message.
+        body = (response.text or "").strip().replace("\n", " ")[:2000]
+        raise AIServiceError(
+            f"OpenRouter/OpenAI-compatible HTTP {response.status_code} "
+            f"endpoint={url} model={model} response={body!r}"
+        )
     try:
         data = response.json()
         content = data["choices"][0]["message"]["content"]
     except (ValueError, KeyError, IndexError, TypeError) as error:
-        raise AIServiceError("پاسخ سرویس هوش مصنوعی معتبر نیست.") from error
+        body = (response.text or "").strip().replace("\n", " ")[:2000]
+        raise AIServiceError(
+            f"OpenRouter/OpenAI-compatible invalid response endpoint={url} "
+            f"model={model} response={body!r}"
+        ) from error
     content = str(content or "").strip()
     if not content:
         raise AIServiceError("پاسخ سرویس هوش مصنوعی خالی است.")
@@ -68,4 +78,6 @@ async def ask(prompt):
     except AIServiceError:
         raise
     except requests.RequestException as error:
-        raise AIServiceError("ارتباط با سرویس هوش مصنوعی ناموفق بود.") from error
+        raise AIServiceError(
+            f"OpenRouter/OpenAI-compatible transport error {error!r}"
+        ) from error
