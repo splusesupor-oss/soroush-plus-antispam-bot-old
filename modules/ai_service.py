@@ -2,6 +2,8 @@
 import asyncio
 import os
 import re
+import logging
+import time
 
 import requests
 
@@ -9,7 +11,11 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 _TIMEOUT = (5, 20)
-_DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+_DEFAULT_FALLBACK_MODELS = (
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "openai/gpt-oss-20b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+)
 _DEFAULT_MAX_TOKENS = 300
 _DEFAULT_HTTP_REFERER = "https://github.com/splusesupor-oss/soroush-plus-antispam-bot-old"
 _DEFAULT_APP_TITLE = "Soroush Plus Bot"
@@ -132,95 +138,152 @@ def _headers(api_key):
     }
 
 
+def _model_chain():
+    primary = os.getenv("AI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+    configured = os.getenv("AI_FALLBACK_MODELS", "").strip()
+    fallbacks = [item.strip() for item in configured.split(",") if item.strip()]
+    # Backward-compatible single fallback remains accepted in existing .env.
+    legacy = os.getenv("AI_FALLBACK_MODEL", "").strip()
+    if legacy:
+        fallbacks.append(legacy)
+    if not fallbacks:
+        fallbacks = list(_DEFAULT_FALLBACK_MODELS)
+    chain = []
+    for model in [primary, *fallbacks]:
+        if model and model not in chain:
+            chain.append(model)
+    return chain
+
+
+def _log_attempt(model, attempt, status, error, fallback_next):
+    logging.getLogger("SoroushAntiSpam").info(
+        "AI MODEL ATTEMPT "
+        f"model={model} attempt={attempt} status={status} "
+        f"error={error!r} fallback_next={fallback_next}"
+    )
+
+
+def _error_from_response(response, url, model):
+    body = (response.text or "").strip().replace("\n", " ")[:2000]
+    headers = _safe_response_headers(response)
+    status = response.status_code
+    kind = "forbidden" if status == 403 else "rate_limited" if status == 429 else "http"
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    provider_error = data.get("error") if isinstance(data, dict) else None
+    if provider_error:
+        status = provider_error.get("code", status) if isinstance(provider_error, dict) else status
+        kind = "provider_error"
+        headers["shape"] = _response_shape(data)
+        message = f"OpenRouter provider error endpoint={url} model={model} response={body!r}"
+    else:
+        message = f"OpenRouter/OpenAI-compatible HTTP {status} endpoint={url} model={model} response={body!r}"
+    return AIServiceError(message, status_code=status, response_body=body,
+                          response_headers=headers, kind=kind), data
+
+
 def _request(prompt):
     api_key = os.getenv("AI_API_KEY", "").strip()
     if not api_key:
         raise AIServiceError("کلید هوش مصنوعی تنظیم نشده است.", kind="config")
     url = endpoint_url()
-    model = os.getenv("AI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
-    fallback = os.getenv("AI_FALLBACK_MODEL", _DEFAULT_FALLBACK_MODEL).strip()
     try:
         max_tokens = max(1, int(os.getenv("AI_MAX_TOKENS", _DEFAULT_MAX_TOKENS)))
     except ValueError:
         max_tokens = _DEFAULT_MAX_TOKENS
-    models = [model] + ([fallback] if fallback and fallback != model else [])
+    models = _model_chain()
     last_error = None
-    for index, selected_model in enumerate(models):
-        response = _SESSION.post(
-            url,
-            headers=_headers(api_key),
-            json={
-                "model": selected_model,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.3,
-                "max_tokens": max_tokens,
-            },
-            timeout=_TIMEOUT,
-        )
-        if response.status_code >= 400:
-            body = (response.text or "").strip().replace("\n", " ")[:2000]
-            last_error = AIServiceError(
-                f"OpenRouter/OpenAI-compatible HTTP {response.status_code} "
-                f"endpoint={url} model={selected_model} response={body!r}",
-                status_code=response.status_code, response_body=body,
-                response_headers=_safe_response_headers(response),
-                kind=("forbidden" if response.status_code == 403 else
-                      "rate_limited" if response.status_code == 429 else "http")
-            )
-            # A provider/security rejection can be model-specific. Try the
-            # one explicit fallback, never an arbitrary router-selected model.
-            if response.status_code in (403, 429, 500, 502, 503, 504) and index + 1 < len(models):
-                continue
-            raise last_error
-        try:
-            data = response.json()
-            shape = _response_shape(data)
-            provider_error = data.get("error") if isinstance(data, dict) else None
-            if provider_error:
-                provider_status = provider_error.get("code", response.status_code) if isinstance(provider_error, dict) else response.status_code
-                body = (response.text or "").strip().replace("\n", " ")[:2000]
-                last_error = AIServiceError(
-                    f"OpenRouter provider error endpoint={url} model={selected_model} response={body!r} shape={shape!r}",
-                    status_code=provider_status, response_body=body,
-                    response_headers={**_safe_response_headers(response), "shape": shape}, kind="provider_error"
+    retryable_statuses = {429, 500, 502, 503, 504}
+
+    for model_index, selected_model in enumerate(models):
+        for attempt in range(1, 3):  # one short retry at most
+            try:
+                response = _SESSION.post(
+                    url,
+                    headers=_headers(api_key),
+                    json={
+                        "model": selected_model,
+                        "messages": [
+                            {"role": "system", "content": _SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.3,
+                        "max_tokens": max_tokens,
+                    },
+                    timeout=(4, 12),
                 )
-                if index + 1 < len(models):
+            except requests.Timeout as error:
+                last_error = AIServiceError(
+                    f"OpenRouter timeout endpoint={url} model={selected_model} error={error!r}",
+                    kind="timeout"
+                )
+                _log_attempt(selected_model, attempt, "timeout", str(error), model_index + 1 < len(models))
+                break  # move immediately to next model
+            except requests.RequestException as error:
+                last_error = AIServiceError(
+                    f"OpenRouter transport error endpoint={url} model={selected_model} error={error!r}",
+                    kind="transport"
+                )
+                _log_attempt(selected_model, attempt, "transport", str(error), model_index + 1 < len(models))
+                break
+
+            if response.status_code >= 400:
+                last_error, _ = _error_from_response(response, url, selected_model)
+                retryable = last_error.status_code in retryable_statuses
+                fallback_next = model_index + 1 < len(models)
+                _log_attempt(selected_model, attempt, last_error.status_code, str(last_error), fallback_next)
+                if retryable and attempt == 1:
+                    time.sleep(0.5)
                     continue
-                raise last_error
-            choices = data.get("choices") if isinstance(data, dict) else None
-            choice = choices[0] if isinstance(choices, list) and choices else None
-            message = choice.get("message") if isinstance(choice, dict) else None
-            # OpenAI-compatible final answer has priority. reasoning and
-            # reasoning_content are intentionally never used as fallback text.
-            content = message.get("content") if isinstance(message, dict) else None
-            if not _content_text(content) and isinstance(choice, dict):
-                content = choice.get("text") or (message.get("text") if isinstance(message, dict) else None)
-            answer = _clean_answer(content)
-        except AIServiceError as error:
-            last_error = AIServiceError(
-                f"OpenRouter/OpenAI-compatible parse/content error endpoint={url} model={selected_model} error={error!r}",
-                status_code=response.status_code, response_body=(response.text or "")[:2000],
-                response_headers={**_safe_response_headers(response), "shape": _response_shape(data) if 'data' in locals() else {}},
-                kind=error.kind
-            )
-            if index + 1 < len(models):
-                continue
-            raise last_error
-        except (ValueError, KeyError, IndexError, TypeError) as error:
-            body = (response.text or "").strip().replace("\n", " ")[:2000]
-            last_error = AIServiceError(
-                f"OpenRouter/OpenAI-compatible invalid response endpoint={url} "
-                f"model={selected_model} response={body!r}",
-                status_code=response.status_code, response_body=body,
-                response_headers={**_safe_response_headers(response), "shape": _response_shape(data) if 'data' in locals() else {}}, kind="invalid_response"
-            )
-            if index + 1 < len(models):
-                continue
-            raise last_error from error
-        return answer
+                break
+
+            try:
+                data = response.json()
+                provider_error = data.get("error") if isinstance(data, dict) else None
+                if provider_error:
+                    # OpenRouter can encode an upstream 504 in a HTTP 200 body.
+                    provider_status = provider_error.get("code", 200) if isinstance(provider_error, dict) else 200
+                    body = (response.text or "")[:2000]
+                    last_error = AIServiceError(
+                        f"OpenRouter provider error endpoint={url} model={selected_model} response={body!r}",
+                        status_code=provider_status, response_body=body,
+                        response_headers={**_safe_response_headers(response), "shape": _response_shape(data)},
+                        kind="provider_error"
+                    )
+                    _log_attempt(selected_model, attempt, provider_status, str(last_error), model_index + 1 < len(models))
+                    if provider_status in retryable_statuses and attempt == 1:
+                        time.sleep(0.5)
+                        continue
+                    break
+                choices = data.get("choices") if isinstance(data, dict) else None
+                choice = choices[0] if isinstance(choices, list) and choices else None
+                message = choice.get("message") if isinstance(choice, dict) else None
+                content = message.get("content") if isinstance(message, dict) else None
+                if not _content_text(content) and isinstance(choice, dict):
+                    content = choice.get("text") or (message.get("text") if isinstance(message, dict) else None)
+                answer = _clean_answer(content)
+                _log_attempt(selected_model, attempt, 200, "success", False)
+                return answer
+            except AIServiceError as error:
+                last_error = AIServiceError(
+                    f"OpenRouter parse/content error endpoint={url} model={selected_model} error={error!r}",
+                    status_code=200, response_body=(response.text or "")[:2000],
+                    response_headers={**_safe_response_headers(response), "shape": _response_shape(data) if 'data' in locals() else {}},
+                    kind=error.kind
+                )
+                _log_attempt(selected_model, attempt, 200, str(last_error), model_index + 1 < len(models))
+                break
+            except (ValueError, KeyError, IndexError, TypeError) as error:
+                last_error = AIServiceError(
+                    f"OpenRouter invalid response endpoint={url} model={selected_model} error={error!r}",
+                    status_code=200, response_body=(response.text or "")[:2000],
+                    response_headers={**_safe_response_headers(response), "shape": _response_shape(data) if 'data' in locals() else {}},
+                    kind="invalid_response"
+                )
+                _log_attempt(selected_model, attempt, 200, str(last_error), model_index + 1 < len(models))
+                break
     raise last_error or AIServiceError("پاسخ سرویس هوش مصنوعی ناموفق بود.")
 
 

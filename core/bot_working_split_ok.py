@@ -86,6 +86,7 @@ _AI_ENV_DEFAULTS = {
     "AI_BASE_URL": "https://openrouter.ai/api/v1",
     "AI_MODEL": "google/gemma-4-26b-a4b-it:free",
     "AI_FALLBACK_MODEL": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "AI_FALLBACK_MODELS": "nvidia/nemotron-3-ultra-550b-a55b:free,openai/gpt-oss-20b:free,nvidia/nemotron-3-super-120b-a12b:free",
     "AI_MAX_TOKENS": "300",
 }
 
