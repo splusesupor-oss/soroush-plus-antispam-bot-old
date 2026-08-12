@@ -135,7 +135,7 @@ from modules import bot_detector
 from modules import ad_name_detector
 from modules.user_display import format_user
 from modules import message_tracker
-from modules import search_access, google_search_service
+from modules import search_access
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -1221,88 +1221,9 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     )
     if not enabled or not allowed_user:
         return False
-    # A search request is counted only for a meaningful (>6 chars) question
-    # replying to a message sent by the bot itself.
-    if not reply_id or len(request_text) <= 6 or not google_search_service.looks_information_seeking(request_text):
-        return False
-
-    bot.logger.log_info(
-        f"GOOGLE SEARCH REPLY DETECTED chat_id={chat_id} user_id={user_id} reply_id={reply_id}"
-    )
-    try:
-        reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
-    except Exception as error:
-        bot.logger.log_error(
-            f"GOOGLE AI REPLY LOAD FAILED chat_id={chat_id} reply_id={reply_id} error={error!r}"
-        )
-        return False
-    if not reply_message:
-        return False
-    reply_sender_id = getattr(reply_message, "sender_id", None)
-    if reply_sender_id is None:
-        reply_sender = await reply_message.get_sender()
-        reply_sender_id = getattr(reply_sender, "id", None)
-    if str(reply_sender_id) != str(getattr(bot, "bot_account_id", None)):
-        return False
-    replied_text = (
-        getattr(reply_message, "message", None)
-        or getattr(reply_message, "caption", None)
-        or ""
-    ).strip()
-    search_query = (
-        f"زمینه: {replied_text}\nدرخواست کاربر: {request_text}"
-        if replied_text else request_text
-    )
-
-    allowed, count, notify_quota = search_access.reserve_request(chat_id, user_id)
-    if not allowed:
-        # Keep normal bot routes alive; only AI is exhausted.
-        if notify_quota:
-            _asyncio.create_task(event.reply(
-                "⏳ شما امروز به سقف استفاده از جستجوی گوگل رسیدید. فردا دوباره امکان استفاده دارید."
-            ))
-        return False
-
-    async def answer_in_background():
-        try:
-            # Search runs in a worker so neither requests nor Google parsing
-            # blocks incoming group messages.
-            bot.logger.log_info(
-                f"GOOGLE SEARCH REQUEST chat_id={chat_id} user_id={user_id} "
-                f"query_length={len(search_query)} has_reply_context={bool(replied_text)}"
-            )
-            answer = await _asyncio.to_thread(google_search_service.search_answer, search_query)
-            bot.logger.log_info(
-                f"GOOGLE SEARCH RESPONSE chat_id={chat_id} user_id={user_id} chars={len(answer)}"
-            )
-            await event.reply(answer)
-            bot.logger.log_info(
-                f"GOOGLE SEARCH RESPONSE chat_id={chat_id} user_id={user_id} sent=True"
-            )
-        except google_search_service.SearchAssistantError as error:
-            bot.logger.log_error(
-                "AI SEARCH ERROR "
-                f"chat_id={chat_id} user_id={user_id} reason={error!s}"
-            )
-            if str(error) == "google_search_not_configured_or_no_results":
-                await event.reply("ℹ️ اطلاعات کافی پیدا نشد یا Google Search برای ربات تنظیم نشده است.")
-            elif str(error) == "no_results":
-                await event.reply("ℹ️ اطلاعات کافی و قابل‌اعتمادی برای پاسخ پیدا نشد.")
-            else:
-                await event.reply("❌ جستجوی اطلاعات موقتاً در دسترس نیست. بعداً دوباره تلاش کنید.")
-        except Exception as error:
-            bot.logger.log_error(
-                "AI SEARCH ERROR "
-                f"chat_id={chat_id} user_id={user_id} type={error.__class__.__name__} error={error!r}"
-            )
-        finally:
-            if notify_quota:
-                await event.reply(
-                    "⏳ شما امروز به سقف استفاده از جستجوی گوگل رسیدید. فردا دوباره امکان استفاده دارید."
-                )
-
-    _asyncio.create_task(answer_in_background())
-    return True
+    # Search access remains configured for future local-search handlers.
+    # No external Google API or web request is performed by this bot.
+    return False
 
 
 async def handle_new_message(bot, event):

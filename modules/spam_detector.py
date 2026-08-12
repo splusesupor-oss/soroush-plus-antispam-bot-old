@@ -3,6 +3,7 @@
 """
 import re
 from modules.group_banned_words_control import is_enabled
+from modules import site_policy
 from typing import Tuple, Optional, List
 from .config_manager import ConfigManager
 
@@ -73,6 +74,12 @@ class SpamDetector:
             if "splus.ir/meet/" in found_link:
                 return False, None
 
+            classification, domain = site_policy.classify(found_link)
+            if classification == "blocked":
+                return True, f"دامنه مسدود ({domain})"
+            if classification in {"trusted", "search"}:
+                return False, None
+            # Unknown domains retain the existing group link policy.
             return True, f"لینک مشکوک ({match.group(0)[:30]})"
         return False, None
 

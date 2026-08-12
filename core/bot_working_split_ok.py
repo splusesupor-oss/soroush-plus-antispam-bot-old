@@ -42,6 +42,7 @@ from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from modules.message_delete_queue import MessageDeleteQueue
 from modules import connection_guard
+from modules import site_policy
 from handlers.message_handler import handle_new_message, send_activation_message
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.name_family import cancel_round as cancel_name_family_round
@@ -118,6 +119,7 @@ except Exception:  # pragma: no cover - اگر ماژول در دسترس نبو
 class SoroushAntiSpamBot:
     def __init__(self, config_path="config/config.json"):
         print("🚀 در حال بارگذاری تنظیمات...")
+        site_policy.load()
         migrated_files = migrate_all_group_storage()
         self.config_manager = ConfigManager(config_path=config_path)
         if migrated_files:
