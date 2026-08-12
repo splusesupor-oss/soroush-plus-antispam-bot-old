@@ -1273,7 +1273,9 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
                 f"AI REQUEST PROCESS START chat_id={chat_id} user_id={user_id} query_length={len(query)}"
             )
             try:
-                answer = await _asyncio.to_thread(web_search.search_factual, query)
+                answer = await _asyncio.to_thread(
+                    web_search.search_factual, topic, request_text
+                )
             except web_search.FactualSearchError as primary_error:
                 # Wikipedia remains a secondary factual fallback only.
                 bot.logger.log_info(

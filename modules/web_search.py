@@ -120,6 +120,7 @@ _INTENT_MARKERS = (
     "فرق", "تاریخ", "اطلاعات", "برنامه نویسی", "جستجو کن", "سرچ کن",
 )
 _INTENT_FILLERS = re.compile(r"^(?:لطفاً|لطفا|میشه|می شه|میتونی|می تونی|جستجو کن|سرچ کن|در مورد|درباره|چندتا|چند مدل)\s+|\s+(?:توضیح بده|معرفی کن|بگو|رو بگو|رو سرچ کن)$")
+_QUERY_STOPWORDS = {"چیست", "چیه", "کجاست", "کیست", "کیه", "چرا", "چطور", "چگونه", "بهترین", "اطلاعات", "درباره", "برای", "است", "هست", "را", "های", "ها", "یا"}
 
 
 def factual_intent(text):
@@ -164,30 +165,61 @@ def _extract_factual_results(html):
     return results
 
 
-def _factual_text(results):
-    if not results:
-        return None
-    # Two independent snippets are enough for a short response without
-    # dumping raw search links. Source titles are retained as provenance only.
-    facts = []
-    titles = []
+def _topic_tokens(value):
+    return {
+        token.lower() for token in re.findall(r"[A-Za-zآ-ی]{3,}", value or "")
+        if token.lower() not in _QUERY_STOPWORDS
+    }
+
+
+def _validated_results(results, topic):
+    """Rank only snippets demonstrably related to the extracted topic."""
+    tokens = _topic_tokens(topic)
+    if not tokens:
+        return []
+    ranked = []
     seen = set()
-    for title, snippet in results[:5]:
-        snippet = _clean_factual_text(snippet)[:420]
-        marker = re.sub(r"\W+", "", snippet.lower())
-        if not snippet or marker in seen:
+    for title, snippet in results:
+        clean_title = _clean_factual_text(title)
+        clean_snippet = _clean_factual_text(snippet)[:420]
+        combined = f"{clean_title} {clean_snippet}".lower()
+        score = sum(token in combined for token in tokens)
+        marker = re.sub(r"\W+", "", combined)
+        if score <= 0 or marker in seen:
             continue
         seen.add(marker)
-        facts.append(snippet)
-        titles.append(_clean_factual_text(title))
-        if len(facts) == 2:
-            break
+        ranked.append((score, clean_title, clean_snippet))
+    return sorted(ranked, key=lambda item: item[0], reverse=True)
+
+
+def _is_comparison(question):
+    normalized = str(question or "").lower()
+    return any(marker in normalized for marker in ("بهتر", "مقایسه", "فرق", "تفاوت", "یا "))
+
+
+def _factual_text(results, topic, question):
+    validated = _validated_results(results, topic)
+    if not validated:
+        return None
+    comparison = _is_comparison(question)
+    # Comparison needs independent evidence. One unrelated company/page must
+    # never be presented as an answer to a comparative question.
+    if comparison and len(validated) < 2:
+        return None
+    selected = validated[:2]
+    facts = [snippet for _score, _title, snippet in selected if snippet]
+    titles = [title for _score, title, _snippet in selected if title]
     if not facts:
         return None
-    return "\n\n".join(facts) + "\n\nمنابع: " + " | ".join(titles)
+    if comparison:
+        lead = "برای مقایسه، پاسخ قطعی به نیاز و معیارهای شما بستگی دارد. "
+        answer = lead + " ".join(facts)
+    else:
+        answer = " ".join(facts)
+    return answer[:850].strip() + "\n\nمنابع: " + " | ".join(titles)
 
 
-def search_factual(query):
+def search_factual(query, question=None):
     """DuckDuckGo factual summary; public ``جستجو`` output remains unchanged."""
     query = (query or "").strip()
     if not query:
@@ -200,7 +232,7 @@ def search_factual(query):
         raise FactualSearchError("unavailable") from error
     if response.status_code != 200:
         raise FactualSearchError("unavailable" if response.status_code >= 500 or response.status_code == 429 else "no_results")
-    answer = _factual_text(_extract_factual_results(response.text))
+    answer = _factual_text(_extract_factual_results(response.text), query, question or query)
     if not answer:
         raise FactualSearchError("no_results")
     return answer
