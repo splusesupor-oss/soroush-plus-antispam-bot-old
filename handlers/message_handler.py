@@ -135,6 +135,7 @@ from modules import bot_detector
 from modules import ad_name_detector
 from modules.user_display import format_user
 from modules import message_tracker
+from modules import ai_access, ai_service
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import types
@@ -1102,6 +1103,118 @@ def _delete_cooldown_allowed(chat_id):
     return True
 
 
+def _ai_reply_message_id(event):
+    return (
+        getattr(getattr(event, "message", None), "reply_to_msg_id", None)
+        or getattr(getattr(event, "reply_to", None), "reply_to_msg_id", None)
+    )
+
+
+async def _handle_ai_group_message(bot, event, chat_id, user_id, sender,
+                                   clean_text, message_text):
+    """Handle AI administration and eligible reply-only prompts for one group."""
+    if event.is_private:
+        return False
+    sender_username = getattr(sender, "username", None)
+    can_manage = admin_tools.has_admin_permission(chat_id, user_id, sender_username)
+
+    if clean_text in {"هوش مصنوعی فعال", "هوش مصنوعی خاموش"}:
+        if not can_manage:
+            await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مدیریت هوش مصنوعی را دارند")
+            return True
+        enabled = clean_text == "هوش مصنوعی فعال"
+        ai_access.set_enabled(chat_id, enabled)
+        await event.reply(
+            "✅ هوش مصنوعی این گروه فعال شد." if enabled
+            else "✅ هوش مصنوعی این گروه خاموش شد."
+        )
+        return True
+
+    if clean_text in {"مجاز", "غیرمجاز"}:
+        if not can_manage:
+            await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مدیریت هوش مصنوعی را دارند")
+            return True
+        reply_id = _ai_reply_message_id(event)
+        if not reply_id:
+            await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+            return True
+        reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
+        target = await reply_message.get_sender() if reply_message else None
+        if not target:
+            await event.reply("❌ کاربر پیدا نشد")
+            return True
+        if clean_text == "مجاز":
+            ai_access.allow(chat_id, target)
+            await event.reply("✅ کاربر به لیست مجازهای هوش مصنوعی اضافه شد.")
+        elif ai_access.disallow(chat_id, target.id):
+            await event.reply("✅ دسترسی هوش مصنوعی کاربر حذف شد.")
+        else:
+            await event.reply("⚠️ این کاربر در لیست مجازهای هوش مصنوعی نیست.")
+        return True
+
+    if clean_text == "لیست مجازهای هوش مصنوعی":
+        if not can_manage:
+            await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مشاهده این لیست را دارند")
+            return True
+        rows = ai_access.allowed_users(chat_id)
+        if not rows:
+            await event.reply("📋 هنوز کاربری برای هوش مصنوعی مجاز نشده است.")
+            return True
+        lines = ["📋 لیست مجازهای هوش مصنوعی:\n"]
+        for index, row in enumerate(rows, 1):
+            username = str(row.get("username") or "").strip().lstrip("@")
+            shown = "@" + username if username else row.get("display", "کاربر ناشناس")
+            lines.append(f"{index}. {shown} — {row['count']}/{ai_access.DAILY_LIMIT}")
+        await event.reply("\n".join(lines))
+        return True
+
+    if not ai_access.is_enabled(chat_id) or not ai_access.is_allowed(chat_id, user_id):
+        return False
+    reply_id = _ai_reply_message_id(event)
+    if not reply_id:
+        return False
+    # This lookup is performed only for enabled/allowed users and only on a
+    # reply; ordinary group messages never reach it or the external API.
+    reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
+    reply_sender_id = getattr(reply_message, "sender_id", None) if reply_message else None
+    if reply_sender_id is None and reply_message is not None:
+        reply_sender = await reply_message.get_sender()
+        reply_sender_id = getattr(reply_sender, "id", None)
+    if str(reply_sender_id) != str(getattr(bot, "bot_account_id", None)):
+        return False
+
+    allowed, count, notify_quota = ai_access.reserve_request(chat_id, user_id)
+    if not allowed:
+        # Keep normal bot routes alive; only AI is exhausted.
+        if notify_quota:
+            _asyncio.create_task(event.reply(
+                "⛔ سهمیه روزانه هوش مصنوعی شما (۵۰ پیام) تمام شد. فردا دوباره فعال می‌شود."
+            ))
+        return False
+
+    async def answer_in_background():
+        try:
+            answer = await ai_service.ask(message_text)
+            await event.reply(answer)
+        except ai_service.AIServiceError as error:
+            bot.logger.log_error(
+                f"AI REQUEST FAILED chat_id={chat_id} user_id={user_id} error={error!r}"
+            )
+            await event.reply("❌ پاسخ هوش مصنوعی در دسترس نیست. بعداً دوباره تلاش کنید.")
+        except Exception as error:
+            bot.logger.log_error(
+                f"AI BACKGROUND FAILED chat_id={chat_id} user_id={user_id} error={error!r}"
+            )
+        finally:
+            if notify_quota:
+                await event.reply(
+                    "⛔ سهمیه روزانه هوش مصنوعی شما (۵۰ پیام) تمام شد. فردا دوباره فعال می‌شود."
+                )
+
+    _asyncio.create_task(answer_in_background())
+    return True
+
+
 async def handle_new_message(bot, event):
     """هندلر اصلی برای پیام‌های جدید"""
     profiler = MessagePerformance()
@@ -1479,6 +1592,15 @@ async def handle_new_message(bot, event):
             # یکی از سه دستور را بفرستد.
             if group_expiry_blocks(chat_id, sender):
                 return
+
+        # ------------------------------------------------------------------
+        # 🤖 هوش مصنوعی گروه — فقط مدیریت ادمین یا reply مجاز به پیام ربات.
+        # درخواست HTTPS خودش در task جدا اجرا می‌شود.
+        # ------------------------------------------------------------------
+        if await _handle_ai_group_message(
+            bot, event, chat_id, user_id, sender, clean_text, message_text
+        ):
+            return
 
         # ------------------------------------------------------------------
         # 💰 اقتصاد — دو بخش مستقل «موجودی» و «فروشگاه».
