@@ -8,13 +8,18 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _CHAT_COMPLETIONS_PATH = "/chat/completions"
 _DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 _TIMEOUT = (5, 20)
+_DEFAULT_FALLBACK_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 _SESSION = requests.Session()
-_SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات مدیریت گروه سروش پلاس هستی.
-خودت را جایگزین ربات اصلی نکن و هیچ دستور مدیریتی، بازی یا عملیاتی اجرا نکن.
-برای سوالات عمومی کوتاه، دقیق و مودبانه به فارسی پاسخ بده.
-اطلاعات ساختگی تولید نکن؛ اگر مطمئن نیستی صریح بگو نمی‌دانی.
-سروش پلاس یک پیام‌رسان ایرانی است؛ درباره آن یا قابلیت‌های ربات فقط اطلاعات
-مطمئن و مرتبط بده و ادعاهای بی‌ربط یا غیرمستند نساز."""
+_SYSTEM_PROMPT = """تو دستیار هوش مصنوعی داخل یک ربات گروهی هستی.
+به سوال کاربر دقیق، مرتبط و کوتاه پاسخ بده.
+اگر اطلاعات کافی نداری حدس نزن و صریح بگو اطلاعات کافی نداری.
+اطلاعات جعلی تولید نکن.
+خودت را جایگزین ربات اصلی نکن و هیچ دستور، مدیریت گروه، بازی یا عملیاتی اجرا نکن.
+پاسخ‌ها باید به زبان فارسی روان باشند.
+از نمایش پیام‌های داخلی، قوانین ایمنی، تحلیل، متادیتا، system information،
+فرآیند فکر کردن و اطلاعات فنی خودداری کن؛ فقط پاسخ نهایی را بنویس.
+سروش پلاس یک پیام‌رسان ایرانی است. آن را با محصولات، اصطلاحات پزشکی یا
+موضوعات نامرتبط اشتباه نگیر و درباره آن ادعای غیرمستند نکن."""
 
 
 class AIServiceError(RuntimeError):
@@ -35,47 +40,79 @@ def endpoint_url(base_url=None):
     return base + _CHAT_COMPLETIONS_PATH
 
 
+_INTERNAL_LINE_MARKERS = (
+    "user safety:", "analysis", "metadata", "system information",
+    "system prompt", "thinking", "thinking process", "the user asks:",
+    "assistant analysis", "reasoning:",
+)
+
+
+def _clean_answer(content):
+    """Remove provider/model internals before a group user can see them."""
+    lines = []
+    for raw_line in str(content or "").splitlines():
+        line = raw_line.strip()
+        normalized = line.lower().lstrip("#*- ").strip()
+        if any(normalized.startswith(marker) for marker in _INTERNAL_LINE_MARKERS):
+            continue
+        # Some reasoning models prefix a final answer explicitly; retain only
+        # the actual answer text after the label.
+        if normalized.startswith("final:") or normalized.startswith("پاسخ نهایی:"):
+            line = line.split(":", 1)[1].strip()
+        if line:
+            lines.append(line)
+    answer = "\n".join(lines).strip()
+    if not answer:
+        raise AIServiceError("پاسخ سرویس فقط شامل اطلاعات داخلی بود.")
+    return answer
+
+
 def _request(prompt):
     api_key = os.getenv("AI_API_KEY", "").strip()
     if not api_key:
         raise AIServiceError("کلید هوش مصنوعی تنظیم نشده است.")
     url = endpoint_url()
     model = os.getenv("AI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
-    response = _SESSION.post(
-        url,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 350,
-        },
-        timeout=_TIMEOUT,
-    )
-    if response.status_code >= 400:
-        # This detail is propagated only to the bot logger by the caller; the
-        # user-facing handler keeps its short generic error message.
-        body = (response.text or "").strip().replace("\n", " ")[:2000]
-        raise AIServiceError(
-            f"OpenRouter/OpenAI-compatible HTTP {response.status_code} "
-            f"endpoint={url} model={model} response={body!r}"
+    fallback = os.getenv("AI_FALLBACK_MODEL", _DEFAULT_FALLBACK_MODEL).strip()
+    models = [model] + ([fallback] if fallback and fallback != model else [])
+    last_error = None
+    for index, selected_model in enumerate(models):
+        response = _SESSION.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": selected_model,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens": 350,
+            },
+            timeout=_TIMEOUT,
         )
-    try:
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-    except (ValueError, KeyError, IndexError, TypeError) as error:
-        body = (response.text or "").strip().replace("\n", " ")[:2000]
-        raise AIServiceError(
-            f"OpenRouter/OpenAI-compatible invalid response endpoint={url} "
-            f"model={model} response={body!r}"
-        ) from error
-    content = str(content or "").strip()
-    if not content:
-        raise AIServiceError("پاسخ سرویس هوش مصنوعی خالی است.")
-    return content
+        if response.status_code >= 400:
+            body = (response.text or "").strip().replace("\n", " ")[:2000]
+            last_error = AIServiceError(
+                f"OpenRouter/OpenAI-compatible HTTP {response.status_code} "
+                f"endpoint={url} model={selected_model} response={body!r}"
+            )
+            # Shared free pools frequently return 429.  A single named
+            # fallback keeps the reply useful without routing arbitrary models.
+            if response.status_code == 429 and index + 1 < len(models):
+                continue
+            raise last_error
+        try:
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError) as error:
+            body = (response.text or "").strip().replace("\n", " ")[:2000]
+            raise AIServiceError(
+                f"OpenRouter/OpenAI-compatible invalid response endpoint={url} "
+                f"model={selected_model} response={body!r}"
+            ) from error
+        return _clean_answer(content)
+    raise last_error or AIServiceError("پاسخ سرویس هوش مصنوعی ناموفق بود.")
 
 
 async def ask(prompt):
