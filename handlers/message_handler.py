@@ -1352,16 +1352,31 @@ async def handle_new_message(bot, event):
         if not has_text_content and not is_forwarded_media and not is_gif_media:
             return
 
+        sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+        # Current group authority is checked before every spam cache, banned
+        # storage, tracker and lock path. Historical spam state cannot outrank
+        # a current owner/admin role.
+        admin_bypass = bool(
+            not event.is_private and admin_tools.has_admin_permission(
+                chat_id, user_id, sender_username
+            )
+        )
+        blocked_cache = bot.is_spam_locked((chat_id, user_id))
+        bot.logger.log_info(
+            "ADMIN BYPASS CHECK "
+            f"user_id={user_id} group_id={chat_id} is_admin={admin_bypass} "
+            f"blocked_cache={blocked_cache} spam_history={False if admin_bypass else 'unchecked'}"
+        )
         status_key = f"{chat_id}:{user_id}"
         tracker_is_banned = getattr(bot.tracker, "is_banned", None)
         tracker_is_muted = getattr(bot.tracker, "is_muted", None)
-        status_banned = (
+        status_banned = False if admin_bypass else (
             is_banned(chat_id, user_id, getattr(sender, "username", None))
             or (tracker_is_banned(chat_id, user_id)
                 if callable(tracker_is_banned) else False)
-            or bot.is_spam_locked((chat_id, user_id))
+            or blocked_cache
         )
-        status_muted = (
+        status_muted = False if admin_bypass else (
             tracker_is_muted(chat_id, user_id)
             if callable(tracker_is_muted) else False
         )
@@ -1372,19 +1387,18 @@ async def handle_new_message(bot, event):
             f"warning_count={bot.tracker.get_count(chat_id, user_id)} "
             f"spam_count={bot.tracker.get_count(chat_id, user_id)}"
         )
-        sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
         # === SPAM FLOW TRACE: BEFORE_TRACKER ===
         _trace_msg_id = getattr(event.message, "id", None)
-        _trace_hist_before = len(message_tracker.get_user_recent_messages(chat_id, user_id))
+        _trace_hist_before = 0 if admin_bypass else len(message_tracker.get_user_recent_messages(chat_id, user_id))
         _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_TRACKER hist_before={_trace_hist_before} bot_id={id(bot)} lock_id={id(getattr(bot, 'spam_lock', set()))}"
         )
         # Track every incoming group message before the spam-lock early drop;
         # otherwise messages after the first threshold hit never enter history.
-        tracked_ok = message_tracker.add_message(
+        tracked_ok = False if admin_bypass else message_tracker.add_message(
             chat_id, user_id, getattr(event.message, "id", None), message_text
         )
-        _trace_hist_after = len(message_tracker.get_user_recent_messages(chat_id, user_id))
+        _trace_hist_after = 0 if admin_bypass else len(message_tracker.get_user_recent_messages(chat_id, user_id))
         _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=AFTER_TRACKER tracked_ok={tracked_ok} hist_after={_trace_hist_after}"
         )
@@ -1396,12 +1410,13 @@ async def handle_new_message(bot, event):
                 f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
         spam_lock_key = (chat_id, user_id)
-        _is_locked = bot.is_spam_locked(spam_lock_key)
+        _is_locked = False if admin_bypass else bot.is_spam_locked(spam_lock_key)
         _lock_size = len(getattr(bot, "spam_lock", set()))
         _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_SPAM_LOCK key={spam_lock_key!r} is_locked={_is_locked} lock_size={_lock_size} chat_id_type={type(chat_id).__name__} user_id_type={type(user_id).__name__}"
         )
         if (not event.is_private
+                and not admin_bypass
                 and bot.is_spam_locked(spam_lock_key)):
             _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
@@ -1772,7 +1787,7 @@ async def handle_new_message(bot, event):
             )
         sender_username = getattr(sender, "username", None)
         # فرمان‌های سریع permission مخصوص خود را در branch فرمان بررسی می‌کنند.
-        is_group_moderator = (
+        is_group_moderator = admin_bypass or (
             not event.is_private
             and not fast_command
             and _has_group_management_permission(
@@ -1844,7 +1859,7 @@ async def handle_new_message(bot, event):
         if not has_text_content and not is_forwarded_media and not is_gif_media:
             return
 
-        if not fast_command:
+        if not fast_command and not admin_bypass:
             save_history_message(chat_id, user_id, event.message.id, message_text)
         if not is_group_moderator:
             if is_gif_message(event.message):
