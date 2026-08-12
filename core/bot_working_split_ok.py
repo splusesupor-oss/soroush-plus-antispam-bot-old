@@ -75,7 +75,8 @@ import os
 import asyncio
 import sys
 import time
-from dotenv import load_dotenv
+import hashlib
+from dotenv import load_dotenv, dotenv_values
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 
 # Load the project .env by an absolute path.  A service/restart may launch
@@ -115,8 +116,36 @@ def ensure_ai_env_template(env_path=_ENV_FILE):
         return []
 
 
+def _apply_local_ai_env(env_path=_ENV_FILE):
+    """Prefer non-empty local Groq settings over stale inherited variables.
+
+    ``load_dotenv(..., override=False)`` preserves process variables. That is
+    normally desirable for sessions, but an exported old GROQ_API_KEY can
+    survive a restart and shadow the key the operator just put in .env.
+    Only non-empty AI values are explicitly refreshed from the project file.
+    """
+    try:
+        values = dotenv_values(env_path)
+    except OSError:
+        return {}
+    applied = {}
+    for key in _AI_ENV_DEFAULTS:
+        value = str(values.get(key) or "").strip()
+        if value:
+            os.environ[key] = value
+            applied[key] = value
+    return applied
+
+
+def _ai_key_fingerprint(value):
+    if not value:
+        return "missing"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
 _AI_ENV_ADDED = ensure_ai_env_template()
 load_dotenv(dotenv_path=_ENV_FILE, override=False)
+_AI_ENV_APPLIED = _apply_local_ai_env()
 
 # اگر پوشه ماژول‌ها در مسیر نیست اضافه کن
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -164,9 +193,11 @@ class SoroushAntiSpamBot:
         self.logger.log_info(
             "AI ENV STATUS "
             f"api_key_present={ai_key_present} "
-            f"provider=Groq "
+            f"key_fingerprint={_ai_key_fingerprint(os.getenv('GROQ_API_KEY', '').strip())} "
+            f"env_file={_ENV_FILE} provider=Groq "
             f"model={os.getenv('AI_MODEL', '').strip() or 'missing'} "
-            f"template_keys_added={','.join(_AI_ENV_ADDED) or 'none'}"
+            f"template_keys_added={','.join(_AI_ENV_ADDED) or 'none'} "
+            f"local_ai_values_applied={','.join(_AI_ENV_APPLIED) or 'none'}"
         )
         if not ai_key_present:
             print("[AI CONFIG] GROQ_API_KEY is missing. Add it to the local .env file; AI remains disabled until configured.")
