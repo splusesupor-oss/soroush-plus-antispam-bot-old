@@ -462,13 +462,13 @@ async def _is_native_group_admin(bot, chat_id, user_id, sender):
         return False
 
 
-def _clear_native_admin_moderation_state(bot, chat_id, user_id):
-    """Remove stale spam state once when a real group admin is observed."""
+def _clear_native_admin_moderation_state(bot, chat_id, user_id, *, force=False):
+    """Remove stale punishment/delete state for a real group administrator."""
     cleared = getattr(bot, "native_admin_state_cleared", None)
     if cleared is None:
         cleared = bot.native_admin_state_cleared = set()
     key = (normalize_group_id(chat_id), str(user_id))
-    if key in cleared:
+    if key in cleared and not force:
         return False
     clear_state = getattr(bot, "clear_released_user_state", None)
     if callable(clear_state):
@@ -1506,20 +1506,25 @@ async def handle_new_message(bot, event):
             not event.is_private
             and await _is_native_group_admin(bot, chat_id, user_id, sender)
         )
-        admin_bypass = registered_admin_bypass or native_admin_bypass
-        if native_admin_bypass:
-            # A real group admin may not be restricted by the bot. Clear any
-            # legacy warning/lock/history state once, before it can delete a
-            # new message or schedule another cleanup wave.
+        # A native group admin who is not registered in the bot follows the
+        # warning counter, but can never enter automatic delete/ban/mute state.
+        # Registered bot admins retain the existing full bypass policy.
+        native_admin_warn_only = native_admin_bypass and not registered_admin_bypass
+        admin_bypass = registered_admin_bypass
+        blocked_cache = bot.is_spam_locked((chat_id, user_id))
+        if native_admin_warn_only and blocked_cache:
+            # This is stale state created before the native role was known.
+            # It must not delete the current or later admin messages.
             state_cleared = _clear_native_admin_moderation_state(
-                bot, chat_id, user_id
+                bot, chat_id, user_id, force=True
             )
+            blocked_cache = False
         else:
             state_cleared = False
+        if not native_admin_bypass:
             getattr(bot, "native_admin_state_cleared", set()).discard(
                 (normalize_group_id(chat_id), str(user_id))
             )
-        blocked_cache = bot.is_spam_locked((chat_id, user_id))
         bot.logger.log_info(
             "ADMIN BYPASS CHECK "
             f"user_id={user_id} group_id={chat_id} "
@@ -1585,6 +1590,7 @@ async def handle_new_message(bot, event):
         )
         if (not event.is_private
                 and not admin_bypass
+                and not native_admin_warn_only
                 and bot.is_spam_locked(spam_lock_key)):
             _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
@@ -1623,7 +1629,8 @@ async def handle_new_message(bot, event):
             "مین یاب", "سابقه ها", "سابقه‌ها", "سطح گروه",
         }
         if (sender and not event.is_private and not command_priority
-                and not is_global_owner(user_id)):
+                and not is_global_owner(user_id)
+                and not native_admin_warn_only):
             if not admin_tools.has_admin_permission(chat_id, user_id, sender_username):
                 ad_reason = ad_name_detector.reason(sender)
                 if ad_reason:
@@ -1974,6 +1981,9 @@ async def handle_new_message(bot, event):
                 bot, chat_id, user_id, sender_username
             )
         )
+        # Native admins may receive ordinary warnings, but none of the
+        # automatic delete/mute/ban branches may act on them.
+        auto_punish_protected = is_group_moderator or native_admin_warn_only
         profiler.mark("ADMIN_CHECK")
         if not is_group_moderator and not is_gif_message(event.message):
             reset_gif_history(chat_id, user_id)
@@ -2041,7 +2051,7 @@ async def handle_new_message(bot, event):
 
         if not fast_command and not admin_bypass:
             save_history_message(chat_id, user_id, event.message.id, message_text)
-        if not is_group_moderator:
+        if not auto_punish_protected:
             if is_gif_message(event.message):
                 # مسیر مستقل GIF: ثبت، صف‌بندی و حذف دسته‌ای با تلاش مجدد.
                 repeated_gif_ids, newly_flagged = handle_gif_message(
@@ -2131,7 +2141,7 @@ async def handle_new_message(bot, event):
                 f"user_id={user_id} username={sender_username} "
                 f"forward_field={forward_field} fields={forward_fields}"
             )
-            if not is_group_moderator:
+            if not auto_punish_protected:
                 deleted = False
                 forward_key = (chat_id, user_id)
                 forward_count = getattr(bot, "forward_spam_counts", {}).get(
@@ -2522,7 +2532,7 @@ async def handle_new_message(bot, event):
             return
 
         # ضدتکرار فقط برای پیام‌های سریع و یکسانِ کاربران عادی اجرا می‌شود.
-        if not fast_command and not is_group_moderator:
+        if not fast_command and not auto_punish_protected:
             try:
                 if is_repeat(chat_id, user_id, message_text):
                     punish_key = f"{chat_id}:{user_id}"
@@ -4926,7 +4936,7 @@ async def handle_new_message(bot, event):
             ]
 
             # فقط پیام‌های تکراری یک کاربر حذف شوند
-            if not is_group_moderator and len(user_msgs) >= 5:
+            if not auto_punish_protected and len(user_msgs) >= 5:
 
                 texts = [
                     x[3]
@@ -4986,7 +4996,7 @@ async def handle_new_message(bot, event):
             repeat_word, repeat_count = (max(counts.items(), key=lambda item: item[1]) if counts else (None, 0))
             repeat_found = repeat_count >= 8
 
-            if repeat_found and not is_group_moderator:
+            if repeat_found and not auto_punish_protected:
                 bot.logger.log_info(
                     "SPAM HEAVY DETECTED "
                     f"chat_id={chat_id} user_id={user_id} word={repeat_word!r} count={repeat_count}"
@@ -5215,6 +5225,23 @@ async def handle_new_message(bot, event):
             )
 
             threshold = bot.config_manager.get("spam_threshold", 3)
+            if native_admin_warn_only and count >= threshold:
+                # Native admins may accumulate ordinary warnings, but reaching
+                # the threshold resets their moderation lifecycle instead of
+                # creating a lock, deletion job, or ban attempt.
+                _asyncio.create_task(bot.admin_actions.send_warning(
+                    chat_id=chat_id, username=username, user=sender,
+                    reason=reason, count=count, threshold=threshold, reply_to=None
+                ))
+                _clear_native_admin_moderation_state(
+                    bot, chat_id, user_id, force=True
+                )
+                bot.logger.log_info(
+                    "NATIVE ADMIN WARNING CYCLE RESET "
+                    f"chat_id={chat_id} user_id={user_id} count={count} "
+                    "reason=threshold_no_auto_punish"
+                )
+                return
             if count >= threshold:
                 bot.set_spam_lock((chat_id, user_id))
                 _debug_log(bot,
