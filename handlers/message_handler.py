@@ -469,36 +469,74 @@ def _big_repeated_spam(chat_id, user_id, text):
     return False, "", set()
 
 
+def _big_spam_incident(bot, key, seed_ids=()):
+    """Create the bounded ID registry used only after big-spam detection."""
+    incidents = getattr(bot, "_big_spam_incidents", None)
+    if incidents is None:
+        incidents = bot._big_spam_incidents = {}
+    incident = incidents.get(key)
+    if incident is None:
+        incident = incidents[key] = {"ids": set(), "cleanup_task": None}
+    incident["ids"].update(
+        message_id for message_id in seed_ids
+        if isinstance(message_id, int) and message_id > 0
+    )
+    # A pathological flood must not retain unbounded RAM. The actual cleanup
+    # still obtains the most recent tracker snapshot at ban success.
+    if len(incident["ids"]) > 2000:
+        incident["ids"] = set(sorted(incident["ids"])[-2000:])
+    return incident
+
+
+def _capture_big_spam_message(bot, chat_id, user_id, message_id):
+    """Add every post-detection message ID before any later handler branch."""
+    incidents = getattr(bot, "_big_spam_incidents", {})
+    incident = incidents.get((chat_id, user_id))
+    if incident is not None and isinstance(message_id, int) and message_id > 0:
+        incident["ids"].add(message_id)
+
+
 def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
-    """Stop a large spam wave first; cleanup starts only after ban succeeds."""
+    """Stop a large spam wave first; cleanup uses its complete incident ID set."""
     key = (chat_id, user_id)
-    deferred = getattr(bot, "_big_spam_deferred_cleanup", None)
-    if deferred is None:
-        deferred = bot._big_spam_deferred_cleanup = {}
     punish_key = f"{chat_id}:{user_id}"
+    existing = getattr(bot, "_big_spam_incidents", {}).get(key)
     if punish_key in bot.punished_users:
-        # If this is the same fast incident, retain the new IDs. A different
-        # existing punishment owns its own lifecycle and must not be polluted.
-        if key in deferred:
-            deferred[key].update(seed_ids)
+        if existing is not None:
+            _big_spam_incident(bot, key, seed_ids)
         return False
-    deferred.setdefault(key, set()).update(seed_ids)
+
+    incident = _big_spam_incident(bot, key, seed_ids)
     bot.punished_users.add(punish_key)
     bot.set_spam_lock(key)
 
     async def succeeded(_result):
-        pending_ids = deferred.pop(key, set())
-        pending_ids.update(message_tracker.spam_snapshot(
+        # Yield once so handlers already in flight can register their IDs.
+        await _asyncio.sleep(0)
+        incident["ids"].update(message_tracker.spam_snapshot(
             chat_id, user_id, getattr(event.message, "id", None)
         ))
-        _confirm_spam_ban_cleanup(bot, event, chat_id, user_id, pending_ids)
+        cleanup_task = _confirm_spam_ban_cleanup(
+            bot, event, chat_id, user_id, set(incident["ids"])
+        )
+        incident["cleanup_task"] = cleanup_task
+
+        async def release_after_cleanup():
+            try:
+                await cleanup_task
+            finally:
+                # The cleanup worker has consumed the complete seed set. Free
+                # the big-spam-only registry even for large multi-batch waves.
+                getattr(bot, "_big_spam_incidents", {}).pop(key, None)
+
+        _asyncio.create_task(release_after_cleanup())
         bot.logger.log_info(
             "BIG SPAM BAN CONFIRMED "
-            f"chat_id={chat_id} user_id={user_id} cleanup_ids={len(pending_ids)}"
+            f"chat_id={chat_id} user_id={user_id} cleanup_ids={len(incident['ids'])}"
         )
 
     async def failed(error):
-        deferred.pop(key, None)
+        getattr(bot, "_big_spam_incidents", {}).pop(key, None)
         bot.punished_users.discard(punish_key)
         bot.clear_spam_lock(key)
         bot.logger.log_error(
@@ -514,13 +552,14 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
         on_success=succeeded, on_failure=failed,
     )
     if not queued:
+        getattr(bot, "_big_spam_incidents", {}).pop(key, None)
         bot.punished_users.discard(punish_key)
         bot.clear_spam_lock(key)
         return False
     bot.logger.log_info(
         "BIG SPAM BAN QUEUED "
         f"chat_id={chat_id} user_id={user_id} reason={reason} "
-        f"seed_ids={len(seed_ids)}"
+        f"seed_ids={len(incident['ids'])}"
     )
     return True
 
@@ -1572,6 +1611,11 @@ async def handle_new_message(bot, event):
         if sender is None:
             sender = await event.get_sender()
         user_id = sender.id if sender else 0
+        # Big-spam incidents are the sole opt-in per-message ID registry.
+        # Capture before any later return/lock branch can race this event.
+        _capture_big_spam_message(
+            bot, chat_id, user_id, getattr(event.message, "id", None)
+        )
         # Never feed messages sent by this account into tracking or moderation.
         # This is intentionally before tracker, spam, repeat and flood checks.
         if user_id and user_id == getattr(bot, "bot_account_id", None):
@@ -1705,12 +1749,10 @@ async def handle_new_message(bot, event):
                 and not admin_bypass
                 and not native_admin_warn_only
                 and bot.is_spam_locked(spam_lock_key)):
-            deferred_big_cleanup = getattr(bot, "_big_spam_deferred_cleanup", {})
-            if spam_lock_key in deferred_big_cleanup:
+            if spam_lock_key in getattr(bot, "_big_spam_incidents", {}):
                 # Ban is already queued for this high-confidence incident.
-                # Retain IDs for the post-ban cleanup, but never start delete
+                # Its ID was captured before this branch; never start delete
                 # work ahead of the ban RPC.
-                deferred_big_cleanup[spam_lock_key].add(event.message.id)
                 bot.logger.log_info(
                     "BIG SPAM MESSAGE DEFERRED "
                     f"chat_id={chat_id} user_id={user_id} "
