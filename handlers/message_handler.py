@@ -589,9 +589,40 @@ def _queue_message_deletes(bot, chat_id, message_ids):
     return _asyncio.create_task(fallback())
 
 
-def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, announce_cleanup=True):
-    """Move history sweep + deletion off the incoming-message critical path."""
+def _spam_cleanup_incident(bot, key, event):
+    """Return the one aggregate cleanup incident for a user/group spam wave."""
+    incidents = getattr(bot, "_spam_cleanup_incidents", None)
+    if incidents is None:
+        incidents = bot._spam_cleanup_incidents = {}
+    incident = incidents.get(key)
+    if incident is None:
+        sequence = getattr(bot, "_spam_cleanup_incident_sequence", 0) + 1
+        bot._spam_cleanup_incident_sequence = sequence
+        incident = incidents[key] = {
+            "id": sequence,
+            "deleted": 0,
+            "ban_confirmed": False,
+            "event": event,
+        }
+    elif event is not None:
+        # Keep the latest event only as reply context; all counts remain in the
+        # same incident and are never reset by a later cleanup batch.
+        incident["event"] = event
+    return incident
+
+
+def _confirm_spam_ban_cleanup(bot, event, chat_id, user_id, seed_ids=()):
+    """Seal a spam incident only after its ban/kick RPC really succeeded."""
     key = (chat_id, user_id)
+    incident = _spam_cleanup_incident(bot, key, event)
+    incident["ban_confirmed"] = True
+    return _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids)
+
+
+def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, announce_cleanup=True):
+    """Aggregate all batches in one incident and emit one final cleanup notice."""
+    key = (chat_id, user_id)
+    incident = _spam_cleanup_incident(bot, key, event)
     pending = getattr(bot, "_auto_spam_cleanup_pending", None)
     if pending is None:
         pending = bot._auto_spam_cleanup_pending = {}
@@ -604,22 +635,25 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
         return existing
 
     async def run():
-        total_deleted = 0
-        total_remaining = []
         try:
-            # A second small pass picks up messages received while the first
-            # batch was deleting, but produces one combined notification.
-            for _ in range(2):
+            # New IDs can arrive while deletion is in progress. They are added
+            # to the same incident and their successful deletes are accumulated
+            # in ``incident['deleted']`` rather than announced per batch.
+            while True:
                 seeds = pending.pop(key, set())
                 if not seeds:
-                    break
+                    # Yield once before declaring the incident drained, so a
+                    # concurrent incoming-message handler can join this wave.
+                    await _asyncio.sleep(0)
+                    seeds = pending.pop(key, set())
+                    if not seeds:
+                        break
                 spam_ids = await collect_accessible_spam_ids(
                     bot, chat_id, user_id, seeds
                 )
                 deleted, remaining = await cleanup_spam_messages(
                     bot, chat_id, user_id, spam_ids)
-                total_deleted += deleted
-                total_remaining.extend(remaining)
+                incident["deleted"] += deleted
                 finalized = finalize_spam_wave(
                     chat_id, user_id, len(spam_ids), deleted, remaining)
                 if remaining:
@@ -630,24 +664,36 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                         f"remaining={len(remaining)}")
                 if not finalized:
                     break
-                await _asyncio.sleep(0)
 
-            if announce_cleanup:
-                punish_key = f"{chat_id}:{user_id}"
-                action = getattr(bot, "config_manager", None)
-                action = action.get("action_on_threshold") if action is not None else None
-                if (punish_key in getattr(bot, "punished_users", set())
-                        and action in {"ban", "kick"}):
-                    await _send_moderation_notification_once(
-                        bot, chat_id, user_id, "spam_ban_cleanup",
-                        getattr(event.message, "id", None),
-                        "⚠️ کاربر ⏌ "
-                        f"{format_user(getattr(event, 'sender', None))}"
-                        " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
-                        f"🗑 {_fullwidth_digits(total_deleted)} پیام هرزنامه پاک شد")
-                elif total_deleted:
-                    await event.reply(
-                        f"🗑 {_fullwidth_digits(total_deleted)} پیام هرزنامه پاک شد")
+            if not announce_cleanup:
+                getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
+                return
+            action = getattr(bot, "config_manager", None)
+            action = action.get("action_on_threshold") if action is not None else None
+            if action in {"ban", "kick"}:
+                # A ban intent is not enough: before its RPC success callback,
+                # cleanup may run in several batches. Keep their total and wait
+                # for that callback to seal the incident.
+                if not incident.get("ban_confirmed"):
+                    bot.logger.log_info(
+                        "SPAM CLEANUP NOTICE DEFERRED "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"deleted_so_far={incident['deleted']}"
+                    )
+                    return
+                notice_event = incident.get("event") or event
+                await _send_moderation_notification_once(
+                    bot, chat_id, user_id, "spam_ban_cleanup", incident["id"],
+                    "⚠️ کاربر ⏌ "
+                    f"{format_user(getattr(notice_event, 'sender', None))}"
+                    " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
+                    f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد")
+                getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
+            elif incident["deleted"]:
+                notice_event = incident.get("event") or event
+                await notice_event.reply(
+                    f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد")
+                getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
 
         except _asyncio.CancelledError:
             raise
@@ -657,8 +703,19 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                 f"user_id={user_id} error={error!r}"
             )
         finally:
-            pending.pop(key, None)
-            tasks.pop(key, None)
+            if tasks.get(key) is _asyncio.current_task():
+                tasks.pop(key, None)
+                # A message may have joined between the final empty check and
+                # task teardown. Start a continuation instead of discarding
+                # its IDs; it retains the same incident total/notice token.
+                if pending.get(key):
+                    _schedule_auto_spam_cleanup(
+                        bot, incident.get("event") or event,
+                        chat_id, user_id, (),
+                        announce_cleanup=announce_cleanup,
+                    )
+                else:
+                    pending.pop(key, None)
 
     task = _asyncio.create_task(run())
     tasks[key] = task
@@ -739,48 +796,6 @@ async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
     return deleted, remaining
 
 
-def _queue_spam_burst_deletion(bot, chat_id, user_id, message_ids):
-    # Use the same tuple key everywhere. Previously the ban path stored a
-    # string key while the incoming-message path looked up a tuple, so new
-    # messages arriving during cleanup were never queued.
-    key = (chat_id, user_id)
-    bot.spam_burst_messages.setdefault(key, set()).update(message_ids)
-    bot.touch_temporary_state("burst", key)
-    existing_task = bot.spam_burst_tasks.get(key)
-    if existing_task and not existing_task.done():
-        return
-
-    async def delete_burst_messages():
-        detected = deleted = 0
-        try:
-            idle_rounds = 0
-            while idle_rounds < 5:
-                ids = set(bot.spam_burst_messages.pop(key, set()))
-                if not ids:
-                    idle_rounds += 1
-                    await _asyncio.sleep(0.3)
-                    continue
-                idle_rounds = 0
-                detected += len(ids)
-                bot.logger.log_info(
-                    "SPAM CLEANUP START "
-                    f"group_id={chat_id} user_id={user_id} detected_count={detected}"
-                )
-                removed, remaining = await cleanup_spam_messages(bot, chat_id, user_id, ids)
-                deleted += removed
-                if remaining:
-                    bot.spam_burst_messages.setdefault(key, set()).update(remaining)
-            bot.logger.log_info(
-                "SPAM CLEANUP VERIFY "
-                f"group_id={chat_id} user_id={user_id} detected={detected} "
-                f"deleted={deleted} remaining={len(bot.spam_burst_messages.get(key, set()))}"
-            )
-        finally:
-            bot.spam_burst_tasks.pop(key, None)
-
-    bot.spam_burst_tasks[key] = _asyncio.create_task(delete_burst_messages())
-
-
 async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
     # Use the single authoritative runtime tracker; spam_history is retained
     # for repeat detection but must not be the cleanup source.
@@ -800,31 +815,10 @@ async def _cleanup_heavy_spam_history(bot, event, chat_id, user_id):
         )
         return
 
-    bot.logger.log_info(
-        "SPAM CLEANUP START "
-        f"group_id={chat_id} user_id={user_id} "
-        f"first_message_id={min(ids)} detected_count={len(ids)}"
-    )
-    deleted, remaining = await cleanup_spam_messages(bot, chat_id, user_id, ids)
-    # Messages arriving while the serial deletion was running are included by
-    # the burst queue; drain them before clearing the user's history.
-    key = (chat_id, user_id)
-    queued = set(bot.spam_burst_messages.get(key, set()))
-    if queued:
-        extra_deleted, extra_remaining = await cleanup_spam_messages(
-            bot, chat_id, user_id, queued
-        )
-        deleted += extra_deleted
-        remaining |= extra_remaining
-        bot.spam_burst_messages.pop(key, None)
-    bot.logger.log_info(
-        "SPAM CLEANUP VERIFY "
-        f"group_id={chat_id} user_id={user_id} detected={len(ids)} "
-        f"deleted={deleted} remaining={len(remaining)}"
-    )
-    if deleted:
-        await event.reply(f"🗑 {_fullwidth_digits(deleted)} پیام هرزنامه پاک شد")
-    finalize_spam_wave(chat_id, user_id, len(ids), deleted, remaining)
+    # Retained for compatibility with legacy callers. It now joins the same
+    # incident worker as every other cleanup path, so it cannot emit its own
+    # per-batch reply.
+    _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, ids)
 
 
 async def get_activation_admin_info(bot, chat_id):
@@ -2199,8 +2193,11 @@ async def handle_new_message(bot, event):
 
         burst_key = (chat_id, user_id)
         if burst_key in bot.spam_burst_users:
-            _queue_spam_burst_deletion(
-                bot, chat_id, user_id, {event.message.id}
+            # Join the existing ban incident instead of a second burst worker;
+            # otherwise its deleted IDs are missing from the final total and
+            # its lifecycle can race a second cleanup/notice.
+            _schedule_auto_spam_cleanup(
+                bot, event, chat_id, user_id, {event.message.id}
             )
             if name_family_trace:
                 bot.logger.log_info(
@@ -2576,36 +2573,13 @@ async def handle_new_message(bot, event):
                         bot.logger.log_info(
                             f"PUNISHMENT RESULT user={user_id} success=True"
                         )
-                        await _send_moderation_notification_once(
-                            bot, chat_id, user_id, "spam_ban", event.message.id,
-                            "⚠️ کاربر ⏌ "
-                            f"{_format_banned_user(sender, user_id)}"
-                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.",
+                        # Do not send a separate ban notice or start a second
+                        # cleanup here. This seals the shared incident, whose
+                        # task combines all earlier/later deletion batches.
+                        _confirm_spam_ban_cleanup(
+                            bot, event, chat_id, user_id, set(ids)
                         )
-                        bot.logger.log_info(
-                            "SPAM SNAPSHOT BEFORE CLEANUP "
-                            f"chat_id={chat_id} user_id={user_id} "
-                            f"count={len(ids)} ids={ids!r}"
-                        )
-                        bot.logger.log_info(
-                            "SPAM SNAPSHOT BEFORE CLEANUP "
-                            f"chat_id={chat_id} user_id={user_id} count={len(ids)} ids={ids!r}"
-                        )
-                        deleted_count, remaining_ids = await cleanup_spam_messages(
-                            bot, chat_id, user_id, set(ids)
-                        )
-                        finalize_spam_wave(
-                            chat_id, user_id, len(ids),
-                            deleted_count, remaining_ids
-                        )
-                        if deleted_count:
-                            await event.reply(
-                                f"🗑 {_fullwidth_digits(deleted_count)} پیام هرزنامه پاک شد"
-                            )
-                        if remaining_ids:
-                            bot.logger.log_error(
-                                f"SPAM CLEANUP INCOMPLETE user={user_id} remaining={remaining_ids!r}"
-                            )
+                        bot.spam_burst_users.discard((chat_id, user_id))
 
                     async def repeat_history_ban_failed(_error):
                         bot.punished_users.discard(punish_key)
@@ -5039,9 +5013,9 @@ async def handle_new_message(bot, event):
                     )
 
                     async def heavy_repeat_succeeded(_result):
-                        # Cleanup and the single user-facing ban notice are
-                        # combined after the real deletion count is known.
-                        # 1) cleanup after ban
+                        # This callback only seals the shared incident. The
+                        # incident worker owns every cleanup batch and emits
+                        # the single final ban+cleanup notification.
                         history = message_tracker.get_user_recent_messages(chat_id, user_id)
                         ids = {
                             item.get("message_id") for item in history
@@ -5051,42 +5025,7 @@ async def handle_new_message(bot, event):
                         current_id = getattr(event.message, "id", None)
                         if current_id:
                             ids.add(current_id)
-                        if not ids:
-                            bot.logger.log_error(
-                                "SPAM CLEANUP VERIFY "
-                                f"group_id={chat_id} user_id={user_id} detected=0 deleted=0 remaining=0"
-                            )
-                            return
-                        bot.logger.log_info(
-                            "SPAM CLEANUP START "
-                            f"group_id={chat_id} user_id={user_id} "
-                            f"first_message_id={min(ids)} detected_count={len(ids)}"
-                        )
-                        deleted, remaining = await cleanup_spam_messages(bot, chat_id, user_id, ids)
-                        key = (chat_id, user_id)
-                        queued = set(bot.spam_burst_messages.get(key, set()))
-                        if queued:
-                            extra_deleted, extra_remaining = await cleanup_spam_messages(
-                                bot, chat_id, user_id, queued
-                            )
-                            deleted += extra_deleted
-                            remaining = list(set(remaining) | set(extra_remaining))
-                            bot.spam_burst_messages.pop(key, None)
-                        bot.logger.log_info(
-                            "SPAM CLEANUP VERIFY "
-                            f"group_id={chat_id} user_id={user_id} detected={len(ids)} "
-                            f"deleted={deleted} remaining={len(remaining)}"
-                        )
-                        # 3) finalize
-                        finalize_spam_wave(chat_id, user_id, len(ids), deleted, remaining)
-                        # 4) exactly one ban+cleanup announcement with the real count
-                        await _send_moderation_notification_once(
-                            bot, chat_id, user_id, "spam_ban_cleanup", event.message.id,
-                            "⚠️ کاربر ⏌ "
-                            f"{_format_banned_user(sender, user_id)}"
-                            " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
-                            f"🗑 {_fullwidth_digits(deleted)} پیام هرزنامه پاک شد",
-                        )
+                        _confirm_spam_ban_cleanup(bot, event, chat_id, user_id, ids)
 
                     async def heavy_repeat_failed(_error):
                         bot.punished_users.discard(punish_key)
@@ -5228,24 +5167,11 @@ async def handle_new_message(bot, event):
                         if punish_key not in bot.punished_users:
                             bot.punished_users.add(punish_key)
                             async def repeat_ban_succeeded(_result):
-                                bot.logger.log_info(
-                                    "SPAM SNAPSHOT BEFORE CLEANUP "
-                                    f"chat_id={chat_id} user_id={user_id} "
-                                    f"count={len(repeated_ids)} ids={repeated_ids!r}"
-                                )
-                                deleted_count, remaining_ids = await cleanup_spam_messages(
-                                    bot, chat_id, user_id, set(repeated_ids)
-                                )
-                                finalize_spam_wave(
-                                    chat_id, user_id, len(repeated_ids),
-                                    deleted_count, remaining_ids
-                                )
-                                await _send_moderation_notification_once(
-                                    bot, chat_id, user_id, "spam_ban_cleanup", event.message.id,
-                                    "⚠️ کاربر ⏌ "
-                                    f"{_format_banned_user(sender, user_id)}"
-                                    " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
-                                    f"🗑 {_fullwidth_digits(deleted_count)} پیام هرزنامه پاک شد",
+                                # Merge this direct-ban path into the same
+                                # incident as threshold/lock cleanup work.
+                                _confirm_spam_ban_cleanup(
+                                    bot, event, chat_id, user_id,
+                                    set(repeated_ids),
                                 )
 
                             async def repeat_ban_failed(_error):
@@ -5354,9 +5280,12 @@ async def handle_new_message(bot, event):
                         permanent = bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
                         # The spam cleanup task sends the single combined
                         # cleanup notification; do not emit a second notice.
-                        if count >= 5 and permanent:
-                            bot.logger.log_info(
-                                f"SPAM BAN NOTICE DEFERRED chat_id={chat_id} user_id={user_id}"
+                        if permanent:
+                            # The generic detector may already have queued one
+                            # or more delete batches. Seal that same incident
+                            # only now, after the ban/kick operation succeeded.
+                            _confirm_spam_ban_cleanup(
+                                bot, event, chat_id, user_id
                             )
                         bot.tracker.reset_count(chat_id, user_id)
                         if not permanent:
