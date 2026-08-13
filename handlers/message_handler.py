@@ -1,6 +1,7 @@
 import asyncio as _asyncio
 from collections import Counter, deque
 from datetime import date
+import time
 
 from modules.fill_blank import check_fill, get_token as get_fill_token
 from modules.riddles import check_answer
@@ -430,6 +431,100 @@ def _is_true_auto_spam_text(bot, chat_id, text):
     return is_spam and _detector_moderation_trigger(reason) == "spam"
 
 
+_BIG_SPAM_MIN_CHARS = 120
+# Four rapid copies still trigger immediately; this longer retention window
+# also keeps one prepared spam wave together when group delivery is delayed.
+_BIG_SPAM_REPEAT_WINDOW_SECONDS = 60
+_BIG_SPAM_REPEAT_MESSAGES = 4
+
+
+def _big_repeated_spam(chat_id, user_id, text):
+    """Detect one huge repeated payload or four rapid copies before 50+ posts."""
+    import re
+    raw = str(text or "").strip()
+    compact = re.sub(r"\s+", "", raw)
+    if len(compact) < _BIG_SPAM_MIN_CHARS:
+        return False, "", set()
+    words = re.findall(r"[\wآ-ی]+", raw.lower())
+    counts = Counter(word for word in words if len(word) >= 2)
+    # A single large box with the same phrase/word repeated many times is
+    # already conclusive; do not wait for additional messages.
+    if counts and max(counts.values()) >= 8:
+        ids = set(message_tracker.spam_snapshot(chat_id, user_id))
+        return True, "large_payload_repeated_word", ids
+
+    normalized = " ".join(raw.lower().split())
+    now = time.time()
+    matching = [
+        row for row in message_tracker.get_user_recent_messages(chat_id, user_id)
+        if (now - float(row.get("timestamp", now))) <= _BIG_SPAM_REPEAT_WINDOW_SECONDS
+        and len(re.sub(r"\s+", "", str(row.get("text", "")))) >= _BIG_SPAM_MIN_CHARS
+        and " ".join(str(row.get("text", "")).lower().split()) == normalized
+    ]
+    if len(matching) >= _BIG_SPAM_REPEAT_MESSAGES:
+        return True, "rapid_repeated_large_messages", {
+            row["message_id"] for row in matching
+            if isinstance(row.get("message_id"), int) and row["message_id"] > 0
+        }
+    return False, "", set()
+
+
+def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
+    """Stop a large spam wave first; cleanup starts only after ban succeeds."""
+    key = (chat_id, user_id)
+    deferred = getattr(bot, "_big_spam_deferred_cleanup", None)
+    if deferred is None:
+        deferred = bot._big_spam_deferred_cleanup = {}
+    punish_key = f"{chat_id}:{user_id}"
+    if punish_key in bot.punished_users:
+        # If this is the same fast incident, retain the new IDs. A different
+        # existing punishment owns its own lifecycle and must not be polluted.
+        if key in deferred:
+            deferred[key].update(seed_ids)
+        return False
+    deferred.setdefault(key, set()).update(seed_ids)
+    bot.punished_users.add(punish_key)
+    bot.set_spam_lock(key)
+
+    async def succeeded(_result):
+        pending_ids = deferred.pop(key, set())
+        pending_ids.update(message_tracker.spam_snapshot(
+            chat_id, user_id, getattr(event.message, "id", None)
+        ))
+        _confirm_spam_ban_cleanup(bot, event, chat_id, user_id, pending_ids)
+        bot.logger.log_info(
+            "BIG SPAM BAN CONFIRMED "
+            f"chat_id={chat_id} user_id={user_id} cleanup_ids={len(pending_ids)}"
+        )
+
+    async def failed(error):
+        deferred.pop(key, None)
+        bot.punished_users.discard(punish_key)
+        bot.clear_spam_lock(key)
+        bot.logger.log_error(
+            "BIG SPAM BAN FAILED "
+            f"chat_id={chat_id} user_id={user_id} reason={reason} error={error!r}"
+        )
+
+    queued = bot.moderation_queue.enqueue(
+        chat_id, "ban", user_id=user_id, timeout_seconds=45,
+        operation=lambda: bot.admin_actions.ban_user(
+            chat_id, user_id, reason="اسپم بزرگ تکراری"
+        ),
+        on_success=succeeded, on_failure=failed,
+    )
+    if not queued:
+        bot.punished_users.discard(punish_key)
+        bot.clear_spam_lock(key)
+        return False
+    bot.logger.log_info(
+        "BIG SPAM BAN QUEUED "
+        f"chat_id={chat_id} user_id={user_id} reason={reason} "
+        f"seed_ids={len(seed_ids)}"
+    )
+    return True
+
+
 async def _is_native_group_admin(bot, chat_id, user_id, sender):
     """Read the actual Soroush group role, independently of bot admin storage.
 
@@ -722,8 +817,8 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
     return task
 
 
-async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
-    """Delete every tracked spam id in batches of 100 for speed; failed ids remain pending."""
+async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=60):
+    """Delete tracked spam in bounded batches of at most 60 IDs."""
     pending = sorted({i for i in ids if isinstance(i, int) and i > 0})
     queue = getattr(bot, "message_delete_queue", None)
     if queue is not None:
@@ -739,7 +834,7 @@ async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=100):
     bot.logger.log_info(
         f"SPAM DELETE START total_ids={requested} ids={pending!r} batch_size={batch_size}"
     )
-    # Process in batches of batch_size (100) for speed when 100-500 messages
+    # Process in bounded batches so a large cleanup cannot monopolize sender RPCs.
     for start in range(0, len(pending), batch_size):
         batch = pending[start:start + batch_size]
         success = False
@@ -1582,6 +1677,24 @@ async def handle_new_message(bot, event):
                 f"message_id={getattr(event.message, 'id', None)} "
                 f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
+        # Fast lane for large repeated payloads: it runs immediately after the
+        # in-memory tracker update, before commands/flood/ordinary thresholds.
+        # Four rapid large copies (or one huge repeated box) are enough to
+        # queue the ban; cleanup deliberately waits for ban success.
+        if (not event.is_private and not admin_bypass
+                and not native_admin_warn_only):
+            big_spam, big_reason, big_ids = _big_repeated_spam(
+                chat_id, user_id, message_text
+            )
+            if big_spam:
+                current_id = getattr(event.message, "id", None)
+                if current_id:
+                    big_ids.add(current_id)
+                _queue_big_spam_ban(
+                    bot, event, chat_id, user_id, sender, big_ids, big_reason
+                )
+                return
+
         spam_lock_key = (chat_id, user_id)
         _is_locked = False if admin_bypass else bot.is_spam_locked(spam_lock_key)
         _lock_size = len(getattr(bot, "spam_lock", set()))
@@ -1592,6 +1705,18 @@ async def handle_new_message(bot, event):
                 and not admin_bypass
                 and not native_admin_warn_only
                 and bot.is_spam_locked(spam_lock_key)):
+            deferred_big_cleanup = getattr(bot, "_big_spam_deferred_cleanup", {})
+            if spam_lock_key in deferred_big_cleanup:
+                # Ban is already queued for this high-confidence incident.
+                # Retain IDs for the post-ban cleanup, but never start delete
+                # work ahead of the ban RPC.
+                deferred_big_cleanup[spam_lock_key].add(event.message.id)
+                bot.logger.log_info(
+                    "BIG SPAM MESSAGE DEFERRED "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"message_id={event.message.id}"
+                )
+                return
             _debug_log(bot,
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
             )

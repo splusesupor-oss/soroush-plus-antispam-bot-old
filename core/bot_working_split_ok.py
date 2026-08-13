@@ -264,6 +264,7 @@ class SoroushAntiSpamBot:
             "rejoin_spam_state", "spam_burst_messages", "spam_burst_tasks",
             "forward_spam_counts", "_auto_spam_cleanup_pending",
             "_auto_spam_cleanup_tasks", "_spam_cleanup_incidents",
+            "_big_spam_deferred_cleanup",
         ):
             mapping = getattr(self, mapping_name, {})
             for key in list(mapping):
