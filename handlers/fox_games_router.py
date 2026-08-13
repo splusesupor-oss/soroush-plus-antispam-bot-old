@@ -542,7 +542,7 @@ async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger, mo
 
     async def on_timeout():
         await asyncio.sleep(sentence_guess.TIMEOUT_SECONDS)
-        result = sentence_guess.timeout(chat_id, user_id)
+        result = sentence_guess.timeout(chat_id, user_id, state["token"])
         if result:
             answer_text = result.get('answer', '') or ''
             text = f"⏰ زمان تمام شد!\n\n✅ پاسخ درست:\n{answer_text}"
@@ -559,7 +559,7 @@ async def _start_sentence_guess(bot, event, chat_id, user_id, sender, logger, mo
 
 async def _sentence_guess_message(bot, event, chat_id, user_id, sender, text, logger):
     # فقط نشستِ خودِ همین کاربر بررسی می‌شود؛ پیامِ او روی بازی دیگران اثر ندارد.
-    if not sentence_guess.is_active(chat_id, user_id):
+    if not sentence_guess.has_active(chat_id, user_id):
         return False
     result = sentence_guess.answer(chat_id, text, user_id)
     if result is None:

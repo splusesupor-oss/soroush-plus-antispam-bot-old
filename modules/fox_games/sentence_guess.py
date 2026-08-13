@@ -247,6 +247,9 @@ def start(chat_id, user_id=None, mode="guess"):
     state = {"index": index, "question": question, "answer": answer_value,
              "number": number, "total": total_puzzles,
              "user_id": user_id, "chat_id": chat_id,
+             # A timer must only finish the exact round that created it.
+             # ``time_ns`` plus random bits stays unique even for rapid starts.
+             "token": f"{time.time_ns()}:{_RANDOM.getrandbits(32)}",
              "started_at": time.time()}
     key = _key(chat_id, user_id)
     _ACTIVE[key] = state
@@ -261,6 +264,28 @@ def current(chat_id, user_id=None):
     return dict(state) if state else None
 
 
+def has_active(chat_id, user_id=None):
+    """Check a live session without letting wall-clock expiry erase its answer.
+
+    The router calls this immediately before ``answer``. Timeout ownership is
+    deliberately left to the token-bound timer, preventing a correct answer
+    queued at the deadline from clearing state before either outcome is sent.
+    """
+    key = _key(chat_id, user_id)
+    state = _ACTIVE.get(key)
+    if state is None:
+        state = _load().get(key)
+        if isinstance(state, dict):
+            _ACTIVE[key] = state
+    if state is None and user_id is not None:
+        # One release may still contain a legacy chat-wide round.
+        key = str(chat_id)
+        state = _ACTIVE.get(key) or _load().get(key)
+        if isinstance(state, dict):
+            _ACTIVE[key] = state
+    return isinstance(state, dict)
+
+
 def _norm(value):
     return " ".join(str(value or "").lower().replace("‌", " ").split())
 
@@ -271,8 +296,18 @@ def answer(chat_id, text, user_id=None):
     در صورتِ درستی، پاسخ برایِ همان کاربر «دیده‌شده» ثبت می‌شود تا دوباره
     به او داده نشود.
     """
-    state = _recover(chat_id, user_id)
+    key = _key(chat_id, user_id)
+    state = _ACTIVE.get(key)
     if state is None:
+        state = _load().get(key)
+        if isinstance(state, dict):
+            _ACTIVE[key] = state
+    if state is None and user_id is not None:
+        key = str(chat_id)
+        state = _ACTIVE.get(key) or _load().get(key)
+        if isinstance(state, dict):
+            _ACTIVE[key] = state
+    if not isinstance(state, dict):
         return None
     if _norm(text) != _norm(state["answer"]):
         return None
@@ -287,7 +322,8 @@ def answer(chat_id, text, user_id=None):
     return result
 
 
-def timeout(chat_id, user_id=None):
+def timeout(chat_id, user_id=None, token=None):
+    """Finish only the round identified by ``token`` when one is supplied."""
     key = _key(chat_id, user_id)
     # مستقیماً از حافظه یا فایل بدون بررسی انقضا می‌خوانیم تا پاسخ حفظ شود
     state = _ACTIVE.get(key)
@@ -302,6 +338,8 @@ def timeout(chat_id, user_id=None):
         else:
             state = _ACTIVE.get(str(chat_id)) or _load().get(str(chat_id))
     if not isinstance(state, dict):
+        return None
+    if token is not None and state.get("token") != token:
         return None
     result = dict(state)
     _clear(chat_id, user_id)

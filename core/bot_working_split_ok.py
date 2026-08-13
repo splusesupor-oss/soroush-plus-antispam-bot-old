@@ -195,20 +195,23 @@ class SoroushAntiSpamBot:
         )
 
     def set_spam_lock(self, key, now=None):
+        if not hasattr(self, "spam_lock"):
+            self.spam_lock = {}
         self.spam_lock[key] = self._state_now() if now is None else now
 
     def is_spam_locked(self, key, now=None):
         now = self._state_now() if now is None else now
-        created = self.spam_lock.get(key)
+        locks = getattr(self, "spam_lock", {})
+        created = locks.get(key)
         if created is None:
             return False
         if now - created >= self.SPAM_LOCK_TTL:
-            self.spam_lock.pop(key, None)
+            locks.pop(key, None)
             return False
         return True
 
     def clear_spam_lock(self, key):
-        self.spam_lock.pop(key, None)
+        getattr(self, "spam_lock", {}).pop(key, None)
 
     def clear_released_user_state(self, chat_id, user_id):
         """Erase every prior punishment/delete cache for a released user.
