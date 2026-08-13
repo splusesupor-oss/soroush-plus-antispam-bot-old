@@ -1634,41 +1634,78 @@ async def handle_new_message(bot, event):
             if not admin_tools.has_admin_permission(chat_id, user_id, sender_username):
                 ad_reason = ad_name_detector.reason(sender)
                 if ad_reason:
+                    # Claim the incident before any await. A burst can produce
+                    # several NewMessage events before the kick RPC completes;
+                    # only its first event may queue the ban or later notify.
+                    punish_key = f"{chat_id}:{user_id}"
+                    if punish_key in bot.punished_users:
+                        bot.logger.log_info(
+                            "AD NAME INCIDENT DUPLICATE SKIPPED "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"message_id={getattr(event.message, 'id', None)}"
+                        )
+                        return
+                    bot.punished_users.add(punish_key)
                     shown_name = ad_name_detector.display_name(sender)
-                    try:
-                        notice = (
-                            "⚠️ کاربر\n"
-                            f"{shown_name}\n\n"
-                            "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
+                    notice = (
+                        "⚠️ کاربر\n"
+                        f"{shown_name}\n\n"
+                        "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
+                    )
+
+                    async def ad_name_ban_succeeded(_result):
+                        # The announcement is deliberately after the real ban
+                        # succeeds, and is owned by this one incident only.
+                        try:
+                            name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
+                            name_len = len(shown_name.encode("utf-16-le")) // 2
+                            bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
+                            await event.reply(notice, formatting_entities=[
+                                MessageEntityBold(offset=0, length=bold_len),
+                                MessageEntityBlockquote(
+                                    offset=name_start, length=name_len
+                                ),
+                            ])
+                        except Exception:
+                            await event.reply(notice)
+                        bot.logger.log_info(
+                            "AD NAME BAN FINISHED "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"reason={ad_reason!r} notification_sent=True"
                         )
-                        name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
-                        name_len = len(shown_name.encode("utf-16-le")) // 2
-                        bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
-                        await event.reply(notice, formatting_entities=[
-                            MessageEntityBold(offset=0, length=bold_len),
-                            MessageEntityBlockquote(offset=name_start, length=name_len),
-                        ])
-                    except Exception:
-                        await event.reply(
-                            f"⚠️ کاربر\n{shown_name}\n\n"
-                            "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
+
+                    async def ad_name_ban_failed(error):
+                        # A failed RPC must be retryable by a later event; it
+                        # must not leave a permanent in-memory incident lock.
+                        bot.punished_users.discard(punish_key)
+                        bot.logger.log_error(
+                            "AD NAME BAN FAILED "
+                            f"chat_id={chat_id} user_id={user_id} error={error!r}"
                         )
-                    _queue_message_deletes(
-                        bot, chat_id, [getattr(event.message, "id", None)]
+
+                    queued = bot.moderation_queue.enqueue(
+                        chat_id,
+                        "ban",
+                        user_id=user_id,
+                        timeout_seconds=45,
+                        operation=lambda: bot.admin_actions.ban_user(
+                            chat_id, user_id, reason="نام تبلیغاتی"
+                        ),
+                        on_success=ad_name_ban_succeeded,
+                        on_failure=ad_name_ban_failed,
                     )
-                    try:
-                        await bot.admin_actions.ban_user(
-                            chat_id, user_id, reason="نام تبلیغاتی")
-                    except Exception as error:
-                        bot.logger.log_error(f"AD NAME BAN FAILED user_id={user_id} error={error!r}")
-                    bot.logger.log_info(
-                        f"AD NAME KICK user_id={user_id} chat_id={chat_id} "
-                        f"name={shown_name!r} reason={ad_reason!r}"
-                    )
-                    bot.logger.log_info(
-                        "EARLY RETURN DEBUG reason=ad_name_guard "
-                        f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
-                    )
+                    if not queued:
+                        bot.punished_users.discard(punish_key)
+                        bot.logger.log_info(
+                            "AD NAME INCIDENT QUEUE DUPLICATE "
+                            f"chat_id={chat_id} user_id={user_id}"
+                        )
+                    else:
+                        bot.logger.log_info(
+                            "AD NAME BAN QUEUED "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"name={shown_name!r} reason={ad_reason!r}"
+                        )
                     return
         # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
         is_bot_account = (
