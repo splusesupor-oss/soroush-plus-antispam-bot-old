@@ -44,6 +44,7 @@ from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
 from handlers.fox_games_router import (
     FOX_GAME_COMMANDS,
+    any_active as fox_game_active,
     handle as handle_fox_games,
 )
 # 📥 قابلیت مستقل «دانلود عکس».
@@ -427,6 +428,59 @@ def _is_true_auto_spam_text(bot, chat_id, text):
         return False
     is_spam, reason = bot.detector.is_spam(str(text), chat_id)
     return is_spam and _detector_moderation_trigger(reason) == "spam"
+
+
+async def _is_native_group_admin(bot, chat_id, user_id, sender):
+    """Read the actual Soroush group role, independently of bot admin storage.
+
+    A group administrator cannot be banned/restricted by the bot.  The result
+    is short-lived cached to avoid an RPC for every message while still
+    promptly reflecting role changes.
+    """
+    cache = getattr(bot, "native_group_admin_cache", None)
+    if cache is None:
+        cache = bot.native_group_admin_cache = {}
+    key = (normalize_group_id(chat_id), str(user_id))
+    now = _asyncio.get_running_loop().time()
+    cached = cache.get(key)
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        permissions = await bot.client.get_permissions(chat_id, sender or user_id)
+        is_admin = bool(getattr(permissions, "is_admin", False))
+        # Admin status gets a slightly longer cache; a non-admin is retried
+        # sooner so a newly promoted group admin is protected promptly.
+        cache[key] = (is_admin, now + (60 if is_admin else 15))
+        if len(cache) > 5000:
+            cache.pop(next(iter(cache)), None)
+        return is_admin
+    except Exception as error:
+        bot.logger.log_error(
+            "NATIVE ADMIN CHECK FAILED "
+            f"chat_id={chat_id} user_id={user_id} error={error!r}"
+        )
+        return False
+
+
+def _clear_native_admin_moderation_state(bot, chat_id, user_id):
+    """Remove stale spam state once when a real group admin is observed."""
+    cleared = getattr(bot, "native_admin_state_cleared", None)
+    if cleared is None:
+        cleared = bot.native_admin_state_cleared = set()
+    key = (normalize_group_id(chat_id), str(user_id))
+    if key in cleared:
+        return False
+    clear_state = getattr(bot, "clear_released_user_state", None)
+    if callable(clear_state):
+        clear_state(chat_id, user_id)
+    else:
+        # Compatibility fallback for a minimal bot object/test double.
+        bot.tracker.reset_count(chat_id, user_id)
+        bot.clear_spam_lock((chat_id, user_id))
+    cleared.add(key)
+    if len(cleared) > 5000:
+        cleared.pop()
+    return True
 
 
 async def _same_sender(message, user_id):
@@ -1140,6 +1194,60 @@ def _delete_cooldown_allowed(chat_id):
     return True
 
 
+# Commands which belong to this bot must never be interpreted as an AI/search
+# prompt merely because they are sent as a reply to a bot message.  Keep this
+# routing guard deliberately side-effect free: it only tells the search route
+# to stand down, so the existing command handlers below remain authoritative.
+_INTERNAL_EXACT_COMMANDS = frozenset({
+    "تست دکمه", "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
+    "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "بیوگرافی",
+    "یاد آوری", "ترجمه", "قفل", "باز", "جک", "تصحیح کلمات",
+    "اسم فامیل", "حدس ایموجی", "حدس پرچم", "جای خالی", "چیستان",
+    "دانستنی", "حافظه من", "حذف اسم", "حذف حافظه", "قوانین",
+    "ثبت قوانین", "حذف قوانین", "ثبت اصل", "اصلم", "موجودی", "فروشگاه",
+    "انتقال سکه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن",
+    "سنجاق", "پیام سنجاق", "پاک", "ریست آمار", "ریست اخراجی ها",
+    "سطح گروه", "سابقه ها", "سابقه‌ها", "راهنمای امتیاز", "امتیاز من",
+    "رتبه ها", "رتبه‌ها", "فعال سازی", "فعال", "غیر فعال",
+    "لغو کلمات ممنوعه", "فعال کلمات ممنوعه", "پاکسازی خودکار",
+    "ثبت ادمین", "لغو ادمین", "برکناری ادمین", "ثبت مالک", "لغو مالک",
+    "برکناری مالک", "ثبت گروه", "حذف گروه", "حذف اخطار", "حذف اخطارها",
+    "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
+    "جعبه شانسی", "خون آشام", "خون‌آشام", "جرعت", "جرات", "جرئت",
+    "حقیقت", "حقیقت بگو", "ربات", "روباه", "/help", "!help", "help",
+}) | frozenset(command for command, _handler in RESERVED_COMMANDS) | FOX_GAME_COMMANDS | EMOJI_RESET_COMMANDS
+
+
+def _is_known_internal_command(clean_text, chat_id, user_id):
+    """Whether a message belongs to an existing command/game route.
+
+    This is intentionally checked only by the Google-search gateway.  It does
+    not execute, authorize, or otherwise change the downstream command logic.
+    """
+    if clean_text in _INTERNAL_EXACT_COMMANDS:
+        return True
+    if clean_text.startswith(("!", "/", ".")):
+        return True
+    if clean_text.startswith((
+        "ثبت ", "ثبت اسم ", "شخصیت ", "جستجو ", "فونت ",
+        "فیلتر کلمه", "حذف کلمه", "افزودن کلمه", "ثبت کلمه",
+        "لیست کلمات", "پاک کردن کلمات",
+    )):
+        return True
+    # During a game, answers must be delivered to that game's existing handler
+    # rather than being consumed as a factual-search prompt.
+    return bool(
+        name_family_active(chat_id)
+        or fox_game_active(chat_id)
+        or emoji_guess_active(chat_id)
+        or flag_guess_active(chat_id)
+        or get_correction(chat_id) is not None
+        or get_active_question(chat_id) is not None
+        or get_fill_token(chat_id, user_id) is not None
+        or get_riddle_token(chat_id, user_id) is not None
+    )
+
+
 def _search_reply_message_id(event):
     message = getattr(event, "message", None)
     message_reply = getattr(message, "reply_to", None)
@@ -1236,6 +1344,15 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
             lines.append(f"{index}- {shown}")
         await event.reply("\n".join(lines))
         return True
+
+    # Search administration above remains owned by this module. Every other
+    # known bot command must continue through the normal command/game route.
+    if _is_known_internal_command(clean_text, chat_id, user_id):
+        bot.logger.log_info(
+            "SEARCH ROUTE SKIPPED internal_command "
+            f"chat_id={chat_id} user_id={user_id} command={clean_text!r}"
+        )
+        return False
 
     enabled, allowed_user = search_access.access_state(chat_id, user_id)
     reply_id = _search_reply_message_id(event)
@@ -1386,15 +1503,35 @@ async def handle_new_message(bot, event):
         # Current group authority is checked before every spam cache, banned
         # storage, tracker and lock path. Historical spam state cannot outrank
         # a current owner/admin role.
-        admin_bypass = bool(
+        registered_admin_bypass = bool(
             not event.is_private and admin_tools.has_admin_permission(
                 chat_id, user_id, sender_username
             )
         )
+        native_admin_bypass = bool(
+            not event.is_private
+            and await _is_native_group_admin(bot, chat_id, user_id, sender)
+        )
+        admin_bypass = registered_admin_bypass or native_admin_bypass
+        if native_admin_bypass:
+            # A real group admin may not be restricted by the bot. Clear any
+            # legacy warning/lock/history state once, before it can delete a
+            # new message or schedule another cleanup wave.
+            state_cleared = _clear_native_admin_moderation_state(
+                bot, chat_id, user_id
+            )
+        else:
+            state_cleared = False
+            getattr(bot, "native_admin_state_cleared", set()).discard(
+                (normalize_group_id(chat_id), str(user_id))
+            )
         blocked_cache = bot.is_spam_locked((chat_id, user_id))
         bot.logger.log_info(
             "ADMIN BYPASS CHECK "
-            f"user_id={user_id} group_id={chat_id} is_admin={admin_bypass} "
+            f"user_id={user_id} group_id={chat_id} "
+            f"registered_admin={registered_admin_bypass} "
+            f"native_group_admin={native_admin_bypass} "
+            f"state_cleared={state_cleared} is_admin={admin_bypass} "
             f"blocked_cache={blocked_cache} spam_history={False if admin_bypass else 'unchecked'}"
         )
         status_key = f"{chat_id}:{user_id}"
