@@ -139,7 +139,7 @@ from modules import search_access
 from modules import web_search, wiki_search_service
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
-from splusthon import types
+from splusthon import Button, types
 
 
 def _warm_reply_input_chat(bot, event, chat=None):
@@ -1653,6 +1653,18 @@ async def handle_new_message(bot, event):
                         f"error={error!r}")
                     # در خطای ذخیره/تأیید/اعلان وانمود نمی‌کنیم shutdown کامل
                     # شده است؛ رویداد به مسیر عادی ادامه می‌یابد.
+
+        # ------------------------------------------------------------------
+        # 🧪 تست موقت دکمهٔ شیشه‌ای — کاملاً مستقل و قابل حذف.
+        # این بخش فقط برای تأیید نمایش Inline Button در گروه سروش‌پلاس است؛
+        # هیچ CallbackQuery یا مسیر کلیک دیگری به ربات اضافه نمی‌کند.
+        # ------------------------------------------------------------------
+        if clean_text == "تست دکمه":
+            await event.reply(
+                "تست دکمه شیشه‌ای",
+                buttons=[[Button.inline("سلام", data=b"test_salam")]],
+            )
+            return
 
         # ------------------------------------------------------------------
         # 📥 دانلود عکس — اتصالِ زودهنگام تا پیامِ مرحله‌ای (عبارت/تأیید/لغو)
