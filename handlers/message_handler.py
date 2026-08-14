@@ -766,11 +766,15 @@ async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
     return ids
 
 
-def _queue_message_deletes(bot, chat_id, message_ids):
-    """Queue deletion immediately; never await a delete RPC in this handler."""
+def _queue_message_deletes(bot, chat_id, message_ids, *, priority=1):
+    """Queue deletion immediately; never await a delete RPC in this handler.
+
+    ``priority=0`` is reserved for owner/admin «پاک» so a spam-wave cleanup
+    in the same group cannot delay a manual delete.
+    """
     queue = getattr(bot, "message_delete_queue", None)
     if queue is not None:
-        return queue.enqueue(chat_id, message_ids)
+        return queue.enqueue(chat_id, message_ids, priority=priority)
 
     async def fallback():
         ids = list(message_ids)
@@ -1561,15 +1565,15 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     enabled, allowed_user = search_access.access_state(chat_id, user_id)
     reply_id = _search_reply_message_id(event)
     request_text = message_text.strip()
+    is_information_request, topic = web_search.factual_intent(request_text)
+    if not enabled or not allowed_user or not reply_id or not is_information_request:
+        return False
     bot.logger.log_info(
         "AI ACCESS CHECK "
         f"user_id={user_id} chat_id={chat_id} enabled={enabled} "
         f"allowed={allowed_user} reply_id={reply_id or 'none'} "
         f"text_length={len(request_text)}"
     )
-    is_information_request, topic = web_search.factual_intent(request_text)
-    if not enabled or not allowed_user or not reply_id or not is_information_request:
-        return False
     try:
         reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
     except Exception as error:
@@ -1740,7 +1744,7 @@ async def handle_new_message(bot, event):
             getattr(bot, "native_admin_state_cleared", set()).discard(
                 (normalize_group_id(chat_id), str(user_id))
             )
-        bot.logger.log_info(
+        _debug_log(bot,
             "ADMIN BYPASS CHECK "
             f"user_id={user_id} group_id={chat_id} "
             f"registered_admin={registered_admin_bypass} "
@@ -1762,7 +1766,7 @@ async def handle_new_message(bot, event):
             if callable(tracker_is_muted) else False
         )
         history_count = 0 if admin_bypass else len(get_user_history(chat_id, user_id) or [])
-        bot.logger.log_info(
+        _debug_log(bot,
             "USER MODERATION STATUS "
             f"user_id={user_id} is_banned={status_banned} "
             f"spam_score={bot.tracker.get_count(chat_id, user_id)} "
@@ -2038,7 +2042,7 @@ async def handle_new_message(bot, event):
             # مستثنا شده‌اند.
             # این لاگ قبل از تصمیم‌گیری ثبت می‌شود تا معلوم باشد sender به
             # مسیر تشخیص رسیده است؛ حساب خود روباه بالاتر عمداً return می‌شود.
-            bot.logger.log_info(
+            _debug_log(bot,
                 "BOT DETECTION DEBUG\n"
                 f"group_id={chat_id}\n"
                 f"sender_id={user_id}\n"
@@ -2367,6 +2371,7 @@ async def handle_new_message(bot, event):
                     event.message.id,
                     client=bot.client,
                     logger=bot.logger,
+                    delete_queue=getattr(bot, "message_delete_queue", None),
                 )
                 deleted = len(repeated_gif_ids)
                 if repeated_gif_ids:
@@ -2382,15 +2387,12 @@ async def handle_new_message(bot, event):
                         "DELETE START "
                         f"message_ids={repeated_gif_ids!r}"
                     )
-                    # Drain the existing GIF queue before proceeding to the
-                    # mute queue; this prevents moderation from racing ahead
-                    # of deletion and leaving the tail visible.
-                    await _asyncio.sleep(0.4)
-                    deleted_now = await flush_gif_deletes(
-                        bot.client, chat_id, bot.logger)
+                    # handle_gif already scheduled a per-chat flush worker.
+                    # Awaiting it here blocked this group's (and previously
+                    # the whole bot's) command path for 400ms plus delete RPCs.
                     bot.logger.log_info(
-                        "DELETE RESULT "
-                        f"success={deleted_now == len(repeated_gif_ids)} deleted={deleted_now}"
+                        "GIF DELETE SCHEDULED "
+                        f"chat_id={chat_id} count={len(repeated_gif_ids)}"
                     )
                 if newly_flagged:
                     bot.set_spam_lock((chat_id, user_id))
@@ -4595,7 +4597,7 @@ async def handle_new_message(bot, event):
                     ]
 
                     delete_future = _queue_message_deletes(
-                        bot, chat_id, message_ids
+                        bot, chat_id, message_ids, priority=0
                     )
 
                 async def finish_manual_bulk_delete():
@@ -4648,7 +4650,8 @@ async def handle_new_message(bot, event):
                 lock = _delete_group_lock(chat_id)
                 async with lock:
                     _queue_message_deletes(
-                        bot, chat_id, [event.reply_to.reply_to_msg_id]
+                        bot, chat_id, [event.reply_to.reply_to_msg_id],
+                        priority=0,
                     )
                 try:
                     reply_msg = await bot.client.get_messages(
@@ -5189,7 +5192,9 @@ async def handle_new_message(bot, event):
                 )
 
                 if reply_id:
-                    delete_future = _queue_message_deletes(bot, chat.id, [reply_id])
+                    delete_future = _queue_message_deletes(
+                        bot, chat.id, [reply_id], priority=0
+                    )
                     _asyncio.create_task(event.delete())
 
                     async def finish_single_delete():
@@ -5671,4 +5676,3 @@ async def handle_new_message(bot, event):
         profiler.set("SEND_RESPONSE", response_rpc_ms())
         profiler.finish(bot.logger, chat_id)
         end_response_measurement(response_token)
-

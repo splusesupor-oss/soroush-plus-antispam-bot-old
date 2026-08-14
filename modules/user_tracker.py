@@ -16,6 +16,7 @@ class UserTracker:
         self.spam_counts: Dict[str, Dict[str, int]] = {}  # {group_id: {user_id: count}}
         self.muted_users: Dict[str, datetime] = {}  # برای پیگیری زمان mute
         self.banned_users: Dict[str, datetime] = {}  # برای پیگیری وضعیت ban
+        self._dirty = False
         os.makedirs(os.path.dirname(spam_counts_file) if os.path.dirname(spam_counts_file) else ".", exist_ok=True)
         self.load()
 
@@ -29,9 +30,17 @@ class UserTracker:
         else:
             self.spam_counts = {}
 
-    def save(self):
+    def mark_dirty(self):
+        self._dirty = True
+
+    def save(self, force=False):
+        """Persist counts. Hot-path increment only marks dirty."""
+        if not force and not self._dirty:
+            return False
         with open(self.spam_counts_file, 'w', encoding='utf-8') as f:
             json.dump(self.spam_counts, f, ensure_ascii=False, indent=2)
+        self._dirty = False
+        return True
 
     def _key(self, group_id, user_id):
         return normalize_group_id(group_id), str(user_id)
@@ -70,7 +79,7 @@ class UserTracker:
             self.spam_counts[g_key][u_key] = 0
         
         self.spam_counts[g_key][u_key] += 1
-        self.save()
+        self.mark_dirty()
         return self.spam_counts[g_key][u_key]
 
     def get_count(self, group_id: int, user_id: int) -> int:
@@ -85,7 +94,7 @@ class UserTracker:
         g_key, u_key = self._key(group_id, user_id)
         if g_key in self.spam_counts and u_key in self.spam_counts[g_key]:
             del self.spam_counts[g_key][u_key]
-            self.save()
+            self.mark_dirty()
 
     def decrement(self, group_id: int, user_id: int) -> int:
         """یک اخطار/تخلف را امن کم می‌کند (کم‌تر از صفر نمی‌رود).
@@ -99,19 +108,19 @@ class UserTracker:
             # صفر شد → رکورد را به‌کلی حذف می‌کنیم تا با بقیهٔ اطلاعات تداخل نکند.
             if g_key in self.spam_counts and u_key in self.spam_counts[g_key]:
                 del self.spam_counts[g_key][u_key]
-                self.save()
+                self.mark_dirty()
             return 0
         if g_key not in self.spam_counts:
             self.spam_counts[g_key] = {}
         self.spam_counts[g_key][u_key] = new_count
-        self.save()
+        self.mark_dirty()
         return new_count
 
     def reset_group(self, group_id: int):
         g_key = normalize_group_id(group_id)
         if g_key in self.spam_counts:
             del self.spam_counts[g_key]
-            self.save()
+            self.mark_dirty()
 
     def get_all_counts(self, group_id: int = None):
         if group_id is None:

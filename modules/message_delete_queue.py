@@ -6,11 +6,11 @@ import time
 class MessageDeleteQueue:
     """Keep delete RPCs out of incoming-message handlers.
 
-    Each chat has an independent FIFO worker.  A small global semaphore bounds
-    simultaneous delete RPCs, while one chat's hundreds of IDs never become a
-    synchronous loop in another chat's message handler.
+    Each chat has an independent priority worker.  There is no global delete
+    semaphore: a flood in group A occupies only that group's worker.  Other
+    chats keep deleting/replying in parallel.
     """
-    def __init__(self, client, logger, *, batch_size=50, max_concurrent=1, inter_batch_delay=0.08):
+    def __init__(self, client, logger, *, batch_size=50, max_concurrent=None, inter_batch_delay=0.05):
         self.client = client
         self.logger = logger
         self.batch_size = batch_size
@@ -18,10 +18,16 @@ class MessageDeleteQueue:
         self._queues = {}
         self._workers = {}
         self._pending_ids = set()
-        self._rpc_slots = asyncio.Semaphore(max_concurrent)
+        # Kept only so older callers that pass max_concurrent still construct.
+        self._rpc_slots = None
+        self._seq = 0
 
-    def enqueue(self, chat_id, message_ids):
-        """Schedule unique IDs and return a Future of ``(deleted, remaining)``."""
+    def enqueue(self, chat_id, message_ids, *, priority=1):
+        """Schedule unique IDs and return a Future of ``(deleted, remaining)``.
+
+        ``priority=0`` is for admin/manual deletes and jumps ahead of automatic
+        spam/link cleanup in the same chat.
+        """
         ids = []
         for message_id in message_ids:
             if not isinstance(message_id, int) or message_id <= 0:
@@ -39,12 +45,14 @@ class MessageDeleteQueue:
 
         queue = self._queues.get(chat_id)
         if queue is None:
-            queue = asyncio.Queue()
+            queue = asyncio.PriorityQueue()
             self._queues[chat_id] = queue
-        queue.put_nowait((ids, result))
+        self._seq += 1
+        queue.put_nowait((int(priority), self._seq, ids, result))
         self.logger.log_info(
             "DELETE QUEUE SIZE "
-            f"chat_id={chat_id} queued_ids={len(ids)} pending={queue.qsize()}"
+            f"chat_id={chat_id} queued_ids={len(ids)} pending={queue.qsize()} "
+            f"priority={priority}"
         )
         worker = self._workers.get(chat_id)
         if worker is None or worker.done():
@@ -65,8 +73,7 @@ class MessageDeleteQueue:
             for attempt in range(1, 4):
                 started = time.perf_counter()
                 try:
-                    async with self._rpc_slots:
-                        await self.client.delete_messages(chat_id, batch)
+                    await self.client.delete_messages(chat_id, batch)
                     deleted += len(batch)
                     succeeded = True
                     self.logger.log_info(
@@ -101,8 +108,7 @@ class MessageDeleteQueue:
                 for attempt in range(1, 4):
                     started = time.perf_counter()
                     try:
-                        async with self._rpc_slots:
-                            await self.client.delete_messages(chat_id, [message_id])
+                        await self.client.delete_messages(chat_id, [message_id])
                         deleted += 1
                         item_ok = True
                         self.logger.log_info(
@@ -130,7 +136,7 @@ class MessageDeleteQueue:
         self.logger.log_info(f"DELETE TASK START chat_id={chat_id}")
         try:
             while True:
-                ids, result = await queue.get()
+                _priority, _seq, ids, result = await queue.get()
                 try:
                     deleted, remaining = await self._delete_ids(chat_id, ids)
                     if not result.done():

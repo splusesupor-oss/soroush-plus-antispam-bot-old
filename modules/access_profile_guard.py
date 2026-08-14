@@ -18,14 +18,20 @@ def _norm(value):
 
 
 def _load():
+    global _CACHE
+    if _CACHE is not None:
+        return _CACHE
     try:
         data = json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
-        return data if isinstance(data, dict) else {}
+        _CACHE = data if isinstance(data, dict) else {}
     except (OSError, ValueError, TypeError):
-        return {}
+        _CACHE = {}
+    return _CACHE
 
 
 def _save(data):
+    global _CACHE
+    _CACHE = data
     FILE.parent.mkdir(parents=True, exist_ok=True)
     FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 

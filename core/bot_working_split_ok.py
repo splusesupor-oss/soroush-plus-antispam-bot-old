@@ -42,6 +42,7 @@ from modules.reminders import due as due_reminders, mark_sent as mark_reminder_s
 from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from modules.message_delete_queue import MessageDeleteQueue
+from modules.group_dispatch import GroupDispatcher, classify_priority, looks_like_link
 from modules import connection_guard
 from modules import site_policy
 from handlers.message_handler import handle_new_message, send_activation_message
@@ -167,6 +168,7 @@ class SoroushAntiSpamBot:
         self._temporary_state_cleanup_task = None
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
+        self.group_dispatcher = GroupDispatcher(logger=self.logger)
 
         self.logger.log_info("✅ تنظیمات بارگذاری شد")
         self.logger.log_info(
@@ -551,6 +553,45 @@ class SoroushAntiSpamBot:
             self.logger.log_error(f"خطا در تشخیص مدیر: {e}")
             return False
 
+    def _overflow_message(self, event):
+        """Cheap per-group overflow path: delete locked/link spam only.
+
+        Called when a chat's ordinary queue is already full.  Must not await
+        and must not touch other groups.
+        """
+        try:
+            chat_id = getattr(event, "chat_id", None)
+            message = getattr(event, "message", None)
+            message_id = getattr(message, "id", None) if message is not None else None
+            text = ""
+            if message is not None:
+                text = (
+                    getattr(message, "message", None)
+                    or getattr(message, "caption", None)
+                    or ""
+                )
+            user_id = getattr(event, "sender_id", None)
+            if user_id is None:
+                sender = getattr(event, "sender", None)
+                user_id = getattr(sender, "id", None)
+            if chat_id is None or message_id is None:
+                return
+            locked = bool(
+                user_id is not None
+                and self.is_spam_locked((chat_id, user_id))
+            )
+            if not locked and not looks_like_link(text):
+                return
+            queue = getattr(self, "message_delete_queue", None)
+            if queue is not None:
+                queue.enqueue(chat_id, [message_id], priority=1)
+            self.logger.log_info(
+                "GROUP DISPATCH OVERFLOW DELETE "
+                f"chat_id={chat_id} message_id={message_id} locked={locked}"
+            )
+        except Exception as error:
+            self.logger.log_error(f"GROUP DISPATCH OVERFLOW FAILED {error!r}")
+
     async def run(self):
         """اجرای ربات"""
         await self.initialize_client()
@@ -564,7 +605,8 @@ class SoroushAntiSpamBot:
         asyncio.create_task(process_delete(self))
         # Automatic deletions have their own per-group workers and never run
         # synchronously in the incoming-message handler.
-        self.message_delete_queue = MessageDeleteQueue(self.client, self.logger)
+        self.message_delete_queue = MessageDeleteQueue(
+            self.client, self.logger, max_concurrent=4, inter_batch_delay=0.05)
 
         async def temporary_state_cleanup_loop():
             while True:
@@ -647,6 +689,7 @@ class SoroushAntiSpamBot:
                     await asyncio.to_thread(flush_group_stats)
                     await asyncio.to_thread(flush_user_activity)
                     await asyncio.to_thread(flush_economy)
+                    await asyncio.to_thread(self.tracker.save, True)
                     cost = time.perf_counter() - started
                 except Exception as error:
                     cost = 0.0
@@ -855,8 +898,7 @@ class SoroushAntiSpamBot:
                 print(f"join ban check error: {e}")
 
 
-        @self.client.on(events.NewMessage())
-        async def new_message_handler(event):
+        async def process_incoming_message(event):
             # === SPAM DEBUG INCOMING — اولین خط NewMessage ===
             try:
                 _sd_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
@@ -1686,6 +1728,36 @@ class SoroushAntiSpamBot:
                     f"error={handler_error!r}\n{_tb.format_exc()}"
                 )
 
+
+        @self.client.on(events.NewMessage())
+        async def new_message_handler(event):
+            """Classify and enqueue; never run the heavy path inline.
+
+            Returning immediately lets SPlusthon keep delivering other chats
+            while this chat's worker processes its own queue.
+            """
+            raw_text = ""
+            try:
+                message = getattr(event, "message", None)
+                raw_text = (
+                    getattr(message, "message", None)
+                    or getattr(message, "caption", None)
+                    or ""
+                ) if message is not None else ""
+            except Exception:
+                raw_text = ""
+            chat_id = getattr(event, "chat_id", None)
+            priority, kind = classify_priority(raw_text, event)
+            self.group_dispatcher.submit(
+                chat_id,
+                lambda ev=event: process_incoming_message(ev),
+                priority=priority,
+                kind=kind,
+                on_overflow=(
+                    None if priority == 0
+                    else lambda ev=event: self._overflow_message(ev)
+                ),
+            )
 
         # ⛑️ حلقهٔ اصلی: مالکِ بازسازی، supervisor است (با client_factory
         # که یک SoroushClient کاملاً جدید با سشن تازه می‌سازد و self.client

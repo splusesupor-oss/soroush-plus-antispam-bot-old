@@ -222,15 +222,23 @@ def schedule_flush(client, chat_id, logger=None, delay=FLUSH_DELAY):
     return new_task
 
 
-def handle_gif(chat_id, user_id, message_id, client=None, logger=None):
+def handle_gif(chat_id, user_id, message_id, client=None, logger=None,
+               delete_queue=None):
     """مسیر کامل و مستقل GIF: ثبت، صف‌بندی و زمان‌بندی حذف.
 
     خروجی ``(queued_ids, newly_flagged)``.
+
+    If ``delete_queue`` is provided (the per-chat MessageDeleteQueue), GIF
+    IDs go there so a GIF flood cannot spawn a second global RPC loop.
+    Tests that pass only ``client`` keep the original schedule_flush path.
     """
     message_ids, newly_flagged = track_gif(chat_id, user_id, message_id)
     if message_ids:
         queue_delete(chat_id, message_ids)
-        if client is not None:
+        if delete_queue is not None:
+            delete_queue.enqueue(chat_id, message_ids, priority=1)
+            _DELETE_QUEUE.pop(chat_id, None)
+        elif client is not None:
             schedule_flush(client, chat_id, logger)
     return message_ids, newly_flagged
 

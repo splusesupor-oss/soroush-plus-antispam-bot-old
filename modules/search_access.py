@@ -9,6 +9,7 @@ from modules.time_utils import now_local
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "search_access.json"
 DAILY_LIMIT = 27
+_CACHE = None
 
 
 def _key(chat_id):
@@ -37,17 +38,25 @@ def _normalize(data):
 
 
 def _load():
+    global _CACHE
+    if _CACHE is not None:
+        return _CACHE
     try:
         data = json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
         data = data if isinstance(data, dict) else {}
         if _normalize(data):
             _save(data)
+            return _CACHE if _CACHE is not None else data
+        _CACHE = data
         return data
     except (OSError, ValueError):
-        return {}
+        _CACHE = {}
+        return _CACHE
 
 
 def _save(data):
+    global _CACHE
+    _CACHE = data
     FILE.parent.mkdir(parents=True, exist_ok=True)
     FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -76,11 +85,6 @@ def access_state(chat_id, user_id):
     enabled = bool(group and group.get("enabled"))
     users = group.get("allowed_users", {}) if group else {}
     allowed = bool(enabled and str(user_id) in users)
-    _log("LOAD", chat_id, user_id, enabled=enabled,
-         allowed=allowed, loaded_users=sorted(str(value) for value in users))
-    _log("CHECK DEBUG", chat_id, user_id,
-         enabled=enabled, allowed=allowed,
-         loaded_users=sorted(str(value) for value in users))
     return enabled, allowed
 
 
@@ -189,4 +193,7 @@ def allowed_users(chat_id):
 
 
 def reset_for_tests():
+    global _CACHE
+    _CACHE = None
     _save({})
+    _CACHE = {}
