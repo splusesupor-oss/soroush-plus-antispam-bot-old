@@ -332,7 +332,8 @@ def _log_ban_execution(bot, chat_id, user_id, reason):
 
 
 async def _send_moderation_notification_once(
-    bot, chat_id, user_id, action, source_message_id, text
+    bot, chat_id, user_id, action, source_message_id, text,
+    formatting_entities=None,
 ):
     key = (chat_id, user_id, action, source_message_id)
     if not hasattr(bot, "moderation_notification_guard"):
@@ -347,7 +348,9 @@ async def _send_moderation_notification_once(
     bot.moderation_notification_guard.add(key)
     bot.moderation_notification_order.append(key)
     try:
-        await bot.client.send_message(chat_id, text)
+        await bot.client.send_message(
+            chat_id, text, formatting_entities=formatting_entities
+        )
         return True
     except Exception:
         bot.moderation_notification_guard.discard(key)
@@ -816,12 +819,27 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                     )
                     return
                 notice_event = incident.get("event") or event
-                await _send_moderation_notification_once(
-                    bot, chat_id, user_id, "spam_ban_cleanup", incident["id"],
+                ban_header = (
                     "⚠️ کاربر ⏌ "
                     f"{format_user(getattr(notice_event, 'sender', None))}"
-                    " ⎾\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
-                    f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد")
+                    " ⎾"
+                )
+                ban_text = ban_header + "\nبه دلیل هرزنامه از گروه اخراج شد."
+                sent = await _send_moderation_notification_once(
+                    bot, chat_id, user_id, "spam_ban_cleanup", incident["id"],
+                    ban_text,
+                    formatting_entities=[
+                        MessageEntityBlockquote(
+                            offset=0,
+                            length=len(ban_header.encode("utf-16-le")) // 2,
+                        )
+                    ],
+                )
+                if sent:
+                    await bot.client.send_message(
+                        chat_id,
+                        f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد",
+                    )
                 getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
             elif incident["deleted"]:
                 notice_event = incident.get("event") or event
