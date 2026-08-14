@@ -824,8 +824,12 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                     f"{format_user(getattr(notice_event, 'sender', None))}"
                     " ⎾"
                 )
-                ban_text = ban_header + "\nبه دلیل هرزنامه از گروه اخراج شد."
-                sent = await _send_moderation_notification_once(
+                ban_text = (
+                    f"{ban_header}\n\n"
+                    "به دلیل هرزنامه از گروه اخراج شد.\n"
+                    f"🗑 {_fullwidth_digits(incident['deleted'])} پیام تکراری پاک شد"
+                )
+                await _send_moderation_notification_once(
                     bot, chat_id, user_id, "spam_ban_cleanup", incident["id"],
                     ban_text,
                     formatting_entities=[
@@ -835,11 +839,6 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                         )
                     ],
                 )
-                if sent:
-                    await bot.client.send_message(
-                        chat_id,
-                        f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد",
-                    )
                 getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
             elif incident["deleted"]:
                 notice_event = incident.get("event") or event
