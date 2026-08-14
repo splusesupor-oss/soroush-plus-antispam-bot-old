@@ -1178,11 +1178,26 @@ class SoroushAntiSpamBot:
                 # It is intentionally emitted before the private-route branch
                 # so a misclassified SPlusthon DM remains diagnosable.
                 if text == "لیست انقضا":
+                    message_peer = getattr(getattr(event, "message", None), "peer_id", None)
+                    event_peer = getattr(event, "_chat_peer", None)
                     self.logger.log_info(
-                        "EXPIRY COMMAND DEBUG "
-                        f"raw_text={raw_text!r} normalized_text={text!r} "
-                        f"sender_id={_trace_sender_id} owner_id={_trace_owner_id} "
-                        f"is_private={is_private_splus} "
+                        "EXPIRY COMMAND DEBUG\n"
+                        f"raw_text={raw_text!r}\n"
+                        f"normalized_text={text!r}\n"
+                        f"event_type={event.__class__.__module__}.{event.__class__.__name__}\n"
+                        f"event_chat_id={event_chat_id!r}\n"
+                        f"event_user_id={getattr(event, 'user_id', None)!r}\n"
+                        f"event_sender_id={getattr(event, 'sender_id', None)!r}\n"
+                        f"event_out={getattr(event, 'out', None)!r}\n"
+                        f"event_is_private={getattr(event, 'is_private', None)!r}\n"
+                        f"event_peer_type={event_peer.__class__.__name__ if event_peer else 'None'}\n"
+                        f"message_peer_type={message_peer.__class__.__name__ if message_peer else 'None'}\n"
+                        f"event_chat_type={getattr(event, 'chat', None).__class__.__name__ if getattr(event, 'chat', None) else 'None'}\n"
+                        f"get_chat_type={routing_type}\n"
+                        f"sender_type={_trace_sender.__class__.__name__ if _trace_sender else 'None'}\n"
+                        f"sender_id={_trace_sender_id}\n"
+                        f"owner_id={_trace_owner_id}\n"
+                        f"is_private={is_private_splus}\n"
                         f"is_global_owner={_trace_owner}"
                     )
                 if text in _broadcast_words:
