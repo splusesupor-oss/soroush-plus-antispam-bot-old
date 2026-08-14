@@ -820,7 +820,7 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                     bot, chat_id, user_id, "spam_ban_cleanup", incident["id"],
                     "⚠️ کاربر ⏌ "
                     f"{format_user(getattr(notice_event, 'sender', None))}"
-                    " ⎾\n\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
+                    " ⎾\nبه دلیل هرزنامه از گروه اخراج شد.\n\n"
                     f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد")
                 getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
             elif incident["deleted"]:
@@ -4876,7 +4876,7 @@ async def handle_new_message(bot, event):
                 manual_name = _format_group_member(user)
                 manual_header = f"⚠️ کاربر {manual_name}"
                 manual_text = (
-                    f"{manual_header}\n\n"
+                    f"{manual_header}\n"
                     "یک اخطار دستی دریافت کرد\n\n"
                     f"تعداد اخطار: {_math_digits(count)}/{_math_digits(threshold)}"
                 )
