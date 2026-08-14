@@ -36,7 +36,11 @@ def add_message(chat_id, user_id, message_id, text, timestamp=None):
         return False
     key = _key(chat_id, user_id)
     _prune_key(key)
-    _HISTORY[key].append({
+    rows = _HISTORY[key]
+    for row in rows:
+        if row.get("message_id") == message_id:
+            return True
+    rows.append({
         "chat_id": chat_id,
         "user_id": user_id,
         "message_id": message_id,

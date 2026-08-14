@@ -43,6 +43,7 @@ from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from modules.message_delete_queue import MessageDeleteQueue
 from modules.group_dispatch import GroupDispatcher, classify_priority, looks_like_link
+from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
 from modules import site_policy
 from handlers.message_handler import handle_new_message, send_activation_message
@@ -1734,7 +1735,7 @@ class SoroushAntiSpamBot:
 
         @self.client.on(events.NewMessage())
         async def new_message_handler(event):
-            """Classify and enqueue; never run the heavy path inline.
+            """Light-detect first, then enqueue heavy work.
 
             Returning immediately lets SPlusthon keep delivering other chats
             while this chat's worker processes its own queue.
@@ -1750,6 +1751,12 @@ class SoroushAntiSpamBot:
             except Exception:
                 raw_text = ""
             chat_id = getattr(event, "chat_id", None)
+            try:
+                decision = ingest_event(self, event)
+            except Exception:
+                decision = None
+            if decision is not None and decision.skip_heavy:
+                return
             priority, kind = classify_priority(raw_text, event)
             self.group_dispatcher.submit(
                 chat_id,
