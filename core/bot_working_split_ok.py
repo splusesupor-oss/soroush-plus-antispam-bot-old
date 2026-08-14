@@ -13,6 +13,7 @@ from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
 from modules.group_expiry import match_command as expiry_command
+from modules.expiry_report import build_report as build_expiry_report
 from modules.admin_tools import run_cleanup_watcher
 from modules import access_profile_guard
 from handlers.group_expiry_handler import (
@@ -1489,6 +1490,25 @@ class SoroushAntiSpamBot:
                             "BROADCAST ROUTE STOP reason=not_global_owner "
                             f"sender_id={sender_id}"
                         )
+
+                    # گزارش انقضا یک فرمان خصوصیِ مستقل است: تنها مالک
+                    # اصلی به آن دسترسی دارد و هرگز وارد مسیر گروه/بازی نمی‌شود.
+                    if text == "لیست انقضا":
+                        if _owner_ok:
+                            try:
+                                await event.reply(build_expiry_report(self.logger))
+                                self.logger.log_info(
+                                    "EXPIRY REPORT SENT authorized=True"
+                                )
+                            except Exception as error:
+                                self.logger.log_error(
+                                    f"EXPIRY REPORT SEND FAILED authorized=True error={error!r}"
+                                )
+                        else:
+                            self.logger.log_info(
+                                "EXPIRY REPORT DENIED reason=not_global_owner"
+                            )
+                        return
 
                     if _owner_ok:
                         self.logger.log_info(
