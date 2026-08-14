@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "profile_access_blocks.json"
+_CACHE = None
 BLOCKED_TERMS = (
     "فرزند ایران", "جان فدای میهن", "فرزند ایران و جانفدای میهن",
     "آمریکا", "پرچم آمریکا", "پهلوی", "شاهزاده",
