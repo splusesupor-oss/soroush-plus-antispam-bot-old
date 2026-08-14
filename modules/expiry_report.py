@@ -44,31 +44,31 @@ def _remaining_text(expires_at, now):
     return " و ".join(parts)
 
 
-def build_report(logger=None, now=None):
-    """Build the owner-facing report from the live storage sources.
-
-    Malformed/missing data is represented in the report or logged; it never
-    raises into the private-message event handler.
-    """
-    moment = now or datetime.now(timezone.utc)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    else:
-        moment = moment.astimezone(timezone.utc)
-
+def _sources(logger):
     try:
         groups = group_storage.load_groups()
         groups = groups if isinstance(groups, dict) else {}
     except Exception as error:
         _log_error(logger, f"EXPIRY REPORT GROUP LOAD FAILED error={error!r}")
         groups = {}
-
     try:
         expiry_records = group_expiry.all_records()
     except Exception as error:
         _log_error(logger, f"EXPIRY REPORT LOAD FAILED error={error!r}")
         expiry_records = {}
+    return groups, expiry_records
 
+
+def _moment(now):
+    value = now or datetime.now(timezone.utc)
+    return (value.replace(tzinfo=timezone.utc) if value.tzinfo is None
+            else value.astimezone(timezone.utc))
+
+
+def build_report(logger=None, now=None):
+    """Build the detailed legacy expiry report (used by the existing private route)."""
+    moment = _moment(now)
+    groups, expiry_records = _sources(logger)
     if not groups:
         return _HEADER + "\n\nℹ️ هیچ گروه ثبت‌شده‌ای وجود ندارد."
 
@@ -83,7 +83,6 @@ def build_report(logger=None, now=None):
         )
         prefix = "❌" if record and group_expiry.is_expired(group_id, now=moment) else f"{_digits(index)}️⃣"
         lines = [f"{prefix} گروه: {title}", f"🆔 شناسه: {group_id}"]
-
         if not record:
             lines.append("⏳ وضعیت: تاریخ انقضا ثبت نشده")
         else:
@@ -94,18 +93,45 @@ def build_report(logger=None, now=None):
                 lines.append("⏳ وضعیت: تاریخ انقضا نامعتبر است")
             else:
                 remaining = _remaining_text(expires, moment)
-                if remaining is None:
-                    lines.append("⏳ وضعیت: منقضی شده")
-                else:
-                    lines.append(f"⏳ باقی‌مانده: {remaining}")
+                lines.append("⏳ وضعیت: منقضی شده" if remaining is None
+                             else f"⏳ باقی‌مانده: {remaining}")
         rows.append("\n".join(lines))
 
-    # An expiry entry with no current group registration is intentionally not
-    # shown as a usable group, but it is observable in logs for maintenance.
     registered_keys = {str(key) for key in groups}
     for expiry_key in expiry_records:
         if str(expiry_key) not in registered_keys:
             _log_error(logger, "EXPIRY REPORT ORPHAN RECORD "
                        f"group_id={expiry_key!r} reason=not_in_groups_storage")
+    return "\n\n".join(rows)
 
+
+def build_group_list(logger=None, now=None):
+    """Build the compact owner-in-group list: group name and remaining time only."""
+    moment = _moment(now)
+    groups, _expiry_records = _sources(logger)
+    if not groups:
+        return _HEADER + "\n\nℹ️ هیچ گروه ثبت‌شده‌ای وجود ندارد."
+
+    rows = [_HEADER]
+    listed = 0
+    for group_id, group in groups.items():
+        record = group_expiry.get_record(group_id)
+        if not record:
+            continue
+        expires = group_expiry.expires_at(group_id)
+        if expires is None:
+            _log_error(logger, "EXPIRY LIST INVALID RECORD "
+                       f"group_id={group_id!r} record={record!r}")
+            continue
+        group = group if isinstance(group, dict) else {}
+        title = (str(group.get("title") or "").strip()
+                 or str(record.get("title") or "").strip()
+                 or "گروه بدون نام")
+        listed += 1
+        remaining = _remaining_text(expires, moment)
+        status = "منقضی شده" if remaining is None else f"{remaining} باقی مانده"
+        rows.append(f"{listed}. {title}\n⏳ {status}")
+
+    if not listed:
+        return _HEADER + "\n\nℹ️ هیچ تاریخ انقضایی ثبت نشده است."
     return "\n\n".join(rows)

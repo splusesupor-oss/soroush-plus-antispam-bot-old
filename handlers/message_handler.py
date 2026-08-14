@@ -7,7 +7,7 @@ from modules.fill_blank import check_fill, get_token as get_fill_token
 from modules.riddles import check_answer
 from modules.group_stats import add_message, get_stats
 from modules.group_storage import activate_group, deactivate_group
-from modules.owner_check import is_global_owner
+from modules.owner_check import get_owner, is_global_owner
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
 from modules.fill_blank import (
@@ -56,6 +56,7 @@ from handlers.group_expiry_handler import (
     blocks_message as group_expiry_blocks,
     handle as handle_group_expiry,
 )
+from modules.expiry_report import build_group_list
 from modules.name_family import (
     cancel_round as cancel_name_family_round,
     finish as finish_name_family,
@@ -1926,6 +1927,33 @@ async def handle_new_message(bot, event):
             "COMMAND MATCH CHECK "
             f"command={clean_text!r} matched={clean_text in _legacy_commands}"
         )
+
+        # ------------------------------------------------------------------
+        # 📋 لیست انقضا — فقط مالک اصلی و فقط در همان گروه.
+        # این گزارش فقط خواندنی است؛ storage و watcher اصلی انقضا را تغییر
+        # نمی‌دهد و هیچ route خصوصی برای آن لازم نیست.
+        # ------------------------------------------------------------------
+        if not event.is_private and clean_text == "لیست انقضا":
+            owner = get_owner()
+            authorized = is_global_owner(user_id)
+            bot.logger.log_info(
+                "EXPIRY LIST OWNER CHECK "
+                f"user_id={user_id} owner_id={owner.get('user_id')} "
+                f"chat_id={chat_id} authorized={authorized} sent=False"
+            )
+            if authorized:
+                try:
+                    await event.reply(build_group_list(bot.logger))
+                    bot.logger.log_info(
+                        "EXPIRY LIST OWNER CHECK "
+                        f"user_id={user_id} owner_id={owner.get('user_id')} "
+                        f"chat_id={chat_id} authorized=True sent=True"
+                    )
+                except Exception as error:
+                    bot.logger.log_error(
+                        f"EXPIRY LIST SEND FAILED chat_id={chat_id} error={error!r}"
+                    )
+            return
 
         # ------------------------------------------------------------------
         # 🤖 تشخیصِ رباتِ دیگر در گروه و غیرفعال‌سازیِ خودکارِ روباه
