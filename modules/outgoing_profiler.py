@@ -3,6 +3,7 @@ import asyncio
 import contextvars
 import functools
 import os
+import sys
 import time
 
 
@@ -26,8 +27,23 @@ def end_response_measurement(token):
     _RESPONSE_RPC_MS.reset(token)
 
 
-def _chat_id(args, kwargs):
-    return kwargs.get("entity") or kwargs.get("chat_id") or (args[0] if args else None)
+def _chat_id(owner, args, kwargs):
+    chat = kwargs.get("entity") or kwargs.get("chat_id")
+    if chat is not None:
+        return getattr(chat, "id", chat)
+    if args and isinstance(args[0], int):
+        return args[0]
+    return getattr(owner, "chat_id", None)
+
+
+def _caller_source():
+    frame = sys._getframe(2)
+    while frame is not None:
+        filename = frame.f_code.co_filename.replace("\\", "/")
+        if "outgoing_profiler.py" not in filename:
+            return frame.f_code.co_name or "unknown"
+        frame = frame.f_back
+    return "unknown"
 
 
 def _wrap(owner, attribute, operation, logger):
@@ -38,11 +54,16 @@ def _wrap(owner, attribute, operation, logger):
     @functools.wraps(original)
     async def measured(*args, **kwargs):
         request_id = f"{id(asyncio.current_task()):x}-{time.monotonic_ns():x}"
-        chat_id = _chat_id(args, kwargs)
+        chat_id = _chat_id(owner, args, kwargs)
         started_wall = time.time()
         started = time.perf_counter()
         depth = _RPC_DEPTH.get()
         depth_token = _RPC_DEPTH.set(depth + 1)
+        source = _caller_source()
+        if operation in {"send_message", "reply"}:
+            logger.log_info(
+                f"SEND START source={source} chat_id={chat_id}"
+            )
         if _RPC_DEBUG:
             logger.log_info(
                 "OUTGOING RPC START "
@@ -69,6 +90,10 @@ def _wrap(owner, attribute, operation, logger):
                     f"request_id={request_id} operation={operation} chat_id={chat_id} "
                     f"started_at={started_wall:.3f} finished_at={time.time():.3f} "
                     f"rpc_ms={elapsed_ms:.2f} result={result} nested={depth > 0}"
+                )
+            if operation in {"send_message", "reply"}:
+                logger.log_info(
+                    f"SEND END source={source} ms={elapsed_ms:.0f}"
                 )
             if elapsed_ms > _RPC_SLOW_WARNING_MS:
                 logger.log_error(

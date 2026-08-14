@@ -684,15 +684,18 @@ class SoroushAntiSpamBot:
                 # می‌شود؛ فایل سنگین کمتر، تا سهم آن از زمان حلقه ناچیز
                 # بماند. داده از دست نمی‌رود چون در حافظه نگه داشته
                 # می‌شود و در نهایت نوشته خواهد شد.
+                started = time.perf_counter()
+                self.logger.log_info("FLUSH START")
                 try:
-                    started = time.perf_counter()
                     await asyncio.to_thread(flush_group_stats)
                     await asyncio.to_thread(flush_user_activity)
                     await asyncio.to_thread(flush_economy)
                     await asyncio.to_thread(self.tracker.save, True)
                     cost = time.perf_counter() - started
+                    self.logger.log_info(f"FLUSH END ms={cost * 1000:.0f}")
                 except Exception as error:
-                    cost = 0.0
+                    cost = time.perf_counter() - started
+                    self.logger.log_info(f"FLUSH END ms={cost * 1000:.0f}")
                     self.logger.log_error(f"خطا در ذخیرهٔ دوره‌ای: {error}")
 
                 # فاصله هرگز کمتر از ۱۵ ثانیه نمی‌شود؛ اگر ذخیره‌سازی گران
