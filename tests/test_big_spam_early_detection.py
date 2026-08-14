@@ -557,6 +557,54 @@ def test_late_wave_ids_rejoin_after_early_drain():
           f"-> missing={sorted(set(range(1, 51)) - all_deleted)}")
 
 
+
+def test_generic_decoration_normalization():
+    print("\n### نرمال‌سازی تزئینات عمومی است، نه هاردکد یک ایموجی")
+    variants = (
+        "بیوچک🥲بیوچککک🧸",
+        "بیوچکک🥺بیوچکککک🐥",
+        "بیوچک❤️بیوچککک🔥",
+        "بیوچک😂🥺🧸بیوچککک",
+        "بیووووچک🥲بیوچک",
+        "بیو★چک✦بیوچککک•",
+        "بـیـوچـک🌸بـیـوچـکـکـک",
+        "بيوچك🇪🇬بيوچكك",
+    )
+    norms = {big_spam.compact_text(text) for text in variants}
+    check("همه واریانت‌ها به یک ریشه می‌رسند", norms == {"بیوچکبیوچک"}, f"-> {norms}")
+    check("هیچ ایموجی‌ای در فرم نرمال نمی‌ماند",
+          all("🥺" not in big_spam.normalize_text(text)
+              and "❤️" not in big_spam.normalize_text(text)
+              and "🐥" not in big_spam.normalize_text(text)
+              for text in variants))
+    hit, _, ids = big_spam.detect_big_spam(variants[1], _rows(variants[0], variants[1]))
+    check("نمونه کاربر با ایموجی تازه تشخیص داده شد", hit and ids == {1, 2}, f"-> {hit} {ids}")
+    hit, _, ids = big_spam.detect_big_spam(
+        variants[2], _rows(variants[0], variants[1], variants[2], variants[3])
+    )
+    check("چهار تزئین متفاوت همان موج‌اند", hit and ids == {1, 2, 3, 4}, f"-> {ids}")
+
+    hit, _, ids = big_spam.detect_big_spam(
+        "بیا گروه فیلم جدید🐥",
+        _rows("بیا گروه فیلم🥲", "بیا گروه فیلم جدید🐥"),
+    )
+    check("کمپین غیر از بیوچک هم با ایموجی تازه تشخیص داده شد", hit and ids == {1, 2}, f"-> {ids}")
+    hit, _, ids = big_spam.detect_big_spam(
+        "فالو کن بیا پیوی🔥😂",
+        _rows("فالو کن بیا پیوی❤️", "فالو کن بیا پیوی🔥😂"),
+    )
+    check("فالو کن با ایموجی‌های مختلف همان موج است", hit)
+
+    for text in (
+        "امروز هوا خوبه🥺",
+        "حالم خوبه❤️",
+        "سلام😊",
+        "فیلم دیشب عالی بود😂",
+    ):
+        hit, reason, _ = big_spam.detect_big_spam(text, _rows(text, text, text))
+        check(f"{text!r} x3 عادی است", not hit, f"-> {reason}")
+
+
 def test_handler_wrapper_uses_tracker():
     print("\n### wrapper هندلر از tracker همان chat استفاده می‌کند")
     message_tracker.reset_all()
@@ -588,6 +636,7 @@ def main():
     test_normalization_does_not_break_ordinary_chat()
     test_incident_stays_per_chat_user()
     test_late_wave_ids_rejoin_after_early_drain()
+    test_generic_decoration_normalization()
     test_handler_wrapper_uses_tracker()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
