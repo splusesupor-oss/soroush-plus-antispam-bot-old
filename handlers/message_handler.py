@@ -480,15 +480,21 @@ def _big_spam_incident(bot, key, seed_ids=()):
         incidents = bot._big_spam_incidents = {}
     incident = incidents.get(key)
     if incident is None:
-        incident = incidents[key] = {"ids": set(), "cleanup_task": None}
+        sequence = getattr(bot, "_big_spam_incident_sequence", 0) + 1
+        bot._big_spam_incident_sequence = sequence
+        incident = incidents[key] = {
+            "id": sequence,
+            "ids": set(),
+            "deleted_ids": set(),
+            "retry_ids": set(),
+            "cleanup_task": None,
+        }
     incident["ids"].update(
         message_id for message_id in seed_ids
         if isinstance(message_id, int) and message_id > 0
     )
-    # A pathological flood must not retain unbounded RAM. The actual cleanup
-    # still obtains the most recent tracker snapshot at ban success.
-    if len(incident["ids"]) > 2000:
-        incident["ids"] = set(sorted(incident["ids"])[-2000:])
+    # This registry exists only from fast detection until cleanup finishes.
+    # Do not truncate its IDs: every captured message belongs to the wave.
     return incident
 
 
@@ -498,6 +504,68 @@ def _capture_big_spam_message(bot, chat_id, user_id, message_id):
     incident = incidents.get((chat_id, user_id))
     if incident is not None and isinstance(message_id, int) and message_id > 0:
         incident["ids"].add(message_id)
+
+
+async def _send_spam_ban_cleanup_notification(
+        bot, event, chat_id, user_id, deleted_count, notice_id):
+    """Send the one existing final ban/cleanup template for a completed wave."""
+    ban_header = (
+        "⚠️ کاربر ⏌ "
+        f"{format_user(getattr(event, 'sender', None))}"
+        " ⎾"
+    )
+    ban_text = (
+        f"{ban_header}\n\n"
+        "به دلیل هرزنامه از گروه اخراج شد.\n"
+        f"🗑 {_fullwidth_digits(deleted_count)} پیام تکراری پاک شد"
+    )
+    return await _send_moderation_notification_once(
+        bot, chat_id, user_id, "spam_ban_cleanup", notice_id, ban_text,
+        formatting_entities=[
+            MessageEntityBlockquote(
+                offset=0,
+                length=len(ban_header.encode("utf-16-le")) // 2,
+            )
+        ],
+    )
+
+
+async def _drain_big_spam_incident(bot, event, chat_id, user_id, incident):
+    """Keep draining IDs added during cleanup; retain failed IDs for retry."""
+    key = (chat_id, user_id)
+    while True:
+        pending = set(incident["ids"]) - set(incident["deleted_ids"])
+        if pending:
+            _deleted, remaining = await cleanup_spam_messages(
+                bot, chat_id, user_id, pending
+            )
+            remaining = set(remaining)
+            # The queue returns the IDs it could not delete, so every other
+            # requested ID is known complete and can never be retried again.
+            incident["deleted_ids"].update(pending - remaining)
+            incident["retry_ids"] = remaining
+            if remaining:
+                # Preserve IDs and retry rather than declaring a partial wave
+                # complete. This task is per incident, never per normal user.
+                await _asyncio.sleep(1)
+                continue
+            continue
+
+        # Two event-loop turns close the race with received messages that had
+        # already entered the handler when the ban succeeded.
+        await _asyncio.sleep(0)
+        if set(incident["ids"]) - set(incident["deleted_ids"]):
+            continue
+        await _asyncio.sleep(0)
+        if set(incident["ids"]) - set(incident["deleted_ids"]):
+            continue
+
+        await _send_spam_ban_cleanup_notification(
+            bot, event, chat_id, user_id,
+            len(incident["deleted_ids"]), ("big", incident["id"]),
+        )
+        getattr(bot, "_big_spam_incidents", {}).pop(key, None)
+        return
 
 
 def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
@@ -520,20 +588,10 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
         incident["ids"].update(message_tracker.spam_snapshot(
             chat_id, user_id, getattr(event.message, "id", None)
         ))
-        cleanup_task = _confirm_spam_ban_cleanup(
-            bot, event, chat_id, user_id, set(incident["ids"])
+        cleanup_task = _asyncio.create_task(
+            _drain_big_spam_incident(bot, event, chat_id, user_id, incident)
         )
         incident["cleanup_task"] = cleanup_task
-
-        async def release_after_cleanup():
-            try:
-                await cleanup_task
-            finally:
-                # The cleanup worker has consumed the complete seed set. Free
-                # the big-spam-only registry even for large multi-batch waves.
-                getattr(bot, "_big_spam_incidents", {}).pop(key, None)
-
-        _asyncio.create_task(release_after_cleanup())
         bot.logger.log_info(
             "BIG SPAM BAN CONFIRMED "
             f"chat_id={chat_id} user_id={user_id} cleanup_ids={len(incident['ids'])}"
