@@ -96,6 +96,41 @@ def test_packed_phrase_in_one_message():
     check("تکرار یک کلمه عادی اسپم نیست", not miss)
 
 
+def test_repeated_campaign_without_marker_list():
+    print("\n### تکرار یکسان/نزدیک بدون لیست ثابت")
+    hit, reason, ids = big_spam.detect_big_spam(
+        "بیا گروه فیلم", _rows("بیا گروه فیلم", "بیا گروه فیلم")
+    )
+    check("بیا گروه فیلم x2 بدون marker", hit, f"-> {reason} {ids}")
+    check("هر دو id ثبت شد", ids == {1, 2}, f"-> {ids}")
+
+    hit, _, ids = big_spam.detect_big_spam(
+        "تا دیر نشده بکوب نود داریم",
+        _rows("تا دیر نشده بکوب نود داریم", "تا دیر نشده بکوب نود داریم"),
+    )
+    check("بکوب نود x2", hit, f"-> {ids}")
+
+    hit, _, ids = big_spam.detect_big_spam(
+        "فالو کن بیا پیوی",
+        _rows("فالو کن بیا پیوی", "فالو کن بیا پیوی"),
+    )
+    check("فالو کن بیا پیوی x2", hit)
+
+    hit, _, ids = big_spam.detect_big_spam(
+        "بیا گروه فیلم جدید",
+        _rows("بیا گروه فیلم", "بیا گروه فیلم الان", "بیا گروه فیلم جدید"),
+    )
+    check("تغییر کوچک همان الگوست", hit, f"-> {ids}")
+    check("هر سه پیام مشابه در incident", ids == {1, 2, 3}, f"-> {ids}")
+
+    three_hello = big_spam.detect_big_spam(
+        "سلام", _rows("سلام", "سلام", "سلام")
+    )
+    check("سلام x3 هنوز عادی است", not three_hello[0])
+    two_short = big_spam.detect_big_spam("خوبی؟", _rows("خوبی؟", "خوبی؟"))
+    check("خوبی x2 عادی است", not two_short[0])
+
+
 def test_different_ads_are_not_forced_together():
     print("\n### دو تبلیغ نامرتبط در پیام اول/دوم کورکورانه یکی نیستند")
     hit, _, _ = big_spam.detect_big_spam(
@@ -342,6 +377,7 @@ def main():
     test_two_promotional_messages_detect()
     test_single_ordinary_or_single_ad_not_spam()
     test_packed_phrase_in_one_message()
+    test_repeated_campaign_without_marker_list()
     test_different_ads_are_not_forced_together()
     test_batch_is_max_not_start_gate()
     test_drain_five_ids_immediately()

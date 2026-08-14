@@ -47,6 +47,37 @@ def compact_text(text):
     return re.sub(r"\s+", "", normalize_text(text))
 
 
+def tokens(text):
+    return re.findall(r"[\wآ-ی]+", normalize_text(text))
+
+
+_SHORT_CHAT = frozenset({
+    "سلام", "سللام", "خوبی", "خوبین", "چطوری", "ممنون", "مرسی",
+    "باشه", "آره", "اره", "نه", "خیلی", "اوکی", "ok", "صبح",
+    "بخیر", "شب", "خداحافظ",
+})
+
+
+def is_contentful(text):
+    """Skip greetings and single-word chatter; keep real repeated campaigns."""
+    toks = tokens(text)
+    distinct = [token for token in dict.fromkeys(toks)]
+    if not distinct:
+        return False
+    if looks_promotional(text) and (len(distinct) >= 2 or len(compact_text(text)) >= 6):
+        return True
+    if len(distinct) < 2:
+        return False
+    if len(toks) <= 2 and all(token in _SHORT_CHAT or len(token) <= 2 for token in distinct):
+        return False
+    compact = compact_text(text)
+    if len(toks) >= 3 and len(compact) >= 8:
+        return True
+    if len(distinct) >= 2 and len(compact) >= 14:
+        return True
+    return False
+
+
 def looks_promotional(text):
     normalized = normalize_text(text)
     if not normalized:
@@ -105,6 +136,60 @@ def similar_promotional(left, right):
     return bool(set(markers_in(first)) & set(markers_in(second)))
 
 
+def _ngrams(toks, size):
+    return {" ".join(toks[index:index + size]) for index in range(len(toks) - size + 1)}
+
+
+def shares_phrase(left, right):
+    """True when two texts share a consecutive 2–4 word phrase."""
+    first = tokens(left)
+    second = tokens(right)
+    for size in (4, 3, 2):
+        if len(first) < size or len(second) < size:
+            continue
+        shared = _ngrams(first, size) & _ngrams(second, size)
+        if not shared:
+            continue
+        if size >= 3:
+            return True
+        for phrase in shared:
+            parts = phrase.split()
+            if len(set(parts)) < 2:
+                continue
+            if all(part in _SHORT_CHAT for part in parts):
+                continue
+            return True
+    return False
+
+
+def similarity_score(left, right):
+    """0..1 similarity: exact, containment, then sequence ratio."""
+    from difflib import SequenceMatcher
+    first = normalize_text(left)
+    second = normalize_text(right)
+    if not first or not second:
+        return 0.0
+    if first == second:
+        return 1.0
+    if first in second or second in first:
+        shorter = first if len(first) <= len(second) else second
+        longer = second if shorter is first else first
+        return len(shorter) / max(len(longer), 1)
+    return SequenceMatcher(None, first, second).ratio()
+
+
+def similar_repeat(left, right):
+    """Same spam campaign even if the wording shifted a little."""
+    if not is_contentful(left) or not is_contentful(right):
+        return False
+    score = similarity_score(left, right)
+    if score >= 0.78:
+        return True
+    if score >= 0.52 and shares_phrase(left, right):
+        return True
+    return False
+
+
 def _row_ids(rows):
     return {
         row.get("message_id") for row in rows
@@ -130,16 +215,22 @@ def detect_big_spam(text, recent_rows, *, now=None):
         row for row in recent_rows
         if (stamp - float(row.get("timestamp", stamp))) <= window
     ]
-    current = normalize_text(raw)
     compact = compact_text(raw)
 
+    matching = [
+        row for row in in_window
+        if similar_repeat(raw, row.get("text", ""))
+    ]
+    if len(matching) >= SIMILAR_MESSAGE_THRESHOLD:
+        return True, "repeated_similar_messages", _row_ids(matching)
+
     if looks_promotional(raw):
-        matching = [
+        promo = [
             row for row in in_window
             if similar_promotional(raw, row.get("text", ""))
         ]
-        if len(matching) >= SIMILAR_MESSAGE_THRESHOLD:
-            return True, "repeated_promotional_messages", _row_ids(matching)
+        if len(promo) >= SIMILAR_MESSAGE_THRESHOLD:
+            return True, "repeated_promotional_messages", _row_ids(promo)
 
     if len(compact) >= LARGE_PAYLOAD_CHARS:
         matching = [
