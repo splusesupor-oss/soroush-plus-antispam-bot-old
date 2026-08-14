@@ -1123,7 +1123,14 @@ class SoroushAntiSpamBot:
                 # آخرین fallback: در سروش پلاس شناسهٔ مثبت یعنی کاربر و شناسهٔ منفی
                 # یعنی گروه/کانال. فقط وقتی استفاده می‌شود که chat اصلاً resolve نشده.
                 event_chat_id = getattr(event, "chat_id", None)
-                positive_chat_id = False
+                # On some SPlusthon updates ``event.is_private`` is False and
+                # entity resolution can fail for a DM. Only in that fallback
+                # case, a positive peer ID identifies a private user chat.
+                positive_chat_id = bool(
+                    routing_chat is None
+                    and isinstance(event_chat_id, int)
+                    and event_chat_id > 0
+                )
                 routing_type = routing_chat.__class__.__name__ if routing_chat is not None else "None"
                 routing_type_lower = routing_type.lower()
                 # SPlusthon has returned several private-peer class names over
@@ -1167,6 +1174,17 @@ class SoroushAntiSpamBot:
                     f"handler_called=False "
                     f"private_route={is_private_splus}"
                 )
+                # Temporary targeted trace for the owner-only expiry command.
+                # It is intentionally emitted before the private-route branch
+                # so a misclassified SPlusthon DM remains diagnosable.
+                if text == "لیست انقضا":
+                    self.logger.log_info(
+                        "EXPIRY COMMAND DEBUG "
+                        f"raw_text={raw_text!r} normalized_text={text!r} "
+                        f"sender_id={_trace_sender_id} owner_id={_trace_owner_id} "
+                        f"is_private={is_private_splus} "
+                        f"is_global_owner={_trace_owner}"
+                    )
                 if text in _broadcast_words:
                     self.logger.log_info(
                         "BROADCAST ROUTE CHAT RESOLVED "
