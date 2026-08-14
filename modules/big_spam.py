@@ -5,6 +5,7 @@ Pure helpers: no client, no queue, no moderation policy besides detection.
 Two detection paths stay separate:
 
 * Intra-message Big Spam — a single payload packed with the same stem/phrase.
+* Short separate promotional repeats — four standalone ad tokens in a row.
 * Multi-message promotional wave — several clearly promotional messages that
   collapse to the same campaign after normalization.
 
@@ -17,6 +18,7 @@ from difflib import SequenceMatcher
 REPEAT_WINDOW_SECONDS = 60
 SIMILAR_MESSAGE_THRESHOLD = 2
 WAVE_SHORT_THRESHOLD = 4
+SHORT_SEPARATE_THRESHOLD = 4
 PHRASE_REPEAT_THRESHOLD = 6  # more than 5 meaningful phrases
 PACKED_TOKEN_THRESHOLD = 6
 LARGE_PAYLOAD_CHARS = 120
@@ -114,7 +116,13 @@ _TOKEN_RE = re.compile(r"[\wآ-ی]+", re.UNICODE)
 _SHORT_CHAT = frozenset({
     "سلام", "سللام", "خوبی", "خوبین", "چطوری", "ممنون", "مرسی",
     "باشه", "آره", "اره", "نه", "خیلی", "اوکی", "ok", "صبح",
-    "بخیر", "شب", "خداحافظ",
+    "بخیر", "شب", "خداحافظ", "امروز",
+})
+
+# Whole-message tokens only. Never match these as a substring of a sentence.
+_SHORT_PROMO_TOKENS = frozenset({
+    "جوین", "بیوچک", "چکبیو", "فیلم", "نود", "پیوی", "پیویم",
+    "لینک", "فالو", "فولو", "بکوب",
 })
 
 
@@ -378,6 +386,42 @@ def wave_needed(text):
     return WAVE_SHORT_THRESHOLD
 
 
+
+def short_promo_key(text):
+    """Stable key when the whole message is one short ad token.
+
+    Ordinary sentences that merely contain «فیلم» or «گروه» stay None.
+    """
+    toks = tokens(text)
+    compact = compact_text(text)
+    if not compact or not toks:
+        return None
+    if any(token in _SHORT_CHAT for token in toks):
+        return None
+    if len(toks) == 1 and toks[0] in _SHORT_PROMO_TOKENS:
+        return toks[0]
+    if compact in _SHORT_PROMO_TOKENS:
+        return compact
+    if len(toks) <= 2 and compact in _SHORT_PROMO_TOKENS:
+        return compact
+    return None
+
+
+def consecutive_short_promo_rows(text, in_window):
+    """Newest run of the same short promotional token, after normalization."""
+    key = short_promo_key(text)
+    if not key:
+        return []
+    matched = []
+    for row in reversed(list(in_window or ())):
+        if short_promo_key(row.get("text", "")) == key:
+            matched.append(row)
+        else:
+            break
+    matched.reverse()
+    return matched
+
+
 def _row_ids(rows):
     return {
         row.get("message_id") for row in rows
@@ -405,6 +449,10 @@ def detect_big_spam(text, recent_rows, *, now=None):
 
     if intra_message_spam(raw):
         return True, "repeated_promotional_phrase", _row_ids(in_window or recent_rows)
+
+    short_wave = consecutive_short_promo_rows(raw, in_window)
+    if len(short_wave) >= SHORT_SEPARATE_THRESHOLD:
+        return True, "repeated_short_promotional_messages", _row_ids(short_wave)
 
     needed = wave_needed(raw)
     if needed is not None:

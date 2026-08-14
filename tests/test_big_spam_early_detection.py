@@ -605,6 +605,67 @@ def test_generic_decoration_normalization():
         check(f"{text!r} x3 عادی است", not hit, f"-> {reason}")
 
 
+
+def test_short_separate_promotional_wave():
+    print("\n### تکرار ۴ پیام کوتاه تبلیغاتی جدا")
+    hit, reason, ids = big_spam.detect_big_spam(
+        "جوین", _rows("جوین", "جوین", "جوین", "جوین")
+    )
+    check("جوین x4 تشخیص داده شد", hit, f"-> {reason} {ids}")
+    check("جوین x4 هر چهار id را دارد", ids == {1, 2, 3, 4}, f"-> {ids}")
+    check("reason موج کوتاه جدا است", reason == "repeated_short_promotional_messages")
+
+    hit, reason, ids = big_spam.detect_big_spam(
+        "جوین", _rows("جوین", "جوین", "جوین")
+    )
+    check("جوین x3 واکنشی ندارد", not hit, f"-> {reason} {ids}")
+
+    emojis = ("بیوچک🥺", "بیوچک🧸", "بیوچک🥲", "بیوچک🐥")
+    hit, reason, ids = big_spam.detect_big_spam(emojis[-1], _rows(*emojis))
+    check("بیوچک با ایموجی‌های مختلف x4 تشخیص شد", hit and ids == {1, 2, 3, 4},
+          f"-> {reason} {ids}")
+    hit, _, _ = big_spam.detect_big_spam("بیوچک❤️", _rows("بیوچک🥺", "بیوچک🧸", "بیوچک🥲"))
+    check("بیوچک x3 هنوز واکنشی ندارد", not hit)
+
+    stretched = ("بیووووچک", "بیوچککک", "بیوچک🥺", "بیییووچک❤️")
+    hit, _, ids = big_spam.detect_big_spam(stretched[-1], _rows(*stretched))
+    check("حروف کشیده همان توکن کوتاه‌اند", hit and ids == {1, 2, 3, 4}, f"-> {ids}")
+
+    for word in ("سلام", "خوبی", "امروز", "ممنون"):
+        hit, reason, _ = big_spam.detect_big_spam(word, _rows(*([word] * 5)))
+        check(f"{word} x5 عادی است", not hit, f"-> {reason}")
+
+    hit, _, _ = big_spam.detect_big_spam(
+        "فیلم دیشب عالی بود",
+        _rows(*(["فیلم دیشب عالی بود"] * 4)),
+    )
+    check("جمله عادی دارای فیلم x4 اسپم کوتاه نیست", not hit)
+
+    packed = " ".join(["جوین"] * 6)
+    hit, reason, _ = big_spam.detect_big_spam(packed, _rows(packed))
+    check("جوین بسته‌شده داخل یک پیام همان intra-message است",
+          hit and reason == "repeated_promotional_phrase", f"-> {reason}")
+
+
+def test_short_separate_wave_is_per_user():
+    print("\n### پیام‌های چند کاربر با یک متن قاطی نمی‌شوند")
+    message_tracker.reset_all()
+    chat, user_a, user_b = -9101, 21, 22
+    for index in range(1, 4):
+        message_tracker.add_message(chat, user_a, index, "جوین")
+        message_tracker.add_message(chat, user_b, 100 + index, "جوین")
+    hit_a, _, ids_a = handler._big_repeated_spam(chat, user_a, "جوین")
+    hit_b, _, ids_b = handler._big_repeated_spam(chat, user_b, "جوین")
+    check("کاربر A با ۳ جوین تشخیص نشد", not hit_a, f"-> {ids_a}")
+    check("کاربر B با ۳ جوین تشخیص نشد", not hit_b, f"-> {ids_b}")
+    message_tracker.add_message(chat, user_a, 4, "جوین")
+    hit_a, _, ids_a = handler._big_repeated_spam(chat, user_a, "جوین")
+    hit_b, _, ids_b = handler._big_repeated_spam(chat, user_b, "جوین")
+    check("کاربر A بعد از ۴ پیام تشخیص شد", hit_a and ids_a == {1, 2, 3, 4}, f"-> {ids_a}")
+    check("کاربر B هنوز ۳ پیام دارد و قاطی نشد", not hit_b, f"-> {ids_b}")
+    message_tracker.reset_all()
+
+
 def test_handler_wrapper_uses_tracker():
     print("\n### wrapper هندلر از tracker همان chat استفاده می‌کند")
     message_tracker.reset_all()
@@ -637,6 +698,8 @@ def main():
     test_incident_stays_per_chat_user()
     test_late_wave_ids_rejoin_after_early_drain()
     test_generic_decoration_normalization()
+    test_short_separate_promotional_wave()
+    test_short_separate_wave_is_per_user()
     test_handler_wrapper_uses_tracker()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
