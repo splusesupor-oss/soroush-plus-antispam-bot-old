@@ -504,10 +504,23 @@ async def _send_spam_ban_cleanup_notification(
     )
 
 
+def _collect_big_spam_ids(chat_id, user_id, seed_ids=(), current_id=None):
+    """Every recorded ID for this chat+user, not only the detector match set."""
+    collected = {
+        message_id for message_id in (seed_ids or ())
+        if isinstance(message_id, int) and message_id > 0
+    }
+    collected.update(message_tracker.spam_snapshot(chat_id, user_id, current_id))
+    if isinstance(current_id, int) and current_id > 0:
+        collected.add(current_id)
+    return collected
+
+
 async def _drain_big_spam_incident(bot, event, chat_id, user_id, incident):
     """Keep draining IDs added during cleanup; retain failed IDs for retry."""
     key = (chat_id, user_id)
     while True:
+        incident["ids"].update(_collect_big_spam_ids(chat_id, user_id))
         pending = set(incident["ids"]) - set(incident["deleted_ids"])
         if pending:
             remaining = set()
@@ -530,9 +543,11 @@ async def _drain_big_spam_incident(bot, event, chat_id, user_id, incident):
         # Two event-loop turns close the race with received messages that had
         # already entered the handler when the ban succeeded.
         await _asyncio.sleep(0)
+        incident["ids"].update(_collect_big_spam_ids(chat_id, user_id))
         if set(incident["ids"]) - set(incident["deleted_ids"]):
             continue
         await _asyncio.sleep(0)
+        incident["ids"].update(_collect_big_spam_ids(chat_id, user_id))
         if set(incident["ids"]) - set(incident["deleted_ids"]):
             continue
 
@@ -560,22 +575,25 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
     """Ban at once and start deleting whatever IDs are already recorded."""
     key = (chat_id, user_id)
     punish_key = f"{chat_id}:{user_id}"
-    existing = getattr(bot, "_big_spam_incidents", {}).get(key)
+    current_id = getattr(getattr(event, "message", None), "id", None)
+    collected = _collect_big_spam_ids(chat_id, user_id, seed_ids, current_id)
     if punish_key in bot.punished_users:
-        if existing is not None:
-            incident = _big_spam_incident(bot, key, seed_ids)
-            _start_big_spam_cleanup(bot, event, chat_id, user_id, incident)
+        # The first drain may have finished before the rest of the wave
+        # arrived. Re-open the same chat+user incident with every ID the
+        # tracker still has so messages 3..N are not dropped.
+        incident = _big_spam_incident(bot, key, collected)
+        _start_big_spam_cleanup(bot, event, chat_id, user_id, incident)
         return False
 
-    incident = _big_spam_incident(bot, key, seed_ids)
+    incident = _big_spam_incident(bot, key, collected)
     bot.punished_users.add(punish_key)
     bot.set_spam_lock(key)
     _start_big_spam_cleanup(bot, event, chat_id, user_id, incident)
 
     async def succeeded(_result):
         await _asyncio.sleep(0)
-        incident["ids"].update(message_tracker.spam_snapshot(
-            chat_id, user_id, getattr(event.message, "id", None)
+        incident["ids"].update(_collect_big_spam_ids(
+            chat_id, user_id, (), getattr(event.message, "id", None)
         ))
         _start_big_spam_cleanup(bot, event, chat_id, user_id, incident)
         bot.logger.log_info(

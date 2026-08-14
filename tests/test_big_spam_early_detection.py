@@ -94,6 +94,13 @@ def test_packed_phrase_in_one_message():
     many_kheili = " ".join(["خیلی"] * 10)
     miss, _, _ = big_spam.detect_big_spam(many_kheili, _rows(many_kheili))
     check("تکرار یک کلمه عادی اسپم نیست", not miss)
+    packed_word = " ".join(["بمنچه"] * 6)
+    hit, reason, ids = big_spam.detect_big_spam(packed_word, _rows(packed_word))
+    check("بمنچه بسته‌شده در یک پیام Big Spam است", hit, f"-> {reason}")
+    check("packed single-word reason", reason == "repeated_promotional_phrase")
+    glued = "بمنچه" * 6
+    hit, _, _ = big_spam.detect_big_spam(glued, _rows(glued))
+    check("بمنچه بدون فاصله هم intra-message است", hit)
 
 
 def test_repeated_campaign_without_marker_list():
@@ -359,6 +366,197 @@ def test_group_b_not_blocked_by_group_a_cleanup():
           finished_first, f"-> {order}")
 
 
+def test_separate_short_messages_are_not_big_spam():
+    print("\n### پیام‌های کوتاه جدا جدا Big Spam نیستند")
+    hit, reason, ids = big_spam.detect_big_spam(
+        "بمنچه", _rows("بمنچه", "بمنچه", "بمنچه")
+    )
+    check("بمنچه x3 جدا تشخیص نشود", not hit, f"-> {reason} {ids}")
+    hit, _, _ = big_spam.detect_big_spam("بمنچه", _rows("بمنچه", "بمنچه"))
+    check("بمنچه x2 جدا تشخیص نشود", not hit)
+    ordinary = "فیلم دیشب عالی بود"
+    hit, reason, _ = big_spam.detect_big_spam(ordinary, _rows(ordinary, ordinary))
+    check("جمله عادی x2 Big Spam نیست", not hit, f"-> {reason}")
+    hit, _, _ = big_spam.detect_big_spam(
+        ordinary, _rows(ordinary, ordinary, ordinary, ordinary)
+    )
+    check("جمله عادی x4 هم موج تبلیغاتی نیست", not hit)
+
+
+def _bio_wave_variant(index):
+    stretch_k = "ک" * (1 + index % 6)
+    stretch_v = "و" * (1 + index % 4)
+    emojis = ["🥺", "🧸", "❤️", "🔥", "✨", "😍", "💋"]
+    left, right = emojis[index % 7], emojis[(index + 3) % 7]
+    if index % 5 == 0:
+        return f"بیوچک{left}بیوچک{stretch_k}{right}"
+    if index % 5 == 1:
+        return f"بیوچکک{left}بیوچک{stretch_k}{right}"
+    if index % 5 == 2:
+        return f"بی{stretch_v}چک{left}بیوچک{stretch_k}{right}"
+    if index % 5 == 3:
+        return f"بیوچک{left}"
+    return f"بیو چک {left} بیوچک{stretch_k} {right}"
+
+
+def test_obfuscated_promotional_wave():
+    print("\n### موج تبلیغاتی با ایموجی و حروف کشیده")
+    first = _bio_wave_variant(0)
+    second = _bio_wave_variant(1)
+    check("نرمال‌سازی ایموجی را حذف می‌کند", "🥺" not in big_spam.normalize_text(first))
+    check(
+        "حروف کشیده به ریشه نزدیک می‌شوند",
+        "بیوچک" in big_spam.compact_text("بیوووووچک")
+        and "بیوچک" in big_spam.compact_text("بیوچکککک")
+        and "بیوچک" in big_spam.compact_text("بیییووچک"),
+    )
+    check(
+        "دو واریانت بعد از normalize تبلیغاتی‌اند",
+        big_spam.looks_promotional(first) and big_spam.looks_promotional(second),
+    )
+    check("واریانت‌ها یک کمپین هستند", big_spam.similar_promotional(first, second))
+
+    wave = [_bio_wave_variant(index) for index in range(50)]
+    rows = _rows(*wave)
+    hit, reason, ids = big_spam.detect_big_spam(wave[-1], rows)
+    check("موج ۵۰تایی تشخیص داده شد", hit, f"-> {reason}")
+    check("همه ۵۰ id وارد incident شد", ids == set(range(1, 51)), f"-> {len(ids)} ids")
+
+    early = big_spam.detect_big_spam(wave[1], _rows(wave[0], wave[1]))
+    check("از پیام دوم موج قوی شروع می‌شود", early[0], f"-> {early[1]}")
+    check("idهای همان لحظه از دست نرفت", early[2] == {1, 2}, f"-> {early[2]}")
+
+    mixed_texts = ["سلام ظهر بخیر"] + wave[:9]
+    hit, _, ids = big_spam.detect_big_spam(mixed_texts[-1], _rows(*mixed_texts))
+    check(
+        "بعد از تشخیص، همه idهای پنجره برمی‌گردد نه فقط match دقیق",
+        hit and ids == set(range(1, 11)),
+        f"-> {ids}",
+    )
+
+
+def test_normalization_does_not_break_ordinary_chat():
+    print("\n### نرمال‌سازی پیام عادی را اسپم نمی‌کند")
+    for text in ("سلام🥺", "خوبی؟😍", "ممنون❤️", "صبح بخیر✨"):
+        hit, reason, _ = big_spam.detect_big_spam(text, _rows(text, text, text))
+        check(f"{text!r} x3 عادی است", not hit, f"-> {reason}")
+
+
+def test_incident_stays_per_chat_user():
+    print("\n### incident فقط (chat_id, user_id) است و cleanup همه idها را می‌گیرد")
+    message_tracker.reset_all()
+    chat_a, chat_b, user_a, user_b = -701, -702, 11, 12
+    wave = [_bio_wave_variant(index) for index in range(8)]
+    for index, text in enumerate(wave, 1):
+        message_tracker.add_message(chat_a, user_a, index, text)
+        message_tracker.add_message(chat_a, user_b, 100 + index, text)
+        message_tracker.add_message(chat_b, user_a, 200 + index, text)
+    hit_a, _, ids_a = handler._big_repeated_spam(chat_a, user_a, wave[-1])
+    hit_other, _, ids_other = handler._big_repeated_spam(chat_a, user_b, wave[-1])
+    hit_b, _, ids_b = handler._big_repeated_spam(chat_b, user_a, wave[-1])
+    check("کاربر A در گروه A تشخیص داده شد", hit_a, f"-> {ids_a}")
+    check("cleanup همان کاربر همان گروه همه idها را دارد", ids_a == set(range(1, 9)), f"-> {ids_a}")
+    check("کاربر B در همان گروه جدا است", hit_other and ids_other == set(range(101, 109)), f"-> {ids_other}")
+    check("همان کاربر در گروه B قاطی نشد", hit_b and ids_b == set(range(201, 209)), f"-> {ids_b}")
+    message_tracker.reset_all()
+
+
+
+def test_late_wave_ids_rejoin_after_early_drain():
+    print("\n### بعد از trigger روی پیام ۲، idهای ۱ تا ۵۰ از دست نروند")
+
+    async def scenario():
+        message_tracker.reset_all()
+        chat_id, user_id = -8801, 55
+        deleted = []
+
+        class Queue:
+            def enqueue(self, chat_id, action, operation, **kwargs):
+                return True
+
+        bot = SimpleNamespace(
+            logger=SimpleNamespace(log_info=lambda *_: None, log_error=lambda *_: None),
+            punished_users=set(),
+            spam_lock=set(),
+            moderation_queue=Queue(),
+            admin_actions=SimpleNamespace(ban_user=lambda *a, **k: None),
+        )
+        bot.set_spam_lock = lambda key: bot.spam_lock.add(key)
+        bot.clear_spam_lock = lambda key: bot.spam_lock.discard(key)
+        bot.is_spam_locked = lambda key: key in bot.spam_lock
+
+        async def fake_cleanup(_bot, _chat, _user, ids):
+            deleted.append(set(ids))
+            return len(ids), []
+
+        async def fake_notice(*_args):
+            return True
+
+        async def instant(_seconds):
+            return None
+
+        original_cleanup = handler.cleanup_spam_messages
+        original_notice = handler._send_spam_ban_cleanup_notification
+        original_sleep = handler._asyncio.sleep
+        handler.cleanup_spam_messages = fake_cleanup
+        handler._send_spam_ban_cleanup_notification = fake_notice
+        handler._asyncio.sleep = instant
+        try:
+            wave = [_bio_wave_variant(index) for index in range(50)]
+            event = SimpleNamespace(message=SimpleNamespace(id=2), sender=None)
+            for index, text in enumerate(wave[:2], 1):
+                handler._capture_big_spam_message(bot, chat_id, user_id, index)
+                message_tracker.add_message(chat_id, user_id, index, text)
+                hit, reason, ids = handler._big_repeated_spam(chat_id, user_id, text)
+                if hit:
+                    ids.add(index)
+                    handler._queue_big_spam_ban(
+                        bot, event, chat_id, user_id, None, ids, reason
+                    )
+            pending = [
+                task for task in asyncio.all_tasks()
+                if task is not asyncio.current_task()
+            ]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+            first_deleted = set().union(*deleted) if deleted else set()
+            for index, text in enumerate(wave[2:], 3):
+                event = SimpleNamespace(message=SimpleNamespace(id=index), sender=None)
+                handler._capture_big_spam_message(bot, chat_id, user_id, index)
+                message_tracker.add_message(chat_id, user_id, index, text)
+                if bot.is_spam_locked((chat_id, user_id)) and (
+                    chat_id, user_id
+                ) in getattr(bot, "_big_spam_incidents", {}):
+                    continue
+                hit, reason, ids = handler._big_repeated_spam(
+                    chat_id, user_id, text
+                )
+                if hit:
+                    ids.add(index)
+                    handler._queue_big_spam_ban(
+                        bot, event, chat_id, user_id, None, ids, reason
+                    )
+            pending = [
+                task for task in asyncio.all_tasks()
+                if task is not asyncio.current_task()
+            ]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            all_deleted = set().union(*deleted) if deleted else set()
+            return first_deleted, all_deleted
+        finally:
+            handler.cleanup_spam_messages = original_cleanup
+            handler._send_spam_ban_cleanup_notification = original_notice
+            handler._asyncio.sleep = original_sleep
+            message_tracker.reset_all()
+
+    first_deleted, all_deleted = asyncio.run(scenario())
+    check("trigger پیام ۲ idهای ۱ و ۲ را دارد", first_deleted == {1, 2}, f"-> {first_deleted}")
+    check("cleanup نهایی هر ۵۰ id را دارد", all_deleted == set(range(1, 51)),
+          f"-> missing={sorted(set(range(1, 51)) - all_deleted)}")
+
+
 def test_handler_wrapper_uses_tracker():
     print("\n### wrapper هندلر از tracker همان chat استفاده می‌کند")
     message_tracker.reset_all()
@@ -385,6 +583,11 @@ def main():
     test_retry_does_not_drop_or_double_complete()
     test_early_ban_starts_cleanup_before_ban_rpc()
     test_group_b_not_blocked_by_group_a_cleanup()
+    test_separate_short_messages_are_not_big_spam()
+    test_obfuscated_promotional_wave()
+    test_normalization_does_not_break_ordinary_chat()
+    test_incident_stays_per_chat_user()
+    test_late_wave_ids_rejoin_after_early_drain()
     test_handler_wrapper_uses_tracker()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
