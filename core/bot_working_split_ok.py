@@ -902,6 +902,62 @@ class SoroushAntiSpamBot:
                 print(f"join ban check error: {e}")
 
 
+        async def process_priority_command(event):
+            """Admin/user-command lane: skip profile, broadcast, and spam prelude.
+
+            Mute/ban/lock must not wait on get_chat routing or per-message
+            debug logs.  Private chats and group on/off still use the full
+            path so existing owner/DM behavior is unchanged.
+            """
+            try:
+                instrument_event(event, self.logger)
+                raw_text = ""
+                try:
+                    message = getattr(event, "message", None)
+                    raw_text = (
+                        getattr(message, "message", None)
+                        or getattr(message, "caption", None)
+                        or ""
+                    ) if message is not None else ""
+                except Exception:
+                    raw_text = ""
+                text = normalize_command_text(raw_text)
+                if getattr(event, "is_private", False) or text in {
+                    "فعال", "غیر فعال", "فعال سازی",
+                }:
+                    await process_incoming_message(event)
+                    return
+                sender = (
+                    getattr(event, "_bot_cached_sender", None)
+                    or getattr(event, "sender", None)
+                )
+                if sender is None:
+                    try:
+                        sender = await event.get_sender()
+                    except Exception:
+                        sender = None
+                try:
+                    event._bot_cached_sender = sender
+                except Exception:
+                    pass
+                chat_id = getattr(event, "chat_id", None)
+                if chat_id is None or not is_active(chat_id):
+                    sender_id = getattr(sender, "id", None)
+                    if (
+                        expiry_command(text) is not None
+                        and is_global_owner(sender_id)
+                    ):
+                        await process_incoming_message(event)
+                    return
+                await handle_new_message(self, event)
+            except Exception as handler_error:
+                import traceback as _tb
+                self.logger.log_error(
+                    "PRIORITY COMMAND HANDLER CRASHED "
+                    f"chat_id={getattr(event, 'chat_id', None)} "
+                    f"error={handler_error!r}\n{_tb.format_exc()}"
+                )
+
         async def process_incoming_message(event):
             # === SPAM DEBUG INCOMING — اولین خط NewMessage ===
             try:
@@ -1758,13 +1814,17 @@ class SoroushAntiSpamBot:
             if decision is not None and decision.skip_heavy:
                 return
             priority, kind = classify_priority(raw_text, event)
+            if kind in {"admin", "command"}:
+                factory = lambda ev=event: process_priority_command(ev)
+            else:
+                factory = lambda ev=event: process_incoming_message(ev)
             self.group_dispatcher.submit(
                 chat_id,
-                lambda ev=event: process_incoming_message(ev),
+                factory,
                 priority=priority,
                 kind=kind,
                 on_overflow=(
-                    None if priority == 0
+                    None if kind != "normal"
                     else lambda ev=event: self._overflow_message(ev)
                 ),
             )

@@ -1,4 +1,4 @@
-"""Per-group dispatcher: isolation, admin priority, overflow, delete priority.
+"""Per-group dispatcher: isolation, admin/command lanes, overflow, delete priority.
 
     python tests/test_group_dispatch.py
 """
@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from modules.group_dispatch import (
     PRIORITY_ADMIN,
+    PRIORITY_COMMAND,
     PRIORITY_NORMAL,
     GroupDispatcher,
     classify_priority,
@@ -57,8 +58,12 @@ def test_classify_priority():
         priority, kind = classify_priority(text)
         check(f"{text!r} admin", priority == PRIORITY_ADMIN and kind == "admin",
               f"-> {priority} {kind}")
+    for text in ("جک", "راهنما", "موجودی", "حدس ایموجی"):
+        priority, kind = classify_priority(text)
+        check(f"{text!r} command", priority == PRIORITY_COMMAND and kind == "command",
+              f"-> {priority} {kind}")
     for text in (
-        "سلام", "https://spam.example/x", "خرید فالوور", "جک", "راهنما",
+        "سلام", "https://spam.example/x", "خرید فالوور",
     ):
         priority, kind = classify_priority(text)
         check(f"{text!r} normal", priority == PRIORITY_NORMAL,
@@ -101,8 +106,8 @@ def test_groups_are_isolated():
     check("بعد از join کارگری نماند", workers == 0, f"-> {workers}")
 
 
-def test_admin_jumps_same_group_queue():
-    print("\n### دستور ادمین از صف همان گروه جلو می‌افتد")
+def test_admin_runs_while_normal_held():
+    print("\n### سکوت/ادمین پشت شغل سنگین همان گروه نمی‌ماند")
 
     async def scenario():
         dispatcher = GroupDispatcher(max_pending_normal=80, logger=Logger())
@@ -112,26 +117,84 @@ def test_admin_jumps_same_group_queue():
         async def first():
             order.append("first")
             await hold.wait()
+            order.append("first_done")
 
         async def named(name):
             order.append(name)
 
-        dispatcher.submit(-7, first, priority=PRIORITY_NORMAL)
+        dispatcher.submit(-7, first, priority=PRIORITY_NORMAL, kind="normal")
         await asyncio.sleep(0)
-        dispatcher.submit(-7, lambda: named("n2"), priority=PRIORITY_NORMAL)
-        dispatcher.submit(-7, lambda: named("n3"), priority=PRIORITY_NORMAL)
-        dispatcher.submit(-7, lambda: named("admin"), priority=PRIORITY_ADMIN)
+        dispatcher.submit(-7, lambda: named("n2"), priority=PRIORITY_NORMAL, kind="normal")
+        dispatcher.submit(-7, lambda: named("سکوت"), priority=PRIORITY_ADMIN, kind="admin")
+        await asyncio.sleep(0.05)
+        admin_during_hold = "سکوت" in order and "first_done" not in order
         hold.set()
         await dispatcher.join(timeout=1)
-        return order
+        return order, admin_during_hold
 
-    order = asyncio.run(scenario())
-    check("اولین شغل عادی که شروع شده بود تمام می‌شود",
-          order[0] == "first", f"-> {order}")
-    check("ادمین قبل از بقیهٔ عادی‌ها اجرا می‌شود",
-          order[1] == "admin", f"-> {order}")
-    check("هر چهار شغل اجرا شدند", order.count("admin") == 1 and len(order) == 4,
-          f"-> {order}")
+    order, admin_during_hold = asyncio.run(scenario())
+    check("شغل عادی شروع شد", "first" in order, f"-> {order}")
+    check("سکوت در حالی که شغل عادی هنوز نگه داشته شده اجرا شد",
+          admin_during_hold, f"-> {order}")
+    check("هر سه شغل تمام شدند",
+          set(order) >= {"first", "first_done", "n2", "سکوت"}, f"-> {order}")
+
+
+def test_user_command_has_own_lane():
+    print("\n### دستور کاربری پشت موج اسپم همان گروه نمی‌ماند")
+
+    async def scenario():
+        dispatcher = GroupDispatcher(max_pending_normal=80, logger=Logger())
+        order = []
+        hold = asyncio.Event()
+
+        async def spam():
+            order.append("spam")
+            await hold.wait()
+
+        async def help_job():
+            order.append("راهنما")
+
+        dispatcher.submit(-8, spam, priority=PRIORITY_NORMAL, kind="normal")
+        await asyncio.sleep(0)
+        dispatcher.submit(-8, help_job, priority=PRIORITY_COMMAND, kind="command")
+        await asyncio.sleep(0.05)
+        isolated = "راهنما" in order and "spam" in order
+        hold.set()
+        await dispatcher.join(timeout=1)
+        return isolated, order
+
+    isolated, order = asyncio.run(scenario())
+    check("راهنما همزمان با شغل اسپم اجرا شد", isolated, f"-> {order}")
+
+
+def test_overflow_keeps_admin_and_command():
+    print("\n### سقف ۴۰ فقط عادی را drop می‌کند نه سکوت/راهنما")
+
+    async def scenario():
+        dispatcher = GroupDispatcher(max_pending_normal=1, logger=Logger())
+        hold = asyncio.Event()
+        ran = []
+
+        async def hold_job():
+            ran.append("hold")
+            await hold.wait()
+
+        dispatcher.submit(12, hold_job, priority=PRIORITY_NORMAL, kind="normal")
+        await asyncio.sleep(0)
+        queued = dispatcher.submit(12, lambda: ran.append("n1"), priority=PRIORITY_NORMAL, kind="normal")
+        dropped = dispatcher.submit(12, lambda: None, priority=PRIORITY_NORMAL, kind="normal")
+        ok_admin = dispatcher.submit(12, lambda: ran.append("بن"), priority=PRIORITY_ADMIN, kind="admin")
+        ok_cmd = dispatcher.submit(12, lambda: ran.append("جک"), priority=PRIORITY_COMMAND, kind="command")
+        hold.set()
+        await dispatcher.join(timeout=1)
+        return dropped, ok_admin, ok_cmd, ran
+
+    dropped, ok_admin, ok_cmd, ran = asyncio.run(scenario())
+    check("عادی اضافه overflow شد", dropped is False)
+    check("بن قبول شد", ok_admin is True)
+    check("جک قبول شد", ok_cmd is True)
+    check("بن و جک اجرا شدند", "بن" in ran and "جک" in ran, f"-> {ran}")
 
 
 def test_overflow_drops_normal_keeps_admin():
@@ -200,11 +263,8 @@ def test_delete_queue_priority_and_isolation():
         queue = MessageDeleteQueue(
             client, Logger(), batch_size=50, max_concurrent=4, inter_batch_delay=0,
         )
-        # Occupy group -1 with a slow spam delete.
         queue.enqueue(-1, [1, 2, 3], priority=1)
         await client.started.wait()
-        # Admin delete in the same group must wait for this group's worker,
-        # but group -2 must proceed immediately.
         admin = queue.enqueue(-1, [99], priority=0)
         other = queue.enqueue(-2, [50], priority=1)
         await asyncio.wait_for(asyncio.wrap_future(other), timeout=0.5)
@@ -237,7 +297,6 @@ def test_admin_delete_jumps_same_chat():
         queue = MessageDeleteQueue(
             client, Logger(), batch_size=10, max_concurrent=1, inter_batch_delay=0,
         )
-        # Seed the worker with a blocking first batch, then enqueue more.
         gate = asyncio.Event()
         original = client.delete_messages
 
@@ -253,7 +312,6 @@ def test_admin_delete_jumps_same_chat():
         queue.enqueue(-9, [2, 3], priority=1)
         admin = queue.enqueue(-9, [100], priority=0)
         await asyncio.wait_for(asyncio.wrap_future(admin), timeout=0.5)
-        # Let remaining spam finish.
         await asyncio.sleep(0.05)
         return client.order
 
@@ -310,7 +368,9 @@ def test_gif_uses_per_chat_delete_queue():
 def main():
     test_classify_priority()
     test_groups_are_isolated()
-    test_admin_jumps_same_group_queue()
+    test_admin_runs_while_normal_held()
+    test_user_command_has_own_lane()
+    test_overflow_keeps_admin_and_command()
     test_overflow_drops_normal_keeps_admin()
     test_delete_queue_priority_and_isolation()
     test_admin_delete_jumps_same_chat()

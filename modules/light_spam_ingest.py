@@ -5,7 +5,7 @@ No RPC, no ``get_sender`` / ``get_chat``, no profile/games, no per-message log.
 """
 from modules import big_spam
 from modules import message_tracker
-from modules.group_dispatch import PRIORITY_ADMIN, classify_priority
+from modules.group_dispatch import PRIORITY_NORMAL, classify_priority
 
 
 class IngestResult:
@@ -106,7 +106,9 @@ def ingest_event(bot, event):
 
 def _ingest(bot, chat_id, user_id, message_id, text, *, event=None, is_private=False):
     priority, _kind = classify_priority(text)
-    if priority <= PRIORITY_ADMIN:
+    # Admin and public/user commands skip detect so they stay on their
+    # dedicated dispatcher lanes and cannot be delayed or mis-tagged.
+    if priority < PRIORITY_NORMAL:
         return IngestResult(skip_heavy=False, detected=False)
     if is_private:
         return IngestResult(skip_heavy=False, detected=False)
