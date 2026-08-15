@@ -666,6 +666,41 @@ def test_short_separate_wave_is_per_user():
     message_tracker.reset_all()
 
 
+def test_ban_notice_sent_once_after_two_cleanup_stages():
+    print("\n### اعلان اخراج فقط یک بار با جمع نهایی")
+
+    async def scenario():
+        sent = []
+        bot = SimpleNamespace(
+            logger=SimpleNamespace(log_info=lambda *_: None, log_error=lambda *_: None),
+        )
+        event = SimpleNamespace(sender=None)
+
+        async def fake_notice(_bot, _event, _chat, _user, count, _notice_id):
+            sent.append(count)
+            return True
+
+        original = handler._send_spam_ban_cleanup_notification
+        handler._send_spam_ban_cleanup_notification = fake_notice
+        try:
+            handler._record_spam_ban_deletes(bot, event, -7701, 42, {1, 2, 3, 4, 5})
+            handler._schedule_spam_ban_notice(bot, event, -7701, 42)
+            handler._record_spam_ban_deletes(bot, event, -7701, 42, {6, 7, 8, 9, 10})
+            handler._schedule_spam_ban_notice(bot, event, -7701, 42)
+            pending = [
+                task for task in asyncio.all_tasks()
+                if task is not asyncio.current_task()
+            ]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            return sent
+        finally:
+            handler._send_spam_ban_cleanup_notification = original
+
+    sent = asyncio.run(scenario())
+    check("فقط یک اعلان با جمع ۱۰", sent == [10], f"-> {sent}")
+
+
 def test_handler_wrapper_uses_tracker():
     print("\n### wrapper هندلر از tracker همان chat استفاده می‌کند")
     message_tracker.reset_all()
@@ -700,6 +735,7 @@ def main():
     test_generic_decoration_normalization()
     test_short_separate_promotional_wave()
     test_short_separate_wave_is_per_user()
+    test_ban_notice_sent_once_after_two_cleanup_stages()
     test_handler_wrapper_uses_tracker()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0

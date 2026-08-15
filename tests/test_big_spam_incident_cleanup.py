@@ -41,9 +41,18 @@ def test_big_incident_drains_ids_captured_during_cleanup(monkeypatch):
     monkeypatch.setattr(handler, "cleanup_spam_messages", fake_cleanup)
     monkeypatch.setattr(handler, "_send_spam_ban_cleanup_notification", fake_notice)
 
-    asyncio.run(handler._drain_big_spam_incident(
-        bot, SimpleNamespace(sender=None), chat_id, user_id, incident
-    ))
+    async def run():
+        await handler._drain_big_spam_incident(
+            bot, SimpleNamespace(sender=None), chat_id, user_id, incident
+        )
+        pending = [
+            task for task in asyncio.all_tasks()
+            if task is not asyncio.current_task()
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    asyncio.run(run())
 
     assert batches == [{101}, {102}]
     assert sent == [2]

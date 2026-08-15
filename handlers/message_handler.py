@@ -480,6 +480,71 @@ def _capture_big_spam_message(bot, chat_id, user_id, message_id):
         incident["ids"].add(message_id)
 
 
+def _record_spam_ban_deletes(bot, event, chat_id, user_id, deleted_ids):
+    """Accumulate unique deleted IDs for the one final ban notice."""
+    key = (chat_id, user_id)
+    shared = _spam_cleanup_incident(bot, key, event)
+    counted = shared.setdefault("counted_ids", set())
+    counted.update(
+        message_id for message_id in (deleted_ids or ())
+        if isinstance(message_id, int) and message_id > 0
+    )
+    shared["deleted"] = len(counted)
+    shared["ban_confirmed"] = True
+    if event is not None:
+        shared["event"] = event
+    return shared
+
+
+def _schedule_spam_ban_notice(bot, event, chat_id, user_id):
+    """Send the ban notice once, after every in-flight cleanup stage finishes."""
+    key = (chat_id, user_id)
+    shared = _spam_cleanup_incident(bot, key, event)
+    shared["generation"] = shared.get("generation", 0) + 1
+    my_gen = shared["generation"]
+
+    async def run():
+        try:
+            await _asyncio.sleep(0)
+            if shared.get("generation") != my_gen:
+                return
+            for _ in range(40):
+                if shared.get("generation") != my_gen:
+                    return
+                big = getattr(bot, "_big_spam_incidents", {}).get(key)
+                big_task = None if big is None else big.get("cleanup_task")
+                auto_task = getattr(bot, "_auto_spam_cleanup_tasks", {}).get(key)
+                me = _asyncio.current_task()
+                big_busy = big_task is not None and not big_task.done()
+                auto_busy = (
+                    auto_task is not None
+                    and not auto_task.done()
+                    and auto_task is not me
+                )
+                if not big_busy and not auto_busy:
+                    break
+                await _asyncio.sleep(0)
+            if shared.get("generation") != my_gen:
+                return
+            count = len(shared.get("counted_ids") or ())
+            if count <= 0:
+                return
+            notice_event = shared.get("event") or event
+            await _send_spam_ban_cleanup_notification(
+                bot, notice_event, chat_id, user_id, count, "wave",
+            )
+        finally:
+            if (
+                shared.get("notice_task") is _asyncio.current_task()
+                and shared.get("generation") == my_gen
+            ):
+                getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
+
+    task = _asyncio.create_task(run())
+    shared["notice_task"] = task
+    return task
+
+
 async def _send_spam_ban_cleanup_notification(
         bot, event, chat_id, user_id, deleted_count, notice_id):
     """Send the one existing final ban/cleanup template for a completed wave."""
@@ -494,7 +559,7 @@ async def _send_spam_ban_cleanup_notification(
         f"🗑 {_fullwidth_digits(deleted_count)} پیام تکراری پاک شد"
     )
     return await _send_moderation_notification_once(
-        bot, chat_id, user_id, "spam_ban_cleanup", notice_id, ban_text,
+        bot, chat_id, user_id, "spam_ban_cleanup", "wave", ban_text,
         formatting_entities=[
             MessageEntityBlockquote(
                 offset=0,
@@ -551,11 +616,11 @@ async def _drain_big_spam_incident(bot, event, chat_id, user_id, incident):
         if set(incident["ids"]) - set(incident["deleted_ids"]):
             continue
 
-        await _send_spam_ban_cleanup_notification(
-            bot, event, chat_id, user_id,
-            len(incident["deleted_ids"]), ("big", incident["id"]),
+        _record_spam_ban_deletes(
+            bot, event, chat_id, user_id, incident["deleted_ids"],
         )
         getattr(bot, "_big_spam_incidents", {}).pop(key, None)
+        _schedule_spam_ban_notice(bot, event, chat_id, user_id)
         return
 
 
@@ -860,6 +925,10 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                 deleted, remaining = await cleanup_spam_messages(
                     bot, chat_id, user_id, spam_ids)
                 incident["deleted"] += deleted
+                _record_spam_ban_deletes(
+                    bot, event, chat_id, user_id,
+                    set(spam_ids) - set(remaining or ()),
+                )
                 finalized = finalize_spam_wave(
                     chat_id, user_id, len(spam_ids), deleted, remaining)
                 if remaining:
@@ -887,28 +956,7 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                         f"deleted_so_far={incident['deleted']}"
                     )
                     return
-                notice_event = incident.get("event") or event
-                ban_header = (
-                    "⚠️ کاربر ⏌ "
-                    f"{format_user(getattr(notice_event, 'sender', None))}"
-                    " ⎾"
-                )
-                ban_text = (
-                    f"{ban_header}\n\n"
-                    "به دلیل هرزنامه از گروه اخراج شد.\n"
-                    f"🗑 {_fullwidth_digits(incident['deleted'])} پیام تکراری پاک شد"
-                )
-                await _send_moderation_notification_once(
-                    bot, chat_id, user_id, "spam_ban_cleanup", incident["id"],
-                    ban_text,
-                    formatting_entities=[
-                        MessageEntityBlockquote(
-                            offset=0,
-                            length=len(ban_header.encode("utf-16-le")) // 2,
-                        )
-                    ],
-                )
-                getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
+                _schedule_spam_ban_notice(bot, event, chat_id, user_id)
             elif incident["deleted"]:
                 notice_event = incident.get("event") or event
                 await notice_event.reply(
