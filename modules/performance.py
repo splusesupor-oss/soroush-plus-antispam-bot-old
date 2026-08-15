@@ -32,7 +32,7 @@ class MessagePerformance:
         if stage in self.values:
             self.values[stage] = max(0.0, float(value_ms))
 
-    def finish(self, logger, chat_id, threshold_ms=50):
+    def finish(self, logger, chat_id, threshold_ms=1000):
         now = time.perf_counter()
         total_ms = (now - self.started_at) * 1000
         if total_ms < threshold_ms:

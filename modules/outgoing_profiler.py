@@ -60,7 +60,7 @@ def _wrap(owner, attribute, operation, logger):
         depth = _RPC_DEPTH.get()
         depth_token = _RPC_DEPTH.set(depth + 1)
         source = _caller_source()
-        if operation in {"send_message", "reply"}:
+        if _RPC_DEBUG and operation in {"send_message", "reply"}:
             logger.log_info(
                 f"SEND START source={source} chat_id={chat_id}"
             )
@@ -91,7 +91,7 @@ def _wrap(owner, attribute, operation, logger):
                     f"started_at={started_wall:.3f} finished_at={time.time():.3f} "
                     f"rpc_ms={elapsed_ms:.2f} result={result} nested={depth > 0}"
                 )
-            if operation in {"send_message", "reply"}:
+            if _RPC_DEBUG and operation in {"send_message", "reply"}:
                 logger.log_info(
                     f"SEND END source={source} ms={elapsed_ms:.0f}"
                 )

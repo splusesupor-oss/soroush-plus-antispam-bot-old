@@ -323,13 +323,14 @@ def _get_forward_metadata(message):
 
 def _log_ban_execution(bot, chat_id, user_id, reason):
     punish_key = f"{chat_id}:{user_id}"
-    bot.logger.log_info(
+    _debug_log(
+        bot,
         "BAN EXECUTION DEBUG\n"
         f"chat_id={chat_id}\n"
         f"user_id={user_id}\n"
         f"reason={reason}\n"
         f"already_punished={punish_key in bot.punished_users}\n"
-        f"will_ban={punish_key not in bot.punished_users}"
+        f"will_ban={punish_key not in bot.punished_users}",
     )
 
 
@@ -697,12 +698,26 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
     return True
 
 
+_NATIVE_ADMIN_FAIL_TTL = 45
+
+
+def _store_native_admin_cache(cache, key, value, expires_at):
+    cache[key] = (value, expires_at)
+    if len(cache) > 5000:
+        cache.pop(next(iter(cache)), None)
+
+
 async def _is_native_group_admin(bot, chat_id, user_id, sender):
     """Read the actual Soroush group role, independently of bot admin storage.
 
     A group administrator cannot be banned/restricted by the bot.  The result
     is short-lived cached to avoid an RPC for every message while still
     promptly reflecting role changes.
+
+    SPlusthon ``get_permissions`` looks the member up in the GetParticipant
+    ``users`` map.  Soroush often returns that map without this user, which
+    raises ``KeyError``.  The miss must be cached: otherwise the single
+    per-chat worker retries the same RPC on every ordinary message.
     """
     cache = getattr(bot, "native_group_admin_cache", None)
     if cache is None:
@@ -717,15 +732,21 @@ async def _is_native_group_admin(bot, chat_id, user_id, sender):
         is_admin = bool(getattr(permissions, "is_admin", False))
         # Admin status gets a slightly longer cache; a non-admin is retried
         # sooner so a newly promoted group admin is protected promptly.
-        cache[key] = (is_admin, now + (60 if is_admin else 15))
-        if len(cache) > 5000:
-            cache.pop(next(iter(cache)), None)
+        _store_native_admin_cache(cache, key, is_admin, now + (60 if is_admin else 15))
         return is_admin
     except Exception as error:
-        bot.logger.log_error(
-            "NATIVE ADMIN CHECK FAILED "
-            f"chat_id={chat_id} user_id={user_id} error={error!r}"
-        )
+        _store_native_admin_cache(cache, key, False, now + _NATIVE_ADMIN_FAIL_TTL)
+        last = getattr(bot, "_native_admin_fail_logged", None)
+        if last is None:
+            last = bot._native_admin_fail_logged = {}
+        if _message_debug_enabled(bot) or last.get(key, 0) <= now:
+            last[key] = now + 300
+            if len(last) > 5000:
+                last.pop(next(iter(last)), None)
+            bot.logger.log_error(
+                "NATIVE ADMIN CHECK FAILED "
+                f"chat_id={chat_id} user_id={user_id} error={error!r}"
+            )
         return False
 
 
@@ -1340,11 +1361,12 @@ def resolve_registration_prefix(text):
 def _log_command_route(bot, text, matched_command, handler):
     """ردیابی تصمیم routing برای هر دستور حساس."""
     try:
-        bot.logger.log_info(
+        _debug_log(
+            bot,
             "COMMAND ROUTE MATCH "
             f"text={text[:60]!r} "
             f"matched_command={matched_command!r} "
-            f"handler={handler!r}"
+            f"handler={handler!r}",
         )
     except Exception:
         pass
@@ -1389,13 +1411,14 @@ def _has_group_management_permission(bot, chat_id, user_id, username):
     ADMIN_PERMISSION_CACHE[cache_key] = (
         now + ADMIN_PERMISSION_CACHE_TTL_SECONDS, result
     )
-    # این helper برای هر پیام گروهی اجرا می‌شود؛ log synchronous فقط برای
-    # permission مثبت نگه داشته می‌شود تا مسیر عادی کاربران I/O اضافی نداشته باشد.
+    # این helper برای هر پیام گروهی اجرا می‌شود؛ log synchronous فقط در
+    # حالت debug نگه داشته می‌شود تا مسیر عادی کاربران I/O اضافی نداشته باشد.
     if result:
-        bot.logger.log_info(
+        _debug_log(
+            bot,
             "ADMIN CHECK DEBUG "
             f"user_id={user_id} username={username} group_id={chat_id} "
-            f"result={result} source={source}"
+            f"result={result} source={source}",
         )
     return result
 
@@ -1610,9 +1633,10 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     # Search administration above remains owned by this module. Every other
     # known bot command must continue through the normal command/game route.
     if _is_known_internal_command(clean_text, chat_id, user_id):
-        bot.logger.log_info(
+        _debug_log(
+            bot,
             "SEARCH ROUTE SKIPPED internal_command "
-            f"chat_id={chat_id} user_id={user_id} command={clean_text!r}"
+            f"chat_id={chat_id} user_id={user_id} command={clean_text!r}",
         )
         return False
 
@@ -1777,6 +1801,7 @@ async def handle_new_message(bot, event):
         )
         native_admin_bypass = bool(
             not event.is_private
+            and not registered_admin_bypass
             and await _is_native_group_admin(bot, chat_id, user_id, sender)
         )
         # A native group admin who is not registered in the bot follows the
@@ -2026,20 +2051,22 @@ async def handle_new_message(bot, event):
             return
         # Normalize only the routing copy; keep message_text unchanged for filters.
         clean_text = normalize_command(message_text)
-        bot.logger.log_info(
-            "PUBLIC COMMAND ROUTE ENTER "
-            f"chat_id={chat_id} user_id={user_id} text={message_text!r} "
-            f"normalized={clean_text!r}"
-        )
         _legacy_commands = {
             "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
             "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",
             "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز", "اخطار",
             "سابقه ها", "سابقه‌ها", "سطح گروه",
         }
-        bot.logger.log_info(
+        _debug_log(
+            bot,
+            "PUBLIC COMMAND ROUTE ENTER "
+            f"chat_id={chat_id} user_id={user_id} text={message_text!r} "
+            f"normalized={clean_text!r}",
+        )
+        _debug_log(
+            bot,
             "COMMAND MATCH CHECK "
-            f"command={clean_text!r} matched={clean_text in _legacy_commands}"
+            f"command={clean_text!r} matched={clean_text in _legacy_commands}",
         )
 
         # ------------------------------------------------------------------
@@ -4127,10 +4154,13 @@ async def handle_new_message(bot, event):
 
             return
 
-        chat = await event.get_chat()
-        sender = await event.get_sender()
-
-        chat_id = getattr(chat, "id", None)
+        chat = event_chat
+        if chat is None:
+            try:
+                chat = await event.get_chat()
+            except Exception:
+                chat = None
+        chat_id = getattr(chat, "id", None) if chat is not None else chat_id
 
         # اجرای دستورات مدیریتی
         if clean_text in ["لغو کلمات ممنوعه", "فعال کلمات ممنوعه"]:
@@ -4162,7 +4192,7 @@ async def handle_new_message(bot, event):
                 return
             except Exception as e:
                 bot.logger.log_error(f"خطای اجرای دستور مدیر: {e}")
-        chat_title = getattr(chat, "title", "Unknown")
+        chat_title = getattr(chat, "title", "Unknown") if chat is not None else "Unknown"
 
         user_id = getattr(sender, "id", None)
         username = (
@@ -5474,9 +5504,10 @@ async def handle_new_message(bot, event):
             if is_spam:
                 moderation_trigger = _detector_moderation_trigger(reason)
 
-        bot.logger.log_info(
+        _debug_log(
+            bot,
             f"MODERATION TYPE={'SPAM' if moderation_trigger == 'spam' else 'FILTER_GROUP'} "
-            f"chat_id={chat_id} user_id={user_id} reason={reason!r}"
+            f"chat_id={chat_id} user_id={user_id} reason={reason!r}",
         )
         profiler.mark("SPAM_CHECK")
         if is_spam:
