@@ -91,6 +91,14 @@ def _bot(client, debug=False):
     )
 
 
+def test_negative_native_admin_ttl_is_raised():
+    print("\n### TTL نتیجه منفی native admin بالاتر از قبل است")
+    check("fail TTL is 180s", handler._NATIVE_ADMIN_FAIL_TTL == 180,
+          f"-> {handler._NATIVE_ADMIN_FAIL_TTL}")
+    check("non-admin TTL is 90s", handler._NATIVE_ADMIN_NEGATIVE_TTL == 90,
+          f"-> {handler._NATIVE_ADMIN_NEGATIVE_TTL}")
+
+
 def test_keyerror_is_fail_closed_and_cached():
     print("\n### KeyError سروش → False و بدون RPC دوباره")
     client = _Client(error=KeyError(12345))
@@ -171,7 +179,7 @@ def test_expired_failure_retries():
         first = await handler._is_native_group_admin(bot, -1005, 22, None)
         key = next(iter(bot.native_group_admin_cache))
         value, expires = bot.native_group_admin_cache[key]
-        bot.native_group_admin_cache[key] = (value, expires - 100)
+        bot.native_group_admin_cache[key] = (value, expires - 1000)
         client.error = None
         client.is_admin = True
         second = await handler._is_native_group_admin(bot, -1005, 22, None)
@@ -229,6 +237,7 @@ def test_ban_execution_and_admin_check_logs_are_debug_only():
 
 
 if __name__ == "__main__":
+    test_negative_native_admin_ttl_is_raised()
     test_keyerror_is_fail_closed_and_cached()
     test_repeat_keyerror_does_not_relog()
     test_successful_admin_is_cached()

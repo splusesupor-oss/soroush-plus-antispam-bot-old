@@ -698,7 +698,11 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
     return True
 
 
-_NATIVE_ADMIN_FAIL_TTL = 45
+# Negative results (KeyError miss or confirmed non-admin) stay cached long
+# enough that ordinary members do not retry get_permissions on every message.
+# A newly promoted native admin is still re-checked after this window.
+_NATIVE_ADMIN_FAIL_TTL = 180
+_NATIVE_ADMIN_NEGATIVE_TTL = 90
 
 
 def _store_native_admin_cache(cache, key, value, expires_at):
@@ -730,9 +734,13 @@ async def _is_native_group_admin(bot, chat_id, user_id, sender):
     try:
         permissions = await bot.client.get_permissions(chat_id, sender or user_id)
         is_admin = bool(getattr(permissions, "is_admin", False))
-        # Admin status gets a slightly longer cache; a non-admin is retried
-        # sooner so a newly promoted group admin is protected promptly.
-        _store_native_admin_cache(cache, key, is_admin, now + (60 if is_admin else 15))
+        # Admin status stays short-lived so a demotion is seen soon.
+        # A confirmed non-admin uses the longer negative TTL to avoid
+        # repeating get_permissions on every ordinary group message.
+        _store_native_admin_cache(
+            cache, key, is_admin,
+            now + (60 if is_admin else _NATIVE_ADMIN_NEGATIVE_TTL),
+        )
         return is_admin
     except Exception as error:
         _store_native_admin_cache(cache, key, False, now + _NATIVE_ADMIN_FAIL_TTL)

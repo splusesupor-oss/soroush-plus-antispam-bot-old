@@ -1111,7 +1111,7 @@ class SoroushAntiSpamBot:
                 # explicit private event; unresolved peers are classified
                 # strictly after get_chat()/peer resolution below.
                 private_event = bool(getattr(event, "is_private", False))
-                self.logger.log_info(
+                self.debug_message_log(
                     "PRIVATE BROADCAST DEBUG\n"
                     f"event_is_private={getattr(event, 'is_private', None)}\n"
                     f"chat_id={event_chat_id_hint}\n"
@@ -1137,7 +1137,7 @@ class SoroushAntiSpamBot:
                         f"matched_trigger={matched_trigger!r}\n"
                         f"owner_check={private_is_owner}"
                     )
-                    self.logger.log_info(
+                    self.debug_message_log(
                         "PRIVATE BROADCAST DEBUG\n"
                         f"user_id={private_sender_id}\n"
                         f"text={raw_text!r}\n"
@@ -1170,7 +1170,7 @@ class SoroushAntiSpamBot:
                         handled = await handle_private_broadcast(
                             self, event, private_sender_id, raw_text
                         )
-                        self.logger.log_info(
+                        self.debug_message_log(
                             "PRIVATE BROADCAST DEBUG\n"
                             f"user_id={private_sender_id}\n"
                             f"text={raw_text!r}\n"
