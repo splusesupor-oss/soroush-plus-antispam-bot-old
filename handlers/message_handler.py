@@ -131,6 +131,7 @@ from modules.outgoing_profiler import (
 )
 from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
+from modules.group_dispatch import PRIORITY_ADMIN, classify_priority
 # 🗂 سیستم سابقه‌ها و 🏆 سطح گروه — دو قابلیتِ مستقل با فایل و ماژولِ جدا.
 from modules import user_history
 from modules import group_level
@@ -699,10 +700,25 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
 
 
 # Negative results (KeyError miss or confirmed non-admin) stay cached long
-# enough that ordinary members do not retry get_permissions on every message.
+# enough that a later management command does not retry get_permissions.
 # A newly promoted native admin is still re-checked after this window.
 _NATIVE_ADMIN_FAIL_TTL = 180
 _NATIVE_ADMIN_NEGATIVE_TTL = 90
+
+
+def _is_management_command(text):
+    """True only for owner/moderation commands, never ordinary chat or filters."""
+    priority, _kind = classify_priority(text)
+    return int(priority) <= PRIORITY_ADMIN
+
+
+def _should_check_native_admin(is_private, registered_admin, text):
+    """Native role RPC is only for management commands, never filters."""
+    return (
+        not is_private
+        and not registered_admin
+        and _is_management_command(text)
+    )
 
 
 def _store_native_admin_cache(cache, key, value, expires_at):
@@ -712,16 +728,16 @@ def _store_native_admin_cache(cache, key, value, expires_at):
 
 
 async def _is_native_group_admin(bot, chat_id, user_id, sender):
-    """Read the actual Soroush group role, independently of bot admin storage.
+    """Read the actual Soroush group role for a management command only.
 
-    A group administrator cannot be banned/restricted by the bot.  The result
-    is short-lived cached to avoid an RPC for every message while still
-    promptly reflecting role changes.
+    Regular chat and content-filter paths must never call this.  The result
+    is short-lived cached so a later management command does not repeat the
+    RPC, while role changes are still seen after the TTL.
 
     SPlusthon ``get_permissions`` looks the member up in the GetParticipant
     ``users`` map.  Soroush often returns that map without this user, which
-    raises ``KeyError``.  The miss must be cached: otherwise the single
-    per-chat worker retries the same RPC on every ordinary message.
+    raises ``KeyError``.  The miss must be cached so a later command does
+    not retry the same RPC.
     """
     cache = getattr(bot, "native_group_admin_cache", None)
     if cache is None:
@@ -1807,9 +1823,13 @@ async def handle_new_message(bot, event):
                 chat_id, user_id, sender_username
             )
         )
+        # Native Soroush role is only needed to authorize management
+        # commands. Regular chat and filter paths must not call
+        # get_permissions (KeyError + one RTT per ordinary user).
         native_admin_bypass = bool(
-            not event.is_private
-            and not registered_admin_bypass
+            _should_check_native_admin(
+                event.is_private, registered_admin_bypass, message_text
+            )
             and await _is_native_group_admin(bot, chat_id, user_id, sender)
         )
         # A native group admin who is not registered in the bot follows the
@@ -5498,7 +5518,7 @@ async def handle_new_message(bot, event):
         # اما اجرای راهنما، بازی‌ها و فرمان‌های مدیریت باید ادامه داشته باشد.
         if is_group_moderator or fast_command:
             if is_group_moderator:
-                print(f"✅ ADMIN BYPASS FILTER: {sender_username}")
+                _debug_log(bot, f"✅ ADMIN BYPASS FILTER: {sender_username}")
             is_spam = False
             reason = ""
         elif group_word_spam:

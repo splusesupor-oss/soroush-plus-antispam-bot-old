@@ -99,6 +99,62 @@ def test_negative_native_admin_ttl_is_raised():
           f"-> {handler._NATIVE_ADMIN_NEGATIVE_TTL}")
 
 
+def test_native_admin_check_is_only_for_management_commands():
+    print("\n### native admin فقط برای دستور مدیریتی")
+    check("سلام is not management", handler._is_management_command("سلام") is False)
+    check("filter text is not management",
+          handler._is_management_command("خرید از shop.com") is False)
+    check("راهنما is not management", handler._is_management_command("راهنما") is False)
+    check("قفل is management", handler._is_management_command("قفل") is True)
+    check("پاک 10 is management", handler._is_management_command("پاک 10") is True)
+    check("سکوت is management", handler._is_management_command("سکوت") is True)
+    check("regular chat skips native RPC",
+          handler._should_check_native_admin(False, False, "سلام") is False)
+    check("filter path skips native RPC",
+          handler._should_check_native_admin(False, False, "لینک تبلیغاتی") is False)
+    check("registered admin skips native RPC",
+          handler._should_check_native_admin(False, True, "قفل") is False)
+    check("private skips native RPC",
+          handler._should_check_native_admin(True, False, "قفل") is False)
+    check("management command checks native role",
+          handler._should_check_native_admin(False, False, "قفل") is True)
+    check("پاک 10 checks native role",
+          handler._should_check_native_admin(False, False, "پاک 10") is True)
+
+
+def test_regular_message_does_not_call_get_permissions():
+    print("\n### پیام عادی get_permissions نمی‌زند")
+    client = _Client(error=KeyError(12345))
+    bot = _bot(client)
+
+    async def run():
+        if handler._should_check_native_admin(False, False, "سلام دوستان"):
+            await handler._is_native_group_admin(bot, -1009, 44, None)
+
+    asyncio.run(run())
+    check("no RPC on regular chat", client.calls == [], f"-> {client.calls}")
+    check("no native fail log", bot.logger.errors == [], f"-> {bot.logger.errors}")
+
+
+def test_management_command_does_call_get_permissions():
+    print("\n### دستور مدیریتی native check را اجرا می‌کند")
+    client = _Client(is_admin=True)
+    bot = _bot(client)
+
+    async def run():
+        called = False
+        result = False
+        if handler._should_check_native_admin(False, False, "قفل"):
+            called = True
+            result = await handler._is_native_group_admin(bot, -1010, 55, None)
+        return called, result
+
+    called, result = asyncio.run(run())
+    check("management path entered", called is True)
+    check("native admin True", result is True)
+    check("one RPC", len(client.calls) == 1, f"-> {client.calls}")
+
+
 def test_keyerror_is_fail_closed_and_cached():
     print("\n### KeyError سروش → False و بدون RPC دوباره")
     client = _Client(error=KeyError(12345))
@@ -235,9 +291,24 @@ def test_ban_execution_and_admin_check_logs_are_debug_only():
         f"-> {noisy.logger.infos}",
     )
 
+    handler._debug_log(quiet, "✅ ADMIN BYPASS FILTER: osine1")
+    handler._debug_log(noisy, "✅ ADMIN BYPASS FILTER: osine1")
+    check(
+        "quiet ADMIN BYPASS FILTER off",
+        not any("ADMIN BYPASS FILTER" in item for item in quiet.logger.infos),
+    )
+    check(
+        "debug ADMIN BYPASS FILTER on",
+        any("ADMIN BYPASS FILTER" in item for item in noisy.logger.infos),
+        f"-> {noisy.logger.infos}",
+    )
+
 
 if __name__ == "__main__":
     test_negative_native_admin_ttl_is_raised()
+    test_native_admin_check_is_only_for_management_commands()
+    test_regular_message_does_not_call_get_permissions()
+    test_management_command_does_call_get_permissions()
     test_keyerror_is_fail_closed_and_cached()
     test_repeat_keyerror_does_not_relog()
     test_successful_admin_is_cached()
