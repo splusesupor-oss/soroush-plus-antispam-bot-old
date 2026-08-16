@@ -258,8 +258,11 @@ class AdminActions:
                 MessageEntityBlockquote(offset=0, length=u16(prefix)),
                 MessageEntityBold(offset=u16(prefix + body), length=u16(warning_label)),
             ]
-            await self.client.send_message(
+            sent = await self.client.send_message(
                 chat_id, msg, reply_to=reply_to, formatting_entities=entities)
+            cleanup = getattr(self, "notice_cleanup", None)
+            if cleanup is not None:
+                cleanup.schedule(chat_id, getattr(sent, "id", None))
         except Exception as e:
             print("WARNING ERROR:", repr(e))
             self.logger.log_error(f"خطا در ارسال هشدار: {e}")
@@ -275,10 +278,13 @@ class AdminActions:
             success = await self.mute_user(chat_id, user_id, duration)
             if success and announce:
                 try:
-                    await self.client.send_message(
+                    sent = await self.client.send_message(
                         chat_id,
                         f"🔇 کاربر @{username or user_id} به دلیل ارسال {self.config.get('spam_threshold')} هرزنامه مکرر، به مدت {duration//60} دقیقه سایلنت شد."
                     )
+                    cleanup = getattr(self, "notice_cleanup", None)
+                    if cleanup is not None:
+                        cleanup.schedule(chat_id, getattr(sent, "id", None))
                 except:
                     pass
             return success
@@ -288,10 +294,13 @@ class AdminActions:
             )
             if success and announce:
                 try:
-                    await self.client.send_message(
+                    sent = await self.client.send_message(
                         chat_id,
                         f"⛔️ کاربر @{username or user_id} به دلیل اسپم مکرر از گروه حذف شد."
                     )
+                    cleanup = getattr(self, "notice_cleanup", None)
+                    if cleanup is not None:
+                        cleanup.schedule(chat_id, getattr(sent, "id", None))
                 except:
                     pass
             return success

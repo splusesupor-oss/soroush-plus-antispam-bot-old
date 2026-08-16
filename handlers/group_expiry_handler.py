@@ -165,8 +165,11 @@ async def check_once(bot, deactivate, logger=None):
         message, spans = build_expired_message()
         for target in _targets(chat_id, key):
             try:
-                await bot.client.send_message(
+                sent = await bot.client.send_message(
                     target, message, formatting_entities=_entities(spans))
+                cleanup = getattr(bot, "notice_cleanup", None)
+                if cleanup is not None:
+                    cleanup.schedule(target, getattr(sent, "id", None))
                 if not mark_notified(key):
                     _log_error(logger, "EXPIRY NOTIFICATION STATE FAILED "
                                        f"group_id={key}")

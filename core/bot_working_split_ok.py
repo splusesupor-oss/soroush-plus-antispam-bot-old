@@ -42,6 +42,7 @@ from modules.reminders import due as due_reminders, mark_sent as mark_reminder_s
 from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from modules.message_delete_queue import MessageDeleteQueue
+from modules.notice_cleanup import NoticeCleanup
 from modules.group_dispatch import GroupDispatcher, classify_priority, looks_like_link
 from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
@@ -170,6 +171,15 @@ class SoroushAntiSpamBot:
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
         self.group_dispatcher = GroupDispatcher(logger=self.logger)
+        self.notice_cleanup = NoticeCleanup(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config",
+                "notice_cleanup.json",
+            ),
+            logger=self.logger,
+            ttl_seconds=60,
+        )
 
         self.logger.log_info("✅ تنظیمات بارگذاری شد")
         self.logger.log_info(
@@ -454,6 +464,7 @@ class SoroushAntiSpamBot:
 
         self.admin_actions = AdminActions(
             self.client, self.logger, self.config_manager)
+        self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
 
         self.group_actions = GroupActions(
             self.client, self.logger)
@@ -1039,6 +1050,10 @@ class SoroushAntiSpamBot:
                     "حدس ایموجی", "حدس جمله", "ساخت جمله", "معما", "حدس پرچم",
                     "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
                     "جعبه شانسی", "خون آشام", "خون‌آشام",
+                    "فعال", "غیر فعال", "فعال سازی",
+                    "ثبت مالک", "لغو مالک", "برکناری مالک",
+                    "ثبت گروه", "حذف گروه",
+                    "۵ روز", "یک هفته", "دو هفته", "یک ماه",
                 }
                 self.debug_message_log(
                     "COMMAND PRIORITY CHECK "

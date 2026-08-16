@@ -142,6 +142,7 @@ from modules import message_tracker
 from modules import big_spam
 from modules import search_access
 from modules import web_search, wiki_search_service
+from modules.notice_cleanup import capture_sent
 from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
 from splusthon.tl import functions
 from splusthon import Button, types
@@ -498,9 +499,10 @@ async def _send_moderation_notification_once(
     bot.moderation_notification_guard.add(key)
     bot.moderation_notification_order.append(key)
     try:
-        await bot.client.send_message(
+        sent = await bot.client.send_message(
             chat_id, text, formatting_entities=formatting_entities
         )
+        capture_sent(bot, chat_id, sent)
         return True
     except Exception:
         bot.moderation_notification_guard.discard(key)
@@ -1150,8 +1152,9 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                 _schedule_spam_ban_notice(bot, event, chat_id, user_id)
             elif incident["deleted"]:
                 notice_event = incident.get("event") or event
-                await notice_event.reply(
+                sent = await notice_event.reply(
                     f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد")
+                capture_sent(bot, chat_id, sent)
                 getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
 
         except _asyncio.CancelledError:
@@ -2149,6 +2152,10 @@ async def handle_new_message(bot, event):
             "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز", "اخطار",
             "حدس ایموجی", "حدس جمله", "ساخت جمله", "معما", "حدس پرچم",
             "مین یاب", "سابقه ها", "سابقه‌ها", "سطح گروه",
+            "فعال", "غیر فعال", "فعال سازی",
+            "ثبت مالک", "لغو مالک", "برکناری مالک",
+            "ثبت گروه", "حذف گروه",
+            "۵ روز", "یک هفته", "دو هفته", "یک ماه",
         }
         if (sender and not event.is_private and not command_priority
                 and not is_global_owner(user_id)
@@ -2182,14 +2189,15 @@ async def handle_new_message(bot, event):
                             name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
                             name_len = len(shown_name.encode("utf-16-le")) // 2
                             bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
-                            await event.reply(notice, formatting_entities=[
+                            sent = await event.reply(notice, formatting_entities=[
                                 MessageEntityBold(offset=0, length=bold_len),
                                 MessageEntityBlockquote(
                                     offset=name_start, length=name_len
                                 ),
                             ])
                         except Exception:
-                            await event.reply(notice)
+                            sent = await event.reply(notice)
+                        capture_sent(bot, chat_id, sent)
                         bot.logger.log_info(
                             "AD NAME BAN FINISHED "
                             f"chat_id={chat_id} user_id={user_id} "
@@ -2352,9 +2360,10 @@ async def handle_new_message(bot, event):
                         "notification_sent=False")
                     if not persisted or not disabled_state:
                         raise RuntimeError("bot_disabled_groups.json persistence verification failed")
-                    await event.reply(
+                    sent = await event.reply(
                         "🤖 ربات دیگری در این گروه فعال است.\n"
                         "به دلیل فعال بودن این ربات، روباه در این گروه خاموش شد.")
+                    capture_sent(bot, chat_id, sent)
                     notification_sent = True
                     bot.logger.log_info(
                         "BOT SHUTDOWN DEBUG\n"
@@ -5493,7 +5502,8 @@ async def handle_new_message(bot, event):
                     f"chat_id={chat_id} user_id={user_id} count={len(ids)}"
                 )
                 if bot.acquire_delete_notice_lock(chat_id):
-                    await event.reply("پیام‌های پشت سر هم حذف شدند")
+                    sent = await event.reply("پیام‌های پشت سر هم حذف شدند")
+                    capture_sent(bot, chat_id, sent)
 
                 return
 
