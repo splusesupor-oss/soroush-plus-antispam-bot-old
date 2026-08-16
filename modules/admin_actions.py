@@ -262,7 +262,7 @@ class AdminActions:
                 chat_id, msg, reply_to=reply_to, formatting_entities=entities)
             cleanup = getattr(self, "notice_cleanup", None)
             if cleanup is not None:
-                cleanup.schedule(chat_id, getattr(sent, "id", None))
+                cleanup.schedule(chat_id, sent)
         except Exception as e:
             print("WARNING ERROR:", repr(e))
             self.logger.log_error(f"خطا در ارسال هشدار: {e}")
@@ -284,7 +284,7 @@ class AdminActions:
                     )
                     cleanup = getattr(self, "notice_cleanup", None)
                     if cleanup is not None:
-                        cleanup.schedule(chat_id, getattr(sent, "id", None))
+                        cleanup.schedule(chat_id, sent)
                 except:
                     pass
             return success
@@ -300,7 +300,7 @@ class AdminActions:
                     )
                     cleanup = getattr(self, "notice_cleanup", None)
                     if cleanup is not None:
-                        cleanup.schedule(chat_id, getattr(sent, "id", None))
+                        cleanup.schedule(chat_id, sent)
                 except:
                     pass
             return success

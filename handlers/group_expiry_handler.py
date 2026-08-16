@@ -169,7 +169,7 @@ async def check_once(bot, deactivate, logger=None):
                     target, message, formatting_entities=_entities(spans))
                 cleanup = getattr(bot, "notice_cleanup", None)
                 if cleanup is not None:
-                    cleanup.schedule(target, getattr(sent, "id", None))
+                    cleanup.schedule(target, sent)
                 if not mark_notified(key):
                     _log_error(logger, "EXPIRY NOTIFICATION STATE FAILED "
                                        f"group_id={key}")

@@ -29,10 +29,55 @@ def _chat_id_for_rpc(key):
         return key
 
 
-def _message_id(value):
-    if isinstance(value, int):
+def extract_sent_id(sent):
+    """Read a Soroush/SPlusthon send/reply result as a positive message id."""
+    if sent is None or isinstance(sent, bool):
+        return None
+    if isinstance(sent, int):
+        return sent if sent > 0 else None
+    for attr in ("id", "message_id"):
+        value = getattr(sent, attr, None)
+        if isinstance(value, int) and value > 0:
+            # Skip peer/channel objects whose .id is not this message.
+            if attr == "id" and getattr(sent, "message", None) is sent:
+                continue
+            cls_name = type(sent).__name__
+            if attr == "id" and ("Peer" in cls_name or "User" in cls_name or "Channel" in cls_name or "Chat" in cls_name):
+                continue
+            if cls_name.endswith("Message") or attr == "message_id" or hasattr(sent, "peer_id") or hasattr(sent, "out"):
+                return value
+            if cls_name == "SimpleNamespace":
+                return value
+    inner = getattr(sent, "message", None)
+    if inner is not None and inner is not sent:
+        found = extract_sent_id(inner)
+        if found:
+            return found
+    if isinstance(sent, (list, tuple)):
+        for item in sent:
+            found = extract_sent_id(item)
+            if found:
+                return found
+    updates = getattr(sent, "updates", None)
+    if updates:
+        for update in updates:
+            found = extract_sent_id(getattr(update, "message", update))
+            if found:
+                return found
+    update = getattr(sent, "update", None)
+    if update is not None:
+        found = extract_sent_id(getattr(update, "message", update))
+        if found:
+            return found
+    # Last resort: a plain object with a positive .id that looks like a message.
+    value = getattr(sent, "id", None)
+    if isinstance(value, int) and value > 0 and not hasattr(sent, "access_hash"):
         return value
-    return getattr(value, "id", None)
+    return None
+
+
+def _message_id(value):
+    return extract_sent_id(value)
 
 
 def capture_sent(bot, chat_id, sent):
@@ -40,7 +85,7 @@ def capture_sent(bot, chat_id, sent):
     cleanup = getattr(bot, "notice_cleanup", None)
     if cleanup is None:
         return False
-    return cleanup.schedule(chat_id, _message_id(sent))
+    return cleanup.schedule(chat_id, sent)
 
 
 class NoticeCleanup:
@@ -65,6 +110,12 @@ class NoticeCleanup:
     def start(self):
         """Launch workers for any persisted notices. Safe to call once."""
         self._started = True
+        if self.logger is not None:
+            self.logger.log_info(
+                "NOTICE CLEANUP START "
+                f"ttl_s={self.ttl_seconds:g} "
+                f"pending_groups={len(self._items)}"
+            )
         for chat_id, rows in list(self._items.items()):
             if rows:
                 self._ensure_worker(chat_id)
@@ -79,20 +130,31 @@ class NoticeCleanup:
 
     def schedule(self, chat_id, message_id, *, ttl=None, now=None):
         """Remember ``message_id`` for this chat. Returns True if stored."""
+        raw = message_id
         message_id = _message_id(message_id)
         if chat_id is None or not isinstance(message_id, int) or message_id <= 0:
+            if self.logger is not None:
+                self.logger.log_error(
+                    "NOTICE CLEANUP ID MISSING "
+                    f"chat_id={chat_id} sent_type={type(raw).__name__} "
+                    f"sent={raw!r}"
+                )
             return False
         key = _chat_key(chat_id)
-        expires_at = (time.time() if now is None else float(now)) + float(
-            self.ttl_seconds if ttl is None else ttl
-        )
+        ttl_s = float(self.ttl_seconds if ttl is None else ttl)
+        expires_at = (time.time() if now is None else float(now)) + ttl_s
         rows = self._items.setdefault(key, [])
         for row in rows:
             if int(row["message_id"]) == message_id:
                 row["expires_at"] = expires_at
+                row["chat_id"] = chat_id
                 break
         else:
-            rows.append({"message_id": int(message_id), "expires_at": expires_at})
+            rows.append({
+                "message_id": int(message_id),
+                "expires_at": expires_at,
+                "chat_id": chat_id,
+            })
             if len(rows) > MAX_PER_CHAT:
                 rows.sort(key=lambda item: item["expires_at"])
                 del rows[:-MAX_PER_CHAT]
@@ -101,6 +163,12 @@ class NoticeCleanup:
         event = self._events.get(key)
         if event is not None and not event.is_set():
             event.set()
+        if self.logger is not None:
+            self.logger.log_info(
+                "NOTICE CLEANUP QUEUED "
+                f"chat_id={chat_id} message_id={message_id} "
+                f"expires_in_s={ttl_s:g} pending={len(rows)}"
+            )
         return True
 
     def pending(self, chat_id):
@@ -178,14 +246,35 @@ class NoticeCleanup:
                 now = time.time()
                 due = self.pop_due(chat_id, now=now)
                 if due:
-                    if self._dirty:
-                        self._persist()
-                    self._enqueue_delete(chat_id, due)
                     if self.logger is not None:
                         self.logger.log_info(
-                            "NOTICE CLEANUP DELETE "
-                            f"chat_id={chat_id} count={len(due)}"
+                            "NOTICE CLEANUP DUE "
+                            f"chat_id={chat_id} message_ids={due!r}"
                         )
+                    if self._dirty:
+                        self._persist()
+                    result = self._enqueue_delete(chat_id, due)
+                    deleted, remaining = 0, list(due)
+                    try:
+                        if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                            deleted, remaining = await result
+                        elif result is not None and not isinstance(result, bool):
+                            deleted, remaining = result
+                        elif result:
+                            deleted, remaining = len(due), []
+                    except Exception as error:
+                        if self.logger is not None:
+                            self.logger.log_error(
+                                "NOTICE CLEANUP DELETE FAILED "
+                                f"chat_id={chat_id} message_ids={due!r} error={error!r}"
+                            )
+                    else:
+                        if self.logger is not None:
+                            self.logger.log_info(
+                                "NOTICE CLEANUP DELETED "
+                                f"chat_id={chat_id} message_ids={due!r} "
+                                f"deleted={deleted} remaining={len(remaining or ())}"
+                            )
                     continue
                 next_at = self.next_expiry(chat_id)
                 if next_at is None:
@@ -237,9 +326,10 @@ class NoticeCleanup:
                         expires_at = float(expires_at)
                     except (TypeError, ValueError):
                         continue
-                    cleaned.append(
-                        {"message_id": message_id, "expires_at": expires_at}
-                    )
+                    item = {"message_id": message_id, "expires_at": expires_at}
+                    if row.get("chat_id") is not None:
+                        item["chat_id"] = row.get("chat_id")
+                    cleaned.append(item)
                 if cleaned:
                     items[_chat_key(key)] = cleaned
         self._items = items

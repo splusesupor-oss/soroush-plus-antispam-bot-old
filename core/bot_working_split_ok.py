@@ -516,6 +516,9 @@ class SoroushAntiSpamBot:
                 self.message_delete_queue.client = new_client
             self.admin_actions = AdminActions(
                 new_client, self.logger, self.config_manager)
+            self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
+            if getattr(self, "notice_cleanup", None) is not None:
+                self.notice_cleanup.client = new_client
             self.group_actions = GroupActions(new_client, self.logger)
 
             self.logger.log_info("CLIENT REBUILD new client connected")
@@ -621,6 +624,16 @@ class SoroushAntiSpamBot:
         # synchronously in the incoming-message handler.
         self.message_delete_queue = MessageDeleteQueue(
             self.client, self.logger, max_concurrent=4, inter_batch_delay=0.05)
+        self.notice_cleanup.bind_delete_queue(self.message_delete_queue)
+        self.notice_cleanup.client = self.client
+        if getattr(self, "admin_actions", None) is not None:
+            self.admin_actions.notice_cleanup = self.notice_cleanup
+        self.notice_cleanup.start()
+        self.logger.log_info(
+            "NOTICE CLEANUP STARTED "
+            f"ttl_s={self.notice_cleanup.ttl_seconds:g} "
+            f"pending_groups={len(self.notice_cleanup._items)}"
+        )
 
         async def temporary_state_cleanup_loop():
             while True:

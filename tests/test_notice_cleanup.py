@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from modules.notice_cleanup import NoticeCleanup, capture_sent
+from modules.notice_cleanup import NoticeCleanup, capture_sent, extract_sent_id
 
 PASSED = FAILED = 0
 
@@ -93,6 +93,20 @@ def test_persist_survives_restart():
             os.unlink(path)
 
 
+def test_extract_sent_id_from_splus_shapes():
+    print("\n### استخراج message_id از شکل‌های پاسخ سروش")
+    check("plain int", extract_sent_id(88) == 88)
+    check("message.id", extract_sent_id(SimpleNamespace(id=12, out=True)) == 12)
+    check(
+        "updates.message.id",
+        extract_sent_id(SimpleNamespace(updates=[
+            SimpleNamespace(message=SimpleNamespace(id=33, out=True))
+        ])) == 33,
+    )
+    check("none", extract_sent_id(None) is None)
+    check("true is not an id", extract_sent_id(True) is None)
+
+
 def test_capture_sent_uses_message_id():
     print("\n### capture_sent فقط از پیام خودکار id می‌گیرد")
     cleaner, path = _cleanup(ttl=10)
@@ -147,6 +161,7 @@ if __name__ == "__main__":
     test_schedule_is_per_group_and_not_due_yet()
     test_new_notice_waits_its_own_ttl()
     test_persist_survives_restart()
+    test_extract_sent_id_from_splus_shapes()
     test_capture_sent_uses_message_id()
     test_worker_deletes_only_that_group()
     print(f"\n{PASSED} passed, {FAILED} failed")
