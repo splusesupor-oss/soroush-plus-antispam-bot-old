@@ -291,12 +291,104 @@ def test_send_path_hook_stamps_drain():
               f"-> {inner[0]['rpc_wait_ms']:.1f}")
 
 
+class LiveSender:
+    PONG = object()
+
+    def __init__(self):
+        self._ping = None
+        self._user_connected = True
+        self._reconnecting = False
+        self._pending_state = {}
+        self.pings = []
+        self.reconnects = []
+        self._handlers = {self.PONG: self._handle_pong}
+
+    def _keepalive_ping(self, rnd_id):
+        if self._ping is None:
+            self._ping = rnd_id
+            self.pings.append(("sent", rnd_id))
+        else:
+            self.pings.append(("timeout", self._ping, rnd_id))
+            self._start_reconnect(None)
+
+    async def _handle_pong(self, message):
+        pong = getattr(message, "obj", message)
+        if self._ping == getattr(pong, "ping_id", None):
+            self._ping = None
+        return "pong-ok"
+
+    def _start_reconnect(self, error):
+        if self._user_connected and not self._reconnecting:
+            self._reconnecting = True
+            self.reconnects.append(error)
+
+    async def _reconnect(self, last_error):
+        await asyncio.sleep(0.01)
+        self._user_connected = True
+        self._reconnecting = False
+        return "reconnected"
+
+
+class LiveClient(FakeClient):
+    def __init__(self):
+        super().__init__(connection_ms=0, rpc_ms=80)
+        self._sender = LiveSender()
+
+    async def _call(self, sender, request, ordered=False, flood_sleep_threshold=None):
+        await asyncio.sleep(self.rpc_ms / 1000.0)
+        return "ok"
+
+
+def test_keepalive_and_reconnect_logs():
+    print("\n### ping / pong / timeout / reconnect فقط لاگ می‌شوند")
+
+    async def scenario():
+        logger = Logger()
+        client = LiveClient()
+        client.rpc_ms = 80
+        instrument_client(client, logger)
+        sender = client._sender
+        task = asyncio.create_task(client.send_message(-5, "slow"))
+        await asyncio.sleep(0.02)
+        sender._keepalive_ping(11)
+        await sender._handlers[LiveSender.PONG](type("Msg", (), {
+            "obj": type("Pong", (), {"ping_id": 11, "msg_id": 99})()
+        })())
+        sender._keepalive_ping(22)
+        sender._keepalive_ping(33)
+        await sender._reconnect("net")
+        await task
+        return logger, sender
+
+    logger, sender = asyncio.run(scenario())
+    print("    logs:")
+    for line in logger.infos:
+        if line.startswith((
+            "KEEPALIVE", "RECONNECT", "WEBSOCKET",
+        )):
+            print("   ", line)
+    texts = "\n".join(logger.infos)
+    check("پینگ ارسال شد", "KEEPALIVE PING SENT" in texts)
+    check("پونگ دریافت شد", "KEEPALIVE PONG RECEIVED" in texts)
+    check("timeout پونگ ثبت شد", "KEEPALIVE PONG TIMEOUT" in texts)
+    check("شروع reconnect ثبت شد", "RECONNECT START" in texts)
+    check("موفقیت reconnect ثبت شد", "RECONNECT SUCCESS" in texts)
+    check("request_id RPC در حال انتظار در timeout هست",
+          "request_ids=" in texts and "pending_rpc=" in texts)
+    check("منطق پینگ عوض نشده: اول sent بعد timeout",
+          sender.pings[0][0] == "sent" and sender.pings[-1][0] == "timeout",
+          f"-> {sender.pings}")
+    check("reconnect اصلی هنوز صدا می‌شود",
+          sender.reconnects == [None], f"-> {sender.reconnects}")
+
+
 def main():
     test_send_message_split()
     test_reply_and_delete_and_moderation()
     test_missing_wire_hook_counts_as_rpc_wait()
     test_no_behavior_change_and_idempotent()
     test_send_path_hook_stamps_drain()
+    test_keepalive_and_reconnect_logs()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 

@@ -19,6 +19,7 @@ _RESPONSE_RPC_MS = contextvars.ContextVar("response_rpc_ms", default=0.0)
 _RPC_DEPTH = contextvars.ContextVar("outgoing_rpc_depth", default=0)
 _OP_STATE = contextvars.ContextVar("outgoing_op_state", default=None)
 _CALL_STATE = contextvars.ContextVar("outgoing_call_state", default=None)
+_INFLIGHT_RPCS = {}
 _RPC_DEBUG = os.getenv("BOT_RPC_DEBUG", "").strip() == "1"
 # 400–800ms is normal successful Soroush server RTT, not a local failure.
 _RPC_SLOW_WARNING_MS = float(os.getenv("BOT_RPC_SLOW_WARNING_MS", "1500"))
@@ -64,6 +65,47 @@ def mark_rpc_on_wire():
         return False
     call["send_started"] = time.perf_counter()
     return True
+
+
+def pending_rpc_snapshot(sender=None):
+    """In-flight traced RPCs, plus SPlusthon ``_pending_state`` size if present."""
+    rows = list(_INFLIGHT_RPCS.values())
+    sender_pending = 0
+    if sender is not None:
+        pending = getattr(sender, "_pending_state", None) or {}
+        try:
+            sender_pending = len(pending)
+        except TypeError:
+            sender_pending = 0
+    return {
+        "count": len(rows),
+        "sender_pending": sender_pending,
+        "request_ids": [row.get("request_id") for row in rows if row.get("request_id")],
+        "operations": [row.get("operation") for row in rows if row.get("operation")],
+    }
+
+
+def _format_request_ids(snapshot):
+    ids = snapshot.get("request_ids") or ()
+    return ",".join(str(item) for item in ids) if ids else "-"
+
+
+def _format_operations(snapshot):
+    ops = snapshot.get("operations") or ()
+    return ",".join(str(item) for item in ops) if ops else "-"
+
+
+def _register_inflight(request, record):
+    if request is None:
+        return None
+    key = id(request)
+    _INFLIGHT_RPCS[key] = record
+    return key
+
+
+def _unregister_inflight(key):
+    if key is not None:
+        _INFLIGHT_RPCS.pop(key, None)
 
 
 def _chat_id(owner, args, kwargs):
@@ -204,6 +246,230 @@ def _ensure_send_hooks(client):
             pass
 
 
+def _wrap_existing(obj, name, factory):
+    original = getattr(obj, name, None)
+    if original is None or getattr(original, "_outgoing_reconnect_hook", False):
+        return False
+    hooked = factory(original)
+    hooked._outgoing_reconnect_hook = True
+    try:
+        setattr(obj, name, hooked)
+        return True
+    except (AttributeError, TypeError):
+        return False
+
+
+def _ensure_reconnect_hooks(client, logger):
+    """Log keepalive/reconnect without changing SPlusthon timing or retries."""
+    sender = getattr(client, "_sender", None)
+    if sender is None:
+        return
+    if getattr(sender, "_outgoing_reconnect_hooks", False):
+        _hook_websocket_reset(sender, logger)
+        return
+
+    def ping_factory(original):
+        def hooked(rnd_id):
+            outstanding = getattr(sender, "_ping", None)
+            snapshot = pending_rpc_snapshot(sender)
+            if outstanding is None:
+                logger.log_info(
+                    "KEEPALIVE PING SENT "
+                    f"ping_id={rnd_id} pending_rpc={snapshot['count']} "
+                    f"sender_pending={snapshot['sender_pending']}"
+                )
+            else:
+                logger.log_info(
+                    "KEEPALIVE PONG TIMEOUT "
+                    f"ping_id={outstanding} next_ping_id={rnd_id} "
+                    f"pending_rpc={snapshot['count']} "
+                    f"sender_pending={snapshot['sender_pending']} "
+                    f"request_ids={_format_request_ids(snapshot)} "
+                    f"operations={_format_operations(snapshot)}"
+                )
+            return original(rnd_id)
+        return hooked
+
+    def pong_factory(original):
+        async def hooked(message):
+            pong = getattr(message, "obj", message)
+            logger.log_info(
+                "KEEPALIVE PONG RECEIVED "
+                f"ping_id={getattr(pong, 'ping_id', None)} "
+                f"msg_id={getattr(pong, 'msg_id', None)}"
+            )
+            return await original(message)
+        if not asyncio.iscoroutinefunction(original):
+            def sync_hooked(message):
+                pong = getattr(message, "obj", message)
+                logger.log_info(
+                    "KEEPALIVE PONG RECEIVED "
+                    f"ping_id={getattr(pong, 'ping_id', None)} "
+                    f"msg_id={getattr(pong, 'msg_id', None)}"
+                )
+                return original(message)
+            return sync_hooked
+        return hooked
+
+    def start_factory(original):
+        def hooked(error):
+            will_start = bool(
+                getattr(sender, "_user_connected", False)
+                and not getattr(sender, "_reconnecting", False)
+            )
+            if will_start:
+                snapshot = pending_rpc_snapshot(sender)
+                logger.log_info(
+                    "RECONNECT START "
+                    f"reason={error!r} pending_rpc={snapshot['count']} "
+                    f"sender_pending={snapshot['sender_pending']} "
+                    f"request_ids={_format_request_ids(snapshot)} "
+                    f"operations={_format_operations(snapshot)}"
+                )
+            return original(error)
+        return hooked
+
+    def reconnect_factory(original):
+        async def hooked(last_error):
+            started = time.perf_counter()
+            snapshot = pending_rpc_snapshot(sender)
+            try:
+                result = await original(last_error)
+            except Exception as error:
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                logger.log_info(
+                    "RECONNECT FAILED "
+                    f"error={error!r} elapsed_ms={elapsed_ms:.1f} "
+                    f"pending_rpc={snapshot['count']} "
+                    f"request_ids={_format_request_ids(snapshot)}"
+                )
+                raise
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            connected = bool(getattr(sender, "_user_connected", False))
+            label = "RECONNECT SUCCESS" if connected else "RECONNECT FAILED"
+            logger.log_info(
+                f"{label} elapsed_ms={elapsed_ms:.1f} "
+                f"pending_rpc={snapshot['count']} "
+                f"sender_pending={pending_rpc_snapshot(sender)['sender_pending']} "
+                f"request_ids={_format_request_ids(snapshot)}"
+            )
+            return result
+        if not asyncio.iscoroutinefunction(original):
+            def sync_hooked(last_error):
+                started = time.perf_counter()
+                snapshot = pending_rpc_snapshot(sender)
+                try:
+                    result = original(last_error)
+                except Exception as error:
+                    elapsed_ms = (time.perf_counter() - started) * 1000
+                    logger.log_info(
+                        "RECONNECT FAILED "
+                        f"error={error!r} elapsed_ms={elapsed_ms:.1f} "
+                        f"pending_rpc={snapshot['count']} "
+                        f"request_ids={_format_request_ids(snapshot)}"
+                    )
+                    raise
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                connected = bool(getattr(sender, "_user_connected", False))
+                label = "RECONNECT SUCCESS" if connected else "RECONNECT FAILED"
+                logger.log_info(
+                    f"{label} elapsed_ms={elapsed_ms:.1f} "
+                    f"pending_rpc={snapshot['count']} "
+                    f"request_ids={_format_request_ids(snapshot)}"
+                )
+                return result
+            return sync_hooked
+        return hooked
+
+    original_pong = getattr(sender, "_handle_pong", None)
+    _wrap_existing(sender, "_keepalive_ping", ping_factory)
+    _wrap_existing(sender, "_handle_pong", pong_factory)
+    hooked_pong = getattr(sender, "_handle_pong", None)
+    handlers = getattr(sender, "_handlers", None)
+    if (
+        isinstance(handlers, dict)
+        and original_pong is not None
+        and hooked_pong is not None
+        and hooked_pong is not original_pong
+    ):
+        orig_func = getattr(original_pong, "__func__", original_pong)
+        for key, value in list(handlers.items()):
+            if value is original_pong or getattr(value, "__func__", None) is orig_func:
+                handlers[key] = hooked_pong
+    _wrap_existing(sender, "_start_reconnect", start_factory)
+    _wrap_existing(sender, "_reconnect", reconnect_factory)
+    _hook_websocket_reset(sender, logger)
+    try:
+        sender._outgoing_reconnect_hooks = True
+    except (AttributeError, TypeError):
+        pass
+
+
+def _hook_websocket_reset(sender, logger):
+    conn = getattr(sender, "_connection", None)
+    if conn is None:
+        return
+    original = getattr(conn, "_connection_guard_reset_once", None)
+    if original is None or getattr(original, "_outgoing_reconnect_hook", False):
+        return
+
+    async def hooked():
+        snapshot = pending_rpc_snapshot(sender)
+        logger.log_info(
+            "WEBSOCKET RESET START reason=periodic "
+            f"pending_rpc={snapshot['count']} "
+            f"sender_pending={snapshot['sender_pending']} "
+            f"request_ids={_format_request_ids(snapshot)}"
+        )
+        try:
+            result = await original()
+        except Exception as error:
+            logger.log_info(f"WEBSOCKET RESET FAILED error={error!r}")
+            raise
+        logger.log_info("WEBSOCKET RESET SUCCESS")
+        return result
+
+    if not asyncio.iscoroutinefunction(original):
+        return
+    hooked._outgoing_reconnect_hook = True
+    try:
+        conn._connection_guard_reset_once = hooked
+    except (AttributeError, TypeError):
+        pass
+
+
+def _wrap_connect(client, logger):
+    original = getattr(client, "connect", None)
+    if original is None or getattr(original, "_outgoing_reconnect_hook", False):
+        return False
+
+    async def hooked(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        _ensure_send_hooks(client)
+        _ensure_reconnect_hooks(client, logger)
+        return result
+
+    if not asyncio.iscoroutinefunction(original):
+        def sync_hooked(*args, **kwargs):
+            result = original(*args, **kwargs)
+            _ensure_send_hooks(client)
+            _ensure_reconnect_hooks(client, logger)
+            return result
+        sync_hooked._outgoing_reconnect_hook = True
+        try:
+            client.connect = sync_hooked
+            return True
+        except (AttributeError, TypeError):
+            return False
+
+    hooked._outgoing_reconnect_hook = True
+    try:
+        client.connect = hooked
+        return True
+    except (AttributeError, TypeError):
+        return False
+
+
 def _wrap_call(client, logger):
     original = getattr(client, "_call", None)
     if original is None or getattr(original, "_outgoing_profiled", False):
@@ -212,6 +478,7 @@ def _wrap_call(client, logger):
     @functools.wraps(original)
     async def measured(*args, **kwargs):
         _ensure_send_hooks(client)
+        _ensure_reconnect_hooks(client, logger)
         request = _extract_request(args, kwargs)
         op_state = _OP_STATE.get()
         operation = None if op_state is None else op_state.get("operation")
@@ -225,6 +492,12 @@ def _wrap_call(client, logger):
             request_id = f"{id(asyncio.current_task()):x}-{time.monotonic_ns():x}"
         call = {"send_started": None, "queued": time.perf_counter()}
         token = _CALL_STATE.set(call)
+        inflight_key = _register_inflight(request, {
+            "request_id": request_id,
+            "operation": operation or _request_name(request),
+            "chat_id": chat_id,
+            "request": _request_name(request),
+        })
         result = "success"
         try:
             return await original(*args, **kwargs)
@@ -246,6 +519,7 @@ def _wrap_call(client, logger):
             post_rpc_ms = (time.perf_counter() - returned) * 1000
             total_rpc_ms = (time.perf_counter() - call["queued"]) * 1000
             _CALL_STATE.reset(token)
+            _unregister_inflight(inflight_key)
             record = {
                 "request_id": request_id,
                 "operation": operation or _request_name(request),
@@ -389,6 +663,7 @@ def instrument_client(client, logger):
     ):
         _wrap(client, attribute, operation, logger)
     _ensure_send_hooks(client)
+    _ensure_reconnect_hooks(client, logger)
     try:
         client._outgoing_profiler_installed = True
     except (AttributeError, TypeError):
