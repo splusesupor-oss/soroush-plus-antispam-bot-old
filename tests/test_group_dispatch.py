@@ -62,8 +62,13 @@ def test_classify_priority():
         priority, kind = classify_priority(text)
         check(f"{text!r} command", priority == PRIORITY_COMMAND and kind == "command",
               f"-> {priority} {kind}")
+    for text in ("سلام", "خوبی", "ربات"):
+        priority, kind = classify_priority(text)
+        check(f"{text!r} command greeting",
+              priority == PRIORITY_COMMAND and kind == "command",
+              f"-> {priority} {kind}")
     for text in (
-        "سلام", "https://spam.example/x", "خرید فالوور",
+        "https://spam.example/x", "خرید فالوور",
     ):
         priority, kind = classify_priority(text)
         check(f"{text!r} normal", priority == PRIORITY_NORMAL,
@@ -166,6 +171,36 @@ def test_user_command_has_own_lane():
 
     isolated, order = asyncio.run(scenario())
     check("راهنما همزمان با شغل اسپم اجرا شد", isolated, f"-> {order}")
+
+
+def test_greeting_not_in_normal_or_moderation():
+    print("\n### سلام/خوبی وارد صف normal یا moderation نمی‌شوند")
+
+    async def scenario():
+        dispatcher = GroupDispatcher(max_pending_normal=80, logger=Logger())
+        order = []
+        hold = asyncio.Event()
+
+        async def spam():
+            order.append("spam")
+            await hold.wait()
+
+        async def hi():
+            order.append("سلام")
+
+        dispatcher.submit(-12, spam, priority=PRIORITY_NORMAL, kind="normal")
+        await asyncio.sleep(0)
+        priority, kind = classify_priority("سلام")
+        dispatcher.submit(-12, hi, priority=priority, kind=kind)
+        await asyncio.sleep(0.05)
+        isolated = "سلام" in order and "spam" in order
+        hold.set()
+        await dispatcher.join(timeout=1)
+        return isolated, order, kind
+
+    isolated, order, kind = asyncio.run(scenario())
+    check("سلام lane=command است", kind == "command", f"-> {kind}")
+    check("سلام همزمان با اسپم اجرا شد", isolated, f"-> {order}")
 
 
 def test_overflow_keeps_admin_and_command():
@@ -401,6 +436,7 @@ def main():
     test_groups_are_isolated()
     test_admin_runs_while_normal_held()
     test_user_command_has_own_lane()
+    test_greeting_not_in_normal_or_moderation()
     test_overflow_keeps_admin_and_command()
     test_overflow_drops_normal_keeps_admin()
     test_normal_does_not_yield_for_busy_admin()

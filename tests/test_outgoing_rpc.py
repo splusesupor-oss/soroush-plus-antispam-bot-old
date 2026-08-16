@@ -16,6 +16,7 @@ from modules import outgoing_rpc
 from modules.message_delete_queue import MessageDeleteQueue
 from modules.outgoing_rpc import (
     PermanentRpcError,
+    URGENT,
     _PrioritySendQueue,
     cached_invalid_users,
     clear_invalid_user_cache,
@@ -23,8 +24,10 @@ from modules.outgoing_rpc import (
     get_users_ids,
     install,
     is_permanent_rpc_error,
+    mark_method_urgent,
     remember_invalid_users,
     request_priority,
+    urgent_rpc,
     unwrap_request,
 )
 
@@ -535,6 +538,108 @@ def test_main_connect_path_does_not_raise():
     check("بعد از connect proxy نصب است", proxied is True)
 
 
+def test_urgent_reply_bypasses_gate():
+    print("\n### پاسخ urgent پشت send سنگین نمی‌ماند")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient(send_ms=200)
+        original = client._call
+
+        async def mixed_call(sender, request, ordered=False, flood_sleep_threshold=None):
+            if getattr(request, "message", None) == "سلام":
+                name = type(outgoing_rpc.unwrap_request(request)).__name__
+                client.calls.append(name)
+                client.started.append((name, time.perf_counter()))
+                await asyncio.sleep(0.01)
+                return "sent"
+            return await original(sender, request, ordered, flood_sleep_threshold)
+
+        client._call = mixed_call
+        install(client, logger)
+        marks = {}
+
+        async def heavy_send():
+            marks["send_start"] = time.perf_counter()
+            await client._call(client._sender, SendMessageRequest(-3, "notice"))
+            marks["send_end"] = time.perf_counter()
+
+        async def reply():
+            await asyncio.sleep(0.03)
+            marks["reply_start"] = time.perf_counter()
+            with urgent_rpc():
+                await client._call(client._sender, SendMessageRequest(-3, "سلام"))
+            marks["reply_end"] = time.perf_counter()
+
+        await asyncio.gather(heavy_send(), reply())
+        return marks
+
+    marks = asyncio.run(scenario())
+    reply_ms = (marks["reply_end"] - marks["reply_start"]) * 1000
+    during = marks["reply_end"] < marks["send_end"]
+    print(f"    reply_ms={reply_ms:.1f}")
+    check("reply قبل از پایان send سنگین تمام شد", during)
+    check("reply پشت گیت ۱–۲ ثانیه نماند", reply_ms < 80, f"-> {reply_ms:.1f}ms")
+
+
+def test_packer_urgent_before_delete():
+    print("\n### packer: پاسخ urgent جلوتر از delete و send سنگین")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        client = FakeClient()
+        install(client, Logger())
+        packer = client._sender._send_queue
+        heavy = RequestState(SendMessageRequest(-1, "notice"))
+        delete = RequestState(DeleteMessagesRequest([1]))
+        packer.append(heavy)
+        packer.append(delete)
+        with urgent_rpc():
+            reply = RequestState(SendMessageRequest(-1, "خوبی"))
+            packer.append(reply)
+        return [getattr(item.request, "message", type(item.request).__name__)
+                for item in packer._deque]
+
+    names = asyncio.run(scenario())
+    check("اول پاسخ urgent است", names[0] == "خوبی", f"-> {names}")
+    check("بعد delete است", names[1] == "DeleteMessagesRequest", f"-> {names}")
+    check("send سنگین آخر است", names[-1] == "notice", f"-> {names}")
+
+
+def test_send_response_excludes_reply():
+    print("\n### SEND_RESPONSE زمان انتظار reply را حساب نمی‌کند")
+    from modules.outgoing_profiler import (
+        begin_response_measurement,
+        end_response_measurement,
+        instrument_event,
+        response_rpc_ms,
+    )
+
+    class Event:
+        def __init__(self, client):
+            self.client = client
+            self.chat_id = -4
+
+        async def reply(self, text):
+            with urgent_rpc():
+                await asyncio.sleep(0.12)
+                return "sent"
+
+    async def scenario():
+        logger = Logger()
+        event = Event(FakeClient())
+        instrument_event(event, logger)
+        token = begin_response_measurement()
+        await event.reply("سلام")
+        waited = response_rpc_ms()
+        end_response_measurement(token)
+        return waited
+
+    waited = asyncio.run(scenario())
+    check("انتظار reply در SEND_RESPONSE نیست", waited < 20, f"-> {waited:.1f}ms")
+
+
 def main():
     test_classify_and_unwrap()
     test_permanent_matcher()
@@ -548,6 +653,9 @@ def main():
     test_install_idempotent()
     test_slotted_packer_is_not_mutated()
     test_main_connect_path_does_not_raise()
+    test_urgent_reply_bypasses_gate()
+    test_packer_urgent_before_delete()
+    test_send_response_excludes_reply()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 

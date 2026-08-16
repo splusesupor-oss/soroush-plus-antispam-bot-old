@@ -603,7 +603,10 @@ def _wrap(owner, attribute, operation, logger):
             else:
                 post_rpc_ms = max(0.0, (ended - last_return) * 1000)
             if depth == 0:
-                _RESPONSE_RPC_MS.set(_RESPONSE_RPC_MS.get() + elapsed_ms)
+                from modules.outgoing_rpc import URGENT, current_priority
+                # User-facing reply wait is not handler processing time.
+                if current_priority() != URGENT and operation != "reply":
+                    _RESPONSE_RPC_MS.set(_RESPONSE_RPC_MS.get() + elapsed_ms)
             _OP_STATE.reset(op_token)
             _RPC_DEPTH.reset(depth_token)
             if operation in _TRACED_OPS:
@@ -675,7 +678,11 @@ def instrument_event(event, logger):
     if getattr(event, "_outgoing_profiler_installed", False):
         return
     _wrap(event, "reply", "reply", logger)
+    _wrap(event, "respond", "reply", logger)
     _wrap(event, "delete", "delete_message", logger)
+    from modules.outgoing_rpc import mark_method_urgent
+    mark_method_urgent(event, "reply")
+    mark_method_urgent(event, "respond")
     try:
         event._outgoing_profiler_installed = True
     except (AttributeError, TypeError):

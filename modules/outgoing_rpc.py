@@ -7,9 +7,9 @@ retried or re-enqueued.
 This module does **not** change keepalive interval, flood retries of
 transient 5xx/503, handler logic, or spam policy. It only:
 
-* caps concurrent *low-priority* RPCs (send/forward) on the shared sender
-* lets delete/ban/mute skip that cap
-* prefers high-priority items in the send packer
+* caps concurrent *low-priority* RPCs (notices / extra sends) on the shared sender
+* user-facing replies are ``urgent`` and skip that cap
+* delete/ban/mute stay ungated but sit behind urgent replies in the packer
 * fail-fast + cache permanent GetUsers 404 so the same invalid id never
   re-enters ``_pending_state``
 """
@@ -25,9 +25,11 @@ _CLIENT_MARKER = "_outgoing_rpc_installed"
 _SENDER_MARKER = "_outgoing_rpc_sender"
 _HIGH_OP_MARKER = "_outgoing_rpc_high_op"
 
+URGENT = "urgent"
 HIGH = "high"
 LOW = "low"
 NORMAL = "normal"
+_URGENT_METHOD = "_outgoing_rpc_urgent_method"
 
 # Content RPCs that pile up when the Soroush worker is sequential.
 # Official Web/Desktop clients typically keep very few of these in flight;
@@ -153,9 +155,32 @@ def request_name(request):
     return type(unwrap_request(request)).__name__
 
 
+def current_priority():
+    return _PRIORITY.get()
+
+
+def urgent_rpc():
+    """Mark this task's RPCs as user-facing replies (bypass the heavy gate)."""
+    return _UrgentScope()
+
+
+class _UrgentScope:
+    def __init__(self):
+        self._token = None
+
+    def __enter__(self):
+        self._token = _PRIORITY.set(URGENT)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._token is not None:
+            _PRIORITY.reset(self._token)
+        return False
+
+
 def request_priority(request):
     override = _PRIORITY.get()
-    if override in {HIGH, LOW, NORMAL}:
+    if override in {URGENT, HIGH, LOW, NORMAL}:
         return override
     name = request_name(request)
     if name in _HIGH_REQUESTS:
@@ -165,14 +190,73 @@ def request_priority(request):
     return NORMAL
 
 
-def is_high_state(state):
+def _state_rank(state):
     request = getattr(state, "request", None)
-    if request is None:
-        return False
-    name = request_name(request)
+    name = request_name(request) if request is not None else ""
     if name in {"MsgsAck", "PingRequest", "MsgsStateInfo", "HttpWaitRequest"}:
+        return 3
+    priority = request_priority(request)
+    if priority == URGENT:
+        return 0
+    if priority == HIGH:
+        return 1
+    return 2
+
+
+def is_high_state(state):
+    return _state_rank(state) <= 1
+
+
+def _insert_ranked(deque, state):
+    rank = _state_rank(state)
+    if deque is None or rank >= 2:
         return False
-    return request_priority(request) == HIGH
+    items = list(deque)
+    pos = 0
+    for index, existing in enumerate(items):
+        if _state_rank(existing) <= rank:
+            pos = index + 1
+        else:
+            break
+    items.insert(pos, state)
+    deque.clear()
+    deque.extend(items)
+    return True
+
+
+def mark_method_urgent(owner, name):
+    """Wrap reply/respond so the send bypasses the heavy outgoing gate."""
+    original = getattr(owner, name, None)
+    if original is None or getattr(original, _URGENT_METHOD, False):
+        return False
+
+    async def hooked(*args, **kwargs):
+        token = _PRIORITY.set(URGENT)
+        try:
+            return await original(*args, **kwargs)
+        finally:
+            _PRIORITY.reset(token)
+
+    if not asyncio.iscoroutinefunction(original):
+        def sync_hooked(*args, **kwargs):
+            token = _PRIORITY.set(URGENT)
+            try:
+                return original(*args, **kwargs)
+            finally:
+                _PRIORITY.reset(token)
+        setattr(sync_hooked, _URGENT_METHOD, True)
+        try:
+            setattr(owner, name, sync_hooked)
+            return True
+        except (AttributeError, TypeError):
+            return False
+
+    setattr(hooked, _URGENT_METHOD, True)
+    try:
+        setattr(owner, name, hooked)
+        return True
+    except (AttributeError, TypeError):
+        return False
 
 
 def get_users_ids(request):
