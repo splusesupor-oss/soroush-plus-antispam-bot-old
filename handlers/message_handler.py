@@ -5871,15 +5871,17 @@ async def handle_new_message(bot, event):
             group_word_spam = False
 
         try:
-            from modules.group_words_storage import get_words
+            from modules.group_words_storage import (
+                find_matching_filter_word,
+                get_words,
+            )
 
-            group_words = get_words(chat_id)
-
-            for word in group_words:
-                if word and word in message_text:
-                    group_word_spam = True
-                    group_word_reason = f"فیلتر گروه ({word})"
-                    break
+            matched_word = find_matching_filter_word(
+                message_text, get_words(chat_id)
+            )
+            if matched_word:
+                group_word_spam = True
+                group_word_reason = f"فیلتر گروه ({matched_word})"
 
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی کلمات گروه: {e}")
