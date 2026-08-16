@@ -42,6 +42,7 @@ from modules.user_original_storage import (
 from modules.jokes import get_joke
 from modules.biographies import get_biography
 from modules.simple_replies import SIMPLE_REPLIES, INSULTS, INSULT_REPLY
+from modules.urgent_send import reply_urgent
 from modules.word_correction import start as start_correction, answer as answer_correction, get as get_correction, clear as clear_correction
 from handlers.fox_games_router import (
     FOX_GAME_COMMANDS,
@@ -2818,10 +2819,10 @@ async def handle_new_message(bot, event):
         # COMMAND_MATCH was already marked at normalize_command above.
         simple_reply = SIMPLE_REPLIES.get(clean_text)
         if simple_reply:
-            await event.reply(simple_reply)
+            await reply_urgent(event, simple_reply)
             return
         if clean_text in INSULTS:
-            await event.reply(INSULT_REPLY)
+            await reply_urgent(event, INSULT_REPLY)
             return
 
         # فرمان‌های کوتاه نباید برای ثبت آمار/فعالیت منتظر I/O فایل بمانند.
@@ -3253,12 +3254,12 @@ async def handle_new_message(bot, event):
             return
 
         if clean_text in INSULTS:
-            await event.reply(INSULT_REPLY)
+            await reply_urgent(event, INSULT_REPLY)
             return
 
         simple_reply = SIMPLE_REPLIES.get(clean_text)
         if simple_reply:
-            await event.reply(simple_reply)
+            await reply_urgent(event, simple_reply)
             return
 
         # بیوگرافی باید پیش از فیلتر گروهیِ کلمهٔ مستقل «بیو» اجرا شود.

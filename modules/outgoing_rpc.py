@@ -8,8 +8,9 @@ This module does **not** change keepalive interval, flood retries of
 transient 5xx/503, handler logic, or spam policy. It only:
 
 * caps concurrent *low-priority* RPCs (notices / extra sends) on the shared sender
-* user-facing replies are ``urgent`` and skip that cap
+* short user-facing replies are ``urgent`` (text + context) and skip that cap
 * delete/ban/mute stay ungated but sit behind urgent replies in the packer
+* reconnect drops stuck LOW sends so they cannot block a new reply
 * fail-fast + cache permanent GetUsers 404 so the same invalid id never
   re-enters ``_pending_state``
 """
@@ -30,6 +31,7 @@ HIGH = "high"
 LOW = "low"
 NORMAL = "normal"
 _URGENT_METHOD = "_outgoing_rpc_urgent_method"
+_SEND_MARKER = "_outgoing_rpc_send"
 
 # Content RPCs that pile up when the Soroush worker is sequential.
 # Official Web/Desktop clients typically keep very few of these in flight;
@@ -178,6 +180,19 @@ class _UrgentScope:
         return False
 
 
+def request_message_text(request):
+    """Plain text of a SendMessage-like request, if any."""
+    payload = unwrap_request(request)
+    for attr in ("message", "caption"):
+        value = getattr(payload, attr, None)
+        if isinstance(value, str):
+            return value
+        inner = getattr(value, "message", None)
+        if isinstance(inner, str):
+            return inner
+    return ""
+
+
 def request_priority(request):
     override = _PRIORITY.get()
     if override in {URGENT, HIGH, LOW, NORMAL}:
@@ -186,8 +201,18 @@ def request_priority(request):
     if name in _HIGH_REQUESTS:
         return HIGH
     if name in _LOW_REQUESTS:
+        if _looks_like_urgent_send(request):
+            return URGENT
         return LOW
     return NORMAL
+
+
+def _looks_like_urgent_send(request):
+    try:
+        from modules.urgent_send import is_urgent_text
+    except Exception:
+        return False
+    return is_urgent_text(request_message_text(request))
 
 
 def _state_rank(state):
@@ -207,25 +232,35 @@ def is_high_state(state):
     return _state_rank(state) <= 1
 
 
-def _insert_ranked(deque, state):
+def _insert_ranked(deque, state, ranks=None):
     rank = _state_rank(state)
+    if ranks is not None:
+        ranks[id(state)] = rank
     if deque is None or rank >= 2:
         return False
     items = list(deque)
     pos = 0
     for index, existing in enumerate(items):
-        if _state_rank(existing) <= rank:
+        if ranks is not None and id(existing) in ranks:
+            existing_rank = ranks[id(existing)]
+        else:
+            existing_rank = _state_rank(existing)
+        if existing_rank <= rank:
             pos = index + 1
         else:
             break
     items.insert(pos, state)
     deque.clear()
     deque.extend(items)
+    if ranks is not None:
+        live = {id(item) for item in items}
+        for key in list(ranks):
+            if key not in live:
+                ranks.pop(key, None)
     return True
 
 
-def mark_method_urgent(owner, name):
-    """Wrap reply/respond so the send bypasses the heavy outgoing gate."""
+def _mark_one_urgent(owner, name):
     original = getattr(owner, name, None)
     if original is None or getattr(original, _URGENT_METHOD, False):
         return False
@@ -257,6 +292,19 @@ def mark_method_urgent(owner, name):
         return True
     except (AttributeError, TypeError):
         return False
+
+
+def mark_method_urgent(owner, name):
+    """Wrap reply/respond so the send bypasses the heavy outgoing gate.
+
+    SPlusthon ``NewMessage.Event`` stores ``reply`` on ``event.message``
+    (``__getattr__`` / ``__setattr__`` after ``_init``). Mark both.
+    """
+    marked = _mark_one_urgent(owner, name)
+    message = getattr(owner, "message", None)
+    if message is not None and message is not owner:
+        marked = _mark_one_urgent(message, name) or marked
+    return marked
 
 
 def get_users_ids(request):
@@ -342,6 +390,36 @@ def clear_invalid_user_cache():
     _invalid_users.clear()
 
 
+def drop_stale_low_pending(sender, logger=None):
+    """Fail stuck LOW sends on reconnect so they cannot block a new reply.
+
+    SPlusthon ``_reconnect`` re-extends ``_pending_state`` onto the packer.
+    A 15–23s notice sitting there would otherwise go back on the wire
+    ahead of the next «سلام».
+    """
+    pending = getattr(sender, "_pending_state", None)
+    if not pending:
+        return 0
+    removed = 0
+    for msg_id, state in list(pending.items()):
+        request = getattr(state, "request", None)
+        if request_priority(request) != LOW:
+            continue
+        pending.pop(msg_id, None)
+        future = getattr(state, "future", None)
+        if future is not None and not future.done():
+            future.set_exception(ConnectionError(
+                "low-priority send dropped on reconnect"
+            ))
+        removed += 1
+    if removed and logger is not None:
+        logger.log_info(
+            f"OUTGOING RPC DROP pending low send count={removed} "
+            "reason=reconnect"
+        )
+    return removed
+
+
 def drop_invalid_pending(sender, logger=None):
     """Remove cached-404 GetUsersRequest so reconnect cannot re-send them."""
     pending = getattr(sender, "_pending_state", None)
@@ -406,6 +484,13 @@ def _wrap_call(client, logger):
         gate = _gate_for(client)
         wait_ms = 0.0
         held = False
+        if priority == URGENT and gate.inflight > 0:
+            _log(
+                logger,
+                "URGENT SEND bypass=gate "
+                f"request={request_name(request)} "
+                f"inflight_low={gate.inflight}",
+            )
         if priority == LOW:
             wait_ms = await gate.acquire()
             held = True
@@ -479,34 +564,38 @@ class _PrioritySendQueue:
 
     def __init__(self, inner):
         self._inner = inner
+        self._ranks = {}
 
     def append(self, state):
         inner = self._inner
         deque = getattr(inner, "_deque", None)
         ready = getattr(inner, "_ready", None)
-        if is_high_state(state) and deque is not None:
-            deque.appendleft(state)
+        if _insert_ranked(deque, state, self._ranks):
             if ready is not None:
                 ready.set()
             return None
+        self._ranks[id(state)] = _state_rank(state)
         return inner.append(state)
 
     def extend(self, states):
         inner = self._inner
-        rows = list(states)
-        highs = [row for row in rows if is_high_state(row)]
-        rest = [row for row in rows if not is_high_state(row)]
         deque = getattr(inner, "_deque", None)
         ready = getattr(inner, "_ready", None)
-        if highs and deque is not None:
-            for row in reversed(highs):
-                deque.appendleft(row)
-            if ready is not None:
-                ready.set()
-            if rest:
-                return inner.extend(rest)
+        rest = []
+        inserted = False
+        for row in states:
+            if _insert_ranked(deque, row, self._ranks):
+                inserted = True
+            else:
+                self._ranks[id(row)] = _state_rank(row)
+                rest.append(row)
+        if inserted and ready is not None:
+            ready.set()
+        if rest:
+            return inner.extend(rest)
+        if inserted:
             return None
-        return inner.extend(rows)
+        return inner.extend(list(states))
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -531,11 +620,13 @@ def _wrap_reconnect(sender, logger):
 
     async def hooked(last_error):
         drop_invalid_pending(sender, logger)
+        drop_stale_low_pending(sender, logger)
         return await original(last_error)
 
     if not asyncio.iscoroutinefunction(original):
         def sync_hooked(last_error):
             drop_invalid_pending(sender, logger)
+            drop_stale_low_pending(sender, logger)
             return original(last_error)
         setattr(sync_hooked, _SENDER_MARKER, True)
         try:
@@ -609,12 +700,45 @@ def _wrap_connect(client, logger):
         return False
 
 
+def _wrap_send_message(client, logger):
+    """Mark short user replies urgent at the client.send_message entry."""
+    original = getattr(client, "send_message", None)
+    if original is None or getattr(original, _SEND_MARKER, False):
+        return False
+
+    async def hooked(*args, **kwargs):
+        already = current_priority()
+        if already in {URGENT, HIGH, LOW, NORMAL}:
+            return await original(*args, **kwargs)
+        try:
+            from modules.urgent_send import should_mark_send_urgent
+        except Exception:
+            return await original(*args, **kwargs)
+        if not should_mark_send_urgent(args, kwargs):
+            return await original(*args, **kwargs)
+        token = _PRIORITY.set(URGENT)
+        try:
+            return await original(*args, **kwargs)
+        finally:
+            _PRIORITY.reset(token)
+
+    if not asyncio.iscoroutinefunction(original):
+        return False
+    setattr(hooked, _SEND_MARKER, True)
+    try:
+        client.send_message = hooked
+        return True
+    except (AttributeError, TypeError):
+        return False
+
+
 def install(client, logger=None):
     """Install sender isolation + 404 cache. Safe to call more than once."""
     if getattr(client, _CLIENT_MARKER, False):
         _ensure_sender_hooks(client, logger)
         return False
     _wrap_call(client, logger)
+    _wrap_send_message(client, logger)
     for name in ("delete_messages", "edit_permissions", "kick_participant"):
         _wrap_high_operation(client, name)
     _wrap_connect(client, logger)

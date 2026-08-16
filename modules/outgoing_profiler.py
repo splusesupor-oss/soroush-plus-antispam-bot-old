@@ -680,6 +680,10 @@ def instrument_event(event, logger):
     _wrap(event, "reply", "reply", logger)
     _wrap(event, "respond", "reply", logger)
     _wrap(event, "delete", "delete_message", logger)
+    message = getattr(event, "message", None)
+    if message is not None:
+        _wrap(message, "reply", "reply", logger)
+        _wrap(message, "respond", "reply", logger)
     from modules.outgoing_rpc import mark_method_urgent
     mark_method_urgent(event, "reply")
     mark_method_urgent(event, "respond")

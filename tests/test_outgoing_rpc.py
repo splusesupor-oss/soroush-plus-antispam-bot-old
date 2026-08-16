@@ -21,6 +21,7 @@ from modules.outgoing_rpc import (
     cached_invalid_users,
     clear_invalid_user_cache,
     drop_invalid_pending,
+    drop_stale_low_pending,
     get_users_ids,
     install,
     is_permanent_rpc_error,
@@ -30,6 +31,9 @@ from modules.outgoing_rpc import (
     urgent_rpc,
     unwrap_request,
 )
+from modules.urgent_send import is_urgent_text, reply_urgent, urgent_send
+
+HEAVY_NOTICE = "🗑 ۱۰ پیام هرزنامه پاک شد"
 
 PASSED = FAILED = 0
 
@@ -185,7 +189,11 @@ def test_classify_and_unwrap():
     inner = SendMessageRequest()
     wrapped = InvokeWithoutUpdatesRequest(inner)
     check("unwrap پوست Invoke را می‌کند", unwrap_request(wrapped) is inner)
-    check("send_message اولویت پایین است", request_priority(inner) == "low")
+    check("send خالی اولویت پایین است", request_priority(inner) == "low")
+    check("اعلان هرزنامه low می‌ماند",
+          request_priority(SendMessageRequest(-1, HEAVY_NOTICE)) == "low")
+    check("پاسخ سلام بدون context هم urgent است",
+          request_priority(SendMessageRequest(-1, "سلام 👋")) == URGENT)
     check("delete اولویت بالا است",
           request_priority(DeleteMessagesRequest()) == "high")
     check("GetUsers عادی است", request_priority(GetUsersRequest([])) == "normal")
@@ -269,7 +277,7 @@ def test_slow_send_does_not_block_delete():
 
         async def send():
             marks["send_start"] = time.perf_counter()
-            await client._call(client._sender, SendMessageRequest(-1, "hi"))
+            await client._call(client._sender, SendMessageRequest(-1, HEAVY_NOTICE))
             marks["send_end"] = time.perf_counter()
 
         async def delete():
@@ -303,7 +311,7 @@ def test_second_send_waits_first_but_delete_does_not():
 
         async def send(tag):
             marks[f"{tag}_start"] = time.perf_counter()
-            await client._call(client._sender, SendMessageRequest(-2, tag))
+            await client._call(client._sender, SendMessageRequest(-2, f"{HEAVY_NOTICE} {tag}"))
             marks[f"{tag}_end"] = time.perf_counter()
 
         async def delete():
@@ -387,7 +395,7 @@ def test_packer_puts_delete_first():
         client = FakeClient()
         install(client, Logger())
         packer = client._sender._send_queue
-        send = RequestState(SendMessageRequest(-1, "x"))
+        send = RequestState(SendMessageRequest(-1, HEAVY_NOTICE))
         delete = RequestState(DeleteMessagesRequest([1]))
         packer.append(send)
         packer.append(delete)
@@ -469,7 +477,7 @@ def test_slotted_packer_is_not_mutated():
         install(client, logger)
         await client.connect()
         queue = client._sender._send_queue
-        send = RequestState(SendMessageRequest(-1, "x"))
+        send = RequestState(SendMessageRequest(-1, HEAVY_NOTICE))
         delete = RequestState(DeleteMessagesRequest([1]))
         queue.append(send)
         queue.append(delete)
@@ -562,7 +570,7 @@ def test_urgent_reply_bypasses_gate():
 
         async def heavy_send():
             marks["send_start"] = time.perf_counter()
-            await client._call(client._sender, SendMessageRequest(-3, "notice"))
+            await client._call(client._sender, SendMessageRequest(-3, HEAVY_NOTICE))
             marks["send_end"] = time.perf_counter()
 
         async def reply():
@@ -591,7 +599,7 @@ def test_packer_urgent_before_delete():
         client = FakeClient()
         install(client, Logger())
         packer = client._sender._send_queue
-        heavy = RequestState(SendMessageRequest(-1, "notice"))
+        heavy = RequestState(SendMessageRequest(-1, HEAVY_NOTICE))
         delete = RequestState(DeleteMessagesRequest([1]))
         packer.append(heavy)
         packer.append(delete)
@@ -604,7 +612,7 @@ def test_packer_urgent_before_delete():
     names = asyncio.run(scenario())
     check("اول پاسخ urgent است", names[0] == "خوبی", f"-> {names}")
     check("بعد delete است", names[1] == "DeleteMessagesRequest", f"-> {names}")
-    check("send سنگین آخر است", names[-1] == "notice", f"-> {names}")
+    check("send سنگین آخر است", names[-1] == HEAVY_NOTICE, f"-> {names}")
 
 
 def test_send_response_excludes_reply():
@@ -640,6 +648,173 @@ def test_send_response_excludes_reply():
     check("انتظار reply در SEND_RESPONSE نیست", waited < 20, f"-> {waited:.1f}ms")
 
 
+def test_urgent_text_classifier():
+    print("\n### متن پاسخ ساده urgent است، اعلان نیست")
+    check("سلام 👋 urgent است", is_urgent_text("سلام 👋"))
+    check("جانم ؟ 🦊 urgent است", is_urgent_text("جانم ؟ 🦊"))
+    check("اعلان هرزنامه urgent نیست", not is_urgent_text(HEAVY_NOTICE))
+    check("متن خالی urgent نیست", not is_urgent_text(""))
+    check("متن بلند urgent نیست", not is_urgent_text("x" * 200))
+
+
+def test_send_message_short_bypasses_gate_without_context():
+    print("\n### send_message کوتاه بدون urgent_rpc از گیت رد می‌شود")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient(send_ms=200)
+        original = client._call
+
+        async def mixed_call(sender, request, ordered=False, flood_sleep_threshold=None):
+            if getattr(request, "message", None) == "سلام 👋":
+                name = type(outgoing_rpc.unwrap_request(request)).__name__
+                client.calls.append(name)
+                client.started.append((name, time.perf_counter()))
+                await asyncio.sleep(0.01)
+                return "sent"
+            return await original(sender, request, ordered, flood_sleep_threshold)
+
+        client._call = mixed_call
+        install(client, logger)
+        marks = {}
+
+        async def heavy_send():
+            marks["send_start"] = time.perf_counter()
+            await client._call(client._sender, SendMessageRequest(-5, HEAVY_NOTICE))
+            marks["send_end"] = time.perf_counter()
+
+        async def reply():
+            await asyncio.sleep(0.03)
+            marks["reply_start"] = time.perf_counter()
+            await client.send_message(-5, "سلام 👋")
+            marks["reply_end"] = time.perf_counter()
+
+        await asyncio.gather(heavy_send(), reply())
+        return marks, logger
+
+    marks, logger = asyncio.run(scenario())
+    reply_ms = (marks["reply_end"] - marks["reply_start"]) * 1000
+    during = marks["reply_end"] < marks["send_end"]
+    print(f"    reply_ms={reply_ms:.1f}")
+    check("سلام قبل از پایان notice تمام شد", during)
+    check("سلام بدون context پشت گیت نماند", reply_ms < 80, f"-> {reply_ms:.1f}ms")
+    check(
+        "لاگ GATE برای سلام نیست",
+        not any("OUTGOING RPC GATE" in line and "سلام" in line for line in logger.infos),
+    )
+
+
+def test_delete_after_urgent_stays_behind():
+    print("\n### delete بعد از urgent نمی‌تواند جلوی آن بپرد")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        client = FakeClient()
+        install(client, Logger())
+        packer = client._sender._send_queue
+        packer.append(RequestState(SendMessageRequest(-1, "سلام 👋")))
+        packer.append(RequestState(DeleteMessagesRequest([1])))
+        return [getattr(item.request, "message", type(item.request).__name__)
+                for item in packer._deque]
+
+    names = asyncio.run(scenario())
+    check("اول سلام است", names[0] == "سلام 👋", f"-> {names}")
+    check("delete بعد از سلام است", names[1] == "DeleteMessagesRequest", f"-> {names}")
+
+
+def test_reconnect_drops_low_not_urgent():
+    print("\n### reconnect اعلان LOW گیرکرده را دور می‌اندازد")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient()
+        install(client, logger)
+        low = RequestState(SendMessageRequest(-1, HEAVY_NOTICE))
+        urgent = RequestState(SendMessageRequest(-1, "سلام 👋"))
+        client._sender._pending_state[1] = low
+        client._sender._pending_state[2] = urgent
+        dropped = drop_stale_low_pending(client._sender, logger)
+        return dropped, list(client._sender._pending_state), low.future, urgent.future, logger
+
+    dropped, leftover, low_future, urgent_future, logger = asyncio.run(scenario())
+    check("یک LOW حذف شد", dropped == 1, f"-> {dropped}")
+    check("urgent در pending ماند", leftover == [2], f"-> {leftover}")
+    check("future اعلان با خطا بسته شد",
+          low_future.done() and isinstance(low_future.exception(), ConnectionError))
+    check("future سلام باز ماند", not urgent_future.done())
+    check("لاگ reconnect ثبت شد",
+          any("reason=reconnect" in line for line in logger.infos))
+
+
+def test_greeting_during_spam_under_one_second():
+    print("\n### سلام در گروه دیگر هنگام ban/delete زیر ۱ ثانیه")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient(send_ms=400)
+        original = client._call
+
+        async def mixed_call(sender, request, ordered=False, flood_sleep_threshold=None):
+            text = getattr(request, "message", None)
+            if text in {"سلام 👋", "ممنون، خوبم 😊", "جانم ؟ 🦊"}:
+                client.calls.append(type(request).__name__)
+                await asyncio.sleep(0.01)
+                return "sent"
+            return await original(sender, request, ordered, flood_sleep_threshold)
+
+        client._call = mixed_call
+        install(client, logger)
+        times = {}
+
+        async def spam_group():
+            await client._call(client._sender, SendMessageRequest(-10, HEAVY_NOTICE))
+            await client.delete_messages(-10, [1, 2, 3])
+
+        async def greet(chat_id, text, tag):
+            await asyncio.sleep(0.02)
+            started = time.perf_counter()
+            await urgent_send(client, chat_id, text)
+            times[tag] = (time.perf_counter() - started) * 1000
+
+        await asyncio.gather(
+            spam_group(),
+            greet(-20, "سلام 👋", "سلام"),
+            greet(-21, "ممنون، خوبم 😊", "خوبی"),
+            greet(-22, "جانم ؟ 🦊", "ربات"),
+        )
+        return times
+
+    times = asyncio.run(scenario())
+    for tag, elapsed in times.items():
+        print(f"    {tag}={elapsed:.1f}ms")
+        check(f"{tag} زیر ۱ ثانیه پاسخ داد", elapsed < 1000, f"-> {elapsed:.1f}ms")
+        check(f"{tag} پشت cleanup نماند", elapsed < 80, f"-> {elapsed:.1f}ms")
+
+
+def test_reply_urgent_sets_lane():
+    print("\\n### reply_urgent مسیر event.reply را urgent می‌کند")
+
+    class Event:
+        def __init__(self):
+            self.seen = None
+
+        async def reply(self, text):
+            self.seen = outgoing_rpc.current_priority()
+            return text
+
+    async def scenario():
+        event = Event()
+        result = await reply_urgent(event, "سلام 👋")
+        return result, event.seen
+
+    result, seen = asyncio.run(scenario())
+    check("متن برگردانده شد", result == "سلام 👋")
+    check("داخل reply اولویت urgent بود", seen == URGENT, f"-> {seen}")
+
+
 def main():
     test_classify_and_unwrap()
     test_permanent_matcher()
@@ -656,6 +831,12 @@ def main():
     test_urgent_reply_bypasses_gate()
     test_packer_urgent_before_delete()
     test_send_response_excludes_reply()
+    test_urgent_text_classifier()
+    test_send_message_short_bypasses_gate_without_context()
+    test_delete_after_urgent_stays_behind()
+    test_reconnect_drops_low_not_urgent()
+    test_greeting_during_spam_under_one_second()
+    test_reply_urgent_sets_lane()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 
