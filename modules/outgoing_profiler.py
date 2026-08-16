@@ -95,6 +95,12 @@ def _wrap(owner, attribute, operation, logger):
                 logger.log_info(
                     f"SEND END source={source} ms={elapsed_ms:.0f}"
                 )
+            if elapsed_ms >= 250:
+                logger.log_info(
+                    "RPC TIME "
+                    f"operation={operation} chat_id={chat_id} "
+                    f"rpc_ms={elapsed_ms:.1f} result={result}"
+                )
             if elapsed_ms > _RPC_SLOW_WARNING_MS:
                 logger.log_error(
                     "OUTGOING RPC WARNING "

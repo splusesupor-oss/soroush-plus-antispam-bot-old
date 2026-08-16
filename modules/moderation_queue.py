@@ -137,7 +137,13 @@ class ModerationQueue:
                     else:
                         result = "failed"
                     if job.on_failure:
-                        await self._run_callback(job.on_failure, caught, chat_id, job.action)
+                        # Same as on_success: never hold this chat's punish
+                        # worker on a slow failure callback / reply.
+                        asyncio.create_task(
+                            self._run_callback(
+                                job.on_failure, caught, chat_id, job.action
+                            )
+                        )
                     self.logger.log_error(
                         "MODERATION RPC FAILED "
                         f"chat_id={chat_id} action={job.action} user_id={job.user_id} "

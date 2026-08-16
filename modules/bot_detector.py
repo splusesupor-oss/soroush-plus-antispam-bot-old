@@ -28,6 +28,11 @@ REENABLE_COMMAND = "فعال کردن روباه"
 # fetchِ تکراری روی هر پیام).
 _KNOWN_BOT_IDS = set()    # قطعاً ربات
 _KNOWN_HUMAN_IDS = set()  # قطعاً کاربرِ عادی
+_KNOWN_MAX = 4000
+# Disabled-group map.  is_disabled() used to parse the JSON file on every
+# group message; keep it in memory and only reread when the file changes.
+_DISABLED = None
+_DISABLED_MTIME = None
 
 
 def _load():
@@ -40,11 +45,31 @@ def _load():
     return {}
 
 
+def _disabled_map():
+    """Return the disabled-groups dict without reading disk on every call."""
+    global _DISABLED, _DISABLED_MTIME
+    try:
+        mtime = _FILE.stat().st_mtime if _FILE.exists() else -1
+    except OSError:
+        mtime = -1
+    if _DISABLED is not None and _DISABLED_MTIME == mtime:
+        return _DISABLED
+    _DISABLED = _load() if mtime != -1 else {}
+    _DISABLED_MTIME = mtime
+    return _DISABLED
+
+
 def _save(data):
+    global _DISABLED, _DISABLED_MTIME
     try:
         _BASE.mkdir(parents=True, exist_ok=True)
         _FILE.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _DISABLED = data if isinstance(data, dict) else {}
+        try:
+            _DISABLED_MTIME = _FILE.stat().st_mtime
+        except OSError:
+            _DISABLED_MTIME = None
     except OSError:
         pass
 
@@ -95,10 +120,10 @@ async def resolve_is_bot(client, user, user_id):
 def _remember(user_id, is_bot):
     if user_id is None:
         return
-    if is_bot:
-        _KNOWN_BOT_IDS.add(user_id)
-    else:
-        _KNOWN_HUMAN_IDS.add(user_id)
+    target = _KNOWN_BOT_IDS if is_bot else _KNOWN_HUMAN_IDS
+    target.add(user_id)
+    if len(target) > _KNOWN_MAX:
+        target.pop()
 
 
 def display(user):
@@ -137,7 +162,7 @@ def disable_for_bot(chat_id, bot_user):
 
 def is_disabled(chat_id):
     """آیا این گروه به دلیلِ رباتِ دیگر غیرفعال شده است؟"""
-    return str(chat_id) in _load()
+    return str(chat_id) in _disabled_map()
 
 
 def reenable(chat_id):
@@ -151,7 +176,7 @@ def reenable(chat_id):
 
 
 def disabled_bot_name(chat_id):
-    return _load().get(str(chat_id), {}).get("bot_name", "ربات")
+    return _disabled_map().get(str(chat_id), {}).get("bot_name", "ربات")
 
 
 def sender_dump(user):

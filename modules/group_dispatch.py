@@ -142,12 +142,19 @@ def _message_bits(event):
 class GroupDispatcher:
     """Independent admin / command / normal workers per chat."""
 
+    # Lower lanes pause while a higher lane of the same chat is running or
+    # queued, so a normal/command RPC cannot occupy the shared sender ahead
+    # of mute/ban/lock.  A safety timeout prevents a hung admin from freezing
+    # ordinary chat forever.
+    HIGHER_LANE_WAIT_SECONDS = 15.0
+
     def __init__(self, *, max_pending_normal=40, logger=None):
         self.max_pending_normal = int(max_pending_normal)
         self.logger = logger
         self._queues = {}
         self._workers = {}
         self._normal_pending = {}
+        self._busy = set()
         self._seq = 0
         self._closed = False
         self.stats = {
@@ -209,7 +216,9 @@ class GroupDispatcher:
             queue = asyncio.PriorityQueue()
             self._queues[key] = queue
         self._seq += 1
-        queue.put_nowait((int(priority), self._seq, kind or lane, factory))
+        queue.put_nowait(
+            (int(priority), self._seq, kind or lane, factory, time.perf_counter())
+        )
         self.stats["submitted"] += 1
         if lane == LANE_ADMIN:
             self.stats["admin"] += 1
@@ -234,11 +243,19 @@ class GroupDispatcher:
         key = self._lane_key(chat_id, lane)
         try:
             while True:
-                priority, _seq, kind, factory = await queue.get()
+                item = await queue.get()
+                if len(item) == 5:
+                    priority, _seq, kind, factory, enqueued_at = item
+                else:
+                    priority, _seq, kind, factory = item
+                    enqueued_at = time.perf_counter()
                 if lane == LANE_NORMAL:
                     current = self._normal_pending.get(chat_id, 1)
                     self._normal_pending[chat_id] = max(0, current - 1)
+                yield_ms = await self._yield_to_higher_lanes(chat_id, lane)
                 started = time.perf_counter()
+                queue_wait_ms = (started - enqueued_at) * 1000
+                self._busy.add(key)
                 try:
                     result = factory() if factory is not None else None
                     if inspect.isawaitable(result):
@@ -254,10 +271,23 @@ class GroupDispatcher:
                             f"chat_id={chat_id} lane={lane} kind={kind} error={error!r}"
                         )
                 finally:
+                    self._busy.discard(key)
                     queue.task_done()
                     if self.logger is not None:
                         elapsed_ms = (time.perf_counter() - started) * 1000
-                        if elapsed_ms >= 250 or lane != LANE_NORMAL:
+                        if queue_wait_ms >= 50:
+                            self.logger.log_info(
+                                "QUEUE WAIT TIME "
+                                f"chat_id={chat_id} lane={lane} kind={kind} "
+                                f"queue_wait_ms={queue_wait_ms:.1f} "
+                                f"yield_ms={yield_ms:.1f}"
+                            )
+                        if elapsed_ms >= 100 or lane != LANE_NORMAL:
+                            self.logger.log_info(
+                                "HANDLER TIME "
+                                f"chat_id={chat_id} lane={lane} kind={kind} "
+                                f"handler_ms={elapsed_ms:.1f}"
+                            )
                             self.logger.log_info(
                                 "GROUP DISPATCH JOB "
                                 f"chat_id={chat_id} lane={lane} kind={kind} "
@@ -266,12 +296,36 @@ class GroupDispatcher:
                 if queue.empty():
                     return
         finally:
+            self._busy.discard(key)
             if self._workers.get(key) is asyncio.current_task():
                 self._workers.pop(key, None)
             if queue.empty():
                 self._queues.pop(key, None)
                 if lane == LANE_NORMAL:
                     self._normal_pending.pop(chat_id, None)
+
+    def _lane_busy(self, chat_id, lane):
+        key = self._lane_key(chat_id, lane)
+        if key in self._busy:
+            return True
+        queue = self._queues.get(key)
+        return bool(queue is not None and queue.qsize() > 0)
+
+    async def _yield_to_higher_lanes(self, chat_id, lane):
+        """Pause this worker while a higher-priority lane of the same chat is busy."""
+        if lane == LANE_ADMIN:
+            return 0.0
+        started = time.perf_counter()
+        deadline = started + self.HIGHER_LANE_WAIT_SECONDS
+        while time.perf_counter() < deadline:
+            admin_busy = self._lane_busy(chat_id, LANE_ADMIN)
+            command_busy = (
+                lane == LANE_NORMAL and self._lane_busy(chat_id, LANE_COMMAND)
+            )
+            if not admin_busy and not command_busy:
+                break
+            await asyncio.sleep(0.02)
+        return (time.perf_counter() - started) * 1000
 
     async def join(self, timeout=None):
         """Wait until every queued job has finished (tests / shutdown)."""
@@ -306,11 +360,13 @@ class GroupDispatcher:
         self._workers.clear()
         self._queues.clear()
         self._normal_pending.clear()
+        self._busy.clear()
 
     def reset_for_tests(self):
         self._queues.clear()
         self._workers.clear()
         self._normal_pending.clear()
+        self._busy.clear()
         self._seq = 0
         self._closed = False
         for key in self.stats:

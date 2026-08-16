@@ -10,7 +10,7 @@ class MessageDeleteQueue:
     semaphore: a flood in group A occupies only that group's worker.  Other
     chats keep deleting/replying in parallel.
     """
-    def __init__(self, client, logger, *, batch_size=50, max_concurrent=None, inter_batch_delay=0.05):
+    def __init__(self, client, logger, *, batch_size=15, max_concurrent=None, inter_batch_delay=0.08):
         self.client = client
         self.logger = logger
         self.batch_size = batch_size
@@ -48,12 +48,13 @@ class MessageDeleteQueue:
             queue = asyncio.PriorityQueue()
             self._queues[chat_id] = queue
         self._seq += 1
-        queue.put_nowait((int(priority), self._seq, ids, result))
-        self.logger.log_info(
-            "DELETE QUEUE SIZE "
-            f"chat_id={chat_id} queued_ids={len(ids)} pending={queue.qsize()} "
-            f"priority={priority}"
-        )
+        queue.put_nowait((int(priority), self._seq, ids, result, time.perf_counter()))
+        if queue.qsize() > 1 or int(priority) == 0:
+            self.logger.log_info(
+                "DELETE QUEUE SIZE "
+                f"chat_id={chat_id} queued_ids={len(ids)} pending={queue.qsize()} "
+                f"priority={priority}"
+            )
         worker = self._workers.get(chat_id)
         if worker is None or worker.done():
             self._workers[chat_id] = asyncio.create_task(
@@ -66,6 +67,9 @@ class MessageDeleteQueue:
         remaining = []
         for start in range(0, len(ids), self.batch_size):
             batch = ids[start:start + self.batch_size]
+            # Yield so a pending admin reply can take the shared sender
+            # before this chat's next delete batch.
+            await asyncio.sleep(0)
             self.logger.log_info(
                 f"BATCH DELETE START chat_id={chat_id} count={len(batch)}"
             )
@@ -136,7 +140,19 @@ class MessageDeleteQueue:
         self.logger.log_info(f"DELETE TASK START chat_id={chat_id}")
         try:
             while True:
-                _priority, _seq, ids, result = await queue.get()
+                item = await queue.get()
+                if len(item) == 5:
+                    _priority, _seq, ids, result, enqueued_at = item
+                else:
+                    _priority, _seq, ids, result = item
+                    enqueued_at = time.perf_counter()
+                queue_wait_ms = (time.perf_counter() - enqueued_at) * 1000
+                if queue_wait_ms >= 50:
+                    self.logger.log_info(
+                        "QUEUE WAIT TIME "
+                        f"chat_id={chat_id} lane=delete priority={_priority} "
+                        f"queue_wait_ms={queue_wait_ms:.1f} ids={len(ids)}"
+                    )
                 try:
                     deleted, remaining = await self._delete_ids(chat_id, ids)
                     if not result.done():

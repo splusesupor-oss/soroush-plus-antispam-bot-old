@@ -374,7 +374,7 @@ class SoroushAntiSpamBot:
                 self.spam_burst_users.discard(key)
                 self._temporary_state_touched.pop(("burst", key), None)
         for key in list(self.spam_burst_users):
-            if stale("burst", key, self.BURST_STATE_TTL) and key not in self.spam_burst_tks:
+            if stale("burst", key, self.BURST_STATE_TTL) and key not in self.spam_burst_tasks:
                 self.spam_burst_users.discard(key)
                 self._temporary_state_touched.pop(("burst", key), None)
         for key in list(self.forward_spam_counts):
@@ -628,7 +628,8 @@ class SoroushAntiSpamBot:
         # Automatic deletions have their own per-group workers and never run
         # synchronously in the incoming-message handler.
         self.message_delete_queue = MessageDeleteQueue(
-            self.client, self.logger, max_concurrent=4, inter_batch_delay=0.05)
+            self.client, self.logger, batch_size=15, max_concurrent=4,
+            inter_batch_delay=0.08)
         self.notice_cleanup.bind_delete_queue(self.message_delete_queue)
         self.notice_cleanup.client = self.client
         if getattr(self, "admin_actions", None) is not None:
@@ -941,6 +942,8 @@ class SoroushAntiSpamBot:
             owner/DM behavior is unchanged. Owner group commands
             (فعال / ثبت گروه / ثبت مالک) run on a dedicated fast path.
             """
+            started_cmd = time.perf_counter()
+            text = ""
             try:
                 instrument_event(event, self.logger)
                 raw_text = ""
@@ -997,6 +1000,20 @@ class SoroushAntiSpamBot:
                     f"chat_id={getattr(event, 'chat_id', None)} "
                     f"error={handler_error!r}\n{_tb.format_exc()}"
                 )
+            finally:
+                elapsed_ms = (time.perf_counter() - started_cmd) * 1000
+                if elapsed_ms >= 50:
+                    self.logger.log_info(
+                        "HANDLER TIME "
+                        f"chat_id={getattr(event, 'chat_id', None)} "
+                        f"path=priority handler_ms={elapsed_ms:.1f} "
+                        f"text={text!r}"
+                    )
+                    self.logger.log_info(
+                        "TOTAL COMMAND TIME "
+                        f"chat_id={getattr(event, 'chat_id', None)} "
+                        f"elapsed_ms={elapsed_ms:.1f} text={text!r}"
+                    )
 
         async def process_incoming_message(event):
             # === SPAM DEBUG INCOMING — اولین خط NewMessage ===
@@ -1832,7 +1849,7 @@ class SoroushAntiSpamBot:
                     )
                 await handle_new_message(self, event)
                 elapsed = time.perf_counter() - started
-                if elapsed >= 0.05:
+                if elapsed >= 0.25:
                     self.logger.log_info(
                         "MESSAGE PROCESS TIME "
                         f"receive={started:.6f} total={elapsed:.4f}s "

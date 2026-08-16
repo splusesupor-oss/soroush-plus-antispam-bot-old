@@ -1543,6 +1543,11 @@ async def handle_fast_owner_command(bot, event, text=None):
             f"COMMAND RESPONSE SENT command={text} chat_id={chat_id} "
             f"replied={replied} elapsed_ms={elapsed_ms:.1f}",
         )
+        _command_timing_log(
+            bot,
+            f"TOTAL COMMAND TIME command={text} chat_id={chat_id} "
+            f"elapsed_ms={elapsed_ms:.1f}",
+        )
         return True
 
     if text == "فعال":
@@ -2287,7 +2292,12 @@ async def handle_new_message(bot, event):
         )
         # Track every incoming group message before the spam-lock early drop;
         # otherwise messages after the first threshold hit never enter history.
-        tracked_ok = False if admin_bypass else message_tracker.add_message(
+        # Management commands skip tracker/big-spam/forward so بن/قفل/پاک
+        # do not wait on those inspections.
+        skip_inspect = (not event.is_private) and _is_management_command(
+            message_text
+        )
+        tracked_ok = False if admin_bypass or skip_inspect else message_tracker.add_message(
             chat_id, user_id, getattr(event.message, "id", None), message_text
         )
         _trace_hist_after = 0 if admin_bypass else len(message_tracker.get_user_recent_messages(chat_id, user_id))
@@ -2304,7 +2314,7 @@ async def handle_new_message(bot, event):
         # Fast lane for promotional/repeated payloads: it runs immediately
         # after the in-memory tracker update. Two clearly similar ads, or
         # one packed promotional box, queue the ban and start cleanup now.
-        if (not event.is_private and not admin_bypass
+        if (not skip_inspect and not event.is_private and not admin_bypass
                 and not native_admin_warn_only):
             big_spam, big_reason, big_ids = _big_repeated_spam(
                 chat_id, user_id, message_text
@@ -2577,8 +2587,13 @@ async def handle_new_message(bot, event):
                 f"sender_type={sender.__class__.__name__ if sender else 'None'}\n"
                 f"is_bot={getattr(sender, 'bot', None)!r}\n"
                 "detection_result=sender_detected_resolving")
-            is_other_bot = await bot_detector.resolve_is_bot(
-                bot.client, sender, user_id)
+            skip_bot_probe = classify_priority(clean_text)[1] in {
+                "admin", "command",
+            }
+            is_other_bot = False
+            if not skip_bot_probe:
+                is_other_bot = await bot_detector.resolve_is_bot(
+                    bot.client, sender, user_id)
             if is_other_bot and not is_global_owner(user_id):
                 title = getattr(event_chat, "title", "") or ""
                 bot_id = getattr(sender, "id", None)
