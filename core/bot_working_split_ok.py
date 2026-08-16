@@ -47,7 +47,12 @@ from modules.group_dispatch import GroupDispatcher, classify_priority, looks_lik
 from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
 from modules import site_policy
-from handlers.message_handler import handle_new_message, send_activation_message
+from handlers.message_handler import (
+    handle_new_message,
+    send_activation_message,
+    handle_fast_owner_command,
+    is_fast_owner_command,
+)
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.name_family import cancel_round as cancel_name_family_round
 from modules.broadcast_state import (
@@ -369,7 +374,7 @@ class SoroushAntiSpamBot:
                 self.spam_burst_users.discard(key)
                 self._temporary_state_touched.pop(("burst", key), None)
         for key in list(self.spam_burst_users):
-            if stale("burst", key, self.BURST_STATE_TTL) and key not in self.spam_burst_tasks:
+            if stale("burst", key, self.BURST_STATE_TTL) and key not in self.spam_burst_tks:
                 self.spam_burst_users.discard(key)
                 self._temporary_state_touched.pop(("burst", key), None)
         for key in list(self.forward_spam_counts):
@@ -952,9 +957,16 @@ class SoroushAntiSpamBot:
                 if getattr(event, "is_private", False):
                     await process_incoming_message(event)
                     return
-                if text in FAST_OWNER_COMMANDS:
-                    if await handle_fast_owner_command(self, event, text):
-                        return
+                try:
+                    if is_fast_owner_command(text):
+                        if await handle_fast_owner_command(self, event, text):
+                            return
+                except Exception as fast_error:
+                    self.logger.log_error(
+                        "FAST OWNER COMMAND FALLBACK "
+                        f"chat_id={getattr(event, 'chat_id', None)} "
+                        f"text={text!r} error={fast_error!r}"
+                    )
                 sender = (
                     getattr(event, "_bot_cached_sender", None)
                     or getattr(event, "sender", None)

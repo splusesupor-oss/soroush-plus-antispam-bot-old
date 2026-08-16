@@ -6,7 +6,7 @@ import time
 from modules.fill_blank import check_fill, get_token as get_fill_token
 from modules.riddles import check_answer
 from modules.group_stats import add_message, get_stats
-from modules.group_storage import activate_group, deactivate_group
+from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.owner_check import get_owner, is_global_owner
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
@@ -1422,10 +1422,26 @@ async def send_activation_message(bot, event, chat_id, title):
 
 
 # Owner/management commands that must not wait on the heavy group pipeline.
+# Exact match only — user chat, games, and greetings never belong here.
 FAST_OWNER_COMMANDS = frozenset({
     "فعال", "غیر فعال", "فعال سازی",
     "ثبت گروه", "ثبت مالک",
 })
+
+
+def is_fast_owner_command(text):
+    """True only for the five owner fast-path commands.
+
+    Detection must never raise: a failure returns False so the caller can
+    continue on the normal handler path.
+    """
+    try:
+        if not text:
+            return False
+        normalized = normalize_command(text)
+        return normalized in FAST_OWNER_COMMANDS
+    except Exception:
+        return False
 
 
 def _command_timing_log(bot, message):
@@ -1502,7 +1518,7 @@ async def handle_fast_owner_command(bot, event, text=None):
                 or ""
             )
         text = normalize_command(raw)
-    if text not in FAST_OWNER_COMMANDS:
+    if not is_fast_owner_command(text):
         return False
 
     chat_id = getattr(event, "chat_id", None)
@@ -2140,10 +2156,17 @@ async def handle_new_message(bot, event):
                 pass
 
         if not getattr(event, "is_private", False):
-            early_command = normalize_command(message_text)
-            if early_command in FAST_OWNER_COMMANDS:
-                if await handle_fast_owner_command(bot, event, early_command):
-                    return
+            try:
+                early_command = normalize_command(message_text)
+                if is_fast_owner_command(early_command):
+                    if await handle_fast_owner_command(bot, event, early_command):
+                        return
+            except Exception as fast_error:
+                bot.logger.log_error(
+                    "FAST OWNER COMMAND FALLBACK "
+                    f"chat_id={getattr(event, 'chat_id', None)} "
+                    f"error={fast_error!r}"
+                )
 
         # Core may have resolved these already; prefer the per-bot InputPeer
         # cache and event fields before asking SPlusthon to resolve a chat.
