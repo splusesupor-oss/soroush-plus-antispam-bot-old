@@ -2331,7 +2331,7 @@ async def handle_new_message(bot, event):
         # Single-forward delete runs here, before command/game/filter routes.
         # A forwarded «راهنما» or a captionless album item must not skip
         # this path. Consecutive-forward mute still uses the same counter.
-        if not event.is_private:
+        if not event.is_private and not skip_inspect:
             album_ids = _album_forward_ids(
                 bot, chat_id, event.message, is_forwarded_media
             )
@@ -2508,7 +2508,10 @@ async def handle_new_message(bot, event):
             )
             return
         # Normalize only the routing copy; keep message_text unchanged for filters.
+        # COMMAND_MATCH is the cheap text classify only — never include
+        # get_entity / search / economy time in this stage.
         clean_text = normalize_command(message_text)
+        profiler.mark("COMMAND_MATCH")
         _legacy_commands = {
             "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
             "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",
@@ -2573,8 +2576,8 @@ async def handle_new_message(bot, event):
                             "🦊 روباه در این گروه از قبل فعال است ✅")
                 return
             # آیا فرستندهٔ این پیام یک رباتِ دیگر است؟ تشخیص فقط بر اساسِ فیلدِ
-            # مستقیمِ API (User.bot)؛ اگر entityِ خلاصه باشد (bot=None)، entityِ
-            # کامل با client.get_entity گرفته و فیلدِ bot قطعی خوانده می‌شود.
+            # مستقیمِ API (User.bot). entity ناقص (bot=None) روی مسیر داغ
+            # get_entity نمی‌زند تا سندر مشترک قفل نشود.
             # حسابِ خودِ روباه و مالک از قبل در is_bot_account / is_global_owner
             # مستثنا شده‌اند.
             # این لاگ قبل از تصمیم‌گیری ثبت می‌شود تا معلوم باشد sender به
@@ -2812,7 +2815,7 @@ async def handle_new_message(bot, event):
             return
 
         # پاسخ‌های ثابت بدون ورود به moderation و I/O پاسخ می‌گیرند.
-        profiler.mark("COMMAND_MATCH")
+        # COMMAND_MATCH was already marked at normalize_command above.
         simple_reply = SIMPLE_REPLIES.get(clean_text)
         if simple_reply:
             await event.reply(simple_reply)

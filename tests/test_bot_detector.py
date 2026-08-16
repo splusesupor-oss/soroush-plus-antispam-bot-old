@@ -13,6 +13,30 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+if "splusthon" not in sys.modules:
+    import types
+    fake = types.ModuleType("splusthon")
+    fake.Button = object
+    fake.types = types.ModuleType("splusthon.types")
+    tl = types.ModuleType("splusthon.tl")
+    tl_types = types.ModuleType("splusthon.tl.types")
+
+    class _Ent:
+        def __init__(self, offset=0, length=0, **_kwargs):
+            self.offset = offset
+            self.length = length
+
+    tl_types.MessageEntityBold = _Ent
+    tl_types.MessageEntityBlockquote = _Ent
+    tl.types = tl_types
+    tl.functions = types.ModuleType("splusthon.tl.functions")
+    fake.tl = tl
+    sys.modules["splusthon"] = fake
+    sys.modules["splusthon.tl"] = tl
+    sys.modules["splusthon.tl.types"] = tl_types
+    sys.modules["splusthon.tl.functions"] = tl.functions
+    sys.modules["splusthon.types"] = fake.types
+
 import modules.bot_detector as bd
 
 PASSED = FAILED = 0
@@ -26,6 +50,31 @@ def check(label, cond, detail=""):
     else:
         FAILED += 1
         print(f"  FAIL  {label} {detail}")
+
+
+def test_hot_path_resolve_skips_get_entity():
+    print("\n### مسیر داغ get_entity نمی‌زند")
+    calls = {"n": 0}
+
+    class Client:
+        async def get_entity(self, entity):
+            calls["n"] += 1
+            return type("U", (), {"bot": True})()
+
+    class Partial:
+        bot = None
+        id = 42
+
+    bd._KNOWN_BOT_IDS.clear()
+    bd._KNOWN_HUMAN_IDS.clear()
+    hot = asyncio.run(bd.resolve_is_bot(Client(), Partial(), 42))
+    check("default allow_rpc=False انسان فرض می‌کند", hot is False)
+    check("get_entity صدا نشد", calls["n"] == 0, f"-> {calls['n']}")
+    probed = asyncio.run(bd.resolve_is_bot(Client(), Partial(), 42, allow_rpc=True))
+    check("allow_rpc=True entity کامل را می‌خواند", probed is True)
+    check("get_entity فقط با allow_rpc", calls["n"] == 1, f"-> {calls['n']}")
+    bd._KNOWN_BOT_IDS.clear()
+    bd._KNOWN_HUMAN_IDS.clear()
 
 
 def _load_harness():
@@ -172,11 +221,11 @@ def test_partial_entity_bot_none_resolved_via_get_entity():
     ev.get_sender = gs
     asyncio.run(mh.handle_new_message(bot, ev))
 
-    check("senderِ خلاصه با bot=None، با get_entity ربات تشخیص داده شد",
-          bd.is_disabled(CHAT), f"{ev.replies}")
-    check("پیام اطلاع‌رسانی ارسال شد",
-          any("روباه در این گروه خاموش شد" in r for r in ev.replies),
-          f"{ev.replies}")
+    # Hot path must not call get_entity: that RPC serializes every group.
+    check("مسیر داغ برای entity ناقص get_entity نمی‌زند",
+          not bd.is_disabled(CHAT), f"{ev.replies}")
+    probed = asyncio.run(bd.resolve_is_bot(bot.client, partial_bot, 999888, allow_rpc=True))
+    check("allow_rpc=True هنوز entity کامل را می‌خواند", probed is True)
 
     bd._FILE.unlink(missing_ok=True)
     bd._KNOWN_BOT_IDS.clear()
@@ -189,6 +238,7 @@ class _Logger:
 
 
 def main():
+    test_hot_path_resolve_skips_get_entity()
     test_bot_detection_flow()
     test_partial_entity_bot_none_resolved_via_get_entity()
     print(f"\n=== bot_detector: PASSED={PASSED} FAILED={FAILED} ===")

@@ -5,9 +5,9 @@
     اساسِ سرعتِ پیام، نامِ کاربری یا بیوگرافی زده نمی‌شود. بنابراین کاربرِ عادی
     هرگز به‌اشتباه ربات تشخیص داده نمی‌شود.
   - در پیامِ گروه، آبجکتِ sender اغلب یک entityِ خلاصه است که ``bot`` آن
-    ``None`` است (پرنشده). در آن صورت برای تصمیمِ قطعی، entityِ کاملِ کاربر با
-    ``client.get_entity`` (یعنی GetUsers) گرفته می‌شود که ``User`` کامل را با
-    ``bot`` قطعی برمی‌گرداند. فقط اگر ``bot is True`` باشد ربات اعلام می‌شود.
+    ``None`` است (پرنشده). مسیر داغ ``get_entity`` نمی‌زند تا سندر مشترک
+    قفل نشود؛ entity ناقص انسان فرض می‌شود. فقط با ``allow_rpc=True``
+    entity کامل خوانده می‌شود. فقط اگر ``bot is True`` باشد ربات اعلام می‌شود.
   - حسابِ خودِ روباه هرگز هدفِ این ماژول قرار نمی‌گیرد.
 
 وضعیتِ هر گروهِ غیرفعال‌شده در ``config/bot_disabled_groups.json`` ذخیره
@@ -88,15 +88,16 @@ def is_bot_sender(user):
     return getattr(user, "bot", None) is True
 
 
-async def resolve_is_bot(client, user, user_id):
-    """تشخیصِ قطعیِ ربات بودنِ فرستنده، حتی اگر entityِ خلاصه باشد.
+async def resolve_is_bot(client, user, user_id, *, allow_rpc=False):
+    """تشخیص ربات بودن بدون RPC روی مسیر داغ.
 
     ترتیب:
-      1. اگر قبلاً برای این user_id قطعی‌سازی شده، از کش استفاده کن.
-      2. اگر ``user.bot is True`` → ربات؛ ``False`` → انسان.
-      3. اگر ``user.bot is None`` → با ``client.get_entity`` entityِ کاملِ
-         کاربر را بگیر و فیلدِ bot را بخوان (GetUsers → User کامل).
-         فقط ``bot is True`` → ربات.
+      1. کش قطعیِ قبلی.
+      2. فیلد ``user.bot`` اگر پر باشد.
+      3. entity ناقص (``bot is None``): روی مسیر پیام ``get_entity``
+         صدا نمی‌شود — آن RPC سندر مشترک را چند ثانیه قفل می‌کرد.
+         اگر ``allow_rpc=True`` باشد (مسیر غیر داغ/تست) entity کامل
+         گرفته می‌شود.
 
     خروجی: bool.
     """
@@ -107,7 +108,8 @@ async def resolve_is_bot(client, user, user_id):
     if user is not None and getattr(user, "bot", None) is not None:
         _remember(user_id, user.bot)
         return bool(user.bot)
-    # entityِ ناقص → fetch کامل
+    if not allow_rpc or client is None:
+        return False
     try:
         full = await client.get_entity(user if user is not None else user_id)
     except Exception:
