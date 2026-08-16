@@ -2,6 +2,8 @@
 import asyncio
 import time
 
+from modules.outgoing_rpc import is_permanent_rpc_error
+
 
 class MessageDeleteQueue:
     """Keep delete RPCs out of incoming-message handlers.
@@ -74,6 +76,7 @@ class MessageDeleteQueue:
                 f"BATCH DELETE START chat_id={chat_id} count={len(batch)}"
             )
             succeeded = False
+            permanent = False
             for attempt in range(1, 4):
                 started = time.perf_counter()
                 try:
@@ -94,6 +97,16 @@ class MessageDeleteQueue:
                         f"chat_id={chat_id} count={len(batch)} attempt={attempt} "
                         f"error={error!r}"
                     )
+                    if is_permanent_rpc_error(error):
+                        # 404/NOT_FOUND/invalid entity will not heal; retrying
+                        # only re-queues the same GetUsersRequest.
+                        permanent = True
+                        self.logger.log_info(
+                            "DELETE MESSAGE SKIP RETRY "
+                            f"chat_id={chat_id} count={len(batch)} "
+                            f"reason=permanent error={type(error).__name__}"
+                        )
+                        break
                     if attempt < 3:
                         await asyncio.sleep(0.2 * attempt)
             if succeeded:
@@ -106,6 +119,10 @@ class MessageDeleteQueue:
                     await asyncio.sleep(self.inter_batch_delay)
                 else:
                     await asyncio.sleep(0)
+                continue
+
+            if permanent:
+                remaining.extend(batch)
                 continue
 
             # Isolate invalid/deleted IDs; successful individual deletions are
@@ -127,6 +144,13 @@ class MessageDeleteQueue:
                     except asyncio.CancelledError:
                         raise
                     except Exception as error:
+                        if is_permanent_rpc_error(error):
+                            self.logger.log_error(
+                                "DELETE MESSAGE UNRESOLVED "
+                                f"chat_id={chat_id} message_id={message_id} "
+                                f"error={error!r}"
+                            )
+                            break
                         if attempt == 3:
                             self.logger.log_error(
                                 "DELETE MESSAGE UNRESOLVED "
