@@ -860,13 +860,22 @@ def _is_management_command(text):
     return int(priority) <= PRIORITY_ADMIN
 
 
+# Owner-only commands authorize with is_global_owner. A native
+# get_permissions RTT (~1.7s) cannot change that decision.
+_OWNER_ONLY_NATIVE_SKIP = frozenset({
+    "فعال", "غیر فعال", "فعال سازی",
+    "ثبت گروه", "حذف گروه",
+    "ثبت مالک", "لغو مالک", "برکناری مالک",
+})
+
+
 def _should_check_native_admin(is_private, registered_admin, text):
     """Native role RPC is only for management commands, never filters."""
-    return (
-        not is_private
-        and not registered_admin
-        and _is_management_command(text)
-    )
+    if is_private or registered_admin:
+        return False
+    if normalize_command(text) in _OWNER_ONLY_NATIVE_SKIP:
+        return False
+    return _is_management_command(text)
 
 
 def _store_native_admin_cache(cache, key, value, expires_at):
@@ -1412,6 +1421,210 @@ async def send_activation_message(bot, event, chat_id, title):
     await event.respond(activation_text, formatting_entities=entities)
 
 
+# Owner/management commands that must not wait on the heavy group pipeline.
+FAST_OWNER_COMMANDS = frozenset({
+    "فعال", "غیر فعال", "فعال سازی",
+    "ثبت گروه", "ثبت مالک",
+})
+
+
+def _command_timing_log(bot, message):
+    logger = getattr(bot, "logger", None)
+    if logger is not None:
+        logger.log_info(message)
+
+
+async def _fast_owner_sender(event):
+    """Prefer already-resolved sender fields. Await get_sender only if needed."""
+    sender = (
+        getattr(event, "_bot_cached_sender", None)
+        or getattr(event, "sender", None)
+    )
+    if sender is None:
+        get_sender = getattr(event, "get_sender", None)
+        if callable(get_sender):
+            try:
+                sender = await get_sender()
+            except Exception:
+                sender = None
+        try:
+            event._bot_cached_sender = sender
+        except Exception:
+            pass
+    user_id = getattr(event, "sender_id", None)
+    if user_id is None:
+        user_id = getattr(sender, "id", None)
+    return sender, user_id
+
+
+async def _fast_owner_chat(event, *, need_title=False):
+    """Use cached chat/title. Call get_chat only when the title is required."""
+    chat = (
+        getattr(event, "_bot_cached_chat", None)
+        or getattr(event, "chat", None)
+    )
+    chat_id = getattr(event, "chat_id", None)
+    title = getattr(chat, "title", None) if chat is not None else None
+    if chat is None or (need_title and not title):
+        get_chat = getattr(event, "get_chat", None)
+        if callable(get_chat):
+            try:
+                chat = await get_chat()
+            except Exception:
+                chat = chat
+        try:
+            event._bot_cached_chat = chat
+        except Exception:
+            pass
+        if chat is not None:
+            chat_id = getattr(chat, "id", chat_id)
+            if not title:
+                title = getattr(chat, "title", None)
+    return chat, chat_id, title or ""
+
+
+async def handle_fast_owner_command(bot, event, text=None):
+    """Run owner group commands without spam/AI/search/native-admin work.
+
+    Returns True when the command was consumed. Private chats return False
+    so the existing DM path is unchanged.
+    """
+    if getattr(event, "is_private", False):
+        return False
+    started = time.perf_counter()
+    if text is None:
+        message = getattr(event, "message", None)
+        raw = ""
+        if message is not None:
+            raw = (
+                getattr(message, "message", None)
+                or getattr(message, "caption", None)
+                or ""
+            )
+        text = normalize_command(raw)
+    if text not in FAST_OWNER_COMMANDS:
+        return False
+
+    chat_id = getattr(event, "chat_id", None)
+    message_id = getattr(getattr(event, "message", None), "id", None)
+    _command_timing_log(
+        bot,
+        f"COMMAND RECEIVED command={text} chat_id={chat_id} "
+        f"message_id={message_id}",
+    )
+    _sender, user_id = await _fast_owner_sender(event)
+    _command_timing_log(
+        bot,
+        f"COMMAND HANDLER START command={text} chat_id={chat_id} "
+        f"user_id={user_id}",
+    )
+    owner = is_global_owner(user_id)
+
+    async def finish(replied=True):
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        _command_timing_log(
+            bot,
+            f"COMMAND RESPONSE SENT command={text} chat_id={chat_id} "
+            f"replied={replied} elapsed_ms={elapsed_ms:.1f}",
+        )
+        return True
+
+    if text == "فعال":
+        need_title = bool(owner and chat_id is not None and not is_active(chat_id))
+        _chat, chat_id, title = await _fast_owner_chat(
+            event, need_title=need_title
+        )
+        if owner and chat_id is not None and not is_active(chat_id):
+            activate_group(chat_id, title)
+            _command_timing_log(
+                bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
+            )
+            await send_activation_message(bot, event, chat_id, title)
+            return await finish(True)
+        return await finish(False)
+
+    if text == "غیر فعال":
+        if owner:
+            _chat, chat_id, title = await _fast_owner_chat(
+                event, need_title=True
+            )
+            deactivate_group(chat_id, title)
+            for task in getattr(bot, "group_timer_tasks", {}).pop(chat_id, set()):
+                task.cancel()
+            cancel_name_family_round(chat_id)
+            _command_timing_log(
+                bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
+            )
+            await event.reply(f"🦊 روباه در گروه «{title}» غیر فعال شد ❌")
+            return await finish(True)
+        return await finish(False)
+
+    if text == "فعال سازی":
+        if not owner:
+            await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
+            return await finish(True)
+        _chat, chat_id, title = await _fast_owner_chat(event, need_title=True)
+        activate_group(chat_id, title)
+        _command_timing_log(
+            bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
+        )
+        await send_activation_message(bot, event, chat_id, title)
+        return await finish(True)
+
+    if text == "ثبت گروه":
+        if not owner:
+            await event.reply("❌ فقط مالک ربات اجازه ثبت گروه دارد")
+            return await finish(True)
+        try:
+            _chat, chat_id, title = await _fast_owner_chat(
+                event, need_title=True
+            )
+            activate_group(chat_id, title)
+            _command_timing_log(
+                bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
+            )
+            await event.reply(f"↻- گروه\n\n⏌ {title} ⎾ ثبت شد ☑️")
+        except Exception as error:
+            await event.reply(f"❌ خطا در ثبت گروه: {error}")
+        return await finish(True)
+
+    if text == "ثبت مالک":
+        if not owner:
+            await event.reply(
+                "❌ فقط مالک اصلی ربات اجازه ثبت مالک گروه را دارد"
+            )
+            return await finish(True)
+        if not getattr(event, "reply_to", None):
+            await event.reply(
+                "❌ برای ثبت مالک باید روی پیام کاربر ریپلای کنید"
+            )
+            return await finish(True)
+        try:
+            reply_msg = await bot.client.get_messages(
+                chat_id,
+                ids=event.reply_to.reply_to_msg_id,
+            )
+            target_user = await reply_msg.get_sender() if reply_msg else None
+            if not target_user:
+                await event.reply("❌ کاربر پیدا نشد")
+                return await finish(True)
+            set_group_owner(chat_id, target_user.id)
+            _command_timing_log(
+                bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
+            )
+            await event.reply(
+                f"مالک گروه 『 {_format_group_member(target_user)} 』 ثبت شد ✅"
+            )
+        except Exception as error:
+            logger = getattr(bot, "logger", None)
+            if logger is not None:
+                logger.log_error(f"خطا در ثبت مالک گروه: {error}")
+            await event.reply(f"❌ خطا در ثبت مالک: {error}")
+        return await finish(True)
+
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Command routing
 #
@@ -1925,6 +2138,12 @@ async def handle_new_message(bot, event):
                 message_text = caption
             except BaseException:
                 pass
+
+        if not getattr(event, "is_private", False):
+            early_command = normalize_command(message_text)
+            if early_command in FAST_OWNER_COMMANDS:
+                if await handle_fast_owner_command(bot, event, early_command):
+                    return
 
         # Core may have resolved these already; prefer the per-bot InputPeer
         # cache and event fields before asking SPlusthon to resolve a chat.

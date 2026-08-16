@@ -932,8 +932,9 @@ class SoroushAntiSpamBot:
             """Admin/user-command lane: skip profile, broadcast, and spam prelude.
 
             Mute/ban/lock must not wait on get_chat routing or per-message
-            debug logs.  Private chats and group on/off still use the full
-            path so existing owner/DM behavior is unchanged.
+            debug logs.  Private chats still use the full path so existing
+            owner/DM behavior is unchanged. Owner group commands
+            (فعال / ثبت گروه / ثبت مالک) run on a dedicated fast path.
             """
             try:
                 instrument_event(event, self.logger)
@@ -948,11 +949,12 @@ class SoroushAntiSpamBot:
                 except Exception:
                     raw_text = ""
                 text = normalize_command_text(raw_text)
-                if getattr(event, "is_private", False) or text in {
-                    "فعال", "غیر فعال", "فعال سازی",
-                }:
+                if getattr(event, "is_private", False):
                     await process_incoming_message(event)
                     return
+                if text in FAST_OWNER_COMMANDS:
+                    if await handle_fast_owner_command(self, event, text):
+                        return
                 sender = (
                     getattr(event, "_bot_cached_sender", None)
                     or getattr(event, "sender", None)

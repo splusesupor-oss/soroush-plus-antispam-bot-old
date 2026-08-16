@@ -120,6 +120,12 @@ def test_native_admin_check_is_only_for_management_commands():
           handler._should_check_native_admin(False, False, "قفل") is True)
     check("پاک 10 checks native role",
           handler._should_check_native_admin(False, False, "پاک 10") is True)
+    check("فعال skips native RPC",
+          handler._should_check_native_admin(False, False, "فعال") is False)
+    check("ثبت گروه skips native RPC",
+          handler._should_check_native_admin(False, False, "ثبت گروه") is False)
+    check("ثبت مالک skips native RPC",
+          handler._should_check_native_admin(False, False, "ثبت مالک") is False)
 
 
 def test_regular_message_does_not_call_get_permissions():
