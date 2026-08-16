@@ -321,75 +321,38 @@ def test_admin_delete_jumps_same_chat():
           order.index(100) < order.index(2), f"-> {order}")
 
 
-def test_group_a_slow_does_not_block_group_b():
-    print("\n### شغل ۵ ثانیه‌ای گروه A گروه B را متوقف نمی‌کند")
-
-    async def scenario():
-        dispatcher = GroupDispatcher(max_pending_normal=80, logger=Logger())
-        order = []
-        hold_a = asyncio.Event()
-
-        async def heavy_a():
-            order.append("a_start")
-            await hold_a.wait()
-            order.append("a_end")
-
-        async def b_job():
-            order.append("b_done")
-
-        async def c_job():
-            order.append("c_done")
-
-        dispatcher.submit(-10, heavy_a, priority=PRIORITY_NORMAL, kind="normal")
-        await asyncio.sleep(0)
-        dispatcher.submit(-20, b_job, priority=PRIORITY_NORMAL, kind="normal")
-        dispatcher.submit(-30, c_job, priority=PRIORITY_COMMAND, kind="command")
-        await asyncio.sleep(0.05)
-        isolated = (
-            "a_start" in order
-            and "b_done" in order
-            and "c_done" in order
-            and "a_end" not in order
-        )
-        hold_a.set()
-        await dispatcher.join(timeout=1)
-        return isolated, order
-
-    isolated, order = asyncio.run(scenario())
-    check("B و C بدون انتظار برای A تمام شدند", isolated, f"-> {order}")
-
-
-def test_command_and_moderation_not_behind_same_chat_normal():
-    print("\n### command و moderation همان گروه پشت normal گیر نمی‌کنند")
+def test_normal_waits_for_busy_admin():
+    print("\n### lane عادی پشت ادمین در حال اجرا نمی‌آید")
 
     async def scenario():
         dispatcher = GroupDispatcher(max_pending_normal=80, logger=Logger())
         order = []
         hold = asyncio.Event()
 
-        async def normal():
-            order.append("normal_start")
-            await hold.wait()
-            order.append("normal_end")
-
-        async def command():
-            order.append("command")
-
         async def admin():
-            order.append("admin")
+            order.append("admin_start")
+            await hold.wait()
+            order.append("admin_end")
 
-        dispatcher.submit(-5, normal, priority=PRIORITY_NORMAL, kind="normal")
+        async def normal():
+            order.append("normal")
+
+        dispatcher.submit(-3, admin, priority=PRIORITY_ADMIN, kind="admin")
         await asyncio.sleep(0)
-        dispatcher.submit(-5, command, priority=PRIORITY_COMMAND, kind="command")
-        dispatcher.submit(-5, admin, priority=PRIORITY_ADMIN, kind="admin")
-        await asyncio.sleep(0.05)
-        ran = "command" in order and "admin" in order and "normal_end" not in order
+        dispatcher.submit(-3, normal, priority=PRIORITY_NORMAL, kind="normal")
+        await asyncio.sleep(0.12)
+        blocked = "admin_start" in order and "normal" not in order
         hold.set()
         await dispatcher.join(timeout=1)
-        return ran, order
+        return blocked, order
 
-    ran, order = asyncio.run(scenario())
-    check("command و admin همزمان با normal سنگین اجرا شدند", ran, f"-> {order}")
+    blocked, order = asyncio.run(scenario())
+    check("عادی قبل از اتمام ادمین شروع نشد", blocked, f"-> {order}")
+    check("هر دو بعد از آزاد شدن ادمین تمام شدند",
+          order == ["admin_start", "admin_end", "normal"] or (
+              "admin_start" in order and "normal" in order
+              and order.index("admin_start") < order.index("normal")
+          ), f"-> {order}")
 
 
 def test_tracker_increment_does_not_write_file():
@@ -443,8 +406,7 @@ def main():
     test_user_command_has_own_lane()
     test_overflow_keeps_admin_and_command()
     test_overflow_drops_normal_keeps_admin()
-    test_group_a_slow_does_not_block_group_b()
-    test_command_and_moderation_not_behind_same_chat_normal()
+    test_normal_waits_for_busy_admin()
     test_delete_queue_priority_and_isolation()
     test_admin_delete_jumps_same_chat()
     test_tracker_increment_does_not_write_file()

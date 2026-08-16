@@ -1,20 +1,19 @@
-"""Per-group incoming-message dispatcher with isolated GroupContext.
+"""Per-group incoming-message dispatcher with isolated lanes.
 
-Each ``chat_id`` owns a ``GroupContext``: its own queues and workers.
-A 5-second job in group A never holds the queue or worker of group B.
+SPlusthon starts a task for every NewMessage.  A spam wave in one chat then
+spawns hundreds of concurrent handlers that all fight for the same RPC
+sender, so admin commands stall.
 
-Inside a group, two persistent workers share one priority scheme:
+This dispatcher keeps **one worker + one queue per (chat_id, lane)**:
 
-* ``control`` — admin/moderation (ban/kick/lock) and user commands
-* ``normal``  — ordinary chat / spam; capped by ``max_pending_normal``
+* ``admin``     — owner/moderation commands; never dropped; own worker
+* ``command``   — public/user commands (help, games, shop); never dropped
+* ``normal``    — ordinary chat / spam; capped by ``max_pending_normal``
 
-Command/moderation therefore never wait behind an in-flight normal job
-of the same chat.  Workers exit when idle so inactive groups release
-tasks.  Classification is text-only: no await, no RPC, no file I/O.
+Lanes of the same group run at the same time, so mute/ban/lock do not wait
+for a heavy normal job.  Different chats stay independent.
 
-Lanes of different chats never share a lock.  The only remaining global
-resource is the single SPlusthon sender; handlers must not start extra
-RPCs (get_entity / get_permissions) on the normal path.
+Classification is text-only: no await, no RPC, no file I/O.
 """
 import asyncio
 import inspect
@@ -27,7 +26,6 @@ PRIORITY_NORMAL = 2
 LANE_ADMIN = "admin"
 LANE_COMMAND = "command"
 LANE_NORMAL = "normal"
-LANE_CONTROL = "control"
 
 # Exact Persian admin/owner commands.
 _ADMIN_EXACT = frozenset({
@@ -120,14 +118,6 @@ def lane_for(priority, kind=None):
     return LANE_NORMAL
 
 
-def worker_lane_for(priority, kind=None):
-    """Map a job onto the two per-chat workers: control vs normal."""
-    lane = lane_for(priority, kind)
-    if lane == LANE_NORMAL:
-        return LANE_NORMAL
-    return LANE_CONTROL
-
-
 def looks_like_link(text):
     value = str(text or "").lower()
     if any(marker in value for marker in _LINK_MARKERS):
@@ -149,43 +139,22 @@ def _message_bits(event):
     return chat_id, message_id, user_id, text
 
 
-class GroupContext:
-    """Isolated runtime for one chat: own queues, workers, counters."""
-
-    __slots__ = (
-        "chat_id", "queues", "workers", "normal_pending",
-        "last_active", "busy",
-    )
-
-    def __init__(self, chat_id):
-        self.chat_id = chat_id
-        self.queues = {}
-        self.workers = {}
-        self.normal_pending = 0
-        self.last_active = time.monotonic()
-        self.busy = set()
-
-    def is_idle(self):
-        if self.busy:
-            return False
-        if self.normal_pending:
-            return False
-        for task in self.workers.values():
-            if task is not None and not task.done():
-                return False
-        for queue in self.queues.values():
-            if queue.qsize():
-                return False
-        return True
-
-
 class GroupDispatcher:
-    """One GroupContext per chat; control and normal workers never share a lock."""
+    """Independent admin / command / normal workers per chat."""
+
+    # Lower lanes pause while a higher lane of the same chat is running or
+    # queued, so a normal/command RPC cannot occupy the shared sender ahead
+    # of mute/ban/lock.  A safety timeout prevents a hung admin from freezing
+    # ordinary chat forever.
+    HIGHER_LANE_WAIT_SECONDS = 15.0
 
     def __init__(self, *, max_pending_normal=40, logger=None):
         self.max_pending_normal = int(max_pending_normal)
         self.logger = logger
-        self._contexts = {}
+        self._queues = {}
+        self._workers = {}
+        self._normal_pending = {}
+        self._busy = set()
         self._seq = 0
         self._closed = False
         self.stats = {
@@ -198,53 +167,37 @@ class GroupDispatcher:
             "failed": 0,
         }
 
-    def _context(self, chat_id):
-        ctx = self._contexts.get(chat_id)
-        if ctx is None:
-            ctx = GroupContext(chat_id)
-            self._contexts[chat_id] = ctx
-        ctx.last_active = time.monotonic()
-        return ctx
-
     def pending_normal(self, chat_id):
-        ctx = self._contexts.get(chat_id)
-        return 0 if ctx is None else int(ctx.normal_pending)
+        return int(self._normal_pending.get(chat_id, 0))
 
     def queue_size(self, chat_id):
-        ctx = self._contexts.get(chat_id)
-        if ctx is None:
-            return 0
-        return sum(queue.qsize() for queue in ctx.queues.values())
-
-    def worker_count(self):
         total = 0
-        for ctx in self._contexts.values():
-            total += sum(
-                1 for task in ctx.workers.values()
-                if task is not None and not task.done()
-            )
+        for (stored_chat, _lane), queue in self._queues.items():
+            if stored_chat == chat_id:
+                total += queue.qsize()
         return total
 
-    def context_count(self):
-        return len(self._contexts)
+    def worker_count(self):
+        return sum(1 for task in self._workers.values() if task is not None and not task.done())
+
+    def _lane_key(self, chat_id, lane):
+        return (chat_id, lane)
 
     def submit(self, chat_id, factory, *, priority=PRIORITY_NORMAL, kind="normal",
                on_overflow=None):
-        """Enqueue ``factory()`` on this chat's context.  Never awaits."""
+        """Enqueue ``factory()`` on the matching lane.  Never awaits."""
         if self._closed:
             return False
         if chat_id is None:
             chat_id = 0
         lane = lane_for(priority, kind)
-        worker_lane = worker_lane_for(priority, kind)
-        ctx = self._context(chat_id)
-        if worker_lane == LANE_NORMAL:
-            if ctx.normal_pending >= self.max_pending_normal:
+        if lane == LANE_NORMAL:
+            if self._normal_pending.get(chat_id, 0) >= self.max_pending_normal:
                 self.stats["dropped"] += 1
                 if self.logger is not None:
                     self.logger.log_info(
                         "GROUP DISPATCH OVERFLOW "
-                        f"chat_id={chat_id} pending={ctx.normal_pending}"
+                        f"chat_id={chat_id} pending={self._normal_pending.get(chat_id, 0)}"
                     )
                 if on_overflow is not None:
                     try:
@@ -257,10 +210,11 @@ class GroupDispatcher:
                             )
                 return False
 
-        queue = ctx.queues.get(worker_lane)
+        key = self._lane_key(chat_id, lane)
+        queue = self._queues.get(key)
         if queue is None:
             queue = asyncio.PriorityQueue()
-            ctx.queues[worker_lane] = queue
+            self._queues[key] = queue
         self._seq += 1
         queue.put_nowait(
             (int(priority), self._seq, kind or lane, factory, time.perf_counter())
@@ -271,35 +225,22 @@ class GroupDispatcher:
         elif lane == LANE_COMMAND:
             self.stats["command"] += 1
         else:
-            ctx.normal_pending += 1
+            self._normal_pending[chat_id] = self._normal_pending.get(chat_id, 0) + 1
             self.stats["normal"] += 1
 
-        self._ensure_worker(ctx, worker_lane, queue)
+        worker = self._workers.get(key)
+        if worker is None or worker.done():
+            self._workers[key] = asyncio.create_task(
+                self._worker(chat_id, lane, queue)
+            )
         return True
 
-    def _ensure_worker(self, ctx, worker_lane, queue):
-        """Start the persistent per-chat worker if it is missing.
-
-        ``submit`` is sync and may be called from tests with no running
-        loop.  In that case the job stays queued until a loop exists.
-        """
-        worker = ctx.workers.get(worker_lane)
-        if worker is not None and not worker.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        ctx.workers[worker_lane] = loop.create_task(
-            self._worker(ctx, worker_lane, queue)
-        )
-
-    async def _worker(self, ctx, worker_lane, queue):
-        chat_id = ctx.chat_id
+    async def _worker(self, chat_id, lane, queue):
         if self.logger is not None:
             self.logger.log_info(
-                f"GROUP DISPATCH WORKER START chat_id={chat_id} lane={worker_lane}"
+                f"GROUP DISPATCH WORKER START chat_id={chat_id} lane={lane}"
             )
+        key = self._lane_key(chat_id, lane)
         try:
             while True:
                 item = await queue.get()
@@ -308,12 +249,13 @@ class GroupDispatcher:
                 else:
                     priority, _seq, kind, factory = item
                     enqueued_at = time.perf_counter()
-                if worker_lane == LANE_NORMAL:
-                    ctx.normal_pending = max(0, ctx.normal_pending - 1)
+                if lane == LANE_NORMAL:
+                    current = self._normal_pending.get(chat_id, 1)
+                    self._normal_pending[chat_id] = max(0, current - 1)
+                yield_ms = await self._yield_to_higher_lanes(chat_id, lane)
                 started = time.perf_counter()
                 queue_wait_ms = (started - enqueued_at) * 1000
-                ctx.busy.add(worker_lane)
-                ctx.last_active = time.monotonic()
+                self._busy.add(key)
                 try:
                     result = factory() if factory is not None else None
                     if inspect.isawaitable(result):
@@ -326,66 +268,75 @@ class GroupDispatcher:
                     if self.logger is not None:
                         self.logger.log_error(
                             "GROUP DISPATCH JOB FAILED "
-                            f"chat_id={chat_id} lane={worker_lane} kind={kind} "
-                            f"error={error!r}"
+                            f"chat_id={chat_id} lane={lane} kind={kind} error={error!r}"
                         )
                 finally:
-                    ctx.busy.discard(worker_lane)
+                    self._busy.discard(key)
                     queue.task_done()
                     if self.logger is not None:
                         elapsed_ms = (time.perf_counter() - started) * 1000
                         if queue_wait_ms >= 50:
                             self.logger.log_info(
                                 "QUEUE WAIT TIME "
-                                f"chat_id={chat_id} lane={worker_lane} kind={kind} "
-                                f"queue_wait_ms={queue_wait_ms:.1f} yield_ms=0.0"
+                                f"chat_id={chat_id} lane={lane} kind={kind} "
+                                f"queue_wait_ms={queue_wait_ms:.1f} "
+                                f"yield_ms={yield_ms:.1f}"
                             )
-                        if elapsed_ms >= 100 or worker_lane != LANE_NORMAL:
+                        if elapsed_ms >= 100 or lane != LANE_NORMAL:
                             self.logger.log_info(
                                 "HANDLER TIME "
-                                f"chat_id={chat_id} lane={worker_lane} kind={kind} "
+                                f"chat_id={chat_id} lane={lane} kind={kind} "
                                 f"handler_ms={elapsed_ms:.1f}"
                             )
                             self.logger.log_info(
                                 "GROUP DISPATCH JOB "
-                                f"chat_id={chat_id} lane={worker_lane} kind={kind} "
+                                f"chat_id={chat_id} lane={lane} kind={kind} "
                                 f"priority={priority} ms={elapsed_ms:.1f}"
                             )
                 if queue.empty():
                     return
         finally:
-            ctx.busy.discard(worker_lane)
-            if ctx.workers.get(worker_lane) is asyncio.current_task():
-                ctx.workers.pop(worker_lane, None)
-            # A submit may have raced the idle exit. Keep a worker if
-            # work is waiting so the job is not orphaned.
-            if not self._closed and queue.qsize():
-                self._ensure_worker(ctx, worker_lane, queue)
-                return
+            self._busy.discard(key)
+            if self._workers.get(key) is asyncio.current_task():
+                self._workers.pop(key, None)
             if queue.empty():
-                ctx.queues.pop(worker_lane, None)
-            if ctx.is_idle():
-                self._contexts.pop(chat_id, None)
+                self._queues.pop(key, None)
+                if lane == LANE_NORMAL:
+                    self._normal_pending.pop(chat_id, None)
+
+    def _lane_busy(self, chat_id, lane):
+        key = self._lane_key(chat_id, lane)
+        if key in self._busy:
+            return True
+        queue = self._queues.get(key)
+        return bool(queue is not None and queue.qsize() > 0)
+
+    async def _yield_to_higher_lanes(self, chat_id, lane):
+        """Pause this worker while a higher-priority lane of the same chat is busy."""
+        if lane == LANE_ADMIN:
+            return 0.0
+        started = time.perf_counter()
+        deadline = started + self.HIGHER_LANE_WAIT_SECONDS
+        while time.perf_counter() < deadline:
+            admin_busy = self._lane_busy(chat_id, LANE_ADMIN)
+            command_busy = (
+                lane == LANE_NORMAL and self._lane_busy(chat_id, LANE_COMMAND)
+            )
+            if not admin_busy and not command_busy:
+                break
+            await asyncio.sleep(0.02)
+        return (time.perf_counter() - started) * 1000
 
     async def join(self, timeout=None):
         """Wait until every queued job has finished (tests / shutdown)."""
         async def _wait():
             while True:
-                queues = []
-                workers = []
-                for ctx in list(self._contexts.values()):
-                    queues.extend(
-                        queue for queue in ctx.queues.values() if queue.qsize()
-                    )
-                    workers.extend(
-                        task for task in ctx.workers.values()
-                        if task is not None and not task.done()
-                    )
+                queues = [queue for queue in self._queues.values() if queue.qsize()]
+                workers = [task for task in self._workers.values() if not task.done()]
                 if not queues and not workers:
                     return
-                for ctx in list(self._contexts.values()):
-                    for queue in list(ctx.queues.values()):
-                        await queue.join()
+                for queue in list(self._queues.values()):
+                    await queue.join()
                 if workers:
                     await asyncio.gather(*workers, return_exceptions=True)
                 await asyncio.sleep(0)
@@ -401,20 +352,21 @@ class GroupDispatcher:
 
     async def close(self):
         self._closed = True
-        workers = []
-        for ctx in list(self._contexts.values()):
-            workers.extend(
-                task for task in ctx.workers.values()
-                if task is not None
-            )
+        workers = list(self._workers.values())
         for worker in workers:
             worker.cancel()
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
-        self._contexts.clear()
+        self._workers.clear()
+        self._queues.clear()
+        self._normal_pending.clear()
+        self._busy.clear()
 
     def reset_for_tests(self):
-        self._contexts.clear()
+        self._queues.clear()
+        self._workers.clear()
+        self._normal_pending.clear()
+        self._busy.clear()
         self._seq = 0
         self._closed = False
         for key in self.stats:
