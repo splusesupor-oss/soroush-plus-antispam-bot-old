@@ -9,6 +9,8 @@ transient 5xx/503, handler logic, or spam policy. It only:
 
 * caps concurrent *low-priority* RPCs (notices / extra sends) on the shared sender
 * short user-facing replies are ``urgent`` (text + context) and skip that cap
+* the packer sends an urgent reply as its own packet and will not dump
+  dozens of delete/notice RPCs onto the wire first
 * delete/ban/mute stay ungated but sit behind urgent replies in the packer
 * reconnect drops stuck LOW sends so they cannot block a new reply
 * fail-fast + cache permanent GetUsers 404 so the same invalid id never
@@ -88,6 +90,11 @@ _PERMANENT_MARKERS = (
 
 _GET_USERS = "GetUsersRequest"
 _LOW_INFLIGHT_LIMIT = 1
+# Official clients keep a handful in flight. Packing 100 deletes into one
+# container is what produces sender_pending=152 and a 1.3s+ rpc_wait on «هعی».
+_MAX_SENDER_PENDING = 6
+_NON_URGENT_BATCH = 2
+_URGENT_WAIT_LOG_MS = 500
 _CACHE_TTL_S = 15 * 60
 _CACHE_MAX = 2000
 
@@ -462,6 +469,53 @@ def _log(logger, message):
         logger.log_info(message)
 
 
+def _sender_pending_count(sender):
+    pending = getattr(sender, "_pending_state", None) if sender is not None else None
+    if pending is None:
+        return 0
+    try:
+        return len(pending)
+    except TypeError:
+        return 0
+
+
+def _route_type(state, urgent):
+    request = getattr(state, "request", None)
+    name = request_name(request) if request is not None else ""
+    if urgent or (name in _LOW_REQUESTS and _looks_like_urgent_send(request)):
+        return "reply"
+    if "Delete" in name:
+        return "delete"
+    if name in _HIGH_REQUESTS:
+        return "moderation"
+    if name in _LOW_REQUESTS:
+        return "send"
+    return "other"
+
+
+def _sender_route_line(*, route_type, urgent, sender_pending, queue_wait_ms, cut_ahead):
+    return (
+        "SENDER ROUTE "
+        f"type={route_type} "
+        f"urgent={bool(urgent)} "
+        f"sender_pending={int(sender_pending)} "
+        f"queue_wait_ms={float(queue_wait_ms):.1f} "
+        f"cut_ahead={bool(cut_ahead)}"
+    )
+
+
+def _wait_reason(urgent, sender_pending, parked, queue_wait_ms):
+    if not urgent:
+        return "non_urgent"
+    if sender_pending >= _MAX_SENDER_PENDING:
+        return "sender_pending_full"
+    if parked:
+        return "cut_ahead_behind_previous_batch"
+    if queue_wait_ms >= _URGENT_WAIT_LOG_MS:
+        return "send_loop_busy"
+    return "ok"
+
+
 def _wrap_call(client, logger):
     original = getattr(client, "_call", None)
     if original is None or getattr(original, _CALL_MARKER, False):
@@ -484,6 +538,13 @@ def _wrap_call(client, logger):
         gate = _gate_for(client)
         wait_ms = 0.0
         held = False
+        started = time.perf_counter()
+        pending_at_start = _sender_pending_count(sender)
+        route_type = "reply" if priority == URGENT else (
+            "delete" if "Delete" in request_name(request) else
+            "moderation" if request_name(request) in _HIGH_REQUESTS else
+            "send" if request_name(request) in _LOW_REQUESTS else "other"
+        )
         if priority == URGENT and gate.inflight > 0:
             _log(
                 logger,
@@ -522,6 +583,17 @@ def _wrap_call(client, logger):
                 )
             raise
         finally:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            if priority == URGENT and elapsed_ms >= _URGENT_WAIT_LOG_MS:
+                _log(
+                    logger,
+                    "SENDER ROUTE WAIT "
+                    f"type={route_type} urgent=True "
+                    f"sender_pending={pending_at_start} "
+                    f"queue_wait_ms={elapsed_ms:.1f} "
+                    f"reason=rpc_or_queue_wait "
+                    f"gate_wait_ms={wait_ms:.1f}",
+                )
             if held:
                 gate.release()
 
@@ -554,25 +626,103 @@ def _wrap_high_operation(client, name):
         return False
 
 
+class _WatchedPending(dict):
+    """``_pending_state`` that wakes the packer when in-flight RPCs finish."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.changed = asyncio.Event()
+
+    def _notify(self):
+        self.changed.set()
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._notify()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._notify()
+
+    def pop(self, key, *args):
+        result = super().pop(key, *args)
+        self._notify()
+        return result
+
+    def clear(self):
+        super().clear()
+        self._notify()
+
+
+def _watch_pending(sender):
+    pending = getattr(sender, "_pending_state", None)
+    if isinstance(pending, _WatchedPending):
+        return pending
+    watched = _WatchedPending()
+    if pending:
+        try:
+            watched.update(pending)
+        except Exception:
+            pass
+    try:
+        sender._pending_state = watched
+    except (AttributeError, TypeError):
+        return pending
+    return watched
+
+
 class _PrioritySendQueue:
     """Proxy in front of SPlusthon ``MessagePacker``.
 
     ``MessagePacker`` uses ``__slots__``, so ``packer.append = ...`` raises
     ``AttributeError: ... attribute 'append' is read-only``. Replace the
     sender's queue object instead of mutating packer methods.
+
+    ``get`` sends an urgent reply as its own packet and will not push more
+    non-urgent RPCs onto the wire while ``sender_pending`` is already high.
     """
 
-    def __init__(self, inner):
+    def __init__(self, inner, pending=None, logger=None):
         self._inner = inner
         self._ranks = {}
+        self._enqueued_at = {}
+        self._pending = pending
+        self._logger = logger
+
+    def _rank_of(self, state):
+        stored = self._ranks.get(id(state))
+        if stored is not None:
+            return stored
+        return _state_rank(state)
+
+    def _pending_count(self):
+        pending = self._pending
+        if pending is None:
+            return 0
+        try:
+            return len(pending)
+        except TypeError:
+            return 0
+
+    def _wake_waiters(self):
+        pending = self._pending
+        changed = getattr(pending, "changed", None)
+        if changed is not None:
+            changed.set()
+
+    def _mark_enqueued(self, state):
+        self._enqueued_at[id(state)] = time.perf_counter()
 
     def append(self, state):
         inner = self._inner
         deque = getattr(inner, "_deque", None)
         ready = getattr(inner, "_ready", None)
+        self._mark_enqueued(state)
         if _insert_ranked(deque, state, self._ranks):
             if ready is not None:
                 ready.set()
+            if self._ranks.get(id(state)) == 0:
+                self._wake_waiters()
             return None
         self._ranks[id(state)] = _state_rank(state)
         return inner.append(state)
@@ -583,30 +733,135 @@ class _PrioritySendQueue:
         ready = getattr(inner, "_ready", None)
         rest = []
         inserted = False
+        woke_urgent = False
         for row in states:
+            self._mark_enqueued(row)
             if _insert_ranked(deque, row, self._ranks):
                 inserted = True
+                if self._ranks.get(id(row)) == 0:
+                    woke_urgent = True
             else:
                 self._ranks[id(row)] = _state_rank(row)
                 rest.append(row)
         if inserted and ready is not None:
             ready.set()
+        if woke_urgent:
+            self._wake_waiters()
         if rest:
             return inner.extend(rest)
         if inserted:
             return None
         return inner.extend(list(states))
 
+    async def get(self):
+        """Pack the next outgoing batch.
+
+        Urgent replies are packed alone so they are not buried in a
+        100-item delete/notice container. Non-urgent traffic waits when
+        ``sender_pending`` is already at the cap.
+        """
+        inner = self._inner
+        original = getattr(inner, "get", None)
+        deque = getattr(inner, "_deque", None)
+        ready = getattr(inner, "_ready", None)
+        if original is None or deque is None:
+            if original is None:
+                raise AttributeError("send queue has no get")
+            return await original()
+
+        while True:
+            if not deque:
+                if ready is None:
+                    return await original()
+                ready.clear()
+                await ready.wait()
+                continue
+
+            if self._rank_of(deque[0]) == 0:
+                return await self._pack_prefix(original, deque, ready, 1, urgent=True)
+
+            if self._pending_count() >= _MAX_SENDER_PENDING:
+                changed = getattr(self._pending, "changed", None)
+                if changed is None:
+                    return await self._pack_prefix(
+                        original, deque, ready, 1, urgent=False
+                    )
+                changed.clear()
+                if deque and self._rank_of(deque[0]) == 0:
+                    continue
+                if self._pending_count() < _MAX_SENDER_PENDING:
+                    continue
+                await changed.wait()
+                continue
+
+            return await self._pack_prefix(
+                original, deque, ready, _NON_URGENT_BATCH, urgent=False
+            )
+
+    async def _pack_prefix(self, original, deque, ready, limit, urgent):
+        taken = []
+        parked = []
+        while deque and len(taken) < limit:
+            item = deque.popleft()
+            if not urgent and self._rank_of(item) == 0:
+                deque.appendleft(item)
+                break
+            taken.append(item)
+        while deque:
+            parked.append(deque.popleft())
+        for item in taken:
+            deque.append(item)
+        try:
+            now = time.perf_counter()
+            pending = self._pending_count()
+            for item in taken:
+                queued = self._enqueued_at.pop(id(item), now)
+                queue_wait_ms = max(0.0, (now - queued) * 1000)
+                route_type = _route_type(item, urgent)
+                _log(
+                    self._logger,
+                    _sender_route_line(
+                        route_type=route_type,
+                        urgent=urgent,
+                        sender_pending=pending,
+                        queue_wait_ms=queue_wait_ms,
+                        cut_ahead=urgent,
+                    ),
+                )
+                if urgent and queue_wait_ms >= _URGENT_WAIT_LOG_MS:
+                    reason = _wait_reason(True, pending, parked, queue_wait_ms)
+                    _log(
+                        self._logger,
+                        "SENDER ROUTE WAIT "
+                        f"type={route_type} urgent=True "
+                        f"sender_pending={pending} "
+                        f"queue_wait_ms={queue_wait_ms:.1f} "
+                        f"reason={reason} parked={len(parked)}",
+                    )
+            return await original()
+        finally:
+            for item in parked:
+                deque.append(item)
+            if parked and ready is not None:
+                ready.set()
+
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
 
 def _wrap_packer(sender, logger):
+    pending = _watch_pending(sender)
     packer = getattr(sender, "_send_queue", None)
-    if packer is None or isinstance(packer, _PrioritySendQueue):
+    if packer is None:
+        return False
+    if isinstance(packer, _PrioritySendQueue):
+        packer._pending = pending
+        packer._logger = logger
         return False
     try:
-        sender._send_queue = _PrioritySendQueue(packer)
+        sender._send_queue = _PrioritySendQueue(
+            packer, pending=pending, logger=logger
+        )
     except (AttributeError, TypeError):
         return False
     _log(logger, "OUTGOING RPC packer priority installed")

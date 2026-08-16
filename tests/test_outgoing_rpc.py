@@ -17,6 +17,7 @@ from modules.message_delete_queue import MessageDeleteQueue
 from modules.outgoing_rpc import (
     PermanentRpcError,
     URGENT,
+    _MAX_SENDER_PENDING,
     _PrioritySendQueue,
     cached_invalid_users,
     clear_invalid_user_cache,
@@ -134,6 +135,15 @@ class FakePacker:
     def extend(self, states):
         self._deque.extend(states)
         self._ready.set()
+
+    async def get(self):
+        if not self._deque:
+            self._ready.clear()
+            await self._ready.wait()
+        batch = []
+        while self._deque:
+            batch.append(self._deque.popleft())
+        return batch, b"data"
 
 
 class FakeClient:
@@ -652,6 +662,7 @@ def test_urgent_text_classifier():
     print("\n### متن پاسخ ساده urgent است، اعلان نیست")
     check("سلام 👋 urgent است", is_urgent_text("سلام 👋"))
     check("جانم ؟ 🦊 urgent است", is_urgent_text("جانم ؟ 🦊"))
+    check("هعی urgent است", is_urgent_text("نکش دوست من 🦊🐥"))
     check("اعلان هرزنامه urgent نیست", not is_urgent_text(HEAVY_NOTICE))
     check("متن خالی urgent نیست", not is_urgent_text(""))
     check("متن بلند urgent نیست", not is_urgent_text("x" * 200))
@@ -794,8 +805,81 @@ def test_greeting_during_spam_under_one_second():
         check(f"{tag} پشت cleanup نماند", elapsed < 80, f"-> {elapsed:.1f}ms")
 
 
+def test_urgent_cuts_ahead_of_full_sender():
+    print("\n### پاسخ کوتاه پشت sender_pending=152 نمی‌ماند")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient()
+        install(client, logger)
+        packer = client._sender._send_queue
+        for index in range(40):
+            packer.append(RequestState(DeleteMessagesRequest([index])))
+        for index in range(_MAX_SENDER_PENDING + 10):
+            client._sender._pending_state[index] = object()
+        packer.append(RequestState(SendMessageRequest(-1, "نکش دوست من 🦊🐥")))
+        started = time.perf_counter()
+        batch, _data = await asyncio.wait_for(packer.get(), 1)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        names = [getattr(item.request, "message", type(item.request).__name__)
+                 for item in batch]
+        leftover = [getattr(item.request, "message", type(item.request).__name__)
+                    for item in packer._deque]
+        return names, leftover, elapsed_ms, packer._pending_count(), logger
+
+    names, leftover, elapsed_ms, pending, logger = asyncio.run(scenario())
+    print(f"    batch={names} leftover={len(leftover)} pending={pending} ms={elapsed_ms:.1f}")
+    route = [line for line in logger.infos if line.startswith("SENDER ROUTE ")]
+    check("فقط پاسخ هعی از packer خارج شد", names == ["نکش دوست من 🦊🐥"], f"-> {names}")
+    check("deleteها در صف ماندند", leftover.count("DeleteMessagesRequest") == 40,
+          f"-> {leftover[:3]}... n={len(leftover)}")
+    check("منتظر خالی شدن pending نماند", elapsed_ms < 80, f"-> {elapsed_ms:.1f}ms")
+    check("لاگ SENDER ROUTE ثبت شد", bool(route), f"-> {logger.infos}")
+    check("لاگ urgent=True و cut_ahead=True دارد",
+          any("type=reply" in line and "urgent=True" in line and "cut_ahead=True" in line
+              for line in route),
+          f"-> {route}")
+
+
+def test_non_urgent_waits_when_pending_full():
+    print("\n### اعلان پشت سقف pending می‌ماند، reply نمی‌ماند")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        client = FakeClient()
+        install(client, Logger())
+        packer = client._sender._send_queue
+        packer.append(RequestState(SendMessageRequest(-1, HEAVY_NOTICE)))
+        for index in range(_MAX_SENDER_PENDING + 4):
+            client._sender._pending_state[index] = object()
+        marks = {}
+
+        async def wait_notice():
+            marks["start"] = time.perf_counter()
+            batch, _data = await packer.get()
+            marks["end"] = time.perf_counter()
+            return [getattr(item.request, "message", type(item.request).__name__)
+                    for item in batch]
+
+        async def later_reply():
+            await asyncio.sleep(0.03)
+            marks["reply_at"] = time.perf_counter()
+            packer.append(RequestState(SendMessageRequest(-2, "سلام 👋")))
+
+        notice_task = asyncio.create_task(wait_notice())
+        await asyncio.gather(notice_task, later_reply())
+        names = notice_task.result()
+        return names, marks
+
+    names, marks = asyncio.run(scenario())
+    reply_first = marks["end"] >= marks["reply_at"]
+    check("get بعد از ورود سلام برگشت", reply_first)
+    check("اول سلام از packer آمد نه اعلان", names[0] == "سلام 👋", f"-> {names}")
+
+
 def test_reply_urgent_sets_lane():
-    print("\\n### reply_urgent مسیر event.reply را urgent می‌کند")
+    print("\n### reply_urgent مسیر event.reply را urgent می‌کند")
 
     class Event:
         def __init__(self):
@@ -836,6 +920,8 @@ def main():
     test_delete_after_urgent_stays_behind()
     test_reconnect_drops_low_not_urgent()
     test_greeting_during_spam_under_one_second()
+    test_urgent_cuts_ahead_of_full_sender()
+    test_non_urgent_waits_when_pending_full()
     test_reply_urgent_sets_lane()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
