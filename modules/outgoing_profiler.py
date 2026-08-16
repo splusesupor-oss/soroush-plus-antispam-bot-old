@@ -1,4 +1,12 @@
-"""Instrumentation سبک RPCهای خروجی Soroush Plus، بدون تغییر ترتیب ارسال."""
+"""Instrumentation سبک RPCهای خروجی Soroush Plus، بدون تغییر ترتیب ارسال.
+
+Splits each traced RPC into:
+
+* ``connection_wait_ms`` — queued until the request is written to the wire
+* ``rpc_wait_ms`` — wire write until SPlusthon's ``_call`` returns
+* ``post_rpc_ms`` — leftover time in the high-level wrapper after ``_call``
+* ``total_rpc_ms`` — full high-level or ``_call`` span
+"""
 import asyncio
 import contextvars
 import functools
@@ -9,9 +17,27 @@ import time
 
 _RESPONSE_RPC_MS = contextvars.ContextVar("response_rpc_ms", default=0.0)
 _RPC_DEPTH = contextvars.ContextVar("outgoing_rpc_depth", default=0)
+_OP_STATE = contextvars.ContextVar("outgoing_op_state", default=None)
+_CALL_STATE = contextvars.ContextVar("outgoing_call_state", default=None)
 _RPC_DEBUG = os.getenv("BOT_RPC_DEBUG", "").strip() == "1"
 # 400–800ms is normal successful Soroush server RTT, not a local failure.
 _RPC_SLOW_WARNING_MS = float(os.getenv("BOT_RPC_SLOW_WARNING_MS", "1500"))
+
+_TRACED_OPS = {
+    "send_message",
+    "reply",
+    "delete_message",
+    "ban",
+    "mute",
+    "moderation",
+}
+
+_REQUEST_OPS = {
+    "SendMessageRequest": "send_message",
+    "DeleteMessagesRequest": "delete_message",
+    "EditBannedRequest": "moderation",
+    "EditChatDefaultBannedRightsRequest": "moderation",
+}
 
 
 def begin_response_measurement():
@@ -27,6 +53,19 @@ def end_response_measurement(token):
     _RESPONSE_RPC_MS.reset(token)
 
 
+def mark_rpc_on_wire():
+    """Stamp the moment this RPC is actually written to the connection.
+
+    Called from send-path hooks (``connection.send`` / ``writer.drain``)
+    and from tests. Does nothing when no ``_call`` is in progress.
+    """
+    call = _CALL_STATE.get()
+    if call is None or call.get("send_started") is not None:
+        return False
+    call["send_started"] = time.perf_counter()
+    return True
+
+
 def _chat_id(owner, args, kwargs):
     chat = kwargs.get("entity") or kwargs.get("chat_id")
     if chat is not None:
@@ -34,6 +73,47 @@ def _chat_id(owner, args, kwargs):
     if args and isinstance(args[0], int):
         return args[0]
     return getattr(owner, "chat_id", None)
+
+
+def _request_chat_id(request):
+    if request is None:
+        return None
+    for attr in ("peer", "channel", "entity", "chat_id"):
+        value = getattr(request, attr, None)
+        if value is None:
+            continue
+        for nested in ("channel_id", "chat_id", "user_id", "id"):
+            found = getattr(value, nested, None)
+            if found is not None:
+                return found
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _request_name(request):
+    return type(request).__name__ if request is not None else "unknown"
+
+
+def _operation_from_request(request):
+    return _REQUEST_OPS.get(_request_name(request))
+
+
+def _extract_request(args, kwargs):
+    request = kwargs.get("request")
+    if request is not None:
+        return request
+    if len(args) >= 2 and not isinstance(args[1], (int, str, bytes)):
+        return args[1]
+    if args and not isinstance(args[0], (int, str, bytes)):
+        maybe = args[0]
+        # First positional of ``_call`` is usually the sender.
+        if len(args) >= 2:
+            return args[1]
+        name = type(maybe).__name__
+        if name.endswith("Request") or name in _REQUEST_OPS:
+            return maybe
+    return None
 
 
 def _caller_source():
@@ -44,6 +124,156 @@ def _caller_source():
             return frame.f_code.co_name or "unknown"
         frame = frame.f_back
     return "unknown"
+
+
+def _format_trace(fields):
+    parts = ["RPC TRACE"]
+    for key in (
+        "request_id",
+        "operation",
+        "chat_id",
+        "connection_wait_ms",
+        "rpc_wait_ms",
+        "post_rpc_ms",
+        "total_rpc_ms",
+        "result",
+        "request",
+    ):
+        if key not in fields or fields[key] is None:
+            continue
+        value = fields[key]
+        if isinstance(value, float):
+            parts.append(f"{key}={value:.2f}")
+        else:
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def _log_trace(logger, fields):
+    logger.log_info(_format_trace(fields))
+
+
+def _hook_method(obj, name):
+    original = getattr(obj, name, None)
+    if original is None or getattr(original, "_outgoing_send_hook", False):
+        return False
+
+    def _stamp():
+        if name == "drain" and not getattr(obj, "_pending", None):
+            return
+        mark_rpc_on_wire()
+
+    if asyncio.iscoroutinefunction(original):
+        async def hooked(*args, **kwargs):
+            _stamp()
+            return await original(*args, **kwargs)
+    else:
+        def hooked(*args, **kwargs):
+            _stamp()
+            return original(*args, **kwargs)
+
+    hooked._outgoing_send_hook = True
+    try:
+        setattr(obj, name, hooked)
+        return True
+    except (AttributeError, TypeError):
+        return False
+
+
+def _ensure_send_hooks(client):
+    """Hook the live sender/connection once it exists (after connect)."""
+    if getattr(client, "_outgoing_send_hooks", False):
+        return
+    sender = getattr(client, "_sender", None)
+    if sender is None:
+        return
+    hooked = False
+    conn = getattr(sender, "_connection", None)
+    if conn is not None:
+        hooked = _hook_method(conn, "send") or hooked
+        writer = getattr(conn, "_writer", None)
+        if writer is not None:
+            hooked = _hook_method(writer, "drain") or hooked
+            ws = getattr(writer, "_ws", None)
+            if ws is not None:
+                hooked = _hook_method(ws, "send_bytes") or hooked
+    if hooked:
+        try:
+            client._outgoing_send_hooks = True
+        except (AttributeError, TypeError):
+            pass
+
+
+def _wrap_call(client, logger):
+    original = getattr(client, "_call", None)
+    if original is None or getattr(original, "_outgoing_profiled", False):
+        return False
+
+    @functools.wraps(original)
+    async def measured(*args, **kwargs):
+        _ensure_send_hooks(client)
+        request = _extract_request(args, kwargs)
+        op_state = _OP_STATE.get()
+        operation = None if op_state is None else op_state.get("operation")
+        if not operation:
+            operation = _operation_from_request(request)
+        chat_id = None if op_state is None else op_state.get("chat_id")
+        if chat_id is None:
+            chat_id = _request_chat_id(request)
+        request_id = None if op_state is None else op_state.get("request_id")
+        if not request_id:
+            request_id = f"{id(asyncio.current_task()):x}-{time.monotonic_ns():x}"
+        call = {"send_started": None, "queued": time.perf_counter()}
+        token = _CALL_STATE.set(call)
+        result = "success"
+        try:
+            return await original(*args, **kwargs)
+        except asyncio.CancelledError:
+            result = "cancelled"
+            raise
+        except Exception as error:
+            result = f"failed:{error.__class__.__name__}"
+            raise
+        finally:
+            returned = time.perf_counter()
+            send_started = call.get("send_started")
+            if send_started is None:
+                connection_wait_ms = 0.0
+                rpc_wait_ms = (returned - call["queued"]) * 1000
+            else:
+                connection_wait_ms = (send_started - call["queued"]) * 1000
+                rpc_wait_ms = (returned - send_started) * 1000
+            post_rpc_ms = (time.perf_counter() - returned) * 1000
+            total_rpc_ms = (time.perf_counter() - call["queued"]) * 1000
+            _CALL_STATE.reset(token)
+            record = {
+                "request_id": request_id,
+                "operation": operation or _request_name(request),
+                "chat_id": chat_id,
+                "connection_wait_ms": connection_wait_ms,
+                "rpc_wait_ms": rpc_wait_ms,
+                "post_rpc_ms": post_rpc_ms,
+                "total_rpc_ms": total_rpc_ms,
+                "result": result,
+                "request": _request_name(request),
+            }
+            if op_state is not None:
+                op_state.setdefault("calls", []).append(record)
+                op_state["last_return"] = time.perf_counter()
+            should_log = (
+                (operation in _TRACED_OPS)
+                or _RPC_DEBUG
+                or _operation_from_request(request) in _TRACED_OPS
+            )
+            if should_log:
+                _log_trace(logger, record)
+
+    measured._outgoing_profiled = True
+    try:
+        client._call = measured
+        return True
+    except (AttributeError, TypeError):
+        return False
 
 
 def _wrap(owner, attribute, operation, logger):
@@ -59,6 +289,14 @@ def _wrap(owner, attribute, operation, logger):
         started = time.perf_counter()
         depth = _RPC_DEPTH.get()
         depth_token = _RPC_DEPTH.set(depth + 1)
+        state = {
+            "request_id": request_id,
+            "operation": operation,
+            "chat_id": chat_id,
+            "calls": [],
+            "last_return": None,
+        }
+        op_token = _OP_STATE.set(state)
         source = _caller_source()
         if _RPC_DEBUG and operation in {"send_message", "reply"}:
             logger.log_info(
@@ -80,10 +318,31 @@ def _wrap(owner, attribute, operation, logger):
             result = f"failed:{error.__class__.__name__}"
             raise
         finally:
-            elapsed_ms = (time.perf_counter() - started) * 1000
+            ended = time.perf_counter()
+            elapsed_ms = (ended - started) * 1000
+            calls = state.get("calls") or ()
+            connection_wait_ms = sum(item["connection_wait_ms"] for item in calls)
+            rpc_wait_ms = sum(item["rpc_wait_ms"] for item in calls)
+            last_return = state.get("last_return")
+            if last_return is None:
+                post_rpc_ms = 0.0 if calls else elapsed_ms
+            else:
+                post_rpc_ms = max(0.0, (ended - last_return) * 1000)
             if depth == 0:
                 _RESPONSE_RPC_MS.set(_RESPONSE_RPC_MS.get() + elapsed_ms)
+            _OP_STATE.reset(op_token)
             _RPC_DEPTH.reset(depth_token)
+            if operation in _TRACED_OPS:
+                _log_trace(logger, {
+                    "request_id": request_id,
+                    "operation": operation,
+                    "chat_id": chat_id,
+                    "connection_wait_ms": connection_wait_ms,
+                    "rpc_wait_ms": rpc_wait_ms,
+                    "post_rpc_ms": post_rpc_ms,
+                    "total_rpc_ms": elapsed_ms,
+                    "result": result,
+                })
             if _RPC_DEBUG:
                 logger.log_info(
                     "OUTGOING RPC FINISHED "
@@ -120,12 +379,16 @@ def instrument_client(client, logger):
     """یک بار پس از ساخت client فراخوانی می‌شود."""
     if getattr(client, "_outgoing_profiler_installed", False):
         return
+    _wrap_call(client, logger)
     for attribute, operation in (
         ("send_message", "send_message"),
         ("edit_message", "edit_message"),
         ("delete_messages", "delete_message"),
+        ("edit_permissions", "moderation"),
+        ("kick_participant", "ban"),
     ):
         _wrap(client, attribute, operation, logger)
+    _ensure_send_hooks(client)
     try:
         client._outgoing_profiler_installed = True
     except (AttributeError, TypeError):
