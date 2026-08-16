@@ -305,21 +305,167 @@ def _format_banned_user(user, user_id):
     return format_user(user)
 
 
-def _get_forward_metadata(message):
-    fields = {
-        field: getattr(message, field, None)
-        for field in (
-            "fwd_from",
-            "forward_from",
-            "forward_chat",
-            "forwarded",
-            "is_forward",
-        )
-    }
-    for field, value in fields.items():
-        if value:
-            return True, field, fields
+_FORWARD_HEADER_FIELDS = (
+    "fwd_from",
+    "forward",
+    "forward_from",
+    "forward_chat",
+    "forward_from_chat",
+    "forward_sender_name",
+    "fwd_from_id",
+    "forward_from_id",
+    "forward_date",
+)
+_FORWARD_FLAG_FIELDS = ("is_forward", "forwarded")
+_FORWARD_ALBUM_TTL = 30
+
+
+def _forward_header_present(value):
+    """True for a real header object. False for None / False / empty."""
+    if value is None or value is False:
+        return False
+    if value is True:
+        return True
+    if isinstance(value, (int, float)) and value == 0:
+        return False
+    if isinstance(value, (str, bytes)) and not value:
+        return False
+    return True
+
+
+def _get_forward_metadata(message, event=None):
+    """Detect a forwarded message across SPlusthon / Soroush field names.
+
+    ``fwd_from`` is the official header, but some Soroush updates only fill
+    ``forward`` or a Pyrogram-style name.  Use ``is not None`` for headers
+    so an empty-looking MessageFwdHeader still counts.  Never treat the
+    integer ``forwards`` view-count as a forward.
+    """
+    fields = {}
+    sources = []
+    if message is not None:
+        sources.append(message)
+    if event is not None and event is not message:
+        sources.append(event)
+    for obj in sources:
+        for field in _FORWARD_HEADER_FIELDS:
+            value = getattr(obj, field, None)
+            fields.setdefault(field, value)
+            if _forward_header_present(value):
+                return True, field, fields
+        for field in _FORWARD_FLAG_FIELDS:
+            value = getattr(obj, field, None)
+            fields.setdefault(field, value)
+            if value is True:
+                return True, field, fields
     return False, None, fields
+
+
+def _album_forward_ids(bot, chat_id, message, is_forward):
+    """Collect IDs for this item and any earlier album siblings.
+
+    Soroush sometimes puts ``fwd_from`` on only one item of a grouped
+    album.  Remember the group briefly so a later tagged item can delete
+    the siblings that already arrived, and later untagged items are
+    still treated as the same forward.
+    """
+    message_id = getattr(message, "id", None)
+    grouped_id = getattr(message, "grouped_id", None)
+    if not isinstance(message_id, int) or message_id <= 0:
+        return set()
+    if grouped_id is None:
+        return {message_id} if is_forward else set()
+    cache = getattr(bot, "_forward_albums", None)
+    if cache is None:
+        cache = bot._forward_albums = {}
+    now = time.monotonic()
+    key = (normalize_group_id(chat_id), grouped_id)
+    row = cache.get(key)
+    if row is None or row["expires"] <= now:
+        row = {"ids": set(), "is_forward": False, "expires": now + _FORWARD_ALBUM_TTL}
+        cache[key] = row
+    row["ids"].add(message_id)
+    if is_forward:
+        row["is_forward"] = True
+    row["expires"] = now + _FORWARD_ALBUM_TTL
+    if len(cache) > 500:
+        cache.pop(next(iter(cache)), None)
+    if row["is_forward"]:
+        return set(row["ids"])
+    return set()
+
+
+def _handle_forwarded_group_message(
+    bot, event, chat_id, user_id, sender, sender_username, *,
+    is_forwarded, forward_field, forward_fields, delete_ids,
+):
+    """Queue delete for a single forward / album wave. Mute after three."""
+    bot.logger.log_info(
+        "FORWARD DETECTED "
+        f"user_id={user_id} username={sender_username} "
+        f"forward_field={forward_field} fields={forward_fields}"
+    )
+    deleted = False
+    forward_key = (chat_id, user_id)
+    forward_count = getattr(bot, "forward_spam_counts", {}).get(
+        forward_key, 0
+    ) + 1
+    bot.forward_spam_counts[forward_key] = forward_count
+    bot.touch_temporary_state("forward", forward_key)
+    try:
+        ids = {
+            message_id for message_id in (delete_ids or ())
+            if isinstance(message_id, int) and message_id > 0
+        }
+        current_id = getattr(getattr(event, "message", None), "id", None)
+        if isinstance(current_id, int) and current_id > 0:
+            ids.add(current_id)
+        if ids:
+            _queue_message_deletes(bot, chat_id, ids)
+            deleted = True
+        if forward_count >= 3:
+            processing = getattr(bot, "forward_spam_processing", set())
+            if forward_key not in processing:
+                if not hasattr(bot, "forward_spam_processing"):
+                    bot.forward_spam_processing = set()
+                bot.forward_spam_processing.add(forward_key)
+
+                async def forward_mute_finished(_result):
+                    try:
+                        await _send_moderation_notification_once(
+                            bot, chat_id, user_id, "forward_spam_mute",
+                            getattr(event.message, "id", None),
+                            "🔸کاربر ← "
+                            f"{_format_banned_user(sender, user_id)}\n\n"
+                            "به دلیل ارسال فوروارد تکراری 𝟮𝟰 ساعت سکوت شد",
+                        )
+                    finally:
+                        bot.forward_spam_counts.pop(forward_key, None)
+                        bot.forward_spam_processing.discard(forward_key)
+
+                async def forward_mute_failed(_error):
+                    bot.forward_spam_counts.pop(forward_key, None)
+                    bot.forward_spam_processing.discard(forward_key)
+
+                bot.moderation_queue.enqueue(
+                    chat_id,
+                    "mute",
+                    user_id=user_id,
+                    timeout_seconds=15,
+                    operation=lambda: bot.admin_actions.mute_user(
+                        chat_id, user_id, 24 * 60 * 60
+                    ),
+                    on_success=forward_mute_finished,
+                    on_failure=forward_mute_failed,
+                )
+    finally:
+        bot.logger.log_info(
+            "FORWARD DETECTED "
+            f"user_id={user_id} username={sender_username} "
+            f"forward_field={forward_field} deleted={deleted} "
+            f"forward_count={forward_count}"
+        )
+    return True
 
 
 def _log_ban_execution(bot, chat_id, user_id, reason):
@@ -1809,7 +1955,9 @@ async def handle_new_message(bot, event):
         # their dedicated anti-abuse paths below, because those checks inspect
         # media/forward metadata rather than text.
         has_text_content = bool(message_text.strip())
-        is_forwarded_media = _get_forward_metadata(event.message)[0]
+        is_forwarded_media, _early_fwd_field, _early_fwd_fields = (
+            _get_forward_metadata(event.message, event)
+        )
         is_gif_media = is_gif_message(event.message)
         if not has_text_content and not is_forwarded_media and not is_gif_media:
             return
@@ -1922,6 +2070,28 @@ async def handle_new_message(bot, event):
                     big_ids.add(current_id)
                 _queue_big_spam_ban(
                     bot, event, chat_id, user_id, sender, big_ids, big_reason
+                )
+                return
+
+        # Single-forward delete runs here, before command/game/filter routes.
+        # A forwarded «راهنما» or a captionless album item must not skip
+        # this path. Consecutive-forward mute still uses the same counter.
+        if not event.is_private:
+            album_ids = _album_forward_ids(
+                bot, chat_id, event.message, is_forwarded_media
+            )
+            if (
+                (is_forwarded_media or album_ids)
+                and not admin_bypass
+                and not native_admin_warn_only
+            ):
+                profiler.mark("FORWARD_CHECK")
+                _handle_forwarded_group_message(
+                    bot, event, chat_id, user_id, sender, sender_username,
+                    is_forwarded=is_forwarded_media,
+                    forward_field=_early_fwd_field,
+                    forward_fields=_early_fwd_fields,
+                    delete_ids=album_ids,
                 )
                 return
 
@@ -2546,76 +2716,6 @@ async def handle_new_message(bot, event):
                 # می‌یابد و وارد فیلترهای دیگر نمی‌شود.
                 if repeated_gif_ids:
                     return
-
-        is_forwarded, forward_field, forward_fields = _get_forward_metadata(
-            event.message
-        )
-        profiler.mark("FORWARD_CHECK")
-        if is_forwarded:
-            bot.logger.log_info(
-                "FORWARD DETECTED "
-                f"user_id={user_id} username={sender_username} "
-                f"forward_field={forward_field} fields={forward_fields}"
-            )
-            if not auto_punish_protected:
-                deleted = False
-                forward_key = (chat_id, user_id)
-                forward_count = getattr(bot, "forward_spam_counts", {}).get(
-                    forward_key, 0
-                ) + 1
-                bot.forward_spam_counts[forward_key] = forward_count
-                bot.touch_temporary_state("forward", forward_key)
-                try:
-                    _queue_message_deletes(bot, chat_id, [event.message.id])
-                    deleted = True
-                    if forward_count >= 3:
-                        processing = getattr(bot, "forward_spam_processing", set())
-                        if forward_key in processing:
-                            return
-                        if not hasattr(bot, "forward_spam_processing"):
-                            bot.forward_spam_processing = set()
-                        bot.forward_spam_processing.add(forward_key)
-                        async def forward_mute_finished(_result):
-                            try:
-                                await _send_moderation_notification_once(
-                                    bot, chat_id, user_id, "forward_spam_mute",
-                                    event.message.id,
-                                    "🔸کاربر ← "
-                                    f"{_format_banned_user(sender, user_id)}\n\n"
-                                    "به دلیل ارسال فوروارد تکراری 𝟮𝟰 ساعت سکوت شد",
-                                )
-                            finally:
-                                bot.forward_spam_counts.pop(forward_key, None)
-                                bot.forward_spam_processing.discard(forward_key)
-
-                        async def forward_mute_failed(_error):
-                            bot.forward_spam_counts.pop(forward_key, None)
-                            bot.forward_spam_processing.discard(forward_key)
-
-                        bot.moderation_queue.enqueue(
-                            chat_id,
-                            "mute",
-                            user_id=user_id,
-                            timeout_seconds=15,
-                            operation=lambda: bot.admin_actions.mute_user(
-                                chat_id, user_id, 24 * 60 * 60
-                            ),
-                            on_success=forward_mute_finished,
-                            on_failure=forward_mute_failed,
-                        )
-                finally:
-                    bot.logger.log_info(
-                        "FORWARD DETECTED "
-                        f"user_id={user_id} username={sender_username} "
-                        f"forward_field={forward_field} deleted={deleted} "
-                        f"forward_count={forward_count}"
-                    )
-                if name_family_trace:
-                    bot.logger.log_info(
-                        "NAME FAMILY TRACE HANDLER_BLOCK "
-                        f"reason=forwarded_message chat_id={chat_id} user_id={user_id}"
-                    )
-                return
 
         burst_key = (chat_id, user_id)
         if burst_key in bot.spam_burst_users:
