@@ -510,8 +510,6 @@ class SoroushAntiSpamBot:
                 on_timeout=self.connection_supervisor.note_rpc_timeout,
                 logger=self.logger,
             )
-            from modules.outgoing_rpc import install as install_outgoing_rpc
-            install_outgoing_rpc(new_client, self.logger)
 
             await new_client.connect()
             me = await new_client.get_me()

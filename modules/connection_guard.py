@@ -800,12 +800,4 @@ def install(client, logger=None, rpc_timeout=60.0, **supervisor_options):
         on_stall=supervisor.note_send_stall,
         logger=logger,
     )
-    # Cap concurrent send_message and fail-fast 404 GetUsers so one slow
-    # content RPC cannot stall delete/ban on the shared sender.
-    try:
-        from modules.outgoing_rpc import install as install_outgoing_rpc
-        install_outgoing_rpc(client, logger)
-    except Exception as error:
-        if logger is not None:
-            logger.log_error(f"OUTGOING RPC install failed: {error!r}")
     return supervisor

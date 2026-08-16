@@ -55,8 +55,6 @@ _ADMIN_PREFIXES = (
     "!", "/", ".",
 )
 
-from modules.simple_replies import INSULTS, SIMPLE_REPLIES
-
 # Public / user commands.  Checked only after admin so «ثبت ادمین» stays admin.
 _COMMAND_EXACT = frozenset({
     "راهنما", "help",
@@ -76,7 +74,7 @@ _COMMAND_EXACT = frozenset({
     "سطح گروه", "پیام سنجاق",
     "تست دکمه", "دانلود عکس",
     "ثبت اصل", "اصلم",
-}) | frozenset(SIMPLE_REPLIES) | frozenset(INSULTS)
+})
 
 _COMMAND_PREFIXES = (
     "ثبت اسم ", "شخصیت ", "فونت ", "جستجو ",
