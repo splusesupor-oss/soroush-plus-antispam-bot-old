@@ -11,8 +11,9 @@ transient 5xx/503, handler logic, or spam policy. It only:
 * short user-facing replies are ``urgent`` (text + context) and skip that cap
 * the packer sends an urgent reply as its own packet and will not dump
   dozens of delete/notice RPCs onto the wire first
-* delete/ban/mute stay ungated but sit behind urgent replies in the packer
-* reconnect drops stuck LOW sends so they cannot block a new reply
+* keepalive ping and short replies sit in front of delete/moderation
+* heavy history/difference RPCs are gated, timed out, and cancelled
+* reconnect drops old pending RPCs so they cannot replay and block reply
 * fail-fast + cache permanent GetUsers 404 so the same invalid id never
   re-enters ``_pending_state``
 """
@@ -55,6 +56,20 @@ _HIGH_REQUESTS = {
     "DeleteChatUserRequest",
     "KickFromGroupCallRequest",
 }
+
+# History / gap-fill RPCs stall the single socket and cause PONG TIMEOUT.
+_HEAVY_REQUESTS = {
+    "GetHistoryRequest",
+    "GetMessagesRequest",
+    "GetChannelDifferenceRequest",
+    "GetDifferenceRequest",
+    "GetParticipantsRequest",
+    "GetFullChannelRequest",
+    "GetFullChatRequest",
+}
+_KEEPALIVE_REQUESTS = {"PingRequest"}
+_CONTROL_REQUESTS = {"MsgsAck", "MsgsStateInfo", "HttpWaitRequest"}
+_HEAVY_TIMEOUT_S = 4.0
 
 _PERMANENT_NAMES = {
     "NotFoundError",
@@ -205,8 +220,12 @@ def request_priority(request):
     if override in {URGENT, HIGH, LOW, NORMAL}:
         return override
     name = request_name(request)
+    if name in _KEEPALIVE_REQUESTS:
+        return URGENT
     if name in _HIGH_REQUESTS:
         return HIGH
+    if name in _HEAVY_REQUESTS:
+        return LOW
     if name in _LOW_REQUESTS:
         if _looks_like_urgent_send(request):
             return URGENT
@@ -225,14 +244,16 @@ def _looks_like_urgent_send(request):
 def _state_rank(state):
     request = getattr(state, "request", None)
     name = request_name(request) if request is not None else ""
-    if name in {"MsgsAck", "PingRequest", "MsgsStateInfo", "HttpWaitRequest"}:
-        return 3
+    if name in _KEEPALIVE_REQUESTS:
+        return 0
+    if name in _CONTROL_REQUESTS:
+        return 4
     priority = request_priority(request)
     if priority == URGENT:
-        return 0
-    if priority == HIGH:
         return 1
-    return 2
+    if priority == HIGH:
+        return 2
+    return 3
 
 
 def is_high_state(state):
@@ -243,7 +264,7 @@ def _insert_ranked(deque, state, ranks=None):
     rank = _state_rank(state)
     if ranks is not None:
         ranks[id(state)] = rank
-    if deque is None or rank >= 2:
+    if deque is None or rank >= 3:
         return False
     items = list(deque)
     pos = 0
@@ -397,33 +418,116 @@ def clear_invalid_user_cache():
     _invalid_users.clear()
 
 
+def _is_keepalive_request(request):
+    return request_name(request) in _KEEPALIVE_REQUESTS
+
+
 def drop_stale_low_pending(sender, logger=None):
-    """Fail stuck LOW sends on reconnect so they cannot block a new reply.
+    """Fail stuck non-keepalive RPCs on reconnect so they cannot replay."""
+    return drop_reconnect_pending(sender, logger)
+
+
+def drop_reconnect_pending(sender, logger=None):
+    """Drop every pending RPC except keepalive so reconnect stays empty.
 
     SPlusthon ``_reconnect`` re-extends ``_pending_state`` onto the packer.
-    A 15–23s notice sitting there would otherwise go back on the wire
-    ahead of the next «سلام».
+    Replaying GetMessages/delete/notice after a PONG timeout just floods
+    the new socket and blocks the next reply.
     """
     pending = getattr(sender, "_pending_state", None)
-    if not pending:
-        return 0
     removed = 0
-    for msg_id, state in list(pending.items()):
-        request = getattr(state, "request", None)
-        if request_priority(request) != LOW:
-            continue
-        pending.pop(msg_id, None)
-        future = getattr(state, "future", None)
-        if future is not None and not future.done():
-            future.set_exception(ConnectionError(
-                "low-priority send dropped on reconnect"
-            ))
-        removed += 1
+    if pending:
+        for msg_id, state in list(pending.items()):
+            request = getattr(state, "request", None)
+            if _is_keepalive_request(request):
+                continue
+            pending.pop(msg_id, None)
+            future = getattr(state, "future", None)
+            if future is not None and not future.done():
+                future.set_exception(ConnectionError(
+                    "pending RPC dropped on reconnect"
+                ))
+            removed += 1
+    packer = getattr(sender, "_send_queue", None)
+    deque = getattr(packer, "_deque", None)
+    if deque:
+        kept = []
+        for state in list(deque):
+            request = getattr(state, "request", None)
+            if _is_keepalive_request(request):
+                kept.append(state)
+                continue
+            future = getattr(state, "future", None)
+            if future is not None and not future.done():
+                future.set_exception(ConnectionError(
+                    "queued RPC dropped on reconnect"
+                ))
+            removed += 1
+        deque.clear()
+        deque.extend(kept)
     if removed and logger is not None:
         logger.log_info(
-            f"OUTGOING RPC DROP pending low send count={removed} "
-            "reason=reconnect"
+            f"OUTGOING RPC DROP pending count={removed} reason=reconnect"
         )
+    return removed
+
+
+def _request_matches(state, target, target_name):
+    """True if this queued/in-flight state is the timed-out heavy RPC.
+
+    Identity can fail when SPlusthon wraps the request. For heavy types,
+    matching the request name is enough: those RPCs must leave the socket.
+    """
+    current = unwrap_request(getattr(state, "request", None))
+    if current is target:
+        return True
+    if target_name and target_name in _HEAVY_REQUESTS:
+        return request_name(current) == target_name
+    return False
+
+
+def _fail_state(state, error):
+    future = getattr(state, "future", None)
+    if future is not None and not future.done():
+        future.set_exception(error or TimeoutError("heavy RPC cancelled"))
+
+
+def cancel_inflight_request(sender, request, error=None):
+    """Remove a timed-out heavy request from pending *and* the packer.
+
+    Cancelling the ``_call`` coroutine is not enough: SPlusthon already
+    parked the RequestState in ``_pending_state`` / ``_send_queue``. If
+    those stay, ``sender_pending`` stays high and ping/reply wait again.
+    """
+    if sender is None or request is None:
+        return 0
+    target = unwrap_request(request)
+    target_name = request_name(target)
+    fail = error or TimeoutError("heavy RPC cancelled")
+    removed = 0
+    pending = getattr(sender, "_pending_state", None) or {}
+    for msg_id, state in list(pending.items()):
+        if not _request_matches(state, target, target_name):
+            continue
+        pending.pop(msg_id, None)
+        _fail_state(state, fail)
+        removed += 1
+    packer = getattr(sender, "_send_queue", None)
+    deque = getattr(packer, "_deque", None)
+    if deque:
+        kept = []
+        for state in list(deque):
+            if _request_matches(state, target, target_name):
+                _fail_state(state, fail)
+                removed += 1
+            else:
+                kept.append(state)
+        if removed:
+            deque.clear()
+            deque.extend(kept)
+    changed = getattr(pending, "changed", None)
+    if changed is not None:
+        changed.set()
     return removed
 
 
@@ -562,13 +666,34 @@ def _wrap_call(client, logger):
                     f"request={request_name(request)} wait_ms={wait_ms:.1f} "
                     f"inflight_low={gate.inflight}",
                 )
+        name = request_name(request)
+        heavy = name in _HEAVY_REQUESTS and priority != URGENT
         try:
-            return await original(
+            call = original(
                 sender,
                 request,
                 ordered=ordered,
                 flood_sleep_threshold=flood_sleep_threshold,
             )
+            if heavy:
+                try:
+                    return await asyncio.wait_for(call, timeout=_HEAVY_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    dropped = cancel_inflight_request(
+                        sender, request,
+                        TimeoutError(f"{name} cancelled after {_HEAVY_TIMEOUT_S}s"),
+                    )
+                    _log(
+                        logger,
+                        "HEAVY RPC CANCEL "
+                        f"request={name} timeout_s={_HEAVY_TIMEOUT_S} "
+                        f"dropped={dropped} "
+                        f"sender_pending={_sender_pending_count(sender)}",
+                    )
+                    raise TimeoutError(
+                        f"{name} cancelled after {_HEAVY_TIMEOUT_S}s"
+                    ) from None
+            return await call
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -721,7 +846,7 @@ class _PrioritySendQueue:
         if _insert_ranked(deque, state, self._ranks):
             if ready is not None:
                 ready.set()
-            if self._ranks.get(id(state)) == 0:
+            if self._ranks.get(id(state), 3) <= 1:
                 self._wake_waiters()
             return None
         self._ranks[id(state)] = _state_rank(state)
@@ -738,7 +863,7 @@ class _PrioritySendQueue:
             self._mark_enqueued(row)
             if _insert_ranked(deque, row, self._ranks):
                 inserted = True
-                if self._ranks.get(id(row)) == 0:
+                if self._ranks.get(id(row), 3) <= 1:
                     woke_urgent = True
             else:
                 self._ranks[id(row)] = _state_rank(row)
@@ -777,7 +902,7 @@ class _PrioritySendQueue:
                 await ready.wait()
                 continue
 
-            if self._rank_of(deque[0]) == 0:
+            if self._rank_of(deque[0]) <= 1:
                 return await self._pack_prefix(original, deque, ready, 1, urgent=True)
 
             if self._pending_count() >= _MAX_SENDER_PENDING:
@@ -803,7 +928,7 @@ class _PrioritySendQueue:
         parked = []
         while deque and len(taken) < limit:
             item = deque.popleft()
-            if not urgent and self._rank_of(item) == 0:
+            if not urgent and self._rank_of(item) <= 1:
                 deque.appendleft(item)
                 break
             taken.append(item)

@@ -17,11 +17,14 @@ from modules.message_delete_queue import MessageDeleteQueue
 from modules.outgoing_rpc import (
     PermanentRpcError,
     URGENT,
+    _HEAVY_TIMEOUT_S,
     _MAX_SENDER_PENDING,
     _PrioritySendQueue,
     cached_invalid_users,
+    cancel_inflight_request,
     clear_invalid_user_cache,
     drop_invalid_pending,
+    drop_reconnect_pending,
     drop_stale_low_pending,
     get_users_ids,
     install,
@@ -81,6 +84,21 @@ class SendMessageRequest:
 class DeleteMessagesRequest:
     def __init__(self, ids=None):
         self.ids = ids or []
+
+
+class GetMessagesRequest:
+    def __init__(self, ids=None):
+        self.ids = ids or []
+
+
+class GetChannelDifferenceRequest:
+    def __init__(self, channel=None):
+        self.channel = channel
+
+
+class PingRequest:
+    def __init__(self, ping_id=1):
+        self.ping_id = ping_id
 
 
 class InvokeWithoutUpdatesRequest:
@@ -176,6 +194,9 @@ class FakeClient:
         if name == "DeleteMessagesRequest":
             await asyncio.sleep(0.01)
             return "deleted"
+        if name in {"GetMessagesRequest", "GetChannelDifferenceRequest"}:
+            await asyncio.sleep(self.send_ms / 1000.0)
+            return "history"
         await asyncio.sleep(0.01)
         return "ok"
 
@@ -207,6 +228,11 @@ def test_classify_and_unwrap():
     check("delete اولویت بالا است",
           request_priority(DeleteMessagesRequest()) == "high")
     check("GetUsers عادی است", request_priority(GetUsersRequest([])) == "normal")
+    check("GetMessages سنگین و gated است",
+          request_priority(GetMessagesRequest([1])) == "low")
+    check("GetChannelDifference سنگین است",
+          request_priority(GetChannelDifferenceRequest(-1)) == "low")
+    check("ping مثل urgent است", request_priority(PingRequest(1)) == URGENT)
     ids = get_users_ids(GetUsersRequest([InputUser(42), InputUser(7)]))
     check("شناسه GetUsers خوانده می‌شود", ids == (42, 7), f"-> {ids}")
 
@@ -750,11 +776,12 @@ def test_reconnect_drops_low_not_urgent():
         return dropped, list(client._sender._pending_state), low.future, urgent.future, logger
 
     dropped, leftover, low_future, urgent_future, logger = asyncio.run(scenario())
-    check("یک LOW حذف شد", dropped == 1, f"-> {dropped}")
-    check("urgent در pending ماند", leftover == [2], f"-> {leftover}")
+    check("هر دو pending غیرkeepalive حذف شدند", dropped == 2, f"-> {dropped}")
+    check("pending بعد از reconnect خالی است", leftover == [], f"-> {leftover}")
     check("future اعلان با خطا بسته شد",
           low_future.done() and isinstance(low_future.exception(), ConnectionError))
-    check("future سلام باز ماند", not urgent_future.done())
+    check("future سلام هم بسته شد تا replay نشود",
+          urgent_future.done() and isinstance(urgent_future.exception(), ConnectionError))
     check("لاگ reconnect ثبت شد",
           any("reason=reconnect" in line for line in logger.infos))
 
@@ -878,6 +905,137 @@ def test_non_urgent_waits_when_pending_full():
     check("اول سلام از packer آمد نه اعلان", names[0] == "سلام 👋", f"-> {names}")
 
 
+def test_ping_cuts_ahead_of_delete():
+    print("\n### ping جلوتر از delete می‌ایستد تا keepalive نمیرد")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        client = FakeClient()
+        install(client, Logger())
+        packer = client._sender._send_queue
+        packer.append(RequestState(DeleteMessagesRequest([1])))
+        packer.append(RequestState(PingRequest(9)))
+        return [type(item.request).__name__ for item in packer._deque]
+
+    names = asyncio.run(scenario())
+    check("اول ping است", names[0] == "PingRequest", f"-> {names}")
+    check("delete بعد از ping است", names[1] == "DeleteMessagesRequest", f"-> {names}")
+
+
+def test_heavy_rpc_times_out_and_cancels():
+    print("\n### GetMessages سنگین timeout و cancel می‌شود")
+    clear_invalid_user_cache()
+    import modules.outgoing_rpc as rpc
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient(send_ms=400)
+        install(client, logger)
+        original_timeout = rpc._HEAVY_TIMEOUT_S
+        rpc._HEAVY_TIMEOUT_S = 0.05
+        started = time.perf_counter()
+        error = None
+        try:
+            await client._call(client._sender, GetMessagesRequest([1, 2, 3]))
+        except TimeoutError as exc:
+            error = exc
+        finally:
+            rpc._HEAVY_TIMEOUT_S = original_timeout
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        return error, elapsed_ms, logger
+
+    error, elapsed_ms, logger = asyncio.run(scenario())
+    print(f"    elapsed_ms={elapsed_ms:.1f}")
+    check("TimeoutError آمد", isinstance(error, TimeoutError), f"-> {error!r}")
+    check("زودتر از sleep سنگین برگشت", elapsed_ms < 250, f"-> {elapsed_ms:.1f}ms")
+    check("لاگ HEAVY RPC CANCEL هست",
+          any("HEAVY RPC CANCEL" in line for line in logger.infos),
+          f"-> {logger.infos}")
+
+
+def test_heavy_cancel_frees_pending_and_packer():
+    print("\n### cancel باید pending و packer را خالی کند نه فقط coroutine")
+    clear_invalid_user_cache()
+    import modules.outgoing_rpc as rpc
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient()
+
+        async def parked_call(sender, request, ordered=False, flood_sleep_threshold=None):
+            wrapped = InvokeWithoutUpdatesRequest(request)
+            state = RequestState(wrapped)
+            sender._pending_state[77] = state
+            sender._send_queue.append(state)
+            return await state.future
+
+        client._call = parked_call
+        install(client, logger)
+        original_timeout = rpc._HEAVY_TIMEOUT_S
+        rpc._HEAVY_TIMEOUT_S = 0.05
+        error = None
+        try:
+            await client._call(client._sender, GetMessagesRequest([4, 5]))
+        except TimeoutError as exc:
+            error = exc
+        finally:
+            rpc._HEAVY_TIMEOUT_S = original_timeout
+        pending = list(client._sender._pending_state)
+        leftover = [
+            type(outgoing_rpc.unwrap_request(item.request)).__name__
+            for item in client._sender._send_queue._deque
+        ]
+        packer = client._sender._send_queue
+        packer.append(RequestState(PingRequest(1)))
+        started = time.perf_counter()
+        batch, _data = await asyncio.wait_for(packer.get(), 1)
+        ping_ms = (time.perf_counter() - started) * 1000
+        ping_names = [type(item.request).__name__ for item in batch]
+        dropped_line = next(
+            (line for line in logger.infos if "HEAVY RPC CANCEL" in line), ""
+        )
+        return error, pending, leftover, ping_names, ping_ms, dropped_line
+
+    error, pending, leftover, ping_names, ping_ms, dropped_line = asyncio.run(scenario())
+    print(f"    pending={pending} leftover={leftover} ping_ms={ping_ms:.1f} log={dropped_line}")
+    check("TimeoutError آمد", isinstance(error, TimeoutError), f"-> {error!r}")
+    check("pending_rpc بعد از cancel خالی است", pending == [], f"-> {pending}")
+    check("packer دیگر GetMessages ندارد", "GetMessagesRequest" not in leftover,
+          f"-> {leftover}")
+    check("لاگ dropped و sender_pending=0 دارد",
+          "dropped=" in dropped_line and "sender_pending=0" in dropped_line,
+          f"-> {dropped_line}")
+    check("ping فوری از packer آمد", ping_names == ["PingRequest"], f"-> {ping_names}")
+    check("ping زیر ۱ ثانیه منتظر نماند", ping_ms < 1000, f"-> {ping_ms:.1f}ms")
+
+
+def test_reconnect_drops_heavy_not_ping():
+    print("\n### reconnect تاریخچه سنگین را replay نمی‌کند")
+    clear_invalid_user_cache()
+
+    async def scenario():
+        logger = Logger()
+        client = FakeClient()
+        install(client, logger)
+        heavy = RequestState(GetChannelDifferenceRequest(-8))
+        ping = RequestState(PingRequest(3))
+        client._sender._pending_state[1] = heavy
+        client._sender._pending_state[2] = ping
+        dropped = drop_reconnect_pending(client._sender, logger)
+        leftover = [
+            type(state.request).__name__
+            for state in client._sender._pending_state.values()
+        ]
+        return dropped, leftover, heavy.future, ping.future
+
+    dropped, leftover, heavy_future, ping_future = asyncio.run(scenario())
+    check("سنگین حذف شد", dropped == 1, f"-> {dropped}")
+    check("ping ماند", leftover == ["PingRequest"], f"-> {leftover}")
+    check("future سنگین بسته شد",
+          heavy_future.done() and isinstance(heavy_future.exception(), ConnectionError))
+    check("future ping باز ماند", not ping_future.done())
+
+
 def test_reply_urgent_sets_lane():
     print("\n### reply_urgent مسیر event.reply را urgent می‌کند")
 
@@ -922,6 +1080,10 @@ def main():
     test_greeting_during_spam_under_one_second()
     test_urgent_cuts_ahead_of_full_sender()
     test_non_urgent_waits_when_pending_full()
+    test_ping_cuts_ahead_of_delete()
+    test_heavy_rpc_times_out_and_cancels()
+    test_heavy_cancel_frees_pending_and_packer()
+    test_reconnect_drops_heavy_not_ping()
     test_reply_urgent_sets_lane()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
