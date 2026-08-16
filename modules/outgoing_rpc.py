@@ -385,48 +385,57 @@ def _wrap_high_operation(client, name):
         return False
 
 
-def _wrap_packer(sender, logger):
-    packer = getattr(sender, "_send_queue", None)
-    if packer is None or getattr(packer, _SENDER_MARKER, False):
-        return False
-    original_append = getattr(packer, "append", None)
-    original_extend = getattr(packer, "extend", None)
-    if original_append is None or original_extend is None:
-        return False
+class _PrioritySendQueue:
+    """Proxy in front of SPlusthon ``MessagePacker``.
 
-    def append(state):
-        deque = getattr(packer, "_deque", None)
-        ready = getattr(packer, "_ready", None)
+    ``MessagePacker`` uses ``__slots__``, so ``packer.append = ...`` raises
+    ``AttributeError: ... attribute 'append' is read-only``. Replace the
+    sender's queue object instead of mutating packer methods.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def append(self, state):
+        inner = self._inner
+        deque = getattr(inner, "_deque", None)
+        ready = getattr(inner, "_ready", None)
         if is_high_state(state) and deque is not None:
             deque.appendleft(state)
             if ready is not None:
                 ready.set()
             return None
-        return original_append(state)
+        return inner.append(state)
 
-    def extend(states):
+    def extend(self, states):
+        inner = self._inner
         rows = list(states)
         highs = [row for row in rows if is_high_state(row)]
         rest = [row for row in rows if not is_high_state(row)]
-        deque = getattr(packer, "_deque", None)
-        ready = getattr(packer, "_ready", None)
+        deque = getattr(inner, "_deque", None)
+        ready = getattr(inner, "_ready", None)
         if highs and deque is not None:
             for row in reversed(highs):
                 deque.appendleft(row)
             if ready is not None:
                 ready.set()
             if rest:
-                return original_extend(rest)
+                return inner.extend(rest)
             return None
-        return original_extend(rows)
+        return inner.extend(rows)
 
-    packer.append = append
-    packer.extend = extend
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def _wrap_packer(sender, logger):
+    packer = getattr(sender, "_send_queue", None)
+    if packer is None or isinstance(packer, _PrioritySendQueue):
+        return False
     try:
-        packer._outgoing_rpc_hook = True
-        setattr(packer, _SENDER_MARKER, True)
+        sender._send_queue = _PrioritySendQueue(packer)
     except (AttributeError, TypeError):
-        pass
+        return False
     _log(logger, "OUTGOING RPC packer priority installed")
     return True
 
@@ -465,8 +474,14 @@ def _ensure_sender_hooks(client, logger):
         return False
     if getattr(sender, _SENDER_MARKER, False):
         return True
-    _wrap_packer(sender, logger)
-    _wrap_reconnect(sender, logger)
+    try:
+        _wrap_packer(sender, logger)
+    except Exception as error:
+        _log(logger, f"OUTGOING RPC packer hook skipped: {error!r}")
+    try:
+        _wrap_reconnect(sender, logger)
+    except Exception as error:
+        _log(logger, f"OUTGOING RPC reconnect hook skipped: {error!r}")
     try:
         setattr(sender, _SENDER_MARKER, True)
     except (AttributeError, TypeError):
@@ -481,13 +496,19 @@ def _wrap_connect(client, logger):
 
     async def hooked(*args, **kwargs):
         result = await original(*args, **kwargs)
-        _ensure_sender_hooks(client, logger)
+        try:
+            _ensure_sender_hooks(client, logger)
+        except Exception as error:
+            _log(logger, f"OUTGOING RPC sender hooks skipped: {error!r}")
         return result
 
     if not asyncio.iscoroutinefunction(original):
         def sync_hooked(*args, **kwargs):
             result = original(*args, **kwargs)
-            _ensure_sender_hooks(client, logger)
+            try:
+                _ensure_sender_hooks(client, logger)
+            except Exception as error:
+                _log(logger, f"OUTGOING RPC sender hooks skipped: {error!r}")
             return result
         setattr(sync_hooked, _SENDER_MARKER, True)
         try:

@@ -16,6 +16,7 @@ from modules import outgoing_rpc
 from modules.message_delete_queue import MessageDeleteQueue
 from modules.outgoing_rpc import (
     PermanentRpcError,
+    _PrioritySendQueue,
     cached_invalid_users,
     clear_invalid_user_cache,
     drop_invalid_pending,
@@ -402,6 +403,138 @@ def test_install_idempotent():
     check("نصب دوباره بی‌اثر است", second is False)
 
 
+class SlottedMessagePacker:
+    """همان محدودیت SPlusthon: append روی instance قابل جایگزینی نیست."""
+
+    __slots__ = ("_state", "_deque", "_ready", "_log", "_buffer")
+
+    def __init__(self):
+        from collections import deque
+        self._state = None
+        self._deque = deque()
+        self._ready = asyncio.Event()
+        self._log = None
+        self._buffer = None
+
+    def append(self, state):
+        self._deque.append(state)
+        self._ready.set()
+
+    def extend(self, states):
+        self._deque.extend(states)
+        self._ready.set()
+
+
+def test_slotted_packer_is_not_mutated():
+    print("\n### MessagePacker با slots نباید monkey-patch شود")
+    packer = SlottedMessagePacker()
+    raised = None
+    try:
+        packer.append = lambda state: None
+    except Exception as error:
+        raised = error
+    check(
+        "بازتولید باگ: append روی packer read-only است",
+        isinstance(raised, AttributeError) and "append" in str(raised),
+        f"-> {raised!r}",
+    )
+
+    async def scenario():
+        logger = Logger()
+
+        class Sender:
+            def __init__(self):
+                self._pending_state = {}
+                self._send_queue = SlottedMessagePacker()
+
+            async def _reconnect(self, last_error):
+                return "ok"
+
+        class Client:
+            def __init__(self):
+                self._sender = None
+
+            async def _call(self, sender, request, ordered=False,
+                            flood_sleep_threshold=None):
+                return "ok"
+
+            async def connect(self):
+                self._sender = Sender()
+                return True
+
+        client = Client()
+        install(client, logger)
+        await client.connect()
+        queue = client._sender._send_queue
+        send = RequestState(SendMessageRequest(-1, "x"))
+        delete = RequestState(DeleteMessagesRequest([1]))
+        queue.append(send)
+        queue.append(delete)
+        names = [type(item.request).__name__ for item in queue._deque]
+        return queue, names, type(client._sender._send_queue._inner).__name__
+
+    queue, names, inner_name = asyncio.run(scenario())
+    check("connect با packer دارای slots exception نداد", True)
+    check("صف با proxy عوض شده، نه متد packer",
+          isinstance(queue, _PrioritySendQueue), f"-> {type(queue)}")
+    check("packer اصلی MessagePacker مانده",
+          inner_name == "SlottedMessagePacker", f"-> {inner_name}")
+    check("حذف همچنان جلوتر از send است",
+          names == ["DeleteMessagesRequest", "SendMessageRequest"], f"-> {names}")
+    check("متد append کلاس packer عوض نشده",
+          SlottedMessagePacker.append is not queue.append)
+
+
+def test_main_connect_path_does_not_raise():
+    print("\n### مسیر startup شبیه main.py بعد از connect")
+
+    async def scenario():
+        logger = Logger()
+
+        class Sender:
+            def __init__(self):
+                self._pending_state = {}
+                self._send_queue = SlottedMessagePacker()
+
+            async def _reconnect(self, last_error):
+                return "ok"
+
+        class StartupClient:
+            def __init__(self):
+                self._sender = None
+                self.connected = False
+
+            async def _call(self, sender, request, ordered=False,
+                            flood_sleep_threshold=None):
+                return "ok"
+
+            async def delete_messages(self, *a, **k):
+                return "deleted"
+
+            async def edit_permissions(self, *a, **k):
+                return "muted"
+
+            async def kick_participant(self, *a, **k):
+                return "banned"
+
+            async def connect(self):
+                self._sender = Sender()
+                self.connected = True
+                return True
+
+        client = StartupClient()
+        install(client, logger)
+        await client.connect()
+        await client.delete_messages(-1, [1])
+        return client.connected, isinstance(
+            client._sender._send_queue, _PrioritySendQueue
+        )
+
+    connected, proxied = asyncio.run(scenario())
+    check("connect موفق شد", connected is True)
+    check("بعد از connect proxy نصب است", proxied is True)
+
+
 def main():
     test_classify_and_unwrap()
     test_permanent_matcher()
@@ -413,6 +546,8 @@ def main():
     test_delete_queue_still_retries_timeout()
     test_packer_puts_delete_first()
     test_install_idempotent()
+    test_slotted_packer_is_not_mutated()
+    test_main_connect_path_does_not_raise()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 
