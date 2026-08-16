@@ -10,7 +10,7 @@ class MessageDeleteQueue:
     semaphore: a flood in group A occupies only that group's worker.  Other
     chats keep deleting/replying in parallel.
     """
-    def __init__(self, client, logger, *, batch_size=15, max_concurrent=None, inter_batch_delay=0.08):
+    def __init__(self, client, logger, *, batch_size=15, max_concurrent=None, inter_batch_delay=0.0):
         self.client = client
         self.logger = logger
         self.batch_size = batch_size
@@ -100,9 +100,12 @@ class MessageDeleteQueue:
                 self.logger.log_info(
                     f"BATCH DELETE FINISHED chat_id={chat_id} count={len(batch)}"
                 )
-                # A small fair pause prevents a spammed chat from filling the
-                # shared SPlusthon sender ahead of replies in other groups.
-                await asyncio.sleep(self.inter_batch_delay)
+                # Yield the event loop only. Do not add a timed sleep after
+                # a completed delete RPC.
+                if self.inter_batch_delay:
+                    await asyncio.sleep(self.inter_batch_delay)
+                else:
+                    await asyncio.sleep(0)
                 continue
 
             # Isolate invalid/deleted IDs; successful individual deletions are

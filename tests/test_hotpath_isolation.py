@@ -76,7 +76,8 @@ def test_delete_queue_uses_small_batches():
     print("\n### صف حذف بچ کوچک دارد و sender را قفل نمی‌کند")
     queue = MessageDeleteQueue(SimpleNamespace(), Logger())
     check("default batch_size is 15", queue.batch_size == 15, f"-> {queue.batch_size}")
-    check("inter_batch_delay > 0", queue.inter_batch_delay > 0)
+    check("inter_batch_delay is 0", queue.inter_batch_delay == 0,
+          f"-> {queue.inter_batch_delay}")
 
 
 def test_delete_queue_logs_wait_time():

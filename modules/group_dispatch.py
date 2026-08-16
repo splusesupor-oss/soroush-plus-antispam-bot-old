@@ -142,11 +142,10 @@ def _message_bits(event):
 class GroupDispatcher:
     """Independent admin / command / normal workers per chat."""
 
-    # Lower lanes pause while a higher lane of the same chat is running or
-    # queued, so a normal/command RPC cannot occupy the shared sender ahead
-    # of mute/ban/lock.  A safety timeout prevents a hung admin from freezing
-    # ordinary chat forever.
-    HIGHER_LANE_WAIT_SECONDS = 15.0
+    # Do not park a ready job behind another lane of the same chat.
+    # Admin / command / normal already have separate workers; extra
+    # yield only added queue_wait after Soroush had already answered.
+    HIGHER_LANE_WAIT_SECONDS = 0.0
 
     def __init__(self, *, max_pending_normal=40, logger=None):
         self.max_pending_normal = int(max_pending_normal)
@@ -312,20 +311,8 @@ class GroupDispatcher:
         return bool(queue is not None and queue.qsize() > 0)
 
     async def _yield_to_higher_lanes(self, chat_id, lane):
-        """Pause this worker while a higher-priority lane of the same chat is busy."""
-        if lane == LANE_ADMIN:
-            return 0.0
-        started = time.perf_counter()
-        deadline = started + self.HIGHER_LANE_WAIT_SECONDS
-        while time.perf_counter() < deadline:
-            admin_busy = self._lane_busy(chat_id, LANE_ADMIN)
-            command_busy = (
-                lane == LANE_NORMAL and self._lane_busy(chat_id, LANE_COMMAND)
-            )
-            if not admin_busy and not command_busy:
-                break
-            await asyncio.sleep(0.02)
-        return (time.perf_counter() - started) * 1000
+        """Kept for log compatibility. Never sleeps; workers stay independent."""
+        return 0.0
 
     async def join(self, timeout=None):
         """Wait until every queued job has finished (tests / shutdown)."""

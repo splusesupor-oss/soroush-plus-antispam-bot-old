@@ -321,8 +321,8 @@ def test_admin_delete_jumps_same_chat():
           order.index(100) < order.index(2), f"-> {order}")
 
 
-def test_normal_waits_for_busy_admin():
-    print("\n### lane عادی پشت ادمین در حال اجرا نمی‌آید")
+def test_normal_does_not_yield_for_busy_admin():
+    print("\n### lane عادی برای ادمین همان گروه yield نمی‌کند")
 
     async def scenario():
         dispatcher = GroupDispatcher(max_pending_normal=80, logger=Logger())
@@ -341,18 +341,15 @@ def test_normal_waits_for_busy_admin():
         await asyncio.sleep(0)
         dispatcher.submit(-3, normal, priority=PRIORITY_NORMAL, kind="normal")
         await asyncio.sleep(0.12)
-        blocked = "admin_start" in order and "normal" not in order
+        concurrent = "admin_start" in order and "normal" in order and "admin_end" not in order
         hold.set()
         await dispatcher.join(timeout=1)
-        return blocked, order
+        return concurrent, order
 
-    blocked, order = asyncio.run(scenario())
-    check("عادی قبل از اتمام ادمین شروع نشد", blocked, f"-> {order}")
-    check("هر دو بعد از آزاد شدن ادمین تمام شدند",
-          order == ["admin_start", "admin_end", "normal"] or (
-              "admin_start" in order and "normal" in order
-              and order.index("admin_start") < order.index("normal")
-          ), f"-> {order}")
+    concurrent, order = asyncio.run(scenario())
+    check("عادی همزمان با ادمین اجرا شد (بدون yield)", concurrent, f"-> {order}")
+    check("هر دو تمام شدند",
+          "admin_end" in order and "normal" in order, f"-> {order}")
 
 
 def test_tracker_increment_does_not_write_file():
@@ -406,7 +403,7 @@ def main():
     test_user_command_has_own_lane()
     test_overflow_keeps_admin_and_command()
     test_overflow_drops_normal_keeps_admin()
-    test_normal_waits_for_busy_admin()
+    test_normal_does_not_yield_for_busy_admin()
     test_delete_queue_priority_and_isolation()
     test_admin_delete_jumps_same_chat()
     test_tracker_increment_does_not_write_file()

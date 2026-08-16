@@ -629,7 +629,7 @@ class SoroushAntiSpamBot:
         # synchronously in the incoming-message handler.
         self.message_delete_queue = MessageDeleteQueue(
             self.client, self.logger, batch_size=15, max_concurrent=4,
-            inter_batch_delay=0.08)
+            inter_batch_delay=0)
         self.notice_cleanup.bind_delete_queue(self.message_delete_queue)
         self.notice_cleanup.client = self.client
         if getattr(self, "admin_actions", None) is not None:
