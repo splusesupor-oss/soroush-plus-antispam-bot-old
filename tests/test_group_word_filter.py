@@ -1,4 +1,4 @@
-"""Word-level matching for per-group filtered words.
+"""Word-level matching for per-group filtered words only.
 
     python tests/test_group_word_filter.py
 """
@@ -35,15 +35,18 @@ def test_pi_standalone_only():
         "پی",
         "پی بیا",
         "سلام پی",
+        "پی پر از فیلم",
         "پی!",
         "(پی)",
         "پی، خوبی؟",
         "  پی  ",
+        "هر کس میخواد مدیر گپ بشه بیاد پی فقط دختر",
     ):
         check(f"MATCH {text!r}", matched(text, words) == "پی",
               f"-> {matched(text, words)!r}")
     for text in (
         "پیشش بودم",
+        "پیام",
         "پیام داد",
         "پیرمرد",
         "پیچ",
@@ -84,7 +87,7 @@ def test_real_words_still_match():
     print("\n### کلمات واقعی فیلتر همچنان match می‌شوند")
     check("تلگرام مستقل", matched("برو تلگرام ببین", ["تلگرام"]) == "تلگرام")
     check("بیو مستقل", matched("بیو چک کن", ["بیو"]) == "بیو")
-    check("بیوگرافی با فیلتر بیو نه", matched("بیوگرافی من", ["بیو"]) is None)
+    check("بیوگرافی با فیلتر گروه بیو نه", matched("بیوگرافی من", ["بیو"]) is None)
 
 
 def main():
