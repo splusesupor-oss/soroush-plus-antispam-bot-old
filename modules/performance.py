@@ -28,6 +28,10 @@ class MessagePerformance:
             self.values[stage] += (now - self._last_at) * 1000
         self._last_at = now
 
+    def skip_to(self):
+        """Drop time since the last mark so the next stage is not a junk bucket."""
+        self._last_at = time.perf_counter()
+
     def set(self, stage, value_ms):
         if stage in self.values:
             self.values[stage] = max(0.0, float(value_ms))

@@ -519,6 +519,18 @@ def _run_background(bot, name, callback, *args):
     return _asyncio.create_task(run())
 
 
+def _schedule_reply(bot, event, *args, **kwargs):
+    """Send a reply without holding this group's dispatcher worker on RPC RTT."""
+    async def run():
+        try:
+            await event.reply(*args, **kwargs)
+        except Exception as error:
+            logger = getattr(bot, "logger", None)
+            if logger is not None:
+                logger.log_error(f"SCHEDULED REPLY FAILED error={error!r}")
+    return _asyncio.create_task(run())
+
+
 def _chat_game_busy(chat_id):
     """آیا یکی از بازی‌های «چت‌محور» همین حالا در این گروه فعال است.
 
@@ -2789,7 +2801,7 @@ async def handle_new_message(bot, event):
         saved_name = get_memory_name(chat_id, user_id)
         personal_reply = friendly_reply(saved_name, clean_text) if saved_name else None
         if personal_reply:
-            await event.reply(personal_reply)
+            _schedule_reply(bot, event, personal_reply)
             return
 
         fast_command = (
@@ -2811,17 +2823,17 @@ async def handle_new_message(bot, event):
             is_private=event.is_private,
         )
         if owner_reply:
-            await event.reply(owner_reply)
+            _schedule_reply(bot, event, owner_reply)
             return
 
         # پاسخ‌های ثابت بدون ورود به moderation و I/O پاسخ می‌گیرند.
         # COMMAND_MATCH was already marked at normalize_command above.
         simple_reply = SIMPLE_REPLIES.get(clean_text)
         if simple_reply:
-            await event.reply(simple_reply)
+            _schedule_reply(bot, event, simple_reply)
             return
         if clean_text in INSULTS:
-            await event.reply(INSULT_REPLY)
+            _schedule_reply(bot, event, INSULT_REPLY)
             return
 
         # فرمان‌های کوتاه نباید برای ثبت آمار/فعالیت منتظر I/O فایل بمانند.
@@ -2831,6 +2843,7 @@ async def handle_new_message(bot, event):
             )
         sender_username = getattr(sender, "username", None)
         # فرمان‌های سریع permission مخصوص خود را در branch فرمان بررسی می‌کنند.
+        profiler.skip_to()
         is_group_moderator = admin_bypass or (
             not event.is_private
             and not fast_command
@@ -3464,7 +3477,9 @@ async def handle_new_message(bot, event):
             return
 
         # ---- بازی‌های Fox AI (کاملاً مستقل، فقط از این نقطه وصل می‌شوند) ----
-        if await handle_fox_games(
+        if (
+            clean_text in FOX_GAME_COMMANDS or fox_game_active(chat_id)
+        ) and await handle_fox_games(
             bot, event, chat_id, user_id, sender, clean_text, bot.logger
         ):
             return
@@ -5778,6 +5793,7 @@ async def handle_new_message(bot, event):
             )
 
 
+        profiler.skip_to()
         profiler.mark("FILTER")
         # بررسی تکرار شدید داخل یک پیام
         try:

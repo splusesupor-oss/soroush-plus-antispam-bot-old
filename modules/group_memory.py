@@ -9,6 +9,8 @@ from modules.group_id import normalize_group_id
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "group_memory.json"
 MAX_NAME_LENGTH = 20
+_cache = None
+_cache_mtime = None
 
 # Common names make sentence inputs predictable: "ثبت علی پسر محمد" stores "علی".
 KNOWN_NAMES = frozenset({
@@ -64,16 +66,35 @@ def _has_banned_term(value):
     return False
 
 
-def _load():
+def _file_mtime():
     try:
-        return json.loads(FILE.read_text(encoding="utf-8")) if FILE.exists() else {}
-    except (OSError, ValueError):
-        return {}
+        return FILE.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _load():
+    global _cache, _cache_mtime
+    mtime = _file_mtime()
+    if _cache is not None and mtime == _cache_mtime:
+        return _cache
+    if mtime is None:
+        _cache = {}
+    else:
+        try:
+            _cache = json.loads(FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _cache = {}
+    _cache_mtime = mtime
+    return _cache
 
 
 def _save(data):
+    global _cache, _cache_mtime
     FILE.parent.mkdir(parents=True, exist_ok=True)
     FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _cache = data
+    _cache_mtime = _file_mtime()
 
 
 def _group_key(chat_id):
