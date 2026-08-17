@@ -5871,17 +5871,20 @@ async def handle_new_message(bot, event):
             group_word_spam = False
 
         try:
+            from modules.group_banned_words_control import is_enabled as group_custom_filter_enabled
             from modules.group_words_storage import (
                 find_matching_filter_word,
                 get_words,
             )
 
-            matched_word = find_matching_filter_word(
-                message_text, get_words(chat_id)
-            )
-            if matched_word:
-                group_word_spam = True
-                group_word_reason = f"فیلتر گروه ({matched_word})"
+            # GROUP_CUSTOM_WORD_FILTER only. Global banned words stay in SpamDetector.
+            if group_custom_filter_enabled(chat_id):
+                matched_word = find_matching_filter_word(
+                    message_text, get_words(chat_id)
+                )
+                if matched_word:
+                    group_word_spam = True
+                    group_word_reason = f"فیلتر گروه ({matched_word})"
 
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی کلمات گروه: {e}")

@@ -3,6 +3,8 @@ import os
 
 from modules.group_id import normalize_group_id
 
+# Per-group switch for GROUP_CUSTOM_WORD_FILTER only.
+# It must never gate GLOBAL_FORBIDDEN_WORDS / SpamDetector.check_banned_words.
 FILE = "config/group_banned_words.json"
 
 _cache = None

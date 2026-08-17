@@ -2,7 +2,6 @@
 ماژول تشخیص هرزنامه - هسته اصلی ربات
 """
 import re
-from modules.group_banned_words_control import is_enabled
 from modules import site_policy
 from typing import Tuple, Optional, List
 from .config_manager import ConfigManager
@@ -126,9 +125,9 @@ class SpamDetector:
         return False, None
 
     def check_banned_words(self, text: str, chat_id=None) -> Tuple[bool, Optional[str]]:
+        # chat_id is accepted only for existing call sites.
+        # GLOBAL_FORBIDDEN_WORDS is always-on and never follows a group switch.
         if not self.config.get("check_banned_words", True):
-            return False, None
-        if chat_id is not None and not is_enabled(chat_id):
             return False, None
         self._refresh_banned_word_patterns()
         text_lower = self._normalize_banned_word(text)

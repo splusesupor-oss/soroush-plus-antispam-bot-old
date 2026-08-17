@@ -52,10 +52,13 @@ async def handle_admin_commands(bot, event, text: str, admin_id: int, chat_id: i
     if special_word_command:
         if text == "لغو کلمات ممنوعه":
             disable(chat_id)
-            await event.respond("✅ کلمات ممنوعه برای این گروه خاموش شد")
+            await event.respond(
+                "✅ فیلتر کلمات سفارشی این گروه خاموش شد.\n"
+                "لیست ممنوعه سراسری همچنان فعال است."
+            )
         else:
             enable(chat_id)
-            await event.respond("✅ کلمات ممنوعه برای این گروه فعال شد")
+            await event.respond("✅ فیلتر کلمات سفارشی این گروه فعال شد")
         return
 
     try:

@@ -49,6 +49,7 @@ def test_source_still_word_boundary():
     refresh = inspect.getsource(SpamDetector._refresh_banned_word_patterns)
     normalize = inspect.getsource(SpamDetector._normalize_banned_word)
     check("از group_words_storage استفاده نمی‌کند", "group_words" not in source)
+    check("از سوئیچ گروه استفاده نمی‌کند", "is_enabled" not in source)
     check("از find_matching_filter_word استفاده نمی‌کند",
           "find_matching_filter_word" not in source + refresh)
     check("الگوی مرزی قبلی باقی است",
