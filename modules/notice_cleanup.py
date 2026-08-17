@@ -260,7 +260,11 @@ class NoticeCleanup:
         if queue is None or not message_ids:
             return
         try:
-            queue.enqueue(_chat_id_for_rpc(chat_id), message_ids, priority=1)
+            # Notification deletes should have high priority (0) so they are not
+            # head-blocked by a heavy spam or manual delete for the same chat.
+            # They share the per-chat PriorityQueue with manual/spam, but with
+            # priority 0 they will jump ahead.
+            queue.enqueue(_chat_id_for_rpc(chat_id), message_ids, priority=0)
         except Exception as error:
             if self.logger is not None:
                 self.logger.log_error(

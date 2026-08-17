@@ -134,14 +134,21 @@ class OutgoingSender:
         self.client = client
         self.logger = logger
         self.max_per_chat = int(max_per_chat)
-        self._queues = {}  # chat_id -> PriorityQueue
-        self._workers = {}  # chat_id -> Task
+        # Per-chat queues: separate for notification (priority 0, auto) vs normal (priority 1)
+        # This ensures a flood of normal replies does not delay an urgent auto notification,
+        # and vice versa. Each has its own worker per chat.
+        self._queues = {}  # (chat_key, kind) -> PriorityQueue where kind is "notif" or "normal"
+        self._workers = {}  # (chat_key, kind) -> Task
         self._seq = 0
         self._closed = False
         self.stats = {"enqueued": 0, "sent": 0, "failed": 0, "dropped": 0}
 
-    def _queue_for(self, chat_id):
-        key = _chat_key(chat_id)
+    def _queue_key(self, chat_id, priority):
+        kind = "notif" if int(priority) == 0 else "normal"
+        return (_chat_key(chat_id), kind)
+
+    def _queue_for(self, chat_id, priority=1):
+        key = self._queue_key(chat_id, priority)
         q = self._queues.get(key)
         if q is None:
             q = asyncio.PriorityQueue()
@@ -154,25 +161,24 @@ class OutgoingSender:
             return False
         if chat_id is None:
             chat_id = 0
-        key = _chat_key(chat_id)
         # Normalize priority: 0 urgent/admin, 1 normal
         try:
             pri = int(priority)
         except Exception:
             pri = 1
-        q = self._queue_for(chat_id)
+        qkey = self._queue_key(chat_id, pri)
+        q = self._queue_for(chat_id, pri)
         if q.qsize() >= self.max_per_chat:
             self.stats["dropped"] += 1
             if self.logger:
-                self.logger.log_info(f"OUTGOING SEND DROP chat_id={chat_id} qsize={q.qsize()}")
+                self.logger.log_info(f"OUTGOING SEND DROP chat_id={chat_id} qsize={q.qsize()} kind={'notif' if pri==0 else 'normal'}")
             return False
         self._seq += 1
-        # Store original chat_id for the worker, but use normalized key for bookkeeping
         q.put_nowait((pri, self._seq, chat_id, coro_factory, on_done, time.perf_counter()))
         self.stats["enqueued"] += 1
-        worker = self._workers.get(key)
+        worker = self._workers.get(qkey)
         if worker is None or worker.done():
-            self._workers[key] = asyncio.create_task(self._worker(key, chat_id, q))
+            self._workers[qkey] = asyncio.create_task(self._worker(qkey, chat_id, q))
         return True
 
     def enqueue_reply(self, event, text, *, priority=1, on_done=None, **kwargs):
@@ -203,9 +209,10 @@ class OutgoingSender:
                 _DISPATCH_ACTIVE.reset(token)
         return self.enqueue(chat_id, wrapped, priority=priority, on_done=on_done)
 
-    async def _worker(self, key, chat_id, queue):
+    async def _worker(self, qkey, chat_id, queue):
+        key = qkey
         if self.logger:
-            self.logger.log_info(f"OUTGOING SEND WORKER START chat_id={chat_id} key={key}")
+            self.logger.log_info(f"OUTGOING SEND WORKER START chat_id={chat_id} key={key} kind={'notif' if 'notif' in str(key) else 'normal'}")
         try:
             while True:
                 try:
@@ -265,10 +272,10 @@ class OutgoingSender:
                     if queue.empty():
                         return
         finally:
-            if self._workers.get(key) is asyncio.current_task():
-                self._workers.pop(key, None)
+            if self._workers.get(qkey) is asyncio.current_task():
+                self._workers.pop(qkey, None)
             if queue.empty():
-                self._queues.pop(key, None)
+                self._queues.pop(qkey, None)
 
     async def close(self):
         self._closed = True
