@@ -258,15 +258,14 @@ class NoticeCleanup:
     def _enqueue_delete(self, chat_id, message_ids):
         queue = self.delete_queue
         if queue is None or not message_ids:
-            return None
+            return
         try:
-            return queue.enqueue(_chat_id_for_rpc(chat_id), message_ids, priority=1)
+            queue.enqueue(_chat_id_for_rpc(chat_id), message_ids, priority=1)
         except Exception as error:
             if self.logger is not None:
                 self.logger.log_error(
                     f"NOTICE CLEANUP ENQUEUE FAILED chat_id={chat_id} error={error!r}"
                 )
-            return None
 
     async def _worker(self, chat_id):
         event = self._events[chat_id]
