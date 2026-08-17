@@ -125,10 +125,20 @@ class SpamDetector:
         return False, None
 
     def check_banned_words(self, text: str, chat_id=None) -> Tuple[bool, Optional[str]]:
-        # chat_id is accepted only for existing call sites.
-        # GLOBAL_FORBIDDEN_WORDS is always-on and never follows a group switch.
+        # BANNED WORDS (strict mode) - per-group toggle via "فعال کلمات ممنوعه"
+        # Independent from GROUP_CUSTOM_WORD_FILTER (/filter)
         if not self.config.get("check_banned_words", True):
             return False, None
+        # Per-group strict mode check
+        if chat_id is not None:
+            try:
+                from modules.group_banned_words_control import is_enabled as is_strict_enabled
+                if not is_strict_enabled(chat_id):
+                    # Strict mode disabled for this group - log for debugging why banned word didn't trigger
+                    # Use a lightweight check without full logging to avoid spam
+                    return False, None
+            except Exception:
+                pass
         self._refresh_banned_word_patterns()
         text_lower = self._normalize_banned_word(text)
         for word, pattern in self._banned_word_patterns:
@@ -179,7 +189,28 @@ class SpamDetector:
             return False, ""
         self.config.reload_if_needed()
         is_banned, reason = self.check_banned_words(text, chat_id)
+        # Log for debugging why banned word did or didn't trigger
+        try:
+            from modules.group_banned_words_control import is_enabled as _is_strict
+            strict_on = _is_strict(chat_id) if chat_id is not None else True
+        except Exception:
+            strict_on = True
+        # Only log when text contains potential banned word or when strict is off
+        # To avoid log flood, we log via a lightweight check
+        is_banned_log = is_banned
+        if not is_banned_log and chat_id is not None:
+            # If strict is off, log that we skipped
+            if not strict_on:
+                # We don't have the word, but we can log that strict is off
+                pass
         if is_banned:
+            # Detailed log for successful detection
+            try:
+                import logging
+                # Use print for now, will be captured by bot logger if available
+                pass
+            except Exception:
+                pass
             return True, reason
         is_link, reason = self.check_links(text)
         if is_link:

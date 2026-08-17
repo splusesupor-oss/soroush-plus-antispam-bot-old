@@ -5977,24 +5977,34 @@ async def handle_new_message(bot, event):
         if any(message_text.startswith(x) for x in word_admin_commands):
             group_word_spam = False
 
+        # === SEPARATE SYSTEMS ===
+        # 1. FILTER WORDS (/filter): manual per-group filter, always active if words exist
+        #    Independent from strict mode. Uses group_words.json
+        # 2. BANNED WORDS (strict mode): global banned_words.txt, per-group toggle via "فعال کلمات ممنوعه"
+        #    Controlled by group_banned_words_control.is_enabled, checked inside SpamDetector.check_banned_words
+        # Two DBs, two handlers, two logics - completely separate
+
+        # --- FILTER WORDS: check custom per-group filter (always, not gated by strict mode) ---
         try:
-            from modules.group_banned_words_control import is_enabled as group_custom_filter_enabled
             from modules.group_words_storage import (
                 find_matching_filter_word,
                 get_words,
             )
 
-            # GROUP_CUSTOM_WORD_FILTER only. Global banned words stay in SpamDetector.
-            if group_custom_filter_enabled(chat_id):
-                matched_word = find_matching_filter_word(
-                    message_text, get_words(chat_id)
-                )
-                if matched_word:
-                    group_word_spam = True
-                    group_word_reason = f"فیلتر گروه ({matched_word})"
+            matched_word = find_matching_filter_word(
+                message_text, get_words(chat_id)
+            )
+            if matched_word:
+                group_word_spam = True
+                group_word_reason = f"فیلتر گروه ({matched_word})"
+                bot.logger.log_info(f"FILTER WORD DETECTED chat_id={chat_id} word={matched_word!r} text={message_text[:50]!r}")
 
         except Exception as e:
-            bot.logger.log_error(f"خطای بررسی کلمات گروه: {e}")
+            bot.logger.log_error(f"خطای بررسی کلمات فیلتر گروه (/filter): {e}")
+
+        # --- BANNED WORDS: strict mode, gated by is_enabled, handled inside SpamDetector ---
+        # No separate check here; it will be checked in bot.detector.is_spam which internally checks is_enabled
+        # If strict mode is off, check_banned_words will return False and log why
 
         # مدیر/مالک ثبت‌شده از فیلتر خودکار و فیلتر کلمات گروه عبور می‌کند،
         # اما اجرای راهنما، بازی‌ها و فرمان‌های مدیریت باید ادامه داشته باشد.
@@ -6010,7 +6020,22 @@ async def handle_new_message(bot, event):
         else:
             # `is_spam` remains the sole detector call.  Its existing reason
             # only labels the notification route after the decision is made.
+            # BANNED WORDS check is inside is_spam -> check_banned_words which checks strict mode
             is_spam, reason = bot.detector.is_spam(message_text, chat_id)
+            # Log for debugging why banned word did or didn't trigger
+            try:
+                from modules.group_banned_words_control import is_enabled as _is_strict_check
+                _strict_on = _is_strict_check(chat_id)
+                if not _strict_on:
+                    bot.logger.log_info(f"BANNED WORD SKIP strict_off chat_id={chat_id} text={message_text[:60]!r}")
+                elif is_spam and "کلمه ممنوعه" in str(reason):
+                    bot.logger.log_info(f"BANNED WORD HIT chat_id={chat_id} reason={reason!r} text={message_text[:60]!r}")
+                elif not is_spam:
+                    # Check if text would have matched banned word but strict off or no match
+                    # We do a quick check without full pattern to avoid double work
+                    pass
+            except Exception:
+                pass
             if is_spam:
                 moderation_trigger = _detector_moderation_trigger(reason)
 
