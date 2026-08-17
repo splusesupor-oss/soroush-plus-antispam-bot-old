@@ -5240,32 +5240,78 @@ async def handle_new_message(bot, event):
 
 
 # آزاد کردن کاربر محروم شده
-        if clean_text == "آزاد":
+        if clean_text == "آزاد" or clean_text.startswith("آزاد ") or clean_text.startswith("آزاد@"):
             if not _has_group_management_permission(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
                 await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
                 return
             try:
-                if not event.reply_to:
-                    await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
-                    return
+                # --- پشتیبانی از دو حالت: ریپلای و یوزرنیم ---
+                # آیدی عددی پشتیبانی نمی‌شود
+                target_username_arg = None
+                if clean_text != "آزاد":
+                    # استخراج آرگومان بعد از "آزاد"
+                    # clean_text نرمالایز شده است، پس فاصله‌ها یکسان هستند
+                    raw_arg = clean_text[4:].strip()
+                    if raw_arg.startswith("@"):
+                        raw_arg = raw_arg[1:].strip()
+                    if raw_arg:
+                        # فقط اولین توکن به عنوان یوزرنیم
+                        target_username_arg = raw_arg.split()[0].lstrip("@").strip()
+                    if target_username_arg is not None:
+                        if target_username_arg.isdigit():
+                            await event.reply("❌ لطفاً از نام کاربری استفاده کنید، آیدی عددی پشتیبانی نمی‌شود")
+                            return
+                        if not target_username_arg:
+                            await event.reply("❌ نام کاربری مشخص نشده است")
+                            return
+                        import re as _re_azad
+                        if not _re_azad.match(r"^[A-Za-z0-9_]{4,32}$", target_username_arg):
+                            await event.reply(f"❌ نام کاربری نامعتبر است: @{target_username_arg}")
+                            return
 
-                reply_msg = await bot.client.get_messages(
-                    chat_id,
-                    ids=event.reply_to.reply_to_msg_id
-                )
+                user = None
+                username_for_unban = None
+                if target_username_arg:
+                    # حل یوزرنیم از طریق SPlusthon بدون نیاز به پیام قبلی
+                    try:
+                        try:
+                            user = await bot.client.get_entity(target_username_arg)
+                        except Exception as _e1:
+                            try:
+                                user = await bot.client.get_entity(f"@{target_username_arg}")
+                            except Exception:
+                                raise _e1
+                    except Exception as e:
+                        bot.logger.log_error(f"AZAD RESOLVE FAILED username=@{target_username_arg} error={e!r}")
+                        await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
+                        return
+                    if not user or not getattr(user, "id", None):
+                        await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
+                        return
+                    username_for_unban = getattr(user, "username", None) or target_username_arg
+                else:
+                    if not event.reply_to:
+                        await event.reply("❌ باید روی پیام کاربر ریپلای کنید یا به صورت «آزاد @username» بنویسید")
+                        return
 
-                user = await reply_msg.get_sender()
+                    reply_msg = await bot.client.get_messages(
+                        chat_id,
+                        ids=event.reply_to.reply_to_msg_id
+                    )
 
-                if not user:
-                    await event.reply("❌ کاربر پیدا نشد")
-                    return
+                    user = await reply_msg.get_sender() if reply_msg else None
+
+                    if not user:
+                        await event.reply("❌ کاربر پیدا نشد")
+                        return
+                    username_for_unban = getattr(user, "username", None)
 
                 ok = await bot.admin_actions.unban_user(
                     chat_id,
                     user.id,
-                    getattr(user, "username", None),
+                    username_for_unban,
                 )
 
                 if ok:

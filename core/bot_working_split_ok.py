@@ -1612,32 +1612,82 @@ class SoroushAntiSpamBot:
                         return
 
                 # آزاد کردن کاربر محروم شده
-                if not is_private_splus and text == "آزاد":
+                if not is_private_splus and (text == "آزاد" or text.startswith("آزاد ") or text.startswith("آزاد@")):
                     try:
-                        if not event.reply_to:
-                            await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not event.reply_to:' chat_id={_sd_chat} message_id={_sd_mid}")
-                            return
+                        target_username_arg = None
+                        if text != "آزاد":
+                            raw_arg = text[4:].strip()
+                            if raw_arg.startswith("@"):
+                                raw_arg = raw_arg[1:].strip()
+                            if raw_arg:
+                                target_username_arg = raw_arg.split()[0].lstrip("@").strip()
+                            if target_username_arg is not None:
+                                if target_username_arg.isdigit():
+                                    await event.reply("❌ لطفاً از نام کاربری استفاده کنید، آیدی عددی پشتیبانی نمی‌شود")
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_digit' chat_id={_sd_chat} message_id={_sd_mid}")
+                                    return
+                                if not target_username_arg:
+                                    await event.reply("❌ نام کاربری مشخص نشده است")
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_empty' chat_id={_sd_chat} message_id={_sd_mid}")
+                                    return
+                                import re as _re_azad_core
+                                if not _re_azad_core.match(r"^[A-Za-z0-9_]{4,32}$", target_username_arg):
+                                    await event.reply(f"❌ نام کاربری نامعتبر است: @{target_username_arg}")
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_invalid' chat_id={_sd_chat} message_id={_sd_mid}")
+                                    return
 
-                        reply_msg = await self.client.get_messages(
-                            event.chat_id,
-                            ids=event.reply_to.reply_to_msg_id
-                        )
+                        user = None
+                        username_for_unban = None
+                        if target_username_arg:
+                            try:
+                                try:
+                                    user = await self.client.get_entity(target_username_arg)
+                                except Exception as _e1:
+                                    try:
+                                        user = await self.client.get_entity(f"@{target_username_arg}")
+                                    except Exception:
+                                        raise _e1
+                            except Exception as e:
+                                self.logger.log_error(f"AZAD RESOLVE FAILED username=@{target_username_arg} error={e!r}")
+                                await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_not_found' chat_id={_sd_chat} message_id={_sd_mid}")
+                                return
+                            if not user or not getattr(user, "id", None):
+                                await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_not_found2' chat_id={_sd_chat} message_id={_sd_mid}")
+                                return
+                            username_for_unban = getattr(user, "username", None) or target_username_arg
+                        else:
+                            if not event.reply_to:
+                                await event.reply("❌ باید روی پیام کاربر ریپلای کنید یا به صورت «آزاد @username» بنویسید")
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not event.reply_to:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                return
 
-                        user = await reply_msg.get_sender()
-                        if not user:
-                            await event.reply("❌ کاربر پیدا نشد")
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not user:' chat_id={_sd_chat} message_id={_sd_mid}")
-                            return
-
-                        async def unban_succeeded(_result):
-                            self.tracker.banned_users.pop(
-                                f"{event.chat_id}:{user.id}", None
+                            reply_msg = await self.client.get_messages(
+                                event.chat_id,
+                                ids=event.reply_to.reply_to_msg_id
                             )
-                            self.clear_released_user_state(event.chat_id, user.id)
-                            self.spammer_messages.pop(user.id, None)
+
+                            user = await reply_msg.get_sender() if reply_msg else None
+                            if not user:
+                                await event.reply("❌ کاربر پیدا نشد")
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not user:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                return
+                            username_for_unban = getattr(user, "username", None)
+
+                        # برای جلوگیری از بسته شدن متغیر user در lambda، مقدار را کپی می‌کنیم
+                        _azad_user_id = user.id
+                        _azad_username = username_for_unban
+                        _azad_user_obj = user
+
+                        async def unban_succeeded(_result, _u=_azad_user_obj):
+                            self.tracker.banned_users.pop(
+                                f"{event.chat_id}:{_u.id}", None
+                            )
+                            self.clear_released_user_state(event.chat_id, _u.id)
+                            self.spammer_messages.pop(_u.id, None)
                             self.logger.log_info(
-                                f"UNBAN COMPLETE user_id={user.id} removed successfully"
+                                f"UNBAN COMPLETE user_id={_u.id} removed successfully"
                             )
                             await event.reply("♻️ کاربر آزاد شد")
 
@@ -1647,10 +1697,10 @@ class SoroushAntiSpamBot:
                         self.moderation_queue.enqueue(
                             event.chat_id,
                             "unban",
-                            user_id=user.id,
+                            user_id=_azad_user_id,
                             timeout_seconds=20,
-                            operation=lambda: self.admin_actions.unban_user(
-                                event.chat_id, user.id, getattr(user, "username", None)
+                            operation=lambda uid=_azad_user_id, uname=_azad_username: self.admin_actions.unban_user(
+                                event.chat_id, uid, uname
                             ),
                             on_success=unban_succeeded,
                             on_failure=unban_failed,
