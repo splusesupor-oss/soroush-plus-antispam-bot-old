@@ -94,8 +94,9 @@ _DISPATCH_ACTIVE = contextvars.ContextVar("outgoing_dispatch_active", default=Fa
 _SENDER_ATTR = "_outgoing_sender"
 _PATCHED_ATTR = "_outgoing_sender_patched"
 
-# Global gate for low-priority sends (normal chat) to prevent sender_pending explosion.
-# High-priority (admin/moderation) bypasses the gate. This mirrors the old outgoing_rpc._LowSlotGate.
+# Per-chat gate for low-priority sends to prevent sender_pending explosion per group.
+# Each chat has its own gate with limit 2, so 32+ groups do not share a global lock.
+# High-priority (admin/moderation, priority 0) bypasses the gate.
 class _LowGate:
     def __init__(self, limit=1):
         self.limit = int(limit)
@@ -124,7 +125,15 @@ class _LowGate:
             if not fut.done():
                 fut.set_result(True)
 
-_LOW_GATE = _LowGate(limit=2)  # Allow 2 concurrent normal sends, high priority bypasses
+# Per-chat gates: chat_key -> _LowGate, so no global lock between groups
+_CHAT_GATES = {}
+def _gate_for_chat(chat_id):
+    key = _chat_key(chat_id)
+    gate = _CHAT_GATES.get(key)
+    if gate is None:
+        gate = _LowGate(limit=2)
+        _CHAT_GATES[key] = gate
+    return gate
 
 
 class OutgoingSender:
@@ -234,8 +243,9 @@ class OutgoingSender:
                 result = None
                 _is_low = int(priority) >= 1
                 gate_wait_ms = 0
+                _gate = _gate_for_chat(chat_id) if _is_low else None
                 if _is_low:
-                    gate_wait_ms = await _LOW_GATE.acquire()
+                    gate_wait_ms = await _gate.acquire()
                     if gate_wait_ms >= 20 and self.logger:
                         self.logger.log_info(f"OUTGOING SEND GATE wait_ms={gate_wait_ms:.1f} chat_id={chat_id} priority={priority}")
                 try:
@@ -261,7 +271,7 @@ class OutgoingSender:
                         self.logger.log_error(f"OUTGOING SEND FAILED chat_id={chat_id} error={e!r}")
                 finally:
                     if _is_low:
-                        _LOW_GATE.release()
+                        _gate.release()
                     queue.task_done()
                     if self.logger:
                         elapsed = (time.perf_counter() - started) * 1000
@@ -445,20 +455,51 @@ def _wrap_call_with_gate(client, logger):
     @functools.wraps(orig)
     async def wrapped(sender, request, ordered=False, flood_sleep_threshold=None):
         name = _req_name(request)
-        # Heavy history requests should be gated and have short timeout
         is_low = name in _LOW
         is_high = name in _HIGH
-        # Only gate low-priority; high and heavy bypass or have separate handling
+        # Only gate low-priority per-chat; high bypasses
         gate_wait = 0
+        _gate = None
+        # For low-priority, we need chat_id to get per-chat gate. Try to extract from request.
         if is_low:
-            gate_wait = await _LOW_GATE.acquire()
+            try:
+                # Try to get chat_id from request for per-chat gate
+                _chat_for_gate = None
+                for attr in ("peer", "channel", "entity", "chat_id"):
+                    val = getattr(request, attr, None)
+                    if val is not None:
+                        for nested in ("channel_id", "chat_id", "user_id", "id"):
+                            v2 = getattr(val, nested, None)
+                            if v2 is not None:
+                                _chat_for_gate = v2
+                                break
+                        if _chat_for_gate is not None:
+                            break
+                        if isinstance(val, int):
+                            _chat_for_gate = val
+                            break
+                if _chat_for_gate is None:
+                    _chat_for_gate = "global"
+                _gate = _gate_for_chat(_chat_for_gate)
+                gate_wait = await _gate.acquire()
+            except Exception:
+                gate_wait = 0
+                _gate = None
             if gate_wait >= 20 and logger:
-                logger.log_info(f"OUTGOING RPC GATE request={name} wait_ms={gate_wait:.1f} inflight_low={_LOW_GATE.inflight}")
+                # Find inflight for logging
+                try:
+                    infl = _gate.inflight if _gate else 0
+                except Exception:
+                    infl = 0
+                logger.log_info(f"OUTGOING RPC GATE request={name} wait_ms={gate_wait:.1f} inflight_low={infl}")
         try:
             return await orig(sender, request, ordered=ordered, flood_sleep_threshold=flood_sleep_threshold)
         finally:
-            if is_low:
-                _LOW_GATE.release()
+            if is_low and _gate is not None:
+                try:
+                    _gate.release()
+                except Exception:
+                    pass
     wrapped._patched_gate = True
     try:
         client._call = wrapped

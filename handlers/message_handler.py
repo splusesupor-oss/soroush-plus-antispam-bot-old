@@ -5349,42 +5349,186 @@ async def handle_new_message(bot, event):
                         return
                     username_for_unban = getattr(user, "username", None)
 
-                ok = await bot.admin_actions.unban_user(
-                    chat_id,
-                    user.id,
-                    username_for_unban,
-                )
+                # Use independent moderation worker (per-chat, limited concurrency)
+                _u = user
+                _un = username_for_unban
+                _c = chat_id
+                _ev = event
+                _b = bot
+                async def _on_ok(_r):
+                    try:
+                        before_spam = _b.tracker.get_count(_c, _u.id)
+                        before_warning = before_spam
+                        _b.logger.log_info(
+                            "UNBAN STATE BEFORE\n"
+                            f"user_id={_u.id}\n"
+                            f"group_id={_c}\n"
+                            "is_banned=False\n"
+                            f"spam_count={before_spam}\n"
+                            f"warning_count={before_warning}"
+                        )
+                        released_key = f"{_c}:{_u.id}"
+                        if hasattr(_b, "clear_released_user_state"):
+                            _b.clear_released_user_state(_c, _u.id)
+                        _b.punished_users.discard(released_key)
+                        _b.tracker.reset_count(_c, _u.id)
+                        clear_user(_c, _u.id)
+                        message_tracker.clear_user_history(_c, _u.id)
+                        _b.clear_spam_lock((_c, _u.id))
+                        _b.tracker.banned_users.pop(released_key, None)
+                        _b.tracker.muted_users.pop(released_key, None)
+                        _b.rejoin_spam_state.pop((_c, _u.id), None)
+                        _b.spam_burst_users.discard((_c, _u.id))
+                        _b.spam_burst_messages.pop((_c, _u.id), None)
+                        getattr(_b, "forward_spam_counts", {}).pop((_c, _u.id), None)
+                        getattr(_b, "forward_spam_processing", set()).discard((_c, _u.id))
+                        try:
+                            from modules.group_id import normalize_group_id as _norm_gid
+                            _norm = _norm_gid(_c)
+                            _str_gid = str(_c)
+                            for _k in list(getattr(_b, "punished_users", set())):
+                                if _k.endswith(f":{_u.id}") or _k.endswith(f":{str(_u.id)}"):
+                                    _chat_part = _k.split(":")[0]
+                                    if _chat_part in (str(_c), _norm, _str_gid):
+                                        _b.punished_users.discard(_k)
+                            for _gid in (_c, _norm, _str_gid):
+                                for _kk in (f"{_gid}:{_u.id}", f"{_gid}:{str(_u.id)}", f"{str(_gid)}:{_u.id}", f"{str(_gid)}:{str(_u.id)}"):
+                                    _b.tracker.banned_users.pop(_kk, None)
+                                    _b.tracker.muted_users.pop(_kk, None)
+                            for _t in list(getattr(_b, "spam_lock", set())):
+                                try:
+                                    if str(_t[0]) in (str(_c), _norm, _str_gid) and str(_t[1]) == str(_u.id):
+                                        _b.clear_spam_lock(_t)
+                                except: pass
+                            for _k in list(_b.rejoin_spam_state.keys()):
+                                try:
+                                    if str(_k[0]) in (str(_c), _norm, _str_gid) and str(_k[1]) == str(_u.id):
+                                        _b.rejoin_spam_state.pop(_k, None)
+                                except: pass
+                            for _t in list(getattr(_b, "spam_burst_users", set())):
+                                try:
+                                    if str(_t[0]) in (str(_c), _norm, _str_gid) and str(_t[1]) == str(_u.id):
+                                        getattr(_b, "spam_burst_users", set()).discard(_t)
+                                except: pass
+                            for _k in list(getattr(_b, "spam_burst_messages", {}).keys()):
+                                try:
+                                    if str(_k[0]) in (str(_c), _norm, _str_gid) and str(_k[1]) == str(_u.id):
+                                        _b.spam_burst_messages.pop(_k, None)
+                                except: pass
+                            for _k in list(getattr(_b, "forward_spam_counts", {}).keys()):
+                                try:
+                                    if str(_k[0]) in (str(_c), _norm, _str_gid) and str(_k[1]) == str(_u.id):
+                                        getattr(_b, "forward_spam_counts", {}).pop(_k, None)
+                                except: pass
+                            for _t in list(getattr(_b, "forward_spam_processing", set())):
+                                try:
+                                    if str(_t[0]) in (str(_c), _norm, _str_gid) and str(_t[1]) == str(_u.id):
+                                        getattr(_b, "forward_spam_processing", set()).discard(_t)
+                                except: pass
+                            try:
+                                clear_user(_norm, _u.id)
+                            except: pass
+                            try:
+                                clear_user(_str_gid, _u.id)
+                            except: pass
+                            try:
+                                message_tracker.clear_user_history(_norm, _u.id)
+                            except: pass
+                            try:
+                                message_tracker.clear_user_history(_str_gid, _u.id)
+                            except: pass
+                            try:
+                                _b.tracker.reset_count(_norm, _u.id)
+                            except: pass
+                            try:
+                                if hasattr(_b, "flood_messages") and _c in _b.flood_messages:
+                                    _b.flood_messages[_c] = [x for x in _b.flood_messages[_c] if str(x[2]) != str(_u.id)]
+                                    if not _b.flood_messages[_c]:
+                                        _b.flood_messages.pop(_c, None)
+                                for _gid in (_norm, _str_gid):
+                                    if hasattr(_b, "flood_messages") and _gid in _b.flood_messages:
+                                        _b.flood_messages[_gid] = [x for x in _b.flood_messages[_gid] if str(x[2]) != str(_u.id)]
+                                        if not _b.flood_messages[_gid]:
+                                            _b.flood_messages.pop(_gid, None)
+                            except: pass
+                            try:
+                                if hasattr(_b, "spammer_messages"):
+                                    _b.spammer_messages.pop(_u.id, None)
+                                    _b.spammer_messages.pop(str(_u.id), None)
+                            except: pass
+                            try:
+                                if hasattr(_b, "user_messages"):
+                                    _b.user_messages.pop(_u.id, None)
+                                    _b.user_messages.pop(str(_u.id), None)
+                                    _b.user_messages.pop((_c, _u.id), None)
+                            except: pass
+                            try:
+                                if hasattr(_b, "repeat_messages"):
+                                    _b.repeat_messages.pop(_u.id, None)
+                                    _b.repeat_messages.pop(str(_u.id), None)
+                            except: pass
+                        except Exception as _e:
+                            try:
+                                _b.logger.log_error(f"UNBAN ROBUST CLEAR FAILED { _e!r}")
+                            except: pass
+                        after_spam = _b.tracker.get_count(_c, _u.id)
+                        _b.logger.log_info(
+                            "UNBAN STATE AFTER\n"
+                            f"user_id={_u.id}\n"
+                            f"group_id={_c}\n"
+                            "is_banned=False\n"
+                            f"spam_count={after_spam}\n"
+                            f"warning_count={after_spam}"
+                        )
+                        _b.logger.log_info(
+                            "USER RELEASED CACHE CLEARED "
+                            f"chat_id={_c} user_id={_u.id} "
+                            "banned_storage=False"
+                        )
+                        admin_tools.log_action(
+                            _c, _s, "آزاد کردن کاربر", target=_u)
+                        _sender_ok = getattr(_b, "outgoing_sender", None)
+                        if _sender_ok is not None:
+                            _sender_ok.enqueue_reply(_ev, "♻️ کاربر آزاد شد ✅")
+                        else:
+                            await _ev.reply("♻️ کاربر آزاد شد ✅")
+                    except Exception as e:
+                        try:
+                            _sender_ok2 = getattr(_b, "outgoing_sender", None)
+                            if _sender_ok2 is not None:
+                                _sender_ok2.enqueue_reply(_ev, f"❌ خطا در آزاد کردن:\n{e}")
+                            else:
+                                await _ev.reply(f"❌ خطا در آزاد کردن:\n{e}")
+                        except Exception:
+                            pass
 
-                if ok:
-                    before_spam = bot.tracker.get_count(chat_id, user.id)
-                    before_warning = before_spam
-                    bot.logger.log_info(
-                        "UNBAN STATE BEFORE\n"
-                        f"user_id={user.id}\n"
-                        f"group_id={chat_id}\n"
-                        "is_banned=False\n"
-                        f"spam_count={before_spam}\n"
-                        f"warning_count={before_warning}"
-                    )
-                    # Clear every in-memory moderation cache as well as the
-                    # persistent banned storage. Otherwise a released user
-                    # can still be treated as banned by a stale rejoin/spam
-                    # state on their next message.
-                    released_key = f"{chat_id}:{user.id}"
-                    if hasattr(bot, "clear_released_user_state"):
-                        bot.clear_released_user_state(chat_id, user.id)
-                    bot.punished_users.discard(released_key)
-                    bot.tracker.reset_count(chat_id, user.id)
-                    clear_user(chat_id, user.id)
-                    message_tracker.clear_user_history(chat_id, user.id)
-                    bot.clear_spam_lock((chat_id, user.id))
-                    bot.tracker.banned_users.pop(released_key, None)
-                    bot.tracker.muted_users.pop(released_key, None)
-                    bot.rejoin_spam_state.pop((chat_id, user.id), None)
-                    bot.spam_burst_users.discard((chat_id, user.id))
-                    bot.spam_burst_messages.pop((chat_id, user.id), None)
-                    getattr(bot, "forward_spam_counts", {}).pop((chat_id, user.id), None)
-                    getattr(bot, "forward_spam_processing", set()).discard((chat_id, user.id))
+                async def _on_fail(_err):
+                    try:
+                        _sender_ok = getattr(_b, "outgoing_sender", None)
+                        if _sender_ok is not None:
+                            _sender_ok.enqueue_reply(_ev, "❌ آزاد کردن انجام نشد")
+                        else:
+                            await _ev.reply("❌ آزاد کردن انجام نشد")
+                    except Exception:
+                        pass
+
+                _b.moderation_queue.enqueue(
+                    _c, "unban",
+                    user_id=_u.id,
+                    timeout_seconds=20,
+                    operation=lambda: _b.admin_actions.unban_user(_c, _u.id, _un),
+                    on_success=_on_ok,
+                    on_failure=_on_fail,
+                )
+                # Free GroupDispatcher worker immediately
+                return
+
+            except Exception as e:
+                _sender_err = getattr(bot, "outgoing_sender", None)
+                if _sender_err is not None:
+                    _sender_err.enqueue_reply(event, f"❌ خطا در آزاد کردن:\n{e}")
+                else:
+                    await event.reply(f"❌ خطا در آزاد کردن:\n{e}")
                     # === FIX: robust clearing for already_punished / is_repeat / spam_history after unban ===
                     # First spam flow is already correct, this only ensures second wave after unban is treated as new.
                     try:
