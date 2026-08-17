@@ -258,11 +258,25 @@ class AdminActions:
                 MessageEntityBlockquote(offset=0, length=u16(prefix)),
                 MessageEntityBold(offset=u16(prefix + body), length=u16(warning_label)),
             ]
-            sent = await self.client.send_message(
-                chat_id, msg, reply_to=reply_to, formatting_entities=entities)
-            cleanup = getattr(self, "notice_cleanup", None)
-            if cleanup is not None:
-                cleanup.schedule(chat_id, sent)
+            # Use outgoing sender queue if available so this warning does not block the caller's worker
+            sender = getattr(self.client, "_outgoing_sender", None)
+            if sender is not None:
+                def _factory_warn():
+                    return self.client.send_message(chat_id, msg, reply_to=reply_to, formatting_entities=entities)
+                # Capture sent for cleanup via on_done
+                def _on_done_warn(sent):
+                    cl = getattr(self, "notice_cleanup", None)
+                    if cl is not None and sent is not None:
+                        cl.schedule(chat_id, sent)
+                # Need to bypass dispatch check since we are already in a background task, not dispatch worker
+                # Call the original send via sender's queue directly (priority 0 for warnings)
+                sender.enqueue(chat_id, lambda: self.client.send_message(chat_id, msg, reply_to=reply_to, formatting_entities=entities), priority=0, on_done=_on_done_warn)
+            else:
+                sent = await self.client.send_message(
+                    chat_id, msg, reply_to=reply_to, formatting_entities=entities)
+                cleanup = getattr(self, "notice_cleanup", None)
+                if cleanup is not None:
+                    cleanup.schedule(chat_id, sent)
         except Exception as e:
             print("WARNING ERROR:", repr(e))
             self.logger.log_error(f"خطا در ارسال هشدار: {e}")
@@ -278,13 +292,22 @@ class AdminActions:
             success = await self.mute_user(chat_id, user_id, duration)
             if success and announce:
                 try:
-                    sent = await self.client.send_message(
-                        chat_id,
-                        f"🔇 کاربر @{username or user_id} به دلیل ارسال {self.config.get('spam_threshold')} هرزنامه مکرر، به مدت {duration//60} دقیقه سایلنت شد."
-                    )
-                    cleanup = getattr(self, "notice_cleanup", None)
-                    if cleanup is not None:
-                        cleanup.schedule(chat_id, sent)
+                    sender2 = getattr(self.client, "_outgoing_sender", None)
+                    if sender2 is not None:
+                        txt_mute = f"🔇 کاربر @{username or user_id} به دلیل ارسال {self.config.get('spam_threshold')} هرزنامه مکرر، به مدت {duration//60} دقیقه سایلنت شد."
+                        def _on_done_mute(sent):
+                            cl = getattr(self, "notice_cleanup", None)
+                            if cl is not None and sent is not None:
+                                cl.schedule(chat_id, sent)
+                        sender2.enqueue(chat_id, lambda: self.client.send_message(chat_id, txt_mute), priority=0, on_done=_on_done_mute)
+                    else:
+                        sent = await self.client.send_message(
+                            chat_id,
+                            f"🔇 کاربر @{username or user_id} به دلیل ارسال {self.config.get('spam_threshold')} هرزنامه مکرر، به مدت {duration//60} دقیقه سایلنت شد."
+                        )
+                        cleanup = getattr(self, "notice_cleanup", None)
+                        if cleanup is not None:
+                            cleanup.schedule(chat_id, sent)
                 except:
                     pass
             return success
@@ -294,13 +317,22 @@ class AdminActions:
             )
             if success and announce:
                 try:
-                    sent = await self.client.send_message(
-                        chat_id,
-                        f"⛔️ کاربر @{username or user_id} به دلیل اسپم مکرر از گروه حذف شد."
-                    )
-                    cleanup = getattr(self, "notice_cleanup", None)
-                    if cleanup is not None:
-                        cleanup.schedule(chat_id, sent)
+                    sender3 = getattr(self.client, "_outgoing_sender", None)
+                    if sender3 is not None:
+                        txt_ban = f"⛔️ کاربر @{username or user_id} به دلیل اسپم مکرر از گروه حذف شد."
+                        def _on_done_ban(sent):
+                            cl = getattr(self, "notice_cleanup", None)
+                            if cl is not None and sent is not None:
+                                cl.schedule(chat_id, sent)
+                        sender3.enqueue(chat_id, lambda: self.client.send_message(chat_id, txt_ban), priority=0, on_done=_on_done_ban)
+                    else:
+                        sent = await self.client.send_message(
+                            chat_id,
+                            f"⛔️ کاربر @{username or user_id} به دلیل اسپم مکرر از گروه حذف شد."
+                        )
+                        cleanup = getattr(self, "notice_cleanup", None)
+                        if cleanup is not None:
+                            cleanup.schedule(chat_id, sent)
                 except:
                     pass
             return success

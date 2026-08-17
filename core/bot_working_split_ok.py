@@ -43,6 +43,7 @@ from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from modules.message_delete_queue import MessageDeleteQueue
 from modules.notice_cleanup import NoticeCleanup
+from modules.outgoing_sender import OutgoingSender, install as install_outgoing_sender, install_event_wrapper
 from modules.group_dispatch import GroupDispatcher, classify_priority, looks_like_link
 from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
@@ -176,6 +177,7 @@ class SoroushAntiSpamBot:
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
         self.group_dispatcher = GroupDispatcher(logger=self.logger)
+        self.outgoing_sender = None
         self.notice_cleanup = NoticeCleanup(
             os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -519,6 +521,10 @@ class SoroushAntiSpamBot:
             self.client = new_client
             if getattr(self, "message_delete_queue", None) is not None:
                 self.message_delete_queue.client = new_client
+            if getattr(self, "outgoing_sender", None) is not None:
+                self.outgoing_sender.client = new_client
+                # re-install wrapper for new client
+                install_outgoing_sender(new_client, self, self.logger)
             self.admin_actions = AdminActions(
                 new_client, self.logger, self.config_manager)
             self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
@@ -630,6 +636,9 @@ class SoroushAntiSpamBot:
         self.message_delete_queue = MessageDeleteQueue(
             self.client, self.logger, batch_size=15, max_concurrent=4,
             inter_batch_delay=0)
+        # Outgoing sender for normal replies - separate from delete queue
+        self.outgoing_sender = OutgoingSender(self.client, self.logger)
+        install_outgoing_sender(self.client, self, self.logger)
         self.notice_cleanup.bind_delete_queue(self.message_delete_queue)
         self.notice_cleanup.client = self.client
         if getattr(self, "admin_actions", None) is not None:
@@ -1943,6 +1952,13 @@ class SoroushAntiSpamBot:
             if decision is not None and decision.skip_heavy:
                 return
             priority, kind = classify_priority(raw_text, event)
+            # Patch event.reply to be non-blocking inside dispatcher worker
+            # (outgoing_sender will handle the actual RPC via its own per-chat queue)
+            try:
+                if getattr(self, "outgoing_sender", None) is not None:
+                    install_event_wrapper(event, self.outgoing_sender)
+            except Exception:
+                pass
             if kind in {"admin", "command"}:
                 factory = lambda ev=event: process_priority_command(ev)
             else:

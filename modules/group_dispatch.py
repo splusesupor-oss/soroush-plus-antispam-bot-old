@@ -23,8 +23,16 @@ so it cannot fill the normal message queue.
 Classification is text-only: no await, no RPC, no file I/O.
 """
 import asyncio
+import contextvars
 import inspect
 import time
+
+try:
+    from modules.outgoing_sender import DISPATCH_ACTIVE_VAR
+    _HAS_OUTGOING = True
+except ImportError:
+    _HAS_OUTGOING = False
+    DISPATCH_ACTIVE_VAR = contextvars.ContextVar("fallback", default=False)
 
 PRIORITY_ADMIN = 0
 PRIORITY_COMMAND = 1
@@ -317,6 +325,11 @@ class GroupDispatcher:
                 # Track busy counts for accurate _lane_busy with concurrency
                 self._busy.add(key)
                 self._busy_counts[key] = self._busy_counts.get(key, 0) + 1
+                # Mark that we are inside a GroupDispatcher worker so that
+                # outgoing_sender can enqueue send_message/reply instead of awaiting RPC.
+                _dispatch_token = None
+                if _HAS_OUTGOING:
+                    _dispatch_token = DISPATCH_ACTIVE_VAR.set(True)
                 try:
                     result = factory() if factory is not None else None
                     if inspect.isawaitable(result):
@@ -332,6 +345,11 @@ class GroupDispatcher:
                             f"chat_id={chat_id} lane={lane} kind={kind} error={error!r}"
                         )
                 finally:
+                    if _HAS_OUTGOING and _dispatch_token is not None:
+                        try:
+                            DISPATCH_ACTIVE_VAR.reset(_dispatch_token)
+                        except Exception:
+                            pass
                     cnt = self._busy_counts.get(key, 1) - 1
                     if cnt <= 0:
                         self._busy_counts.pop(key, None)

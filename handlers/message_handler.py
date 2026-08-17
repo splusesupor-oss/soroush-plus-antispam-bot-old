@@ -499,6 +499,17 @@ async def _send_moderation_notification_once(
     bot.moderation_notification_guard.add(key)
     bot.moderation_notification_order.append(key)
     try:
+        # Use outgoing sender queue so this moderation notice does not block
+        # the caller's worker (especially GroupDispatcher normal lane).
+        sender = getattr(bot, "outgoing_sender", None)
+        if sender is not None:
+            def _factory1():
+                return bot.client.send_message(chat_id, text, formatting_entities=formatting_entities)
+            # Capture after real send completes, still via sender's worker
+            def _on_done1(sent):
+                capture_sent(bot, chat_id, sent)
+            sender.enqueue(chat_id, _factory1, priority=0, on_done=_on_done1)
+            return True
         sent = await bot.client.send_message(
             chat_id, text, formatting_entities=formatting_entities
         )
@@ -1173,10 +1184,15 @@ def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, annou
                 _schedule_spam_ban_notice(bot, event, chat_id, user_id)
             elif incident["deleted"]:
                 notice_event = incident.get("event") or event
-                sent = await notice_event.reply(
-                    f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد")
-                capture_sent(bot, chat_id, sent)
-                getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
+                sender2 = getattr(bot, "outgoing_sender", None)
+                if sender2 is not None:
+                    sender2.enqueue_reply(notice_event, f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد", on_done=lambda sent: capture_sent(bot, chat_id, sent))
+                    getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
+                else:
+                    sent = await notice_event.reply(
+                        f"🗑 {_fullwidth_digits(incident['deleted'])} پیام هرزنامه پاک شد")
+                    capture_sent(bot, chat_id, sent)
+                    getattr(bot, "_spam_cleanup_incidents", {}).pop(key, None)
 
         except _asyncio.CancelledError:
             raise
@@ -2449,19 +2465,34 @@ async def handle_new_message(bot, event):
                     async def ad_name_ban_succeeded(_result):
                         # The announcement is deliberately after the real ban
                         # succeeds, and is owned by this one incident only.
-                        try:
-                            name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
-                            name_len = len(shown_name.encode("utf-16-le")) // 2
-                            bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
-                            sent = await event.reply(notice, formatting_entities=[
-                                MessageEntityBold(offset=0, length=bold_len),
-                                MessageEntityBlockquote(
-                                    offset=name_start, length=name_len
-                                ),
-                            ])
-                        except Exception:
-                            sent = await event.reply(notice)
-                        capture_sent(bot, chat_id, sent)
+                        sender3 = getattr(bot, "outgoing_sender", None)
+                        if sender3 is not None:
+                            # Use outgoing queue so this notice does not block moderation worker
+                            try:
+                                name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
+                                name_len = len(shown_name.encode("utf-16-le")) // 2
+                                bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
+                                entities = [
+                                    MessageEntityBold(offset=0, length=bold_len),
+                                    MessageEntityBlockquote(offset=name_start, length=name_len),
+                                ]
+                                sender3.enqueue_reply(event, notice, formatting_entities=entities, on_done=lambda sent: capture_sent(bot, chat_id, sent))
+                            except Exception:
+                                sender3.enqueue_reply(event, notice, on_done=lambda sent: capture_sent(bot, chat_id, sent))
+                        else:
+                            try:
+                                name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
+                                name_len = len(shown_name.encode("utf-16-le")) // 2
+                                bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
+                                sent = await event.reply(notice, formatting_entities=[
+                                    MessageEntityBold(offset=0, length=bold_len),
+                                    MessageEntityBlockquote(
+                                        offset=name_start, length=name_len
+                                    ),
+                                ])
+                            except Exception:
+                                sent = await event.reply(notice)
+                            capture_sent(bot, chat_id, sent)
                         bot.logger.log_info(
                             "AD NAME BAN FINISHED "
                             f"chat_id={chat_id} user_id={user_id} "
@@ -2632,10 +2663,14 @@ async def handle_new_message(bot, event):
                         "notification_sent=False")
                     if not persisted or not disabled_state:
                         raise RuntimeError("bot_disabled_groups.json persistence verification failed")
-                    sent = await event.reply(
-                        "🤖 ربات دیگری در این گروه فعال است.\n"
-                        "به دلیل فعال بودن این ربات، روباه در این گروه خاموش شد.")
-                    capture_sent(bot, chat_id, sent)
+                    sender4 = getattr(bot, "outgoing_sender", None)
+                    if sender4 is not None:
+                        sender4.enqueue_reply(event, "🤖 ربات دیگری در این گروه فعال است.\nبه دلیل فعال بودن این ربات، روباه در این گروه خاموش شد.", on_done=lambda sent: capture_sent(bot, chat_id, sent))
+                    else:
+                        sent = await event.reply(
+                            "🤖 ربات دیگری در این گروه فعال است.\n"
+                            "به دلیل فعال بودن این ربات، روباه در این گروه خاموش شد.")
+                        capture_sent(bot, chat_id, sent)
                     notification_sent = True
                     bot.logger.log_info(
                         "BOT SHUTDOWN DEBUG\n"
@@ -5829,8 +5864,12 @@ async def handle_new_message(bot, event):
                     f"chat_id={chat_id} user_id={user_id} count={len(ids)}"
                 )
                 if bot.acquire_delete_notice_lock(chat_id):
-                    sent = await event.reply("پیام‌های پشت سر هم حذف شدند")
-                    capture_sent(bot, chat_id, sent)
+                    sender5 = getattr(bot, "outgoing_sender", None)
+                    if sender5 is not None:
+                        sender5.enqueue_reply(event, "پیام‌های پشت سر هم حذف شدند", on_done=lambda sent: capture_sent(bot, chat_id, sent))
+                    else:
+                        sent = await event.reply("پیام‌های پشت سر هم حذف شدند")
+                        capture_sent(bot, chat_id, sent)
 
                 return
 
