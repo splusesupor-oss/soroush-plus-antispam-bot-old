@@ -86,12 +86,46 @@ def _key_for_dict(chat_id):
     return _chat_key(chat_id)
 
 # Set while a GroupDispatcher worker is running its factory.
-# The patched send_message/reply checks this to decide enqueue vs direct.
+# Value is priority (0=admin, 1=command, 2=normal) or False when not in dispatch.
+# The patched send_message/reply uses this to decide enqueue vs direct and to set send priority.
 _DISPATCH_ACTIVE = contextvars.ContextVar("outgoing_dispatch_active", default=False)
 
 # Each client gets its own OutgoingSender via client._outgoing_sender
 _SENDER_ATTR = "_outgoing_sender"
 _PATCHED_ATTR = "_outgoing_sender_patched"
+
+# Global gate for low-priority sends (normal chat) to prevent sender_pending explosion.
+# High-priority (admin/moderation) bypasses the gate. This mirrors the old outgoing_rpc._LowSlotGate.
+class _LowGate:
+    def __init__(self, limit=1):
+        self.limit = int(limit)
+        self.inflight = 0
+        self._waiters = []
+    async def acquire(self):
+        import asyncio, time
+        started = time.perf_counter()
+        loop = asyncio.get_running_loop()
+        while self.inflight >= self.limit:
+            fut = loop.create_future()
+            self._waiters.append(fut)
+            try:
+                await fut
+            except asyncio.CancelledError:
+                if fut in self._waiters:
+                    self._waiters.remove(fut)
+                raise
+        self.inflight += 1
+        return (time.perf_counter() - started) * 1000
+    def release(self):
+        if self.inflight > 0:
+            self.inflight -= 1
+        while self._waiters and self.inflight < self.limit:
+            fut = self._waiters.pop(0)
+            if not fut.done():
+                fut.set_result(True)
+
+_LOW_GATE = _LowGate(limit=2)  # Allow 2 concurrent normal sends, high priority bypasses
+
 
 class OutgoingSender:
     """Per-chat queue for outgoing sends. Separate from delete queues."""
@@ -191,6 +225,12 @@ class OutgoingSender:
                     self.logger.log_info(f"OUTGOING SEND QUEUE_WAIT chat_id={chat_id} queue_wait_ms={queue_wait_ms:.1f} priority={priority}")
                 started = time.perf_counter()
                 result = None
+                _is_low = int(priority) >= 1
+                gate_wait_ms = 0
+                if _is_low:
+                    gate_wait_ms = await _LOW_GATE.acquire()
+                    if gate_wait_ms >= 20 and self.logger:
+                        self.logger.log_info(f"OUTGOING SEND GATE wait_ms={gate_wait_ms:.1f} chat_id={chat_id} priority={priority}")
                 try:
                     coro = factory()
                     if inspect.isawaitable(coro):
@@ -213,11 +253,13 @@ class OutgoingSender:
                     if self.logger:
                         self.logger.log_error(f"OUTGOING SEND FAILED chat_id={chat_id} error={e!r}")
                 finally:
+                    if _is_low:
+                        _LOW_GATE.release()
                     queue.task_done()
                     if self.logger:
                         elapsed = (time.perf_counter() - started) * 1000
                         if elapsed >= 200:
-                            self.logger.log_info(f"OUTGOING SEND TIME chat_id={chat_id} priority={priority} send_ms={elapsed:.1f}")
+                            self.logger.log_info(f"OUTGOING SEND TIME chat_id={chat_id} priority={priority} send_ms={elapsed:.1f} gate_wait_ms={gate_wait_ms:.1f}")
                 if queue.empty():
                     await asyncio.sleep(0)
                     if queue.empty():
@@ -254,23 +296,27 @@ def _wrap_send_message(client, sender):
 
     @functools.wraps(orig)
     async def wrapped(*args, **kwargs):
-        # If we are inside a GroupDispatcher normal worker, enqueue and return immediately.
-        # The actual RPC will be done in OutgoingSender's worker, outside dispatch context.
-        if _DISPATCH_ACTIVE.get():
-            # Extract chat_id for queueing
+        dispatch_prio = _DISPATCH_ACTIVE.get()
+        # dispatch_prio is False when not in dispatch, or 0/1/2 when in dispatch
+        if dispatch_prio is not False and dispatch_prio is not None:
+            # Inside GroupDispatcher: enqueue and return immediately
             chat_id = kwargs.get("entity") or kwargs.get("chat_id")
             if chat_id is None and args:
-                # send_message(chat_id, text, ...)
                 first = args[0]
                 if isinstance(first, int):
                     chat_id = first
                 else:
                     chat_id = getattr(first, "id", first)
-            # Priority: assume normal (1) unless caller explicitly wants urgent (0)
-            # We check for a marker in kwargs or context? For now, all dispatch sends are priority 1
-            # Admin lane could use priority 0, but we treat all dispatch sends as 1 to keep simple.
-            # The caller can pass priority=0 if needed.
-            priority = kwargs.pop("priority", 1)
+            # Map dispatch priority to send priority: admin(0)->0, command(1)->0, normal(2)->1
+            # So command/moderation replies are highest priority
+            if isinstance(dispatch_prio, int):
+                if dispatch_prio <= 1:  # admin or command
+                    default_prio = 0
+                else:
+                    default_prio = 1
+            else:
+                default_prio = 1
+            priority = kwargs.pop("priority", default_prio)
             on_done = kwargs.pop("on_done", None)
             # Capture args at call time
             _args = args
@@ -327,9 +373,17 @@ def install_event_wrapper(event, sender):
 
     @functools.wraps(orig)
     async def wrapped(*args, **kwargs):
-        if _DISPATCH_ACTIVE.get():
+        dispatch_prio = _DISPATCH_ACTIVE.get()
+        if dispatch_prio is not False and dispatch_prio is not None:
             chat_id = getattr(event, "chat_id", None)
-            priority = kwargs.pop("priority", 1)
+            if isinstance(dispatch_prio, int):
+                if dispatch_prio <= 1:
+                    default_prio = 0
+                else:
+                    default_prio = 1
+            else:
+                default_prio = 1
+            priority = kwargs.pop("priority", default_prio)
             on_done = kwargs.pop("on_done", None)
             # Also check for formatting_entities etc. - keep them
             _args = args
@@ -358,6 +412,53 @@ def install_event_wrapper(event, sender):
     except (AttributeError, TypeError):
         return False
 
+def _wrap_call_with_gate(client, logger):
+    orig = getattr(client, "_call", None)
+    if orig is None or getattr(orig, "_patched_gate", False):
+        return False
+    import functools
+    # Define request priorities
+    _LOW = {"SendMessageRequest", "SendMediaRequest", "SendMultiMediaRequest", "ForwardMessagesRequest", "SendInlineBotResultRequest"}
+    _HIGH = {"DeleteMessagesRequest", "EditBannedRequest", "EditAdminRequest", "EditChatDefaultBannedRightsRequest", "DeleteChatUserRequest"}
+    _HEAVY = {"GetHistoryRequest", "GetMessagesRequest", "GetChannelDifferenceRequest", "GetDifferenceRequest", "GetParticipantsRequest"}
+    def _req_name(req):
+        try:
+            # Unwrap InvokeWithoutUpdates etc.
+            cur = req
+            seen = set()
+            while cur is not None and id(cur) not in seen:
+                seen.add(id(cur))
+                inner = getattr(cur, "query", None)
+                if inner is None:
+                    break
+                cur = inner
+            return type(cur).__name__
+        except Exception:
+            return type(req).__name__
+    @functools.wraps(orig)
+    async def wrapped(sender, request, ordered=False, flood_sleep_threshold=None):
+        name = _req_name(request)
+        # Heavy history requests should be gated and have short timeout
+        is_low = name in _LOW
+        is_high = name in _HIGH
+        # Only gate low-priority; high and heavy bypass or have separate handling
+        gate_wait = 0
+        if is_low:
+            gate_wait = await _LOW_GATE.acquire()
+            if gate_wait >= 20 and logger:
+                logger.log_info(f"OUTGOING RPC GATE request={name} wait_ms={gate_wait:.1f} inflight_low={_LOW_GATE.inflight}")
+        try:
+            return await orig(sender, request, ordered=ordered, flood_sleep_threshold=flood_sleep_threshold)
+        finally:
+            if is_low:
+                _LOW_GATE.release()
+    wrapped._patched_gate = True
+    try:
+        client._call = wrapped
+        return True
+    except Exception:
+        return False
+
 def install(client, bot, logger=None):
     """Create OutgoingSender for this client/bot and patch send_message."""
     if getattr(client, _SENDER_ATTR, None) is not None:
@@ -369,13 +470,14 @@ def install(client, bot, logger=None):
     except Exception:
         pass
     _wrap_send_message(client, sender)
+    _wrap_call_with_gate(client, logger)
     # Also store bot reference for event patching
     try:
         client._outgoing_sender_bot = bot
     except Exception:
         pass
     if logger:
-        logger.log_info("OUTGOING SENDER installed (per-chat, separate from delete queue)")
+        logger.log_info("OUTGOING SENDER installed (per-chat, separate from delete queue) + _call gate")
     return sender
 
 def dispatch_active():

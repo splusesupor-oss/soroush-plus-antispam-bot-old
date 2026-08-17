@@ -380,9 +380,12 @@ class GroupDispatcher:
                 self._busy_counts[key] = self._busy_counts.get(key, 0) + 1
                 # Mark that we are inside a GroupDispatcher worker so that
                 # outgoing_sender can enqueue send_message/reply instead of awaiting RPC.
+                # Store the priority (0=admin,1=command,2=normal) so outgoing_sender
+                # can give admin/command the highest send priority.
                 _dispatch_token = None
                 if _HAS_OUTGOING:
-                    _dispatch_token = DISPATCH_ACTIVE_VAR.set(True)
+                    # priority is already defined in this loop's item
+                    _dispatch_token = DISPATCH_ACTIVE_VAR.set(int(priority))
                 try:
                     result = factory() if factory is not None else None
                     if inspect.isawaitable(result):
