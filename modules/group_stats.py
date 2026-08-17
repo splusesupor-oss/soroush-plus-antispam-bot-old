@@ -49,7 +49,10 @@ def flush():
         return False
     os.makedirs(os.path.dirname(FILE) or ".", exist_ok=True)
     with open(FILE, "w", encoding="utf-8") as f:
-        json.dump(_stats_cache or {}, f, ensure_ascii=False, indent=2)
+        # فایل داده‌ای است؛ حذف indent هم حجم و هم زمان serialize (و
+        # مدت نگه داشتن GIL هنگام flush دوره‌ای) را تقریباً نصف می‌کند.
+        json.dump(_stats_cache or {}, f, ensure_ascii=False,
+                  separators=(",", ":"))
     _stats_cache_mtime = _file_mtime()
     _stats_dirty = False
     return True

@@ -7,6 +7,7 @@
 مثل بقیهٔ اقتصاد، همه چیز داخل ``storage.transaction()`` اتفاق می‌افتد و
 جایزه با ``reference`` یکتا ثبت می‌گردد تا یک روز دو بار تسویه نشود.
 """
+import json
 from datetime import datetime, timedelta, timezone
 
 from economy import settings, storage
@@ -125,7 +126,37 @@ def settle_previous_days(*, now=None):
             (now or datetime.now(timezone.utc)).astimezone(TEHRAN).date()
             - timedelta(days=14)
         ).isoformat()
-        for day in [d for d in daily if d < cutoff]:
+        stale_days = {d: daily[d] for d in daily if d < cutoff}
+        if stale_days:
+            # 🗄️ قبل از حذف، به آرشیو سرد منتقل می‌شوند تا تاریخچه از
+            # بین نرود؛ خطای آرشیو هرگز تسویه را نمی‌شکند.
+            _archive_days(stale_days)
+        for day in stale_days:
             del daily[day]
         data["paid_days"] = [d for d in data["paid_days"] if d >= cutoff]
     return awards
+
+
+def _archive_days(stale_days):
+    """روزهای هرس‌شدهٔ daily_messages را در فایل آرشیو ادغام می‌کند."""
+    try:
+        archive_file = (
+            storage.DATA_FILE.parent / "archive" / "coins_daily_archive.json"
+        )
+        archive_file.parent.mkdir(parents=True, exist_ok=True)
+        if archive_file.exists():
+            try:
+                archive = json.loads(
+                    archive_file.read_text(encoding="utf-8"))
+            except Exception:
+                archive = {}
+        else:
+            archive = {}
+        for day, groups in stale_days.items():
+            archive.setdefault(day, {}).update(groups)
+        archive_file.write_text(
+            json.dumps(archive, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass

@@ -72,7 +72,10 @@ def _write(data):
                                          suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, ensure_ascii=False, indent=2)
+            # فایل داده‌ای است؛ حذف indent حجم فایل و مدت نگه داشتن GIL
+            # هنگام flush دوره‌ای را تقریباً نصف می‌کند.
+            json.dump(data, stream, ensure_ascii=False,
+                      separators=(",", ":"))
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp_path, DATA_FILE)

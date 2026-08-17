@@ -38,7 +38,9 @@ class UserTracker:
         if not force and not self._dirty:
             return False
         with open(self.spam_counts_file, 'w', encoding='utf-8') as f:
-            json.dump(self.spam_counts, f, ensure_ascii=False, indent=2)
+            # فایل داده‌ای است؛ بدون indent نوشتن سریع‌تر و کوچک‌تر است.
+            json.dump(self.spam_counts, f, ensure_ascii=False,
+                      separators=(",", ":"))
         self._dirty = False
         return True
 
