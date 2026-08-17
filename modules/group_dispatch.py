@@ -4,14 +4,21 @@ SPlusthon starts a task for every NewMessage.  A spam wave in one chat then
 spawns hundreds of concurrent handlers that all fight for the same RPC
 sender, so admin commands stall.
 
-This dispatcher keeps **one worker + one queue per (chat_id, lane)**:
+This dispatcher keeps **isolated workers per (chat_id, lane)**:
 
-* ``admin``     — owner/moderation commands; never dropped; own worker
-* ``command``   — public/user commands (help, games, shop); never dropped
-* ``normal``    — ordinary chat / spam; capped by ``max_pending_normal``
+* ``admin``     — owner/moderation commands; never dropped; 1 worker per chat (serial, preserves order)
+* ``command``   — public/user commands (help, games, shop); never dropped; 1 worker per chat
+* ``normal``    — ordinary chat / spam; capped by ``max_pending_normal``; **4 concurrent workers per chat**
 
 Lanes of the same group run at the same time, so mute/ban/lock do not wait
 for a heavy normal job.  Different chats stay independent.
+Normal lane uses multiple workers per chat so a burst in one chat
+(15×150ms) is absorbed in ~600ms instead of ~2200ms (queue_wait 2.2s → ~450ms).
+
+Heavy background work (spam cleanup, moderation callbacks, notice expiry,
+delete batches, flush) never goes through this dispatcher; each has its
+own per-chat queue/worker and is fire-and-forget via ``asyncio.create_task``
+so it cannot fill the normal message queue.
 
 Classification is text-only: no await, no RPC, no file I/O.
 """
@@ -147,13 +154,16 @@ class GroupDispatcher:
     # yield only added queue_wait after Soroush had already answered.
     HIGHER_LANE_WAIT_SECONDS = 0.0
 
-    def __init__(self, *, max_pending_normal=40, logger=None):
+    def __init__(self, *, max_pending_normal=40, logger=None, normal_concurrency=4):
         self.max_pending_normal = int(max_pending_normal)
+        self.normal_concurrency = int(normal_concurrency) if int(normal_concurrency) > 0 else 1
         self.logger = logger
         self._queues = {}
+        # key -> list[Task]  (normal lane may have up to normal_concurrency workers)
         self._workers = {}
         self._normal_pending = {}
         self._busy = set()
+        self._busy_counts = {}
         self._seq = 0
         self._closed = False
         self.stats = {
@@ -177,10 +187,24 @@ class GroupDispatcher:
         return total
 
     def worker_count(self):
-        return sum(1 for task in self._workers.values() if task is not None and not task.done())
+        return sum(
+            sum(1 for t in lst if t is not None and not t.done())
+            for lst in self._workers.values()
+        )
 
     def _lane_key(self, chat_id, lane):
         return (chat_id, lane)
+
+    def _desired_concurrency(self, lane):
+        if lane == LANE_NORMAL:
+            return self.normal_concurrency
+        return 1
+
+    def _alive_workers(self, key):
+        lst = self._workers.get(key)
+        if not lst:
+            return []
+        return [t for t in lst if t is not None and not t.done()]
 
     def submit(self, chat_id, factory, *, priority=PRIORITY_NORMAL, kind="normal",
                on_overflow=None):
@@ -227,11 +251,44 @@ class GroupDispatcher:
             self._normal_pending[chat_id] = self._normal_pending.get(chat_id, 0) + 1
             self.stats["normal"] += 1
 
-        worker = self._workers.get(key)
-        if worker is None or worker.done():
-            self._workers[key] = asyncio.create_task(
+        # Ensure enough workers for this lane (normal: up to normal_concurrency)
+        workers = self._workers.get(key)
+        if workers is None:
+            workers = []
+            self._workers[key] = workers
+        # Prune done workers
+        workers[:] = [t for t in workers if not t.done()]
+        desired = self._desired_concurrency(lane)
+        alive = len(workers)
+        # Spawn if we have fewer than desired and queue has work.
+        # For normal lane this scales quickly under burst (15 messages → 3 workers).
+        if alive < desired:
+            # For normal, spawn one per submit until desired is reached;
+            # for admin/command, spawn only if none alive.
+            # Also, if queue depth exceeds alive, we may need more.
+            needed = desired - alive
+            # If queue is deep, spawn up to needed at once (not just 1)
+            # but cap to 1 per submit to avoid thundering herd on first burst.
+            # We spawn 1 per submit which converges in 3 submits for normal.
+            workers.append(asyncio.create_task(
                 self._worker(chat_id, lane, queue)
-            )
+            ))
+            # If the burst enqueued 15 at once before any worker started,
+            # the first worker will see a deep queue; it could still benefit
+            # from extra workers, but the next submits will spawn them.
+            # To handle a single bulk submit, check depth:
+            if lane == LANE_NORMAL and queue.qsize() > len(workers) * 2 and len(workers) < desired:
+                # Queue is still deep after spawning one, spawn one more immediately
+                # (up to desired). This handles the case where 15 were enqueued
+                # with a single submit loop that reuses same event loop tick.
+                while len(workers) < desired and queue.qsize() > len(workers):
+                    workers.append(asyncio.create_task(
+                        self._worker(chat_id, lane, queue)
+                    ))
+        elif not workers:
+            workers.append(asyncio.create_task(
+                self._worker(chat_id, lane, queue)
+            ))
         return True
 
     async def _worker(self, chat_id, lane, queue):
@@ -242,7 +299,10 @@ class GroupDispatcher:
         key = self._lane_key(chat_id, lane)
         try:
             while True:
-                item = await queue.get()
+                try:
+                    item = await queue.get()
+                except asyncio.CancelledError:
+                    raise
                 if len(item) == 5:
                     priority, _seq, kind, factory, enqueued_at = item
                 else:
@@ -254,7 +314,9 @@ class GroupDispatcher:
                 yield_ms = await self._yield_to_higher_lanes(chat_id, lane)
                 started = time.perf_counter()
                 queue_wait_ms = (started - enqueued_at) * 1000
+                # Track busy counts for accurate _lane_busy with concurrency
                 self._busy.add(key)
+                self._busy_counts[key] = self._busy_counts.get(key, 0) + 1
                 try:
                     result = factory() if factory is not None else None
                     if inspect.isawaitable(result):
@@ -270,7 +332,12 @@ class GroupDispatcher:
                             f"chat_id={chat_id} lane={lane} kind={kind} error={error!r}"
                         )
                 finally:
-                    self._busy.discard(key)
+                    cnt = self._busy_counts.get(key, 1) - 1
+                    if cnt <= 0:
+                        self._busy_counts.pop(key, None)
+                        self._busy.discard(key)
+                    else:
+                        self._busy_counts[key] = cnt
                     queue.task_done()
                     if self.logger is not None:
                         elapsed_ms = (time.perf_counter() - started) * 1000
@@ -293,15 +360,32 @@ class GroupDispatcher:
                                 f"priority={priority} ms={elapsed_ms:.1f}"
                             )
                 if queue.empty():
-                    return
+                    # Give a tiny window for a burst that is still being
+                    # enqueued in this same tick.  Without this, a 15-message
+                    # burst enqueued in a tight loop would be seen as empty
+                    # by the first worker after its first item, causing it to
+                    # exit before the remaining 14 are drained by the extra
+                    # workers (which would then also exit early).
+                    await asyncio.sleep(0)
+                    if queue.empty():
+                        return
         finally:
+            # Remove this worker from the list
+            lst = self._workers.get(key)
+            if lst is not None:
+                try:
+                    lst.remove(asyncio.current_task())
+                except ValueError:
+                    pass
+                if not lst:
+                    self._workers.pop(key, None)
+                    # Only pop queue if truly empty (another worker may have just enqueued)
+                    if queue.empty():
+                        self._queues.pop(key, None)
+                        if lane == LANE_NORMAL:
+                            self._normal_pending.pop(chat_id, None)
             self._busy.discard(key)
-            if self._workers.get(key) is asyncio.current_task():
-                self._workers.pop(key, None)
-            if queue.empty():
-                self._queues.pop(key, None)
-                if lane == LANE_NORMAL:
-                    self._normal_pending.pop(chat_id, None)
+            self._busy_counts.pop(key, None)
 
     def _lane_busy(self, chat_id, lane):
         key = self._lane_key(chat_id, lane)
@@ -319,7 +403,9 @@ class GroupDispatcher:
         async def _wait():
             while True:
                 queues = [queue for queue in self._queues.values() if queue.qsize()]
-                workers = [task for task in self._workers.values() if not task.done()]
+                workers = []
+                for lst in self._workers.values():
+                    workers.extend([t for t in lst if not t.done()])
                 if not queues and not workers:
                     return
                 for queue in list(self._queues.values()):
@@ -339,7 +425,9 @@ class GroupDispatcher:
 
     async def close(self):
         self._closed = True
-        workers = list(self._workers.values())
+        workers = []
+        for lst in self._workers.values():
+            workers.extend(lst)
         for worker in workers:
             worker.cancel()
         if workers:
@@ -348,12 +436,14 @@ class GroupDispatcher:
         self._queues.clear()
         self._normal_pending.clear()
         self._busy.clear()
+        self._busy_counts.clear()
 
     def reset_for_tests(self):
         self._queues.clear()
         self._workers.clear()
         self._normal_pending.clear()
         self._busy.clear()
+        self._busy_counts.clear()
         self._seq = 0
         self._closed = False
         for key in self.stats:
