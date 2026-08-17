@@ -23393,3 +23393,130 @@
 {"timestamp": "2026-08-17T23:58:35.342708", "action": "BAN", "user_id": 69204527, "group_id": -1000023615480, "details": "اسپم بزرگ تکراری"}
 {"timestamp": "2026-08-17T23:58:45.626830", "action": "BAN", "user_id": 69301798, "group_id": 22821719, "details": "اسپم تکراری"}
 {"timestamp": "2026-08-17T23:58:54.009705", "action": "BAN", "user_id": 69070538, "group_id": -1000023696020, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:04:37.934556", "action": "MUTE", "user_id": 69067482, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:04:50.123200", "action": "MUTE", "user_id": 68834337, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:04:57.113516", "action": "MUTE", "user_id": 46311144, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:04:58.763238", "action": "BAN", "user_id": 68519333, "group_id": -1000023509207, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:05:45.525639", "action": "MUTE", "user_id": 68686718, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:06:15.877980", "action": "MUTE", "user_id": 69413695, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:06:30.328441", "action": "MUTE", "user_id": 68408784, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:06:33.870428", "action": "MUTE", "user_id": 29953458, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:06:34.773694", "action": "MUTE", "user_id": 69399495, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:07:46.648492", "action": "BAN", "user_id": 25711703, "group_id": -1000023696020, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:07:57.599461", "action": "BAN", "user_id": 69432923, "group_id": 22161814, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:07:57.956533", "action": "MUTE", "user_id": 68921681, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:07:58.647962", "action": "MUTE", "user_id": 68921681, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:08:34.481292", "action": "MUTE", "user_id": 23417013, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:09:03.252251", "action": "BAN", "user_id": 69427614, "group_id": 22790753, "details": "نام تبلیغاتی"}
+{"timestamp": "2026-08-18T00:09:03.628351", "action": "MUTE", "user_id": 36972856, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:09:04.112253", "action": "MUTE", "user_id": 69427614, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:09:04.524956", "action": "MUTE", "user_id": 61408919, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:09:27.065167", "action": "BAN", "user_id": 64893271, "group_id": 23509207, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:09:31.540822", "action": "MUTE", "user_id": 58798786, "group_id": 23509207, "details": "به مدت 3600 ثانیه"}
+{"timestamp": "2026-08-18T00:09:32.447823", "action": "MUTE", "user_id": 61408919, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:10:04.484560", "action": "BAN", "user_id": 43065830, "group_id": -1000023696020, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:10:11.488875", "action": "BAN", "user_id": 69423125, "group_id": 23615480, "details": "نام تبلیغاتی"}
+{"timestamp": "2026-08-18T00:10:11.600841", "action": "BAN", "user_id": 69432159, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:10:11.741796", "action": "BAN", "user_id": 69430736, "group_id": -1000011149749, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:10:28.704753", "action": "MUTE", "user_id": 60392709, "group_id": 22790753, "details": "به مدت 86400 ثانیه"}
+{"timestamp": "2026-08-18T00:10:49.285945", "action": "MUTE", "user_id": 66250781, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:10:49.966487", "action": "MUTE", "user_id": 67447028, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:10:59.607814", "action": "MUTE", "user_id": 68606797, "group_id": 23585301, "details": "به مدت 3600 ثانیه"}
+{"timestamp": "2026-08-18T00:11:06.654850", "action": "BAN", "user_id": 69430561, "group_id": -1000023502430, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:11:33.121860", "action": "MUTE", "user_id": 67990735, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:11:38.505150", "action": "BAN", "user_id": 67990735, "group_id": 22790753, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:11:39.100080", "action": "MUTE", "user_id": 67990735, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:16:24.192573", "action": "MUTE", "user_id": 48531491, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:16:30.661768", "action": "MUTE", "user_id": 48531491, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:16:41.241349", "action": "MUTE", "user_id": 23495854, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:16:45.794251", "action": "MUTE", "user_id": 67990735, "group_id": 23509207, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:16:57.500030", "action": "BAN", "user_id": 68201469, "group_id": 22790753, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:17:03.612969", "action": "MUTE", "user_id": 69432922, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:17:11.520957", "action": "MUTE", "user_id": 57044389, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:17:12.632024", "action": "BAN", "user_id": 67990735, "group_id": 22821719, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:17:39.782878", "action": "BAN", "user_id": 57307700, "group_id": 23502430, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:17:40.640737", "action": "BAN", "user_id": 69410730, "group_id": -1000022790753, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:17:54.690579", "action": "MUTE", "user_id": 69414189, "group_id": 23696020, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:18:04.207925", "action": "BAN", "user_id": 69433222, "group_id": 22821719, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:18:22.479816", "action": "BAN", "user_id": 36908066, "group_id": 22161814, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:18:27.431022", "action": "BAN", "user_id": 69423125, "group_id": 22790753, "details": "نام تبلیغاتی"}
+{"timestamp": "2026-08-18T00:18:46.328886", "action": "MUTE", "user_id": 69376738, "group_id": 23093376, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:18:53.184954", "action": "MUTE", "user_id": 68201469, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:18:57.199359", "action": "MUTE", "user_id": 49008825, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:18:59.008510", "action": "BAN", "user_id": 69350762, "group_id": -1000022969373, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:20:00.134572", "action": "BAN", "user_id": 55370857, "group_id": 23585301, "details": "رسیدن به آستانه تخلفات"}
+{"timestamp": "2026-08-18T00:21:42.379833", "action": "BAN", "user_id": 60771648, "group_id": -1000022790753, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:21:55.829068", "action": "BAN", "user_id": 68625417, "group_id": -1000023696020, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:21:58.947137", "action": "BAN", "user_id": 25779778, "group_id": 23645003, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:22:12.833725", "action": "MUTE", "user_id": 60450032, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:22:29.301075", "action": "MUTE", "user_id": 44776050, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:22:50.432545", "action": "BAN", "user_id": 69351994, "group_id": 22161814, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:23:02.571299", "action": "BAN", "user_id": 69181691, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:23:08.843938", "action": "BAN", "user_id": 42123919, "group_id": -1000022790753, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:23:09.829504", "action": "BAN", "user_id": 69334337, "group_id": 21249791, "details": "رسیدن به آستانه تخلفات"}
+{"timestamp": "2026-08-18T00:23:10.491607", "action": "MUTE", "user_id": 69334337, "group_id": 21249791, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:23:11.920978", "action": "BAN", "user_id": 38031466, "group_id": 22790753, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:23:24.343236", "action": "BAN", "user_id": 40434322, "group_id": 23696020, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:23:24.532770", "action": "BAN", "user_id": 69372352, "group_id": 14188636, "details": "نام تبلیغاتی"}
+{"timestamp": "2026-08-18T00:23:33.590486", "action": "MUTE", "user_id": 69346748, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:23:44.234240", "action": "BAN", "user_id": 69415874, "group_id": -1000023615480, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:24:17.301159", "action": "MUTE", "user_id": 69077720, "group_id": 23700879, "details": "به مدت 3600 ثانیه"}
+{"timestamp": "2026-08-18T00:25:04.580472", "action": "BAN", "user_id": 38031466, "group_id": 22821719, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:25:24.094124", "action": "MUTE", "user_id": 16088500, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:25:24.851866", "action": "MUTE", "user_id": 16088500, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:25:34.852111", "action": "MUTE", "user_id": 69186058, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:25:36.281601", "action": "MUTE", "user_id": 69186058, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:25:37.797012", "action": "BAN", "user_id": 69326284, "group_id": -1000011149749, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:26:16.220843", "action": "MUTE", "user_id": 40856916, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:26:40.214345", "action": "BAN", "user_id": 44925941, "group_id": 22790753, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:26:40.686715", "action": "MUTE", "user_id": 44925941, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:26:55.632658", "action": "MUTE", "user_id": 15906484, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:27:06.702257", "action": "BAN", "user_id": 64083249, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:28:03.231517", "action": "BAN", "user_id": 69433623, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:28:17.326951", "action": "BAN", "user_id": 69383203, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:28:38.736283", "action": "MUTE", "user_id": 42272550, "group_id": 14188636, "details": "به مدت 86400 ثانیه"}
+{"timestamp": "2026-08-18T00:29:42.693664", "action": "MUTE", "user_id": 69425902, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:29:46.565535", "action": "MUTE", "user_id": 69425902, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:29:54.209943", "action": "BAN", "user_id": 69415874, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:30:37.244491", "action": "BAN", "user_id": 69410730, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:30:45.982957", "action": "MUTE", "user_id": 46391125, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:30:54.381566", "action": "MUTE", "user_id": 48561648, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:31:11.480106", "action": "MUTE", "user_id": 69136703, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:31:29.423353", "action": "MUTE", "user_id": 67017889, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:31:35.640722", "action": "MUTE", "user_id": 67017889, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:32:49.305975", "action": "MUTE", "user_id": 67164228, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:32:50.213205", "action": "MUTE", "user_id": 69030384, "group_id": 22969373, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:33:09.845693", "action": "MUTE", "user_id": 59850915, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:33:16.755864", "action": "BAN", "user_id": 69414189, "group_id": 22821719, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:33:21.711977", "action": "MUTE", "user_id": 68780225, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:33:27.010463", "action": "BAN", "user_id": 69150194, "group_id": 23645003, "details": "نام تبلیغاتی"}
+{"timestamp": "2026-08-18T00:33:27.143646", "action": "MUTE", "user_id": 59850915, "group_id": 23696020, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:33:28.991352", "action": "MUTE", "user_id": 69433638, "group_id": 23696020, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:33:30.307381", "action": "BAN", "user_id": 49433971, "group_id": -1000022161814, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:33:42.071088", "action": "MUTE", "user_id": 45259183, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:33:43.101858", "action": "MUTE", "user_id": 45259183, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:33:50.287227", "action": "MUTE", "user_id": 67162116, "group_id": 23645003, "details": "به مدت 3600 ثانیه"}
+{"timestamp": "2026-08-18T00:33:56.266307", "action": "BAN", "user_id": 69413001, "group_id": -1000022790753, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:34:11.813501", "action": "MUTE", "user_id": 69143405, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:34:29.219487", "action": "MUTE", "user_id": 58382658, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:34:43.742843", "action": "MUTE", "user_id": 58382658, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:34:44.548359", "action": "BAN", "user_id": 68953451, "group_id": -1000023509207, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:34:52.283676", "action": "BAN", "user_id": 69383887, "group_id": -1000022790753, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:34:52.534709", "action": "MUTE", "user_id": 69383887, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:35:12.790331", "action": "BAN", "user_id": 69236832, "group_id": 22790753, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:35:13.244504", "action": "MUTE", "user_id": 69236832, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:35:31.249013", "action": "MUTE", "user_id": 61337269, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:35:32.223350", "action": "BAN", "user_id": 58167214, "group_id": 22821719, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:35:37.453382", "action": "UNMUTE", "user_id": 69077720, "group_id": 23700879, "details": ""}
+{"timestamp": "2026-08-18T00:35:49.632950", "action": "BAN", "user_id": 68953451, "group_id": -1000023502430, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:36:04.982010", "action": "MUTE", "user_id": 59577196, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:36:33.679357", "action": "MUTE", "user_id": 68747952, "group_id": 22790753, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:36:33.882297", "action": "MUTE", "user_id": 61608378, "group_id": 23615480, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:36:51.969981", "action": "BAN", "user_id": 68100705, "group_id": -1000022790753, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:37:19.409142", "action": "BAN", "user_id": 69413001, "group_id": -1000022821719, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:37:19.717424", "action": "MUTE", "user_id": 61337269, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:37:23.495897", "action": "MUTE", "user_id": 69136703, "group_id": 22821719, "details": "به مدت None ثانیه"}
+{"timestamp": "2026-08-18T00:37:39.896571", "action": "BAN", "user_id": 61478649, "group_id": 22821719, "details": "رسیدن به آستانه تخلفات"}
+{"timestamp": "2026-08-18T00:38:23.627639", "action": "BAN", "user_id": 25711703, "group_id": -1000023615480, "details": "اسپم بزرگ تکراری"}
+{"timestamp": "2026-08-18T00:38:33.685715", "action": "BAN", "user_id": 69317308, "group_id": 22161814, "details": "اسپم تکراری"}
+{"timestamp": "2026-08-18T00:39:13.079814", "action": "MUTE", "user_id": 69308968, "group_id": 22790753, "details": "به مدت None ثانیه"}
