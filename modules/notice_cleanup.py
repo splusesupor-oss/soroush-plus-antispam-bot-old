@@ -19,7 +19,42 @@ MAX_PER_CHAT = 500
 
 
 def _chat_key(chat_id):
-    return str(chat_id)
+    if chat_id is None:
+        return "0"
+    for attr in ("channel_id", "chat_id", "user_id", "id"):
+        try:
+            val = getattr(chat_id, attr, None)
+            if isinstance(val, int):
+                try:
+                    from modules.group_id import normalize_group_id
+                    return normalize_group_id(val)
+                except Exception:
+                    return str(val)
+            if val is not None:
+                try:
+                    ival = int(val)
+                    try:
+                        from modules.group_id import normalize_group_id
+                        return normalize_group_id(ival)
+                    except Exception:
+                        return str(ival)
+                except Exception:
+                    return str(val)
+        except Exception:
+            continue
+    try:
+        ival = int(chat_id)
+        try:
+            from modules.group_id import normalize_group_id
+            return normalize_group_id(ival)
+        except Exception:
+            return str(ival)
+    except Exception:
+        pass
+    try:
+        return str(chat_id)
+    except Exception:
+        return "0" 
 
 
 def _chat_id_for_rpc(key):

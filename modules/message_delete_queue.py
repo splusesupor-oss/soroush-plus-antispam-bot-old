@@ -1,5 +1,53 @@
 """Per-group asynchronous queue for automatic message deletions."""
 import asyncio
+try:
+    from modules.group_id import normalize_group_id
+    _HAS_NORMALIZE = True
+except ImportError:
+    _HAS_NORMALIZE = False
+    def normalize_group_id(v):
+        try:
+            return str(int(v))
+        except Exception:
+            return str(v)
+
+def _chat_key(chat_id):
+    """Hashable key for chat. Never use InputPeer directly."""
+    if chat_id is None:
+        return "0"
+    for attr in ("channel_id", "chat_id", "user_id", "id"):
+        try:
+            val = getattr(chat_id, attr, None)
+            if isinstance(val, int):
+                return normalize_group_id(val) if _HAS_NORMALIZE else str(val)
+            if val is not None:
+                try:
+                    ival = int(val)
+                    return normalize_group_id(ival) if _HAS_NORMALIZE else str(ival)
+                except Exception:
+                    return str(val)
+        except Exception:
+            continue
+    try:
+        ival = int(chat_id)
+        return normalize_group_id(ival) if _HAS_NORMALIZE else str(ival)
+    except Exception:
+        pass
+    try:
+        from splusthon import utils as _sutils
+        peer = _sutils.get_peer_id(chat_id)
+        if peer is not None:
+            try:
+                return normalize_group_id(peer) if _HAS_NORMALIZE else str(int(peer))
+            except Exception:
+                return str(peer)
+    except Exception:
+        pass
+    try:
+        return str(chat_id)
+    except Exception:
+        return "0"
+
 import time
 
 
@@ -32,10 +80,11 @@ class MessageDeleteQueue:
         for message_id in message_ids:
             if not isinstance(message_id, int) or message_id <= 0:
                 continue
-            key = (chat_id, message_id)
-            if key in self._pending_ids:
+            # Use normalized key for pending set to avoid unhashable InputPeerChannel
+            pkey = (_chat_key(chat_id), message_id)
+            if pkey in self._pending_ids:
                 continue
-            self._pending_ids.add(key)
+            self._pending_ids.add(pkey)
             ids.append(message_id)
         loop = asyncio.get_running_loop()
         result = loop.create_future()
@@ -43,10 +92,11 @@ class MessageDeleteQueue:
             result.set_result((0, []))
             return result
 
-        queue = self._queues.get(chat_id)
+        key = _chat_key(chat_id)
+        queue = self._queues.get(key)
         if queue is None:
             queue = asyncio.PriorityQueue()
-            self._queues[chat_id] = queue
+            self._queues[key] = queue
         self._seq += 1
         queue.put_nowait((int(priority), self._seq, ids, result, time.perf_counter()))
         if queue.qsize() > 1 or int(priority) == 0:
@@ -55,9 +105,9 @@ class MessageDeleteQueue:
                 f"chat_id={chat_id} queued_ids={len(ids)} pending={queue.qsize()} "
                 f"priority={priority}"
             )
-        worker = self._workers.get(chat_id)
+        worker = self._workers.get(key)
         if worker is None or worker.done():
-            self._workers[chat_id] = asyncio.create_task(
+            self._workers[key] = asyncio.create_task(
                 self._worker(chat_id, queue)
             )
         return result
@@ -172,12 +222,13 @@ class MessageDeleteQueue:
                         result.set_result((0, ids))
                 finally:
                     for message_id in ids:
-                        self._pending_ids.discard((chat_id, message_id))
+                        self._pending_ids.discard((_chat_key(chat_id), message_id))
                     queue.task_done()
                 if queue.empty():
                     return
         finally:
-            if self._workers.get(chat_id) is asyncio.current_task():
-                self._workers.pop(chat_id, None)
+            k = _chat_key(chat_id)
+            if self._workers.get(k) is asyncio.current_task():
+                self._workers.pop(k, None)
             if queue.empty():
-                self._queues.pop(chat_id, None)
+                self._queues.pop(k, None)

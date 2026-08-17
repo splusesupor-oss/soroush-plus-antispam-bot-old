@@ -34,6 +34,58 @@ except ImportError:
     _HAS_OUTGOING = False
     DISPATCH_ACTIVE_VAR = contextvars.ContextVar("fallback", default=False)
 
+try:
+    from modules.group_id import normalize_group_id
+    _HAS_NORMALIZE = True
+except ImportError:
+    _HAS_NORMALIZE = False
+    def normalize_group_id(v):
+        try:
+            return str(int(v))
+        except Exception:
+            return str(v)
+
+def _chat_key(chat_id):
+    """Hashable key for chat. Never use InputPeer directly as dict key."""
+    if chat_id is None:
+        return "0"
+    # Try to extract numeric id from InputPeerChannel etc.
+    for attr in ("channel_id", "chat_id", "user_id", "id"):
+        try:
+            val = getattr(chat_id, attr, None)
+            if isinstance(val, int):
+                return normalize_group_id(val) if _HAS_NORMALIZE else str(val)
+            if val is not None:
+                try:
+                    ival = int(val)
+                    return normalize_group_id(ival) if _HAS_NORMALIZE else str(ival)
+                except Exception:
+                    return str(val)
+        except Exception:
+            continue
+    try:
+        ival = int(chat_id)
+        return normalize_group_id(ival) if _HAS_NORMALIZE else str(ival)
+    except Exception:
+        pass
+    try:
+        from splusthon import utils as _sutils
+        peer = _sutils.get_peer_id(chat_id)
+        if peer is not None:
+            try:
+                return normalize_group_id(peer) if _HAS_NORMALIZE else str(int(peer))
+            except Exception:
+                return str(peer)
+    except Exception:
+        pass
+    try:
+        return str(chat_id)
+    except Exception:
+        return "0"
+
+def _key_for_dict(chat_id):
+    return _chat_key(chat_id)
+
 PRIORITY_ADMIN = 0
 PRIORITY_COMMAND = 1
 PRIORITY_NORMAL = 2
@@ -185,12 +237,13 @@ class GroupDispatcher:
         }
 
     def pending_normal(self, chat_id):
-        return int(self._normal_pending.get(chat_id, 0))
+        return int(self._normal_pending.get(_chat_key(chat_id), 0))
 
     def queue_size(self, chat_id):
         total = 0
+        key = _chat_key(chat_id)
         for (stored_chat, _lane), queue in self._queues.items():
-            if stored_chat == chat_id:
+            if stored_chat == key:
                 total += queue.qsize()
         return total
 
@@ -201,7 +254,7 @@ class GroupDispatcher:
         )
 
     def _lane_key(self, chat_id, lane):
-        return (chat_id, lane)
+        return (_chat_key(chat_id), lane)
 
     def _desired_concurrency(self, lane):
         if lane == LANE_NORMAL:
@@ -223,12 +276,12 @@ class GroupDispatcher:
             chat_id = 0
         lane = lane_for(priority, kind)
         if lane == LANE_NORMAL:
-            if self._normal_pending.get(chat_id, 0) >= self.max_pending_normal:
+            if self._normal_pending.get(_chat_key(chat_id), 0) >= self.max_pending_normal:
                 self.stats["dropped"] += 1
                 if self.logger is not None:
                     self.logger.log_info(
                         "GROUP DISPATCH OVERFLOW "
-                        f"chat_id={chat_id} pending={self._normal_pending.get(chat_id, 0)}"
+                        f"chat_id={chat_id} pending={self._normal_pending.get(_chat_key(chat_id), 0)}"
                     )
                 if on_overflow is not None:
                     try:
@@ -256,7 +309,7 @@ class GroupDispatcher:
         elif lane == LANE_COMMAND:
             self.stats["command"] += 1
         else:
-            self._normal_pending[chat_id] = self._normal_pending.get(chat_id, 0) + 1
+            self._normal_pending[_chat_key(chat_id)] = self._normal_pending.get(_chat_key(chat_id), 0) + 1
             self.stats["normal"] += 1
 
         # Ensure enough workers for this lane (normal: up to normal_concurrency)
@@ -317,8 +370,8 @@ class GroupDispatcher:
                     priority, _seq, kind, factory = item
                     enqueued_at = time.perf_counter()
                 if lane == LANE_NORMAL:
-                    current = self._normal_pending.get(chat_id, 1)
-                    self._normal_pending[chat_id] = max(0, current - 1)
+                    current = self._normal_pending.get(_chat_key(chat_id), 1)
+                    self._normal_pending[_chat_key(chat_id)] = max(0, current - 1)
                 yield_ms = await self._yield_to_higher_lanes(chat_id, lane)
                 started = time.perf_counter()
                 queue_wait_ms = (started - enqueued_at) * 1000
@@ -401,7 +454,7 @@ class GroupDispatcher:
                     if queue.empty():
                         self._queues.pop(key, None)
                         if lane == LANE_NORMAL:
-                            self._normal_pending.pop(chat_id, None)
+                            self._normal_pending.pop(_chat_key(chat_id), None)
             self._busy.discard(key)
             self._busy_counts.pop(key, None)
 

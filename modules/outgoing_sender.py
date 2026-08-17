@@ -20,6 +20,71 @@ import contextvars
 import inspect
 import time
 
+try:
+    from modules.group_id import normalize_group_id
+    _HAS_NORMALIZE = True
+except ImportError:
+    _HAS_NORMALIZE = False
+    def normalize_group_id(v):
+        try:
+            return str(int(v))
+        except Exception:
+            return str(v)
+
+def _chat_key(chat_id):
+    """Return a hashable key for chat_id. Never use InputPeer directly as dict key."""
+    if chat_id is None:
+        return "0"
+    # Try to get numeric peer id via attributes (InputPeerChannel etc.)
+    # InputPeerChannel is unhashable, so we must extract its id.
+    for attr in ("channel_id", "chat_id", "user_id", "id"):
+        try:
+            val = getattr(chat_id, attr, None)
+            if isinstance(val, int):
+                # Use normalize to handle -100... and channel offset consistently
+                if _HAS_NORMALIZE:
+                    return normalize_group_id(val)
+                return str(val)
+            if val is not None:
+                # Try int conversion
+                try:
+                    ival = int(val)
+                    if _HAS_NORMALIZE:
+                        return normalize_group_id(ival)
+                    return str(ival)
+                except Exception:
+                    return str(val)
+        except Exception:
+            continue
+    # Try direct int conversion
+    try:
+        ival = int(chat_id)
+        if _HAS_NORMALIZE:
+            return normalize_group_id(ival)
+        return str(ival)
+    except Exception:
+        pass
+    # Fallback: try get_peer_id via utils if available
+    try:
+        from splusthon import utils as _sutils
+        peer = _sutils.get_peer_id(chat_id)
+        if peer is not None:
+            try:
+                return normalize_group_id(peer) if _HAS_NORMALIZE else str(int(peer))
+            except Exception:
+                return str(peer)
+    except Exception:
+        pass
+    # Last resort: string representation (always hashable)
+    try:
+        return str(chat_id)
+    except Exception:
+        return "0"
+
+def _key_for_dict(chat_id):
+    # Alias for clarity
+    return _chat_key(chat_id)
+
 # Set while a GroupDispatcher worker is running its factory.
 # The patched send_message/reply checks this to decide enqueue vs direct.
 _DISPATCH_ACTIVE = contextvars.ContextVar("outgoing_dispatch_active", default=False)
@@ -42,10 +107,11 @@ class OutgoingSender:
         self.stats = {"enqueued": 0, "sent": 0, "failed": 0, "dropped": 0}
 
     def _queue_for(self, chat_id):
-        q = self._queues.get(chat_id)
+        key = _chat_key(chat_id)
+        q = self._queues.get(key)
         if q is None:
             q = asyncio.PriorityQueue()
-            self._queues[chat_id] = q
+            self._queues[key] = q
         return q
 
     def enqueue(self, chat_id, coro_factory, *, priority=1, on_done=None):
@@ -54,6 +120,7 @@ class OutgoingSender:
             return False
         if chat_id is None:
             chat_id = 0
+        key = _chat_key(chat_id)
         # Normalize priority: 0 urgent/admin, 1 normal
         try:
             pri = int(priority)
@@ -66,11 +133,12 @@ class OutgoingSender:
                 self.logger.log_info(f"OUTGOING SEND DROP chat_id={chat_id} qsize={q.qsize()}")
             return False
         self._seq += 1
-        q.put_nowait((pri, self._seq, coro_factory, on_done, time.perf_counter()))
+        # Store original chat_id for the worker, but use normalized key for bookkeeping
+        q.put_nowait((pri, self._seq, chat_id, coro_factory, on_done, time.perf_counter()))
         self.stats["enqueued"] += 1
-        worker = self._workers.get(chat_id)
+        worker = self._workers.get(key)
         if worker is None or worker.done():
-            self._workers[chat_id] = asyncio.create_task(self._worker(chat_id, q))
+            self._workers[key] = asyncio.create_task(self._worker(key, chat_id, q))
         return True
 
     def enqueue_reply(self, event, text, *, priority=1, on_done=None, **kwargs):
@@ -101,13 +169,21 @@ class OutgoingSender:
                 _DISPATCH_ACTIVE.reset(token)
         return self.enqueue(chat_id, wrapped, priority=priority, on_done=on_done)
 
-    async def _worker(self, chat_id, queue):
+    async def _worker(self, key, chat_id, queue):
         if self.logger:
-            self.logger.log_info(f"OUTGOING SEND WORKER START chat_id={chat_id}")
+            self.logger.log_info(f"OUTGOING SEND WORKER START chat_id={chat_id} key={key}")
         try:
             while True:
                 try:
-                    priority, seq, factory, on_done, enqueued_at = await queue.get()
+                    item = await queue.get()
+                    # Support both old (5-tuple) and new (6-tuple with chat_id) formats
+                    if len(item) == 6:
+                        priority, seq, orig_chat_id, factory, on_done, enqueued_at = item
+                        # Use orig_chat_id for logging if different from worker's chat_id
+                        if orig_chat_id is not None:
+                            chat_id = orig_chat_id
+                    else:
+                        priority, seq, factory, on_done, enqueued_at = item
                 except asyncio.CancelledError:
                     raise
                 queue_wait_ms = (time.perf_counter() - enqueued_at) * 1000
@@ -147,10 +223,10 @@ class OutgoingSender:
                     if queue.empty():
                         return
         finally:
-            if self._workers.get(chat_id) is asyncio.current_task():
-                self._workers.pop(chat_id, None)
+            if self._workers.get(key) is asyncio.current_task():
+                self._workers.pop(key, None)
             if queue.empty():
-                self._queues.pop(chat_id, None)
+                self._queues.pop(key, None)
 
     async def close(self):
         self._closed = True

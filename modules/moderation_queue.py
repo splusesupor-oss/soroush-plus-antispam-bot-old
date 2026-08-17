@@ -1,5 +1,53 @@
 """صف FIFO عملیات moderation، با worker مستقل برای هر گروه."""
 import asyncio
+try:
+    from modules.group_id import normalize_group_id
+    _HAS_NORMALIZE = True
+except ImportError:
+    _HAS_NORMALIZE = False
+    def normalize_group_id(v):
+        try:
+            return str(int(v))
+        except Exception:
+            return str(v)
+
+def _chat_key(chat_id):
+    """Hashable key for chat. Never use InputPeer directly."""
+    if chat_id is None:
+        return "0"
+    for attr in ("channel_id", "chat_id", "user_id", "id"):
+        try:
+            val = getattr(chat_id, attr, None)
+            if isinstance(val, int):
+                return normalize_group_id(val) if _HAS_NORMALIZE else str(val)
+            if val is not None:
+                try:
+                    ival = int(val)
+                    return normalize_group_id(ival) if _HAS_NORMALIZE else str(ival)
+                except Exception:
+                    return str(val)
+        except Exception:
+            continue
+    try:
+        ival = int(chat_id)
+        return normalize_group_id(ival) if _HAS_NORMALIZE else str(ival)
+    except Exception:
+        pass
+    try:
+        from splusthon import utils as _sutils
+        peer = _sutils.get_peer_id(chat_id)
+        if peer is not None:
+            try:
+                return normalize_group_id(peer) if _HAS_NORMALIZE else str(int(peer))
+            except Exception:
+                return str(peer)
+    except Exception:
+        pass
+    try:
+        return str(chat_id)
+    except Exception:
+        return "0"
+
 import inspect
 import re
 import time
@@ -67,7 +115,7 @@ class ModerationQueue:
         """
         if self._closed:
             raise RuntimeError("moderation queue is closed")
-        key = (chat_id, user_id, action)
+        key = (_chat_key(chat_id), user_id, action)
         if key in self._pending_keys:
             self.logger.log_info(
                 "MODERATION QUEUE DUPLICATE SKIPPED "
@@ -75,10 +123,11 @@ class ModerationQueue:
             )
             return False
 
-        queue = self._queues.get(chat_id)
+        k = _chat_key(chat_id)
+        queue = self._queues.get(k)
         if queue is None:
             queue = asyncio.PriorityQueue()
-            self._queues[chat_id] = queue
+            self._queues[k] = queue
         self._pending_keys.add(key)
         job = ModerationJob(
             action=action,
@@ -97,9 +146,9 @@ class ModerationQueue:
             "MODERATION QUEUE ENQUEUED "
             f"chat_id={chat_id} action={action} user_id={user_id} pending={queue.qsize()}"
         )
-        worker = self._workers.get(chat_id)
+        worker = self._workers.get(k)
         if worker is None or worker.done():
-            self._workers[chat_id] = asyncio.create_task(self._worker(chat_id, queue))
+            self._workers[k] = asyncio.create_task(self._worker(chat_id, queue))
         return True
 
     async def _worker(self, chat_id, queue):
@@ -162,15 +211,16 @@ class ModerationQueue:
                         f"avg_queue_wait_ms={self._queue_wait_total_ms / self._completed:.2f} "
                         f"avg_rpc_ms={self._rpc_total_ms / self._completed:.2f}"
                     )
-                    self._pending_keys.discard((chat_id, job.user_id, job.action))
+                    self._pending_keys.discard((_chat_key(chat_id), job.user_id, job.action))
                     queue.task_done()
                 if queue.empty():
                     return
         finally:
-            if self._workers.get(chat_id) is asyncio.current_task():
-                self._workers.pop(chat_id, None)
+            kk = _chat_key(chat_id)
+            if self._workers.get(kk) is asyncio.current_task():
+                self._workers.pop(kk, None)
             if queue.empty():
-                self._queues.pop(chat_id, None)
+                self._queues.pop(kk, None)
 
     async def _run_job(self, chat_id, job):
         """deadline هر کوشش و تنها یک retry پس از FloodWait در همان worker."""
