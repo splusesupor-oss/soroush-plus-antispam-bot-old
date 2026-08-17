@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "owner.json"
-DEFAULT_GLOBAL_OWNER_ID = 68074059
+DEFAULT_GLOBAL_OWNER_ID = 37858988
 
 
 def normalize_username(username):

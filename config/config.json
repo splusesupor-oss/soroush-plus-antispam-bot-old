@@ -1,6 +1,6 @@
 {
     "bot_mode": "userbot",
-    "OWNER_ID": 68074059,
+    "OWNER_ID": 37858988,
     "session_string": "",
     "api_id": null,
     "api_hash": null,
@@ -27,7 +27,7 @@
     "spam_counts_file": "logs/spam_counts.json",
     "enable_hot_reload_banned_words": true,
     "admin_usernames": [
-        "osine1"
+        "osine2"
     ],
     "banned_words": []
 }

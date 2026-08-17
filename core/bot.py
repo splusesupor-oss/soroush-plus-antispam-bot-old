@@ -152,7 +152,7 @@ class SoroushAntiSpamBot:
                 return True
 
             # بررسی مالک یا ادمین با آیدی عددی
-            if str(user_id) == "68074059":
+            if str(user_id) == "37858988":
                 return True
 
             return False
@@ -219,7 +219,7 @@ class SoroushAntiSpamBot:
                 owner_lock = getattr(sender_lock, "username", None)
 
                 # مالک همیشه اجازه فعال/غیر فعال کردن دارد
-                if text not in ["فعال سازی", "غیر فعال"] or owner_lock != "osine1":
+                if text not in ["فعال سازی", "غیر فعال"] or owner_lock != "osine2":
                     if not is_active(lock_id):
                         return
 

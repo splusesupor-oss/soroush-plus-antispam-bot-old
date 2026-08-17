@@ -1060,7 +1060,7 @@ def close_session(chat_id, user_id):
 
 
 def _is_main_owner(user_id):
-    """فقط مالکِ اصلیِ ربات (osine1) برایِ تست، بدونِ سکه استفاده می‌کند."""
+    """فقط مالکِ اصلیِ ربات (osine2) برایِ تست، بدونِ سکه استفاده می‌کند."""
     try:
         from modules.owner_check import is_global_owner
         return is_global_owner(user_id)
@@ -1083,7 +1083,7 @@ def handle_query(chat_id, user_id, query):
         close_session(chat_id, user_id)
         return "blocked", BLOCKED_CONTENT
 
-    # فقط مالکِ اصلی (osine1) برایِ تست، بدونِ نیاز به سکه است؛
+    # فقط مالکِ اصلی (osine2) برایِ تست، بدونِ نیاز به سکه است؛
     # سایرِ مالکان/ادمین‌ها همچنان باید سکه داشته باشند.
     if not _is_main_owner(user_id):
         balance = economy.get_balance(chat_id, user_id)
@@ -1197,7 +1197,7 @@ async def process(chat_id, user_id, bot):
 
         # ۵) کسرِ سکه — فقط بعد از موفقیتِ واقعیِ ارسال.
         #    هزینه = ۱۰ برنز به‌ازای هر عکسِ ارسال‌شده (۱ عکس = ۱۰، ۲ عکس = ۲۰).
-        #    مالکِ اصلی (osine1) برایِ تست بدونِ کسرِ سکه استفاده می‌کند.
+        #    مالکِ اصلی (osine2) برایِ تست بدونِ کسرِ سکه استفاده می‌کند.
         cost = 0
         if _is_main_owner(user_id):
             _log(bot, f"PHOTO OWNER TEST chat_id={chat_id} user_id={user_id} "

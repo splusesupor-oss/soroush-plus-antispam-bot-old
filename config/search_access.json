@@ -15,13 +15,13 @@
         }
       },
       "allowed_users": {
-        "68074059": {
-          "username": "osine1",
-          "display": "@osine1"
-        },
         "69020434": {
           "username": "Meli_E9",
           "display": "@Meli_E9"
+        },
+        "37858988": {
+          "username": "osine2",
+          "display": "@osine2"
         }
       }
     },
