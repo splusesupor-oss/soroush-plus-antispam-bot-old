@@ -176,7 +176,11 @@ class SoroushAntiSpamBot:
         self._temporary_state_cleanup_task = None
         from modules.delete_queue import process_delete
         self.process_delete = process_delete
-        self.group_dispatcher = GroupDispatcher(logger=self.logger)
+        self.group_dispatcher = GroupDispatcher(
+            logger=self.logger,
+            debug_timing=self.config_manager.get(
+                "debug_message_pipeline", False),
+        )
         self.outgoing_sender = None
         self.notice_cleanup = NoticeCleanup(
             os.path.join(
@@ -1011,7 +1015,13 @@ class SoroushAntiSpamBot:
                 )
             finally:
                 elapsed_ms = (time.perf_counter() - started_cmd) * 1000
-                if elapsed_ms >= 50:
+                # در حالت عادی فقط دستورهای واقعاً کند ثبت می‌شوند؛ حالت
+                # debug همان آستانهٔ قبلی ۵۰ms را نگه می‌دارد.
+                _timing_threshold_ms = (
+                    50 if self.config_manager.get(
+                        "debug_message_pipeline", False) else 1000
+                )
+                if elapsed_ms >= _timing_threshold_ms:
                     self.logger.log_info(
                         "HANDLER TIME "
                         f"chat_id={getattr(event, 'chat_id', None)} "

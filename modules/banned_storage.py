@@ -7,21 +7,46 @@ from modules.group_id import normalize_group_id
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "banned_users.json"
 
+# ⚡️ کش mtime-محور — دقیقاً همان الگوی modules/admin_storage.py.
+# فایل banned_users.json ممکن است چند مگابایت باشد؛ خواندن و پارس آن در
+# هر پیام، حلقهٔ رویداد را روی حافظهٔ کند گوشی قفل می‌کرد. حالا فایل فقط
+# وقتی دوباره خوانده می‌شود که واقعاً تغییر کرده باشد (mtime عوض شود).
+# منطق بن هیچ تغییری نکرده است.
+_cache = None
+_cache_mtime = None
+
 
 def load_banned():
-    if not FILE.exists():
-        return {}
+    global _cache, _cache_mtime
     try:
-        return json.loads(FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+        mtime = FILE.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    if _cache is not None and mtime == _cache_mtime:
+        return _cache
+    if mtime is None:
+        _cache = {}
+    else:
+        try:
+            _cache = json.loads(FILE.read_text(encoding="utf-8"))
+        except Exception:
+            _cache = {}
+    _cache_mtime = mtime
+    return _cache
 
 
 def save_banned(data):
+    global _cache, _cache_mtime
     FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    # کش با همان دادهٔ نوشته‌شده همگام می‌ماند تا load بعدی فایل را نخواند.
+    _cache = data
+    try:
+        _cache_mtime = FILE.stat().st_mtime_ns
+    except OSError:
+        _cache_mtime = None
 
 
 def _normalise_identifier(value):
@@ -220,9 +245,11 @@ def is_banned(group_id, user_id, username=None, data=None):
     records = get_matching_ban_records(group_id, user_id, username, data)
     banned = bool(records)
     if banned:
+        # فقط خلاصه چاپ می‌شود؛ dump کامل رکوردها روی مسیر داغ پیام،
+        # فشار I/O بی‌دلیل ایجاد می‌کرد. منطق تشخیص بن تغییری نکرده.
         print(
             "BANNED STORAGE MATCH "
             f"user_id={user_id} username={username} group_id={group_id} "
-            f"source={FILE} records={records}"
+            f"records_count={len(records)}"
         )
     return banned

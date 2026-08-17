@@ -214,10 +214,16 @@ class GroupDispatcher:
     # yield only added queue_wait after Soroush had already answered.
     HIGHER_LANE_WAIT_SECONDS = 0.0
 
-    def __init__(self, *, max_pending_normal=40, logger=None, normal_concurrency=4):
+    def __init__(self, *, max_pending_normal=40, logger=None, normal_concurrency=4,
+                 debug_timing=False):
         self.max_pending_normal = int(max_pending_normal)
         self.normal_concurrency = int(normal_concurrency) if int(normal_concurrency) > 0 else 1
         self.logger = logger
+        # 📝 در حالت عادی فقط موارد به‌شدت کند ثبت می‌شوند تا نوشتن مکرر
+        # روی دیسک، خودش عامل کندی نشود؛ در حالت debug (کلید
+        # debug_message_pipeline در config) همان آستانه‌های قبلی کامل
+        # ثبت می‌شوند. هیچ تغییری در منطق صف‌ها ایجاد نشده است.
+        self.debug_timing = bool(debug_timing)
         self._queues = {}
         # key -> list[Task]  (normal lane may have up to normal_concurrency workers)
         self._workers = {}
@@ -415,14 +421,22 @@ class GroupDispatcher:
                     queue.task_done()
                     if self.logger is not None:
                         elapsed_ms = (time.perf_counter() - started) * 1000
-                        if queue_wait_ms >= 50:
+                        if self.debug_timing:
+                            queue_wait_threshold = 50.0
+                            handler_threshold = 100.0
+                        else:
+                            queue_wait_threshold = 2000.0
+                            handler_threshold = 1000.0
+                        if queue_wait_ms >= queue_wait_threshold:
                             self.logger.log_info(
                                 "QUEUE WAIT TIME "
                                 f"chat_id={chat_id} lane={lane} kind={kind} "
                                 f"queue_wait_ms={queue_wait_ms:.1f} "
                                 f"yield_ms={yield_ms:.1f}"
                             )
-                        if elapsed_ms >= 100 or lane != LANE_NORMAL:
+                        if elapsed_ms >= handler_threshold or (
+                            self.debug_timing and lane != LANE_NORMAL
+                        ):
                             self.logger.log_info(
                                 "HANDLER TIME "
                                 f"chat_id={chat_id} lane={lane} kind={kind} "
