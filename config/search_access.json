@@ -1,0 +1,189 @@
+{
+  "groups": {
+    "23608872": {
+      "enabled": true,
+      "usage": {
+        "2026-08-12": {
+          "68074059": {
+            "count": 27,
+            "notified": true
+          },
+          "69020434": {
+            "count": 13,
+            "notified": false
+          }
+        }
+      },
+      "allowed_users": {
+        "68074059": {
+          "username": "osine1",
+          "display": "@osine1"
+        },
+        "69020434": {
+          "username": "Meli_E9",
+          "display": "@Meli_E9"
+        }
+      }
+    },
+    "9429374": {
+      "enabled": true,
+      "usage": {
+        "2026-08-12": {
+          "68074059": {
+            "count": 19,
+            "notified": false
+          },
+          "69020434": {
+            "count": 2,
+            "notified": false
+          }
+        }
+      },
+      "allowed_users": {}
+    },
+    "22084753": {
+      "enabled": false,
+      "usage": {},
+      "allowed_users": {}
+    },
+    "22168428": {
+      "enabled": true,
+      "usage": {},
+      "allowed_users": {}
+    },
+    "23437570": {
+      "enabled": true,
+      "usage": {},
+      "allowed_users": {}
+    },
+    "23405835": {
+      "enabled": true,
+      "usage": {},
+      "allowed_users": {}
+    },
+    "14188636": {
+      "enabled": true,
+      "usage": {},
+      "allowed_users": {}
+    },
+    "22972574": {
+      "enabled": true,
+      "allowed_users": {
+        "42294444": {
+          "username": "Mr_ll_ll",
+          "display": "@Mr_ll_ll"
+        },
+        "68298038": {
+          "username": "User_lin",
+          "display": "@User_lin"
+        }
+      },
+      "usage": {}
+    },
+    "22969373": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
+    },
+    "21249791": {
+      "enabled": false,
+      "allowed_users": {
+        "68084537": {
+          "username": "aifox",
+          "display": "@aifox"
+        },
+        "39113695": {
+          "username": "momo051",
+          "display": "@momo051"
+        },
+        "67391301": {
+          "username": "Raha_Alizm",
+          "display": "@Raha_Alizm"
+        }
+      },
+      "usage": {}
+    },
+    "22161814": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
+    },
+    "23645003": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
+    },
+    "22710034": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
+    },
+    "22086973": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
+    },
+    "23696020": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
+    },
+    "22752290": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
+    },
+    "23375191": {
+      "enabled": true,
+      "allowed_users": {
+        "64275711": {
+          "username": "Nazanin89000",
+          "display": "@Nazanin89000"
+        }
+      },
+      "usage": {}
+    },
+    "22222270": {
+      "enabled": true,
+      "allowed_users": {
+        "68477365": {
+          "username": "sahel_288",
+          "display": "@sahel_288"
+        }
+      },
+      "usage": {
+        "2026-08-17": {}
+      }
+    },
+    "23700879": {
+      "enabled": false,
+      "allowed_users": {
+        "36299487": {
+          "username": "hhhtttddd",
+          "display": "@hhhtttddd"
+        },
+        "35330307": {
+          "username": null,
+          "display": "𝗡𝗮𝗱𝗶𝗮"
+        },
+        "68905057": {
+          "username": "zahra_3zZz",
+          "display": "@zahra_3zZz"
+        },
+        "68194299": {
+          "username": "SADRA7_7",
+          "display": "@SADRA7_7"
+        },
+        "7556149": {
+          "username": "Aa_Aa8485",
+          "display": "@Aa_Aa8485"
+        },
+        "38446871": {
+          "username": "wolf_en_450",
+          "display": "@wolf_en_450"
+        }
+      },
+      "usage": {}
+    }
+  }
+}

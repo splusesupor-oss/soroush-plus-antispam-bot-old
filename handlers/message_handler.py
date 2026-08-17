@@ -5655,8 +5655,6 @@ async def handle_new_message(bot, event):
                     admin_tools.log_action(
                         chat_id, sender, "آزاد کردن کاربر", target=user)
                     await event.reply("♻️ کاربر آزاد شد ✅")
-                else:
-                    await event.reply("❌ آزاد کردن انجام نشد")
 
             except Exception as e:
                 await event.reply(f"❌ خطا در آزاد کردن:\n{e}")
