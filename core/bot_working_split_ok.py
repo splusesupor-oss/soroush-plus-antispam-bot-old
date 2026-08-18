@@ -661,6 +661,34 @@ class SoroushAntiSpamBot:
                     # Tracker retention is independent from moderation state.
                     from modules import message_tracker
                     message_tracker.cleanup_expired()
+                    # 🧟 هرس دوره‌ای زامبی‌های سِندر (sender_pending).
+                    #
+                    # drop_stale_pending پیش‌تر فقط هنگام timeout یک RPC
+                    # اجرا می‌شد؛ ورودی‌هایی مثل پینگ‌های keepalive که از
+                    # مسیر client._call نمی‌گذرند هرگز مهر زمان نمی‌خوردند
+                    # و برای همیشه در _pending_state می‌ماندند (در لاگ:
+                    # sender_pending=590 و سیل PONG های قدیمی). هر reconnect
+                    # هم همهٔ آن‌ها را دوباره روی سوکت می‌فرستاد و همین
+                    # لَگ‌های ناگهانی و کندی دستورات مدیریتی را می‌ساخت.
+                    # حالا هر ۶۰ ثانیه: اول همهٔ معلق‌ها مهر زمان می‌خورند،
+                    # بعد هر چه بیش از ۱۸۰ ثانیه مانده (سه برابر مهلت ۶۰
+                    # ثانیه‌ای RPC — قطعاً مرده) پاک می‌شود.
+                    try:
+                        _sender = getattr(self.client, "_sender", None)
+                        if _sender is not None:
+                            connection_guard.note_pending(_sender)
+                            _dropped = connection_guard.drop_stale_pending(
+                                _sender, time.monotonic() - 180)
+                            if _dropped:
+                                _left = len(
+                                    getattr(_sender, "_pending_state", None)
+                                    or {})
+                                self.logger.log_info(
+                                    "SENDER PENDING PRUNED "
+                                    f"dropped={_dropped} remaining={_left}")
+                    except Exception as prune_error:
+                        self.logger.log_error(
+                            f"SENDER PENDING PRUNE FAILED: {prune_error!r}")
                 except Exception as error:
                     self.logger.log_error(f"TEMPORARY STATE CLEANUP FAILED: {error!r}")
                 await asyncio.sleep(60)
