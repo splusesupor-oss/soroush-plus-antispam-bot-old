@@ -998,16 +998,27 @@ SPAM_HISTORY_SWEEP_LIMIT = 300
 async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
     """Use tracked IDs first; history sweep is bounded and background-only.
 
-    A non-empty seed is authoritative for the current spam wave, so no
-    GetHistory request is needed on the hot path.  Only a seedless recovery
-    sweep reads a small, rate-limited history window.
+    ⚠️ آی‌دی‌های ردیابِ حافظه‌ای همیشه ادغام می‌شوند. پیش‌تر با وجود
+    حتی یک seed، فقط همان seed حذف می‌شد و بقیهٔ موج (که ingest همه
+    را در message_tracker ثبت کرده) جا می‌ماند — همان باگ «بعد از بن
+    فقط ۲-۳ پیام پاک می‌شود». ادغام ردیاب هیچ RPC ای ندارد؛ فقط
+    خواندن حافظه است. جاروی تاریخچه (GetHistory) همچنان فقط برای
+    بازیابیِ بدون seed و بدون ردیاب استفاده می‌شود.
     """
     ids = {message_id for message_id in seed_ids
            if isinstance(message_id, int) and message_id > 0}
+    tracked = message_tracker.spam_snapshot(chat_id, user_id)
+    tracked_ids = {
+        message_id for message_id in tracked
+        if isinstance(message_id, int) and message_id > 0
+    }
+    ids.update(tracked_ids)
     if ids:
         bot.logger.log_info(
             "SPAM HISTORY SWEEP SKIPPED "
-            f"chat_id={chat_id} user_id={user_id} seed_ids={len(ids)}"
+            f"chat_id={chat_id} user_id={user_id} "
+            f"seed_ids={len(seed_ids or ())} tracked_ids={len(tracked_ids)} "
+            f"total={len(ids)}"
         )
         return ids
 
