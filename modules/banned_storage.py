@@ -1,11 +1,18 @@
 """ذخیره‌سازی سازگارِ کاربران بن‌شده به‌صورت دائمی برای هر گروه."""
 import json
+import os
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from modules.group_id import normalize_group_id
 
 
 FILE = Path(__file__).resolve().parent.parent / "config" / "banned_users.json"
+
+# ✍️ نویسندهٔ تک‌نخی: نوشتن روی دیسک FIFO و خارج از حلقهٔ رویداد انجام
+# می‌شود. با یک worker، ترتیب نوشتن‌ها هرگز جابه‌جا نمی‌شود.
+_WRITER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="banned-save")
 
 # ⚡️ کش mtime-محور — دقیقاً همان الگوی modules/admin_storage.py.
 # فایل banned_users.json ممکن است چند مگابایت باشد؛ خواندن و پارس آن در
@@ -35,18 +42,48 @@ def load_banned():
     return _cache
 
 
-def save_banned(data):
-    global _cache, _cache_mtime
-    FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    # کش با همان دادهٔ نوشته‌شده همگام می‌ماند تا load بعدی فایل را نخواند.
-    _cache = data
+def _write_payload(payload):
+    """نوشتن اتمیک (temp + replace)؛ فقط داخل نخ نویسنده اجرا می‌شود."""
+    global _cache_mtime
+    temp_path = None
     try:
+        handle, temp_path = tempfile.mkstemp(
+            dir=str(FILE.parent), suffix=".tmp")
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+        os.replace(temp_path, FILE)
+        temp_path = None
         _cache_mtime = FILE.stat().st_mtime_ns
-    except OSError:
-        _cache_mtime = None
+    except Exception:
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
+def save_banned(data):
+    """ذخیرهٔ بن‌ها بدون فریز کردن ربات.
+
+    این فایل به چند مگابایت رسیده است. نوشتنِ همگامِ آن با indent روی
+    حافظهٔ کند گوشی، حلقهٔ رویداد را ۵ تا ۸ ثانیه یخ می‌زد (فریز بعد از
+    هر بن خودکار؛ همان کندی «ثبت مالک/لغو مالک»). حالا:
+      1) کش بلافاصله به‌روز می‌شود؛ همهٔ خواندن‌ها همان لحظه دادهٔ جدید
+         را می‌بینند (منطق بن هیچ تغییری نکرده).
+      2) serialize فشرده است (بدون indent → تقریباً نصف).
+      3) نوشتن روی دیسک به نخ نویسندهٔ تک‌نخی سپرده می‌شود تا FUSE
+         کندِ اندروید، حلقهٔ رویداد را بلاک نکند. ترتیب نوشتن‌ها با
+         یک worker تضمین‌شده FIFO است.
+    """
+    global _cache
+    _cache = data
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    try:
+        _WRITER.submit(_write_payload, payload)
+    except Exception:
+        # اگر نخ نویسنده در دسترس نبود (مثلاً هنگام خاموش شدن)، همان
+        # مسیر همگام قبلی به عنوان آخرین راه استفاده می‌شود.
+        _write_payload(payload)
 
 
 def _normalise_identifier(value):
