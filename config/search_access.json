@@ -156,7 +156,7 @@
       }
     },
     "23700879": {
-      "enabled": false,
+      "enabled": true,
       "allowed_users": {
         "36299487": {
           "username": "hhhtttddd",
@@ -189,6 +189,13 @@
       "enabled": true,
       "allowed_users": {},
       "usage": {}
+    },
+    "23211976": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {
+        "2026-08-18": {}
+      }
     }
   }
 }
