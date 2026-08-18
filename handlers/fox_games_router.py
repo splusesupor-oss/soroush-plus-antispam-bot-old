@@ -1008,6 +1008,9 @@ async def _start_karagah(bot, event, chat_id, logger):
     async def on_abort():
         await event.reply(karagah.NOT_ENOUGH)
 
+    async def on_dm_failed():
+        await event.reply(karagah.DM_FAILED_MESSAGE)
+
     async def on_roles(chosen):
         # نقش دزد فقط از راه پیوی؛ هرگز داخل گروه.
         return await karagah.deliver_role(bot.client, chat_id, chosen, logger=logger)
@@ -1041,6 +1044,7 @@ async def _start_karagah(bot, event, chat_id, logger):
 
     karagah.schedule(chat_id, session["session_id"], {
         "on_abort": on_abort,
+        "on_dm_failed": on_dm_failed,
         "on_roles": on_roles,
         "on_roster": on_roster,
         "on_thief_win": on_thief_win,

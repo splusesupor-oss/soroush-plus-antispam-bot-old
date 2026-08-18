@@ -36,8 +36,8 @@ WINNER_SILVER = 12
 THIEF_BRONZE = 12
 OBJECT_OPTIONS = 5
 
-DM_TIMEOUT = 12
-DM_RETRIES = 2
+DM_TIMEOUT = 12          # مهلت هر تلاشِ send (ثانیه) — همان مقدار خون‌آشام
+DM_RETRIES = 3           # حداکثر تلاش روی همان بازیکن برای خطای موقت
 
 _STORE = SessionStore(GAME_NAME)
 _RANDOM = random.SystemRandom()
@@ -52,6 +52,10 @@ OBJECTS = (
 
 ALREADY_RUNNING = "🕵️ یک پرونده همین حالا در جریان است."
 NOT_ENOUGH = "🕵️ تعداد شرکت‌کننده کافی نبود؛ پرونده بسته شد."
+DM_FAILED_MESSAGE = (
+    "🕵️ این پرونده تشکیل نشد.\n\n"
+    "چند لحظه دیگر دوباره «کارگاه» را بفرستید."
+)
 ROLE_MESSAGE = (
     "🕵️ شما دزد هستید!\n\n"
     "🎒 شیء دزدیده‌شده: {obj}\n\n"
@@ -271,31 +275,167 @@ def abandon(chat_id, session_id=None, logger=None):
 
 
 async def deliver_role(client, chat_id, chosen, logger=None):
-    """نقش دزد فقط با پیوی؛ اگر پیوی بسته بود دزد دیگری انتخاب می‌شود."""
-    failed = set()
-    current = chosen
-    while current is not None:
-        player = current["player"]
-        message = ROLE_MESSAGE.format(obj=current["object"])
-        for attempt in range(1, DM_RETRIES + 1):
+    """نقش دزد را **فقط** از راه پیام خصوصی می‌رساند.
+
+    کپی مستقل از مکانیزم اثبات‌شدهٔ بازی خون‌آشام (بدون اشتراک کد):
+      ۱. ارسال اول با شیء کاربر (peer با access_hash واقعی) و بعد با
+         شناسهٔ عددی به‌عنوان آخرین راه.
+      ۲. خطای موقت (timeout/شبکه/RPC) با چند تلاشِ timeout دار مهار
+         می‌شود؛ خطای دائمی (حریم خصوصی/بلاک) → نقش به بازیکن دیگری
+         منتقل می‌شود.
+      ۳. هیچ نقشی هرگز داخل گروه اعلام نمی‌شود.
+
+    خروجی ``(chosen, mode)`` با mode برابر ``"dm"`` یا ``"failed"``.
+    """
+    attempted = 0
+    session = _STORE.get(chat_id)
+    max_attempts = max(
+        len(session["players"]) if session else 1, 1
+    ) * DM_RETRIES + 2
+    while chosen is not None and attempted < max_attempts:
+        attempted += 1
+        ok, error, transient = await send_role_dm(
+            client, chosen["player"], chosen["object"],
+            logger=logger, chat_id=chat_id)
+        if ok:
+            log(logger, f"FOX KARAGAH ROLE DELIVERED chat_id={chat_id} "
+                        f"attempts={attempted}")
+            return chosen, "dm"
+        log(logger, f"FOX KARAGAH ROLE UNREACHABLE chat_id={chat_id} "
+                    f"user_id={chosen['player'].get('user_id')} "
+                    f"reason={error!r} transient={transient} "
+                    f"-> trying another player")
+        chosen = reassign_thief(
+            chat_id, chosen["player"].get("user_id"), logger)
+
+    log_error(logger, f"FOX KARAGAH ROLE UNDELIVERABLE chat_id={chat_id} "
+                      f"attempts={attempted}")
+    return None, "failed"
+
+
+def _is_transient_dm_error(error):
+    """آیا خطای ارسالِ نقش «موقت» است یا «دائمی»؟ (کپی مستقل از خون‌آشام)"""
+    if error is None:
+        return False
+    name = error.__class__.__name__
+    text = str(error).lower()
+    transient_names = (
+        "timeout", "timedouterror", "rpc error", "flood", "servererror",
+        "network", "connectionerror", "ioerror", "oserror", "typeerror",
+    )
+    transient_keywords = (
+        "timeout", "timed out", "flood", "network", "connection",
+        "cannot connect", "connection reset", "timedout",
+    )
+    if any(k in name.lower() for k in transient_names):
+        return True
+    return any(k in text for k in transient_keywords)
+
+
+async def send_role_dm(client, player, stolen_object, logger=None, chat_id=None):
+    """پیام نقش دزد را به پیوی می‌فرستد. ``(ok, error, transient)``.
+
+    ترتیب تلاش (همان روش خون‌آشام):
+      ۱. شیء کاربر که هنگام «شرکت» ذخیره شده — دارای access_hash و بدون
+         نیاز به کش یا شبکه.
+      ۲. شناسهٔ عددی، فقط به عنوان آخرین راه.
+    هر تلاش مهلت دارد تا یک RPC گیرکرده، بازی را برای همیشه قفل نکند.
+    """
+    message = ROLE_MESSAGE.format(obj=stolen_object)
+    user_id = player.get("user_id")
+    targets = []
+    peer = player.get("peer")
+    if peer is not None:
+        targets.append(("peer_object", peer))
+    if user_id is not None:
+        targets.append(("user_id", user_id))
+
+    if not targets:
+        log_error(logger, f"FOX KARAGAH ROLE DM FAILED chat_id={chat_id} "
+                          f"user_id={user_id} reason=no_target")
+        return False, "no_target", False
+
+    last_error = None
+    for attempt in range(DM_RETRIES):
+        last_error = None
+        for label, target in targets:
             try:
+                log(logger, f"FOX KARAGAH ROLE DM TRY chat_id={chat_id} "
+                            f"user_id={user_id} via={label} attempt={attempt + 1}")
                 await asyncio.wait_for(
-                    client.send_message(player["peer"], message),
+                    client.send_message(target, message),
                     timeout=DM_TIMEOUT,
                 )
-                log(logger, f"FOX KARAGAH ROLE DELIVERED chat_id={chat_id} "
-                            f"user_id={player['user_id']} attempt={attempt}")
-                return current, "dm"
+                log(logger, f"FOX KARAGAH ROLE DM SENT chat_id={chat_id} "
+                            f"user_id={user_id} via={label}")
+                return True, None, False
             except asyncio.CancelledError:
                 raise
+            except asyncio.TimeoutError:
+                last_error = TimeoutError(
+                    f"send_message timed out after {DM_TIMEOUT}s"
+                )
+                log_error(logger, f"FOX KARAGAH ROLE DM TIMEOUT "
+                                  f"chat_id={chat_id} user_id={user_id} "
+                                  f"via={label} attempt={attempt + 1}")
             except Exception as error:
-                log_error(logger, f"FOX KARAGAH DM FAILED chat_id={chat_id} "
-                                  f"user_id={player['user_id']} attempt={attempt} "
-                                  f"error={error!r}")
-                await asyncio.sleep(0.5)
-        failed.add(player["user_id"])
-        current = choose_thief(chat_id, exclude_ids=failed, logger=logger)
-    return None, "failed"
+                last_error = error
+                log_error(logger, f"FOX KARAGAH ROLE DM ATTEMPT FAILED "
+                                  f"chat_id={chat_id} user_id={user_id} "
+                                  f"via={label} error={error!r} "
+                                  f"attempt={attempt + 1}")
+
+        transient = _is_transient_dm_error(last_error)
+        if not transient:
+            break
+        if attempt < DM_RETRIES - 1:
+            await asyncio.sleep(1)
+
+    transient = _is_transient_dm_error(last_error)
+    log_error(logger, f"FOX KARAGAH ROLE DM FAILED chat_id={chat_id} "
+                      f"user_id={user_id} error={last_error!r} "
+                      f"transient={transient}")
+    return False, last_error, transient
+
+
+def reassign_thief(chat_id, user_id, logger=None):
+    """دزد را به بازیکن دیگری منتقل می‌کند (پیوی بسته/بلاک).
+
+    همان منطق ``reassign_vampire``: بازیکنِ دردسترس بعدی به‌صورت
+    تصادفی انتخاب می‌شود؛ دزدِ دورِ قبل در صورت امکان کنار گذاشته
+    می‌شود. شیء دزدیده‌شده همان قبلی می‌ماند. خروجی ساختار
+    ``choose_thief`` یا ``None``.
+    """
+    session = _STORE.get(chat_id)
+    if not session or session.get("phase") != "assigning":
+        return None
+
+    session.setdefault("unreachable", set()).add(user_id)
+    remaining = [
+        index
+        for index, player in enumerate(session["players"])
+        if player["user_id"] not in session["unreachable"]
+    ]
+    if not remaining:
+        log_error(logger, f"FOX KARAGAH NO REACHABLE PLAYER chat_id={chat_id}")
+        return None
+
+    last_thief = _LAST_THIEF_BY_CHAT.get(chat_id)
+    preferred = [i for i in remaining
+                 if session["players"][i]["user_id"] != last_thief]
+    pool = preferred or remaining
+    index = _RANDOM.choice(pool)
+    session["thief"] = index
+    thief = session["players"][index]
+    log(logger, f"FOX KARAGAH REASSIGNED chat_id={chat_id} "
+                f"from_user_id={user_id} to_user_id={thief['user_id']} "
+                f"number={index + 1}")
+    return {
+        "number": index + 1,
+        "player": dict(thief),
+        "object": session["object"],
+        "players": list(session["players"]),
+    }
 
 
 async def run_game(chat_id, session_id, callbacks, logger=None,
@@ -331,7 +471,11 @@ async def run_game(chat_id, session_id, callbacks, logger=None,
         if chosen is None:
             log_error(logger, f"FOX KARAGAH ABORT chat_id={chat_id} reason=dm_failed_all")
             abandon(chat_id, session_id, logger)
-            await callbacks["on_abort"]()
+            dm_failed = callbacks.get("on_dm_failed")
+            if dm_failed is not None:
+                await dm_failed()
+            else:
+                await callbacks["on_abort"]()
             finished = True
             return
 
