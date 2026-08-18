@@ -5514,6 +5514,10 @@ async def handle_new_message(bot, event):
                 _c = chat_id
                 _ev = event
                 _b = bot
+                # ادمینِ صادرکنندهٔ دستور برای ثبت در لاگ مدیریتی؛ نبودِ
+                # همین alias باعث خطای «name '_s' is not defined» در
+                # آزادکردن با ریپلای می‌شد.
+                _s = sender
                 async def _on_ok(_r):
                     try:
                         before_spam = _b.tracker.get_count(_c, _u.id)
