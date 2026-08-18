@@ -23,7 +23,12 @@ GAME_NAME = "karagah"
 COMMAND = "کارگاه"
 JOIN_WORD = "شرکت"
 
-PLAYERS_NEEDED = 5
+# حداقل ۴ و حداکثر ۵ بازیکن؛ اگر ظرفیت ۵ نفر پر شود بازی زودتر شروع
+# می‌شود، وگرنه در پایان مهلت ثبت‌نام با ۴ نفر هم تشکیل می‌شود.
+MIN_PLAYERS = 4
+MAX_PLAYERS = 5
+# سازگاری با متن‌های قدیمی
+PLAYERS_NEEDED = MAX_PLAYERS
 JOIN_SECONDS = 60
 THIEF_GUESS_SECONDS = 40
 OBJECT_GUESS_SECONDS = 30
@@ -88,7 +93,7 @@ def join(chat_id, user_id, user, logger=None):
         return "closed", []
     if user_id in session["ids"]:
         return "duplicate", list(session["players"])
-    if len(session["players"]) >= PLAYERS_NEEDED:
+    if len(session["players"]) >= MAX_PLAYERS:
         return "full", list(session["players"])
     player = {
         "user_id": user_id,
@@ -109,7 +114,7 @@ def player_count(chat_id):
 
 
 def is_full(chat_id):
-    return player_count(chat_id) >= PLAYERS_NEEDED
+    return player_count(chat_id) >= MAX_PLAYERS
 
 
 def roster_lines(players):
@@ -126,7 +131,7 @@ def choose_thief(chat_id, exclude_ids=(), logger=None):
     if not session or session.get("phase") not in {"joining", "assigning"}:
         return None
     players = session["players"]
-    if len(players) < PLAYERS_NEEDED:
+    if len(players) < MIN_PLAYERS:
         return None
     last_thief = _LAST_THIEF_BY_CHAT.get(chat_id)
     candidates = [
@@ -309,7 +314,7 @@ async def run_game(chat_id, session_id, callbacks, logger=None,
         session = _STORE.get(chat_id)
         if not session or session["session_id"] != session_id:
             return
-        if len(session["players"]) < PLAYERS_NEEDED:
+        if len(session["players"]) < MIN_PLAYERS:
             abandon(chat_id, session_id, logger)
             await callbacks["on_abort"]()
             finished = True

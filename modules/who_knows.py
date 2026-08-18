@@ -204,9 +204,9 @@ def answer(chat_id, user_id, text):
     state = _ACTIVE.get(chat_id)
     if not state:
         return None
-    if time.monotonic() > state["deadline"]:
-        # مهلت گذشته؛ مرحله را تایمر می‌بندد.
-        return None
+    # ⚠️ چک مهلت عمداً حذف شد: تا وقتی تایمر مرحله را نبسته، پاسخِ
+    # رسیده پذیرفته می‌شود (در گروه شلوغ پیام ممکن است چند ثانیه در
+    # صف مانده باشد؛ جوابِ به‌موقعِ کاربر نباید بی‌صدا رد شود).
     # پاسخ باید کوتاه باشد (یک مورد)، نه جملهٔ بلند یا چندخطی.
     raw = str(text or "").strip()
     if not raw or "\n" in raw or len(raw) > 40:

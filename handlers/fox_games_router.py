@@ -999,7 +999,8 @@ async def _start_karagah(bot, event, chat_id, logger):
     await event.reply(
         "🕵️ پرونده جدید ساخته شد\n\n"
         "منتظر بازیکنان...\n\n"
-        f"تعداد مورد نیاز: {to_persian_digits(karagah.PLAYERS_NEEDED)} نفر\n\n"
+        f"تعداد مورد نیاز: {to_persian_digits(karagah.MIN_PLAYERS)} تا "
+        f"{to_persian_digits(karagah.MAX_PLAYERS)} نفر\n\n"
         f"برای شرکت بنویسید: {karagah.JOIN_WORD}\n"
         f"⏳ مهلت ثبت‌نام: {to_persian_digits(karagah.JOIN_SECONDS)} ثانیه"
     )
@@ -1062,7 +1063,7 @@ async def _karagah_message(bot, event, chat_id, user_id, sender, text, logger):
         if result == "joined":
             await event.reply(
                 f"✅ ثبت شد ({to_persian_digits(len(players))}"
-                f"/{to_persian_digits(karagah.PLAYERS_NEEDED)})"
+                f"/{to_persian_digits(karagah.MAX_PLAYERS)})"
             )
         elif result == "duplicate":
             await event.reply("⚠️ شما قبلاً ثبت‌نام کرده‌اید.")

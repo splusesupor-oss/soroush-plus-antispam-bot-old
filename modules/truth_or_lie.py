@@ -396,24 +396,31 @@ def start(chat_id):
 def _parse_guess(text):
     """تبدیل پاسخ کاربر به True/False؛ None اگر پاسخ این بازی نیست."""
     value = str(text or "").strip().translate(_PERSIAN_DIGITS)
-    value = value.replace("️", "").replace("1️⃣", "1").replace("2️⃣", "2")
+    # ایموجی‌های کیبورد مثل 1️⃣ و 2️⃣ هم پذیرفته می‌شوند
+    # (حذف variation selector و keycap).
+    value = value.replace("\ufe0f", "").replace("\u20e3", "")
     normalized = " ".join(value.replace("ي", "ی").split())
-    if normalized in {"1", TRUE_WORD, "حقیقته", "درست", "راست"}:
+    if normalized in {"1", TRUE_WORD, "حقیقته", "درست", "درسته", "راست", "راسته"}:
         return True
-    if normalized in {"2", LIE_WORD, "دروغه", "غلط", "نادرست"}:
+    if normalized in {"2", LIE_WORD, "دروغه", "غلط", "غلطه", "نادرست"}:
         return False
     return None
 
 
 def answer(chat_id, user_id, text):
-    """بررسی پاسخ. خروجی dict نتیجه یا None اگر پیام پاسخ بازی نیست."""
+    """بررسی پاسخ. خروجی dict نتیجه یا None اگر پیام پاسخ بازی نیست.
+
+    ⚠️ عمداً هیچ چک مهلتی اینجا نیست: تا وقتی سوال باز است (تایمر ۲۵
+    ثانیه هنوز آن را نبسته) پاسخ پذیرفته می‌شود. چک سخت‌گیرانهٔ
+    deadline باعث می‌شد در گروه‌های شلوغ که پیام چند ثانیه در صف
+    می‌ماند، جوابِ به‌موقعِ کاربر بی‌صدا رد شود و نه سکه بیاید و نه
+    پیام «اشتباه بود».
+    """
     state = _ACTIVE.get(chat_id)
     if not state:
         return None
     guess = _parse_guess(text)
     if guess is None:
-        return None
-    if time.monotonic() > state["deadline"]:
         return None
     _ACTIVE.pop(chat_id, None)
     statement, truth = STATEMENTS[state["index"]]
