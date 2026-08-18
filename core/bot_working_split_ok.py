@@ -661,6 +661,11 @@ class SoroushAntiSpamBot:
                     # Tracker retention is independent from moderation state.
                     from modules import message_tracker
                     message_tracker.cleanup_expired()
+                    # 🧹 تاریخچهٔ اسپم هم مثل tracker هرس دوره‌ای می‌شود؛
+                    # بدون این، RAM در گروه‌های پرترافیک ساعت‌به‌ساعت رشد
+                    # می‌کرد و ربات به‌تدریج کند می‌شد (رفع با ری‌استارت).
+                    from modules import spam_history as _spam_history
+                    _spam_history.cleanup_expired()
                     # 🧟 هرس دوره‌ای زامبی‌های سِندر (sender_pending).
                     #
                     # drop_stale_pending پیش‌تر فقط هنگام timeout یک RPC
