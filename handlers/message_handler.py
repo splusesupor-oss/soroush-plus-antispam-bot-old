@@ -3596,17 +3596,22 @@ async def handle_new_message(bot, event):
             bot.logger.log_info(
                 "NAME FAMILY TRACE HANDLER_BEFORE_SUBMIT "
                 f"chat_id={chat_id} user_id={user_id} "
-                f"line_count={len(clean_text.splitlines())} char_count={len(clean_text)}"
+                f"line_count={len(message_text.splitlines())} char_count={len(message_text)}"
             )
             # هر ثبت اسم فامیل ممکن است تا ۷ جستجوی وب همگام انجام دهد
             # (هر دسته یک بار، هرکدام تا ۲ ثانیه). اجرای مستقیم آن حلقه را
             # ده‌ها ثانیه قفل می‌کرد و همهٔ گروه‌ها بی‌پاسخ می‌ماندند.
+            #
+            # ⚠️ متن «خام» پیام پاس داده می‌شود، نه clean_text:
+            # normalize_command همهٔ خط‌ها را به فاصله تبدیل می‌کرد، پس
+            # پاسخ ۷ خطی همیشه یک‌خطی می‌رسید و parse_failed می‌شد —
+            # همان باگی که هیچ شرکت‌کننده‌ای ثبت نمی‌شد.
             submitted = await _asyncio.to_thread(
                 submit_name_family,
                 chat_id,
                 user_id,
                 _format_group_member(sender),
-                clean_text,
+                message_text,
                 logger=bot.logger,
                 learning_min_observations=bot.config_manager.get("name_family_learning_min_observations", 5),
                 learning_min_unique_users=bot.config_manager.get("name_family_learning_min_unique_users", 3),

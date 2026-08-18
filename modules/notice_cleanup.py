@@ -255,21 +255,29 @@ class NoticeCleanup:
                 self._worker(key), name=f"notice-cleanup-{key}"
             )
 
-    def _enqueue_delete(self, chat_id, message_ids):
+    def _enqueue_delete(self, chat_id, message_ids, rpc_chat=None):
         queue = self.delete_queue
         if queue is None or not message_ids:
-            return
+            return None
         try:
             # Notification deletes should have high priority (0) so they are not
             # head-blocked by a heavy spam or manual delete for the same chat.
             # They share the per-chat PriorityQueue with manual/spam, but with
             # priority 0 they will jump ahead.
-            queue.enqueue(_chat_id_for_rpc(chat_id), message_ids, priority=0)
+            #
+            # ⚠️ برای RPC حذف باید chat_id «اصلی» رویداد استفاده شود
+            # (مثلاً ‎-1000022790753‎)؛ آی‌دی نرمال‌شدهٔ خام (22790753)
+            # با ChannelPrivateError یا حذفِ هیچ، شکست می‌خورد. خروجی
+            # Future صف حذف هم برگردانده می‌شود تا نتیجهٔ واقعی
+            # (deleted, remaining) لاگ شود، نه deleted=0 همیشگی.
+            target = rpc_chat if rpc_chat is not None else _chat_id_for_rpc(chat_id)
+            return queue.enqueue(target, message_ids, priority=0)
         except Exception as error:
             if self.logger is not None:
                 self.logger.log_error(
                     f"NOTICE CLEANUP ENQUEUE FAILED chat_id={chat_id} error={error!r}"
                 )
+            return None
 
     async def _worker(self, chat_id):
         event = self._events[chat_id]
@@ -283,6 +291,13 @@ class NoticeCleanup:
                     await event.wait()
                     continue
                 now = time.time()
+                # آی‌دی اصلیِ ذخیره‌شده در رکوردها (فرم کامل ‎-100...‎)
+                # قبل از pop برداشته می‌شود تا RPC حذف با همان انجام شود.
+                rpc_chat = None
+                for row in rows:
+                    if row.get("chat_id") is not None:
+                        rpc_chat = row.get("chat_id")
+                        break
                 due = self.pop_due(chat_id, now=now)
                 if due:
                     if self.logger is not None:
@@ -292,7 +307,7 @@ class NoticeCleanup:
                         )
                     if self._dirty:
                         self._persist()
-                    result = self._enqueue_delete(chat_id, due)
+                    result = self._enqueue_delete(chat_id, due, rpc_chat=rpc_chat)
                     deleted, remaining = 0, list(due)
                     try:
                         if asyncio.isfuture(result) or asyncio.iscoroutine(result):

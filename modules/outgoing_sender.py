@@ -249,11 +249,22 @@ class OutgoingSender:
                     if gate_wait_ms >= 20 and self.logger:
                         self.logger.log_info(f"OUTGOING SEND GATE wait_ms={gate_wait_ms:.1f} chat_id={chat_id} priority={priority}")
                 try:
-                    coro = factory()
-                    if inspect.isawaitable(coro):
-                        result = await coro
-                    else:
-                        result = coro
+                    # ⚠️ همیشه خارج از حالت dispatch اجرا شود: worker با
+                    # create_task از داخل کانتکست dispatcher ساخته می‌شود و
+                    # _DISPATCH_ACTIVE را به ارث می‌برد؛ در نتیجه factoryهای
+                    # خامی که client.send_message پچ‌شده را صدا می‌زدند،
+                    # دوباره صف می‌شدند و None برمی‌گرداندند — on_done با
+                    # sent=None اجرا می‌شد و اعلان هرگز برای پاکسازی ۶۰
+                    # ثانیه ثبت نمی‌شد (خطای NOTICE CLEANUP ID MISSING).
+                    _token = _DISPATCH_ACTIVE.set(False)
+                    try:
+                        coro = factory()
+                        if inspect.isawaitable(coro):
+                            result = await coro
+                        else:
+                            result = coro
+                    finally:
+                        _DISPATCH_ACTIVE.reset(_token)
                     self.stats["sent"] += 1
                     if on_done:
                         try:
