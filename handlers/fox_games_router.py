@@ -13,6 +13,7 @@ from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 from modules.fox_games import (
     battle,
     best_answer,
+    karagah,
     laugh_or_lose,
     lucky_box,
     maemma,
@@ -43,6 +44,7 @@ FOX_GAME_COMMANDS = frozenset({
     "مین یاب",
     "بهترین جواب",
     "نبرد",
+    "کارگاه",
     "شرکت",
 })
 
@@ -59,6 +61,7 @@ def any_active(chat_id):
         or maemma.is_active(chat_id)
         or sentence_guess.is_active(chat_id)
         or minesweeper.is_active(chat_id)
+        or karagah.is_active(chat_id)
     )
 
 
@@ -981,6 +984,154 @@ async def _battle_message(bot, event, chat_id, user_id, sender, text, logger):
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 🕵️ کارگاه — پیدا کردن دزد و شیء دزدیده‌شده (همان چرخهٔ اثبات‌شدهٔ خون‌آشام)
+# ---------------------------------------------------------------------------
+async def _start_karagah(bot, event, chat_id, logger):
+    if karagah.is_active(chat_id):
+        await event.reply(karagah.ALREADY_RUNNING)
+        return True
+    session = karagah.start(chat_id, logger)
+    if session is None:
+        await event.reply(karagah.ALREADY_RUNNING)
+        return True
+
+    await event.reply(
+        "🕵️ پرونده جدید ساخته شد\n\n"
+        "منتظر بازیکنان...\n\n"
+        f"تعداد مورد نیاز: {to_persian_digits(karagah.PLAYERS_NEEDED)} نفر\n\n"
+        f"برای شرکت بنویسید: {karagah.JOIN_WORD}\n"
+        f"⏳ مهلت ثبت‌نام: {to_persian_digits(karagah.JOIN_SECONDS)} ثانیه"
+    )
+
+    async def on_abort():
+        await event.reply(karagah.NOT_ENOUGH)
+
+    async def on_roles(chosen):
+        # نقش دزد فقط از راه پیوی؛ هرگز داخل گروه.
+        return await karagah.deliver_role(bot.client, chat_id, chosen, logger=logger)
+
+    async def on_roster(chosen):
+        await event.reply(
+            "🕵️ پرونده جدید ساخته شد\n\n"
+            "شرکت‌کنندگان:\n\n"
+            f"{karagah.roster_lines(chosen['players'])}\n\n"
+            "دزد انتخاب شد و به پیوی شخصی یک نفر ارسال شد 🤫\n\n"
+            "شروع پرونده؟\n"
+            "🕵️ دزد را با «شماره» حدس بزنید\n"
+            f"⏳ {to_persian_digits(karagah.THIEF_GUESS_SECONDS)} ثانیه فرصت دارید"
+        )
+
+    async def on_thief_win(result):
+        thief = result.get("thief") or {}
+        paid = _coins(bot, chat_id, thief.get("user_id"), thief.get("name", "دزد"),
+                      karagah.THIEF_BRONZE, logger,
+                      reference=f"karagah:{chat_id}:{session['session_id']}:thief",
+                      game="karagah_thief")
+        reward = (f"\n🥉 +{to_persian_digits(karagah.THIEF_BRONZE)} سکه برنز برای دزد"
+                  if paid else "")
+        stolen = result.get("object") or "—"
+        await event.reply(
+            "⏰ زمان تمام شد!\n\n"
+            "😈 دزد برنده شد!\n\n"
+            f"🕵️ دزد: {thief.get('name', '—')}\n"
+            f"🎒 شیء دزدیده‌شده: {stolen}{reward}"
+        )
+
+    karagah.schedule(chat_id, session["session_id"], {
+        "on_abort": on_abort,
+        "on_roles": on_roles,
+        "on_roster": on_roster,
+        "on_thief_win": on_thief_win,
+    }, logger=logger)
+    return True
+
+
+async def _karagah_message(bot, event, chat_id, user_id, sender, text, logger):
+    if not karagah.is_active(chat_id):
+        return False
+    state = karagah.phase(chat_id)
+    normalized = normalize_text(text)
+    session = karagah._STORE.get(chat_id)
+    session_id = session["session_id"] if session else 0
+
+    if state == "joining":
+        if normalized != normalize_text(karagah.JOIN_WORD):
+            return False
+        result, players = karagah.join(chat_id, user_id, sender, logger)
+        if result == "joined":
+            await event.reply(
+                f"✅ ثبت شد ({to_persian_digits(len(players))}"
+                f"/{to_persian_digits(karagah.PLAYERS_NEEDED)})"
+            )
+        elif result == "duplicate":
+            await event.reply("⚠️ شما قبلاً ثبت‌نام کرده‌اید.")
+        elif result == "full":
+            await event.reply("⚠️ ظرفیت تکمیل است.")
+        return True
+
+    if state == "thief_guess":
+        result, info = karagah.guess_thief(chat_id, user_id, text, logger)
+        if result in {"closed", "not_player", "bad_number"}:
+            return False
+        if result == "self_guess":
+            await event.reply("⚠️ نمی‌توانید خودتان را انتخاب کنید.")
+            return True
+        if result in {"already", "is_thief"}:
+            return True
+        if result == "wrong":
+            await event.reply(f"❌ اشتباه بود، {info['guesser']['name']}!")
+            return True
+        if result == "found":
+            options_text = "\n".join(
+                f"{index}) {option}"
+                for index, option in enumerate(info["options"], 1)
+            )
+            await event.reply(
+                f"🎯 آفرین {info['guesser']['name']}! دزد را پیدا کردی!\n\n"
+                f"🕵️ دزد: {info['thief']['name']}\n\n"
+                "حالا حدس بزن چه چیزی دزدیده شده؟\n\n"
+                f"{options_text}\n\n"
+                "شماره گزینه را بفرست\n"
+                f"⏳ {to_persian_digits(karagah.OBJECT_GUESS_SECONDS)} ثانیه فرصت داری"
+            )
+            return True
+        return False
+
+    if state == "object_guess":
+        result, info = karagah.guess_object(chat_id, user_id, text, logger)
+        if result in {"closed", "not_finder", "bad_option"}:
+            return False
+        if result == "solved":
+            paid = _coins(bot, chat_id, user_id, info["finder"]["name"],
+                          karagah.WINNER_SILVER, logger,
+                          reference=f"karagah:{chat_id}:{session_id}:winner",
+                          game="karagah")
+            reward = (f"\n🥈 +{to_persian_digits(karagah.WINNER_SILVER)} سکه نقره"
+                      if paid else "")
+            await event.reply(
+                "🏆 پرونده حل شد!\n\n"
+                f"✅ شیء دزدیده‌شده: {info['object']}\n"
+                f"🎉 برنده: {info['finder']['name']}{reward}"
+            )
+            return True
+        if result == "object_wrong":
+            paid = _coins(bot, chat_id, info["thief"]["user_id"],
+                          info["thief"]["name"], karagah.THIEF_BRONZE, logger,
+                          reference=f"karagah:{chat_id}:{session_id}:thief",
+                          game="karagah_thief")
+            reward = (f"\n🥉 +{to_persian_digits(karagah.THIEF_BRONZE)} سکه برنز برای دزد"
+                      if paid else "")
+            await event.reply(
+                "❌ حدس شیء اشتباه بود!\n\n"
+                "😈 دزد برنده شد!\n\n"
+                f"🎒 شیء دزدیده‌شده: {info['object']}\n"
+                f"🕵️ دزد: {info['thief']['name']}{reward}"
+            )
+            return True
+    return False
+
+
 async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     """پیام را به بازی مربوطه می‌سپارد. True یعنی پیام مصرف شد."""
     command = normalize_text(text)
@@ -1004,12 +1155,14 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         return await _start_best_answer(bot, event, chat_id, logger)
     if command == normalize_text("نبرد"):
         return await _start_battle(bot, event, chat_id, user_id, sender, logger)
+    if command == normalize_text("کارگاه"):
+        return await _start_karagah(bot, event, chat_id, logger)
 
     # پیام‌های درون‌بازی — هر بازی فقط session خودش را می‌بیند.
     for responder in (
         _laugh_message, _survival_message, _lucky_box_message, _vampire_message,
         _maemma_message, _sentence_guess_message, _minesweeper_message,
-        _best_answer_message, _battle_message,
+        _best_answer_message, _battle_message, _karagah_message,
     ):
         if await responder(bot, event, chat_id, user_id, sender, text, logger):
             return True
@@ -1026,3 +1179,4 @@ def reset_all(chat_id=None):
     minesweeper.reset_all(chat_id)
     best_answer.reset_all(chat_id)
     battle.reset_all(chat_id)
+    karagah.reset_all(chat_id)

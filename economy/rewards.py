@@ -35,10 +35,14 @@ _REWARDS = {
     "battle":          (2, BRONZE, "نبرد"),
     "sentence_guess":  (3, BRONZE, "ساخت جمله"),
     "minesweeper":     (5, SILVER, "مین یاب"),
+    "who_knows":       (2, BRONZE, "کی بیشتر بلده"),
+    "truth_lie":       (2, BRONZE, "دروغ یا حقیقت"),
+    "karagah_thief":   (12, BRONZE, "کارگاه — دزد"),
     # --- بازی‌های سخت → نقره --------------------------------------------
     "survival":        (8, SILVER, "بقا"),
     "survival_step":   (1, SILVER, "بقا — پاسخ صحیح"),
     "vampire":         (7, SILVER, "خون‌آشام"),
+    "karagah":         (12, SILVER, "کارگاه"),
 }
 
 # جایزهٔ رتبهٔ روزانه (برنز، مثل قبل).

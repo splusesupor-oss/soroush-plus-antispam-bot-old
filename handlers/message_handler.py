@@ -48,6 +48,8 @@ from handlers.fox_games_router import (
     any_active as fox_game_active,
     handle as handle_fox_games,
 )
+from modules import who_knows as _who_knows
+from modules import truth_or_lie as _truth_lie
 # 📥 قابلیت مستقل «دانلود عکس».
 from handlers.photo_download_handler import handle as handle_photo_download
 # ⏳ تاریخ انقضای گروه — قابلیتی کاملاً مستقل با مسیر پردازش جدا.
@@ -555,6 +557,8 @@ def _chat_game_busy(chat_id):
         or flag_guess_active(chat_id)
         or get_correction(chat_id) is not None
         or get_active_question(chat_id) is not None
+        or _who_knows.is_active(chat_id)
+        or _truth_lie.is_active(chat_id)
     )
 
 
@@ -1923,6 +1927,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "بیوگرافی",
     "یاد آوری", "ترجمه", "قفل", "باز", "جک", "تصحیح کلمات",
     "اسم فامیل", "حدس ایموجی", "حدس پرچم", "چهار گزینه ای", "جای خالی", "چیستان",
+    "کی بیشتر بلده", "دروغ یا حقیقت",
     "دانستنی", "حافظه من", "حذف اسم", "حذف حافظه", "قوانین",
     "ثبت قوانین", "حذف قوانین", "ثبت اصل", "اصلم", "موجودی", "فروشگاه",
     "انتقال سکه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن",
@@ -1965,6 +1970,8 @@ def _is_known_internal_command(clean_text, chat_id, user_id):
         or get_active_question(chat_id) is not None
         or get_fill_token(chat_id, user_id) is not None
         or get_riddle_token(chat_id, user_id) is not None
+        or _who_knows.is_active(chat_id)
+        or _truth_lie.is_active(chat_id)
     )
 
 
@@ -3759,6 +3766,144 @@ async def handle_new_message(bot, event):
                 )
             return
 
+        # 🧠 کی بیشتر بلده — پاسخ مرحلهٔ فعال
+        if _who_knows.is_active(chat_id) and clean_text != "کی بیشتر بلده":
+            wk_result = _who_knows.answer(chat_id, user_id, clean_text)
+            if wk_result is not None:
+                try:
+                    economy.award_game(
+                        chat_id, user_id, "who_knows",
+                        reference=f"who_knows:{chat_id}:{wk_result['token']}:{user_id}",
+                        name=_format_group_member(sender),
+                    )
+                except Exception as error:
+                    bot.logger.log_error(f"WHO KNOWS REWARD FAILED: {error!r}")
+                await event.reply("✅ درست است!\n\n🥉 +۲ سکه برنز")
+                next_stage = _who_knows.start(chat_id)
+                if next_stage == "finished":
+                    await event.reply(_who_knows.END_MESSAGE)
+                elif next_stage:
+                    await event.reply(
+                        "🧠 کی بیشتر بلده؟\n\n"
+                        f"«حرف {next_stage['letter']}»\n\n"
+                        f"با این حرف یک {_who_knows.CATEGORY_LABEL[next_stage['category']]} بگو:\n\n"
+                        "⏳ زمان: ۲۵ ثانیه"
+                    )
+
+                    async def who_knows_timer(stage=next_stage):
+                        await _asyncio.sleep(_who_knows.ANSWER_SECONDS)
+                        if _who_knows.timeout(chat_id, stage["token"]):
+                            await event.reply(
+                                "⏰ زمان تمام شد!\n\n"
+                                "🧠 مرحله بسته شد.\n"
+                                "برای ادامه بنویسید: کی بیشتر بلده"
+                            )
+
+                    _track_group_timer(
+                        bot, chat_id,
+                        _asyncio.create_task(who_knows_timer()),
+                    )
+                return
+
+        # 🧠 دروغ یا حقیقت — پاسخ سوال فعال (قبل از دستور «حقیقت» جرأت‌حقیقت)
+        if _truth_lie.is_active(chat_id):
+            tl_result = _truth_lie.answer(chat_id, user_id, clean_text)
+            if tl_result is not None:
+                if tl_result["correct"]:
+                    try:
+                        economy.award_game(
+                            chat_id, user_id, "truth_lie",
+                            reference=f"truth_lie:{chat_id}:{tl_result['token']}:{user_id}",
+                            name=_format_group_member(sender),
+                        )
+                    except Exception as error:
+                        bot.logger.log_error(f"TRUTH LIE REWARD FAILED: {error!r}")
+                    await event.reply(
+                        "✅ درست گفتی!\n\n"
+                        f"جواب صحیح:\n{tl_result['truth_label']}\n\n"
+                        "🎁 جایزه:\n🥉 +۲ برنز"
+                    )
+                else:
+                    await event.reply(
+                        "❌ اشتباه بود!\n\n"
+                        f"جواب صحیح:\n{tl_result['truth_label']}"
+                    )
+                return
+
+        # 🧠 شروع بازی «کی بیشتر بلده»
+        if clean_text == "کی بیشتر بلده":
+            if _who_knows.is_active(chat_id):
+                await event.reply("⏳ یک مرحله همین حالا باز است؛ اول همان را جواب بدهید.")
+                return
+            if _chat_game_busy(chat_id):
+                await event.reply(GAME_BUSY_MESSAGE)
+                return
+            wk_stage = _who_knows.start(chat_id)
+            if wk_stage == "finished":
+                await event.reply(_who_knows.END_MESSAGE)
+                return
+            if not wk_stage:
+                await event.reply(GAME_BUSY_MESSAGE)
+                return
+            await event.reply(
+                "🧠 کی بیشتر بلده؟\n\n"
+                f"«حرف {wk_stage['letter']}»\n\n"
+                f"با این حرف یک {_who_knows.CATEGORY_LABEL[wk_stage['category']]} بگو:\n\n"
+                "⏳ زمان: ۲۵ ثانیه"
+            )
+
+            async def who_knows_start_timer(stage=wk_stage):
+                await _asyncio.sleep(_who_knows.ANSWER_SECONDS)
+                if _who_knows.timeout(chat_id, stage["token"]):
+                    await event.reply(
+                        "⏰ زمان تمام شد!\n\n"
+                        "🧠 مرحله بسته شد.\n"
+                        "برای ادامه بنویسید: کی بیشتر بلده"
+                    )
+
+            _track_group_timer(
+                bot, chat_id,
+                _asyncio.create_task(who_knows_start_timer()),
+            )
+            return
+
+        # 🧠 شروع بازی «دروغ یا حقیقت»
+        if clean_text == "دروغ یا حقیقت":
+            if _truth_lie.is_active(chat_id):
+                await event.reply("⏳ یک سوال همین حالا باز است؛ اول همان را جواب بدهید.")
+                return
+            if _chat_game_busy(chat_id):
+                await event.reply(GAME_BUSY_MESSAGE)
+                return
+            tl_stage = _truth_lie.start(chat_id)
+            if not tl_stage:
+                await event.reply(GAME_BUSY_MESSAGE)
+                return
+            await event.reply(
+                "🧠 دروغ یا حقیقت؟\n\n"
+                "سوال:\n"
+                f"«{tl_stage['question']}»\n\n"
+                "جوابت را بفرست:\n\n"
+                "1️⃣ حقیقت\n"
+                "2️⃣ دروغ\n\n"
+                "⏳ زمان: ۲۵ ثانیه"
+            )
+
+            async def truth_lie_timer(stage=tl_stage):
+                await _asyncio.sleep(_truth_lie.ANSWER_SECONDS)
+                tl_timeout = _truth_lie.timeout(chat_id, stage["token"])
+                if tl_timeout:
+                    await event.reply(
+                        "⏰ زمان تمام شد!\n\n"
+                        f"جواب صحیح:\n{tl_timeout['truth_label']}"
+                    )
+
+            _track_group_timer(
+                bot, chat_id,
+                _asyncio.create_task(truth_lie_timer()),
+            )
+            return
+
         # بازی چهار گزینه‌ای
         normalized_game_command = " ".join(
             clean_text.replace("‌", " ").split()
@@ -4104,6 +4249,12 @@ async def handle_new_message(bot, event):
                 "رقابت دو نفره با سوالات سخت، علمی و فکری.\n\n"
                 "🎭 جرأت حقیقت\n"
                 "با ارسال «جرعت» یا «حقیقت»، یک جرأت یا سوال صادقانه دریافت کن.\n\n"
+                "🧠 کی بیشتر بلده\n"
+                "حدس کلمات با حرف تصادفی و جایزه.\n\n"
+                "🧠 دروغ یا حقیقت\n"
+                "تشخیص درست یا غلط بودن سوال‌ها.\n\n"
+                "🕵️ کارگاه\n"
+                "حل پرونده و پیدا کردن دزد.\n\n"
                 "😄 جک\n"
                 "با ارسال «جک»، یک جوک یا لطیفه خنده‌دار دریافت کن."
             )
@@ -4134,6 +4285,9 @@ async def handle_new_message(bot, event):
                 "⚔️ نبرد",
                 "🎭 جرأت حقیقت",
                 "با ارسال «جرعت» یا «حقیقت»، یک جرأت یا سوال صادقانه دریافت کن.",
+                "🧠 کی بیشتر بلده",
+                "🧠 دروغ یا حقیقت",
+                "🕵️ کارگاه",
                 "😄 جک",
                 "با ارسال «جک»، یک جوک یا لطیفه خنده‌دار دریافت کن.",
             ]:
