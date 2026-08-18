@@ -188,39 +188,81 @@ class MessageDeleteQueue:
 
     async def _worker(self, chat_id, queue):
         self.logger.log_info(f"DELETE TASK START chat_id={chat_id}")
+
+        def _unpack(item):
+            if len(item) == 5:
+                _priority, _seq, ids, result, enqueued_at = item
+            else:
+                _priority, _seq, ids, result = item
+                enqueued_at = time.perf_counter()
+            return _priority, ids, result, enqueued_at
+
+        # 🧲 سقف ادغام در هر چرخه: ۱۰ batch پانزده‌تایی.
+        merge_cap = max(self.batch_size * 10, self.batch_size)
+
         try:
             while True:
                 item = await queue.get()
-                if len(item) == 5:
-                    _priority, _seq, ids, result, enqueued_at = item
-                else:
-                    _priority, _seq, ids, result = item
-                    enqueued_at = time.perf_counter()
-                queue_wait_ms = (time.perf_counter() - enqueued_at) * 1000
+                jobs = [_unpack(item)]
+                merged = len(jobs[0][1])
+                # ادغام کارهای حذفِ همین گروه که الان در صف منتظرند:
+                # قبلاً هر کارِ تک‌پیامی یک RPC جدا (~۲۰۰-۴۰۰ms) می‌خورد و
+                # با سیل کارهای ids=1، صفِ حذفِ گروه ده‌ها ثانیه عقب
+                # می‌افتاد (queue_wait_ms=32000 در لاگ) و دستور «پاک» هم
+                # پشت همان صف می‌ماند. حالا صد کار تکی در چند RPC
+                # پانزده‌تایی یک‌جا حذف می‌شوند.
+                while merged < merge_cap:
+                    try:
+                        extra = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    job = _unpack(extra)
+                    jobs.append(job)
+                    merged += len(job[1])
+
+                oldest = min(job[3] for job in jobs)
+                queue_wait_ms = (time.perf_counter() - oldest) * 1000
                 if queue_wait_ms >= 50:
                     self.logger.log_info(
                         "QUEUE WAIT TIME "
-                        f"chat_id={chat_id} lane=delete priority={_priority} "
-                        f"queue_wait_ms={queue_wait_ms:.1f} ids={len(ids)}"
+                        f"chat_id={chat_id} lane=delete priority={jobs[0][0]} "
+                        f"queue_wait_ms={queue_wait_ms:.1f} "
+                        f"ids={merged} merged_jobs={len(jobs)}"
                     )
+
+                all_ids = list(dict.fromkeys(
+                    message_id for _p, ids, _r, _e in jobs
+                    for message_id in ids
+                ))
                 try:
-                    deleted, remaining = await self._delete_ids(chat_id, ids)
-                    if not result.done():
-                        result.set_result((deleted, remaining))
+                    deleted, remaining = await self._delete_ids(
+                        chat_id, all_ids)
+                    remaining_set = set(remaining or ())
+                    for _p, ids, result, _e in jobs:
+                        job_remaining = [
+                            i for i in ids if i in remaining_set]
+                        if not result.done():
+                            result.set_result(
+                                (len(ids) - len(job_remaining),
+                                 job_remaining))
                 except asyncio.CancelledError:
-                    if not result.done():
-                        result.cancel()
+                    for _p, _ids, result, _e in jobs:
+                        if not result.done():
+                            result.cancel()
                     raise
                 except Exception as error:
                     self.logger.log_error(
                         f"DELETE TASK FAILED chat_id={chat_id} error={error!r}"
                     )
-                    if not result.done():
-                        result.set_result((0, ids))
+                    for _p, ids, result, _e in jobs:
+                        if not result.done():
+                            result.set_result((0, ids))
                 finally:
-                    for message_id in ids:
-                        self._pending_ids.discard((_chat_key(chat_id), message_id))
-                    queue.task_done()
+                    for _p, ids, _r, _e in jobs:
+                        for message_id in ids:
+                            self._pending_ids.discard(
+                                (_chat_key(chat_id), message_id))
+                        queue.task_done()
                 if queue.empty():
                     return
         finally:
