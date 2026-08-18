@@ -5,6 +5,10 @@ from modules.group_id import normalize_group_id
 from datetime import datetime
 
 FILE = "logs/group_stats.json"
+# 🛟 نسخهٔ پشتیبانِ «آخرین وضعیت سالم». اگر فایل اصلی خراب شود
+# (kill وسط نوشتن، تداخل git stash/pop و...) از این بازیابی می‌شود
+# تا شمارش پیام‌ها — و در نتیجه «سطح گروه» — هرگز صفر نشود.
+BACKUP_FILE = FILE + ".bak"
 
 _stats_cache = None
 _stats_cache_mtime = None
@@ -17,20 +21,36 @@ def _file_mtime():
         return None
 
 
+def _read_json(path):
+    """خواندن امن؛ None اگر فایل نبود یا JSON خراب بود."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def load_stats():
-    global _stats_cache, _stats_cache_mtime
+    global _stats_cache, _stats_cache_mtime, _stats_dirty
     mtime = _file_mtime()
     if _stats_cache is not None and mtime == _stats_cache_mtime:
         return _stats_cache
 
-    if mtime is None:
-        _stats_cache = {}
-    else:
-        try:
-            with open(FILE, "r", encoding="utf-8") as f:
-                _stats_cache = json.load(f)
-        except Exception:
+    data = _read_json(FILE)
+    if data is None:
+        # ⚠️ فایل اصلی گم/خراب است. قبلاً اینجا بی‌صدا {} برمی‌گشت و
+        # flush بعدی همان {} را روی دیسک می‌نوشت — یعنی کل شمارش
+        # پیام‌ها و سطح گروه‌ها یک‌شبه صفر می‌شد. حالا از آخرین نسخهٔ
+        # سالم بازیابی می‌کنیم و dirty می‌شود تا فایل اصلی ترمیم شود.
+        backup = _read_json(BACKUP_FILE)
+        if backup is not None:
+            _stats_cache = backup
+            _stats_dirty = True
+        else:
             _stats_cache = {}
+    else:
+        _stats_cache = data
 
     _stats_cache_mtime = mtime
     return _stats_cache
@@ -48,11 +68,24 @@ def flush():
     if not _stats_dirty:
         return False
     os.makedirs(os.path.dirname(FILE) or ".", exist_ok=True)
-    with open(FILE, "w", encoding="utf-8") as f:
-        # فایل داده‌ای است؛ حذف indent هم حجم و هم زمان serialize (و
-        # مدت نگه داشتن GIL هنگام flush دوره‌ای) را تقریباً نصف می‌کند.
-        json.dump(_stats_cache or {}, f, ensure_ascii=False,
-                  separators=(",", ":"))
+    payload = json.dumps(_stats_cache or {}, ensure_ascii=False,
+                         separators=(",", ":"))
+    # ✍️ نوشتن اتمیک (temp + replace): اگر پروسه وسط نوشتن kill شود
+    # (pkill ری‌استارت روزانه، OOM، خاموشی)، فایل نیمه‌کاره و خراب
+    # باقی نمی‌ماند — قبلاً همین باعث صفر شدن سطح گروه‌ها می‌شد.
+    temp_path = FILE + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.replace(temp_path, FILE)
+    # نسخهٔ پشتیبان همیشه از همین دادهٔ سالمِ در حافظه نوشته می‌شود
+    # (نه با جابه‌جایی فایل قبلی که ممکن است خراب باشد).
+    try:
+        backup_temp = BACKUP_FILE + ".tmp"
+        with open(backup_temp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(backup_temp, BACKUP_FILE)
+    except OSError:
+        pass
     _stats_cache_mtime = _file_mtime()
     _stats_dirty = False
     return True
