@@ -181,6 +181,8 @@ class SoroushAntiSpamBot:
             debug_timing=self.config_manager.get(
                 "debug_message_pipeline", False),
         )
+        # ⏱️ زمان شروع برای دستور تشخیصی «وضعیت ربات».
+        self.started_at = time.time()
         self.outgoing_sender = None
         self.notice_cleanup = NoticeCleanup(
             os.path.join(

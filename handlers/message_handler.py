@@ -881,6 +881,102 @@ _NATIVE_ADMIN_FAIL_TTL = 180
 _NATIVE_ADMIN_NEGATIVE_TTL = 90
 
 
+async def _bot_status_text(bot):
+    """🩺 گزارش لحظه‌ای سلامت — برای تشخیص «حافظه/CPU یا سرور» هنگام کندی.
+
+    فقط خواندنی است؛ هیچ state ای را تغییر نمی‌دهد.
+    """
+    import time as _time
+
+    # ۱) تاخیر حلقهٔ رویداد: نزدیک صفر = سالم؛ عدد بزرگ = فشار CPU/GIL داخلی
+    t0 = _time.perf_counter()
+    await _asyncio.sleep(0.05)
+    loop_lag_ms = max(0.0, (_time.perf_counter() - t0 - 0.05) * 1000)
+
+    # ۲) حافظهٔ واقعی پروسه (RSS)
+    rss_mb = 0.0
+    try:
+        with open("/proc/self/status", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("VmRSS"):
+                    rss_mb = float(line.split()[1]) / 1024.0
+                    break
+    except OSError:
+        pass
+
+    # ۳) صف معلق اتصال (sender_pending)
+    sender_pending = 0
+    try:
+        from modules.outgoing_profiler import pending_rpc_snapshot
+        snap = pending_rpc_snapshot(getattr(bot.client, "_sender", None))
+        sender_pending = int(snap.get("sender_pending", 0) or 0)
+    except Exception:
+        pass
+
+    # ۴) صف‌ها و کش‌های داخلی
+    dispatcher = getattr(bot, "group_dispatcher", None)
+    workers = dispatcher.worker_count() if dispatcher is not None else 0
+    stats = dict(getattr(dispatcher, "stats", {}) or {})
+    delete_pending = 0
+    delete_queue = getattr(bot, "message_delete_queue", None)
+    if delete_queue is not None:
+        try:
+            delete_pending = sum(
+                q.qsize() for q in delete_queue._queues.values())
+        except Exception:
+            pass
+    tracker_rows = history_rows = 0
+    try:
+        tracker_rows = sum(len(v) for v in message_tracker._HISTORY.values())
+    except Exception:
+        pass
+    try:
+        from modules import spam_history as _sh
+        history_rows = sum(len(v) for v in _sh.MESSAGE_HISTORY.values())
+    except Exception:
+        pass
+
+    uptime_s = int(_time.time() - getattr(bot, "started_at", _time.time()))
+    up_h, rem = divmod(max(0, uptime_s), 3600)
+    up_m = rem // 60
+
+    # ۵) سرعت واقعی سرور: یک RPC سبک همین حالا
+    rpc_ms = -1.0
+    try:
+        t1 = _time.perf_counter()
+        await _asyncio.wait_for(bot.client.get_me(), timeout=10)
+        rpc_ms = (_time.perf_counter() - t1) * 1000
+    except Exception:
+        pass
+
+    verdict = []
+    if loop_lag_ms >= 100:
+        verdict.append("⚠️ فشار داخلی CPU/حلقه — مشکل از خود ربات/گوشی است")
+    if rss_mb >= 500:
+        verdict.append("⚠️ مصرف حافظه بالا — احتمال swap شدن پروسه")
+    if sender_pending >= 300:
+        verdict.append("⚠️ انباشت صف اتصال — sender_pending غیرعادی")
+    if rpc_ms >= 1000 and loop_lag_ms < 100:
+        verdict.append("🌐 کندی از شبکه/سرور سروش است، نه از ربات")
+    if not verdict:
+        verdict.append("✅ همه چیز سالم است")
+
+    rpc_display = "خطا/مهلت" if rpc_ms < 0 else f"{rpc_ms:.0f} ms"
+    return (
+        "🩺 وضعیت ربات\n\n"
+        f"⏳ مدت اجرا: {up_h} ساعت و {up_m} دقیقه\n"
+        f"🧠 حافظه (RSS): {rss_mb:.0f} MB\n"
+        f"🌀 تاخیر حلقه رویداد: {loop_lag_ms:.0f} ms\n"
+        f"🌐 پاسخ سرور (RPC تست): {rpc_display}\n"
+        f"📡 صف معلق اتصال: {sender_pending}\n"
+        f"👷 ورکرها: {workers} | پردازش: {stats.get('processed', 0)} | "
+        f"خطا: {stats.get('failed', 0)} | حذف از صف: {stats.get('dropped', 0)}\n"
+        f"🗑 صف حذف: {delete_pending} پیام\n"
+        f"🧾 ردیاب پیام: {tracker_rows} | تاریخچه اسپم: {history_rows}\n\n"
+        + "\n".join(verdict)
+    )
+
+
 def _is_management_command(text):
     """True only for owner/moderation commands, never ordinary chat or filters."""
     priority, _kind = classify_priority(text)
@@ -1949,6 +2045,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "ثبت ادمین", "لغو ادمین", "برکناری ادمین", "ثبت مالک", "لغو مالک",
     "برکناری مالک", "ثبت گروه", "حذف گروه", "حذف اخطار", "حذف اخطارها",
     "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
+    "وضعیت ربات", "پینگ ربات",
     "جعبه شانسی", "خون آشام", "خون‌آشام", "جرعت", "جرات", "جرئت",
     "حقیقت", "حقیقت بگو", "ربات", "روباه", "/help", "!help", "help",
 }) | frozenset(command for command, _handler in RESERVED_COMMANDS) | FOX_GAME_COMMANDS | EMOJI_RESET_COMMANDS
@@ -4175,6 +4272,16 @@ async def handle_new_message(bot, event):
             )
             return
 
+
+        # 🩺 دستور تشخیصی مالک: «وضعیت ربات» — در لحظه کندی نشان می‌دهد
+        # مشکل از حافظه/CPU خود ربات است یا از شبکه/سرور سروش.
+        if clean_text in {"وضعیت ربات", "پینگ ربات"}:
+            if is_global_owner(user_id):
+                try:
+                    await event.reply(await _bot_status_text(bot))
+                except Exception as status_error:
+                    bot.logger.log_error(f"BOT STATUS FAILED: {status_error!r}")
+            return
 
         if clean_text == "ریست آمار":
             try:
