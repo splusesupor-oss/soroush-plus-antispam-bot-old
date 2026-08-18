@@ -30,7 +30,7 @@ from modules.banned_storage import (
 )
 from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
-from modules.group_storage import activate_group, deactivate_group, is_active
+from modules.group_storage import activate_group, deactivate_group, is_active, update_group_title
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 # 💰 تسویهٔ روزانه از راه API اقتصاد جدید.
@@ -848,6 +848,43 @@ class SoroushAntiSpamBot:
                 self.logger.log_error(
                     f"خطا در همگام‌سازی آزادسازی دستی {user_id}: {error}"
                 )
+
+
+        @self.client.on(events.ChatAction())
+        async def group_title_sync(event):
+            """🔄 همگام‌سازی خودکار نام گروه‌های ثبت‌شده.
+
+            اگر نام گروه عوض شود، عنوان ذخیره‌شده در groups.json به‌روز
+            می‌شود تا «لیست انقضا» همیشه نام فعلی را نشان دهد. کاملاً
+            مستقل است و به هیچ مسیر دیگری دست نمی‌زند؛ برای گروه‌های
+            ثبت‌نشده هم هیچ رکوردی نمی‌سازد.
+            """
+            try:
+                chat_id = getattr(event, "chat_id", None)
+                if chat_id is None:
+                    return
+                # ۱) رویداد صریح تغییر نام
+                new_title = getattr(event, "new_title", None)
+                if not new_title:
+                    # ۲) جبران نام‌هایی که هنگام خاموش بودن ربات عوض
+                    # شده‌اند: در رویدادهای کم‌تکرار عضویت (join/leave)
+                    # عنوان فعلی از chat کش‌شدهٔ خود رویداد خوانده می‌شود.
+                    chat = getattr(event, "chat", None)
+                    if chat is None:
+                        try:
+                            chat = await event.get_chat()
+                        except Exception:
+                            chat = None
+                    new_title = getattr(chat, "title", None)
+                if not new_title:
+                    return
+                if update_group_title(chat_id, new_title):
+                    self.logger.log_info(
+                        "GROUP TITLE SYNC "
+                        f"chat_id={chat_id} new_title={str(new_title)[:60]!r}"
+                    )
+            except Exception as error:
+                self.logger.log_error(f"GROUP TITLE SYNC FAILED: {error!r}")
 
 
         @self.client.on(events.ChatAction())

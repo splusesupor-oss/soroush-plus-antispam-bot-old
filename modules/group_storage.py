@@ -80,6 +80,34 @@ def deactivate_group(group_id, title):
     save_groups(data)
 
 
+def update_group_title(group_id, title):
+    """🔄 همگام‌سازی خودکار نام گروه پس از تغییر آن در سروش.
+
+    فقط عنوانِ گروهی که قبلاً ثبت شده به‌روز می‌شود؛ برای گروه‌های
+    ثبت‌نشده هیچ رکوردی ساخته نمی‌شود و به هیچ فیلد دیگری (active،
+    owner_id و...) دست نمی‌زند. خروجی: True اگر عنوان واقعاً تغییر کرد.
+    """
+    title = str(title or "").strip()
+    if not title:
+        return False
+    data = load_groups()
+    raw_key = str(group_id)
+    canonical_key = normalize_group_id(group_id)
+    key = raw_key if raw_key in data else (
+        canonical_key if canonical_key in data else None
+    )
+    if key is None:
+        return False
+    group = data.get(key)
+    if not isinstance(group, dict):
+        return False
+    if str(group.get("title") or "").strip() == title:
+        return False
+    group["title"] = title
+    save_groups(data)
+    return True
+
+
 def set_group_owner(group_id, owner_id):
     data = load_groups()
     key = _group_key(data, group_id)
