@@ -31,3 +31,17 @@ config/fox_minesweeper.json
 config/sentence_guess_state.json
 config/group_level.json
 config/user_history.json
+
+# Runtime logs and data
+logs/
+*.log
+
+# Runtime config data
+config/*.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment
+.env
