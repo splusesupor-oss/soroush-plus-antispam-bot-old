@@ -1773,7 +1773,7 @@ async def handle_fast_owner_command(bot, event, text=None):
                 bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
             )
             await event.reply(
-                f"مالک گروه 『 {_format_group_member(target_user)} 』 ثبت شد ✅"
+                f"مالـک ثبت شد ✅  「 {_format_group_member(target_user)}」‌𓆤"
             )
         except Exception as error:
             logger = getattr(bot, "logger", None)
@@ -3408,7 +3408,16 @@ async def handle_new_message(bot, event):
         if clean_text == "اصلم":
             original = get_original(user_id)
             if original:
-                await event.reply(f"اصل شما:\n\n{original}")
+                original_text = str(original)
+                await event.reply(
+                    original_text,
+                    formatting_entities=[
+                        MessageEntityBold(
+                            offset=0,
+                            length=len(original_text.encode("utf-16-le")) // 2,
+                        )
+                    ],
+                )
             else:
                 await event.reply(
                     "هنوز اصلی ثبت نکردی. برای ثبت بنویس: ثبت اصل"
@@ -5228,7 +5237,7 @@ async def handle_new_message(bot, event):
 
                 set_group_owner(chat_id, target_user.id)
                 await event.reply(
-                    f"مالک گروه 『 {_format_group_member(target_user)} 』 ثبت شد ✅"
+                    f"مالـک ثبت شد ✅  「 {_format_group_member(target_user)}」‌𓆤"
                 )
             except Exception as e:
                 bot.logger.log_error(f"خطا در ثبت مالک گروه: {e}")
@@ -5315,7 +5324,7 @@ async def handle_new_message(bot, event):
                 admin_username = getattr(admin_user, "username", None)
                 if add_admin(chat_id, admin_user.id, admin_username):
                     await event.reply(
-                        f"✅ ادمین {_format_admin_display(admin_user)} ثبت شد"
+                        f"ادمـین ثبت شد ✅  「 {_format_admin_display(admin_user)}」‌𓆤"
                     )
                 else:
                     await event.reply("⚠️ این کاربر قبلا ادمین ثبت شده است")
@@ -5358,7 +5367,7 @@ async def handle_new_message(bot, event):
                 admin_username = getattr(admin_user, "username", None)
                 if remove_admin(chat_id, admin_user.id):
                     await event.reply(
-                        f"✅ دسترسی ادمین {_format_admin_display(admin_user)} حذف شد"
+                        f"ادمـین لغو شد ✅  「 {_format_admin_display(admin_user)}」‌𓆤"
                     )
                 else:
                     await event.reply("❌ این کاربر ادمین ثبت‌شده نیست")
