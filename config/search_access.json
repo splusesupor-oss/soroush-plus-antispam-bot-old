@@ -18,10 +18,6 @@
         "69020434": {
           "username": "Meli_E9",
           "display": "@Meli_E9"
-        },
-        "37858988": {
-          "username": "osine2",
-          "display": "@osine2"
         }
       }
     },
@@ -156,7 +152,7 @@
       }
     },
     "23700879": {
-      "enabled": false,
+      "enabled": true,
       "allowed_users": {
         "36299487": {
           "username": "hhhtttddd",
