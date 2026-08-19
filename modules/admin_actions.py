@@ -228,6 +228,26 @@ class AdminActions:
         """ارسال هشدار با قالب کوتاه و entityهای واقعی SPlus."""
         if not self.config.get("send_warning", True):
             return
+        # ⏱️ پنجرهٔ ۲۰ ثانیه‌ای اخطار: در موج اسپم، برای هر کاربر در هر
+        # گروه فقط «اولین» متن اخطار ارسال می‌شود؛ حذف پیام و افزایش
+        # شمارندهٔ تخلف مثل قبل برای همهٔ پیام‌ها انجام شده است. این فقط
+        # از تکرار ۴-۵ بارهٔ متن اخطار و خفه شدن صف ارسال گروه جلوگیری
+        # می‌کند. تخلف‌های با فاصلهٔ بیش از ۲۰ ثانیه مثل قبل همگی اخطار
+        # می‌گیرند.
+        import time as _time
+        gate = getattr(self, "_warning_gate", None)
+        if gate is None:
+            gate = self._warning_gate = {}
+        user_key = getattr(user, "id", None) if user is not None else None
+        gate_key = (str(chat_id), str(user_key if user_key is not None else username))
+        now_mono = _time.monotonic()
+        if now_mono - gate.get(gate_key, -999.0) < 20.0:
+            return
+        gate[gate_key] = now_mono
+        if len(gate) > 2000:
+            cutoff = now_mono - 60.0
+            for stale in [k for k, v in gate.items() if v < cutoff]:
+                gate.pop(stale, None)
         try:
             from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
 

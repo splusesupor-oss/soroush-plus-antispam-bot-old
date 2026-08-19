@@ -17,10 +17,11 @@ RETENTION_SECONDS = 2 * 60
 
 
 def normalize(text):
-    text = text.lower()
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'[^\wآ-ی ]', '', text)
-    return text.strip()
+    """فرم مقایسه: حذف ایموجی/علائم/فاصله تا نسخه‌های تزئین‌شدهٔ همان
+    پیام («بیو چک🐥»، «بیوچک🌐»، «بیو  چک») یکی حساب شوند."""
+    text = str(text or "").lower()
+    text = re.sub(r'[^\wآ-ی]+', '', text)
+    return text
 
 
 def save_history_message(chat_id, user_id, message_id, text):

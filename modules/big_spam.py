@@ -23,6 +23,59 @@ PHRASE_REPEAT_THRESHOLD = 6  # more than 5 meaningful phrases
 PACKED_TOKEN_THRESHOLD = 6
 LARGE_PAYLOAD_CHARS = 120
 DELETE_BATCH_MAX = 100
+# پیام یکسان (بعد از حذف ایموجی/علائم/فاصله) که ۳ بار در پنجره تکرار شود
+# و بیش از ۵ حرف داشته باشد = موج؛ حتی اگر تبلیغاتی شناخته نشود.
+IDENTICAL_MESSAGE_THRESHOLD = 3
+IDENTICAL_MIN_CHARS = 5
+
+# ---------------------------------------------------------------------------
+# 🎨 اسپم تزئینی — الگوهایی مثل «▃▅▆█ 웃 - 웃 █▆▅▃» و «■■□□□ 40%» که
+# normalize آن‌ها را خالی می‌کند و از همهٔ فیلترها رد می‌شدند. این‌ها
+# قالب‌های آمادهٔ تبلیغ‌اند و از «اولین پیام» موج حساب می‌شوند.
+# ---------------------------------------------------------------------------
+_DECORATIVE_RANGES = (
+    (0x2500, 0x257F),   # Box Drawing ─ ═ ║ ╔ ...
+    (0x2580, 0x259F),   # Block Elements ▃ ▅ ▆ █ ...
+    (0x25A0, 0x25FF),   # Geometric Shapes ■ □ ● ◆ ...
+    (0x2716, 0x2716),
+    (0x2726, 0x2729),   # ✦ ✧ ...
+    (0x2B1B, 0x2B1C),   # ⬛ ⬜
+    (0x1100, 0x11FF),   # Hangul Jamo (تزئینی مثل 웃)
+    (0x3130, 0x318F),
+    (0xAC00, 0xD7AF),   # Hangul Syllables
+)
+_DECORATIVE_EXTRA = frozenset("▰▱◾◽▪▫★☆➖➕〰❚❙❘➤➣►◄\u0640")
+# ران‌های بی‌خطر که کاربران عادی زیاد می‌فرستند؛ هرگز اسپم حساب نمی‌شوند.
+_INNOCENT_RUN_CHARS = frozenset(
+    ".!?؟،,…-_*~():;\"'`^#\u2764\u2665"
+) | frozenset("😂🤣😹😅😭😍🥰❤♥🙂😐🗿💔✨⭐🌟")
+_RUN_RE = re.compile(r"(.)\1{4,}")  # پنج بار یا بیشتر همان کاراکتر
+DECORATIVE_MIN_SYMBOLS = 4
+
+
+def _is_decorative_char(ch):
+    if ch in _DECORATIVE_EXTRA:
+        return True
+    code = ord(ch)
+    return any(low <= code <= high for low, high in _DECORATIVE_RANGES)
+
+
+def decorative_spam(text):
+    """True برای قالب‌های تزئینی تبلیغاتی؛ از اولین پیام."""
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    decorative = sum(1 for ch in raw if _is_decorative_char(ch))
+    if decorative >= DECORATIVE_MIN_SYMBOLS:
+        return True
+    for match in _RUN_RE.finditer(raw):
+        ch = match.group(1)
+        if ch.isalnum() or ch.isspace():
+            continue
+        if ch in _INNOCENT_RUN_CHARS:
+            continue
+        return True
+    return False
 
 _AD_MARKERS = (
     "بیو چک",
@@ -450,9 +503,24 @@ def detect_big_spam(text, recent_rows, *, now=None):
     if intra_message_spam(raw):
         return True, "repeated_promotional_phrase", _row_ids(in_window or recent_rows)
 
+    # 🎨 قالب تزئینی تبلیغاتی: از اولین پیام موج حساب می‌شود.
+    if decorative_spam(raw):
+        return True, "decorative_spam", _row_ids(in_window or recent_rows)
+
     short_wave = consecutive_short_promo_rows(raw, in_window)
     if len(short_wave) >= SHORT_SEPARATE_THRESHOLD:
         return True, "repeated_short_promotional_messages", _row_ids(short_wave)
+
+    # 🔁 پیام یکسان (ایموجی/فاصله/علائم حذف‌شده) ۳ بار در پنجره:
+    # «بیو چک🐥» و «بیو چک» و «بیوچک🌐» همگی یک کلیدند.
+    identical_key = compact_text(raw)
+    if len(identical_key) >= IDENTICAL_MIN_CHARS:
+        identical = [
+            row for row in in_window
+            if compact_text(row.get("text", "")) == identical_key
+        ]
+        if len(identical) >= IDENTICAL_MESSAGE_THRESHOLD:
+            return True, "repeated_identical_messages", _row_ids(in_window)
 
     needed = wave_needed(raw)
     if needed is not None:
