@@ -139,6 +139,7 @@ from modules import user_history
 from modules import group_level
 from modules import bot_detector
 from modules import ad_name_detector
+from modules import warning_threshold
 from modules.user_display import format_user
 from modules import message_tracker
 from modules import big_spam
@@ -2044,6 +2045,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "لغو کلمات ممنوعه", "فعال کلمات ممنوعه", "پاکسازی خودکار",
     "ثبت ادمین", "لغو ادمین", "برکناری ادمین", "ثبت مالک", "لغو مالک",
     "برکناری مالک", "ثبت گروه", "حذف گروه", "حذف اخطار", "حذف اخطارها",
+    "تغییر اخطار",
     "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
     "وضعیت ربات", "پینگ ربات",
     "جعبه شانسی", "خون آشام", "خون‌آشام", "جرعت", "جرات", "جرئت",
@@ -2957,7 +2959,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "تغییر اخطار", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -3393,6 +3395,54 @@ async def handle_new_message(bot, event):
                     f"✅ پاکسازی خودکار تنظیم شد.\n\n"
                     f"{admin_tools.format_cleanup(chat_id)}")
                 return
+
+        if clean_text == "تغییر اخطار":
+            _log_command_route(
+                bot, clean_text, "تغییر اخطار", "warning_threshold.prompt")
+            if not _can_manage_group_admins(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            ):
+                await event.reply(
+                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه تغییر اخطار را دارد"
+                )
+                return
+            current_threshold = warning_threshold.get_threshold(
+                chat_id, bot.config_manager.get("spam_threshold", 5))
+            warning_threshold.begin_change(chat_id, user_id)
+            prompt_prefix = "⚙ "
+            prompt_title = "تغییر اخطار"
+            prompt_text = (
+                f"{prompt_prefix}{prompt_title}\n\n"
+                f"تعداد اخطار فعلی {current_threshold}\n\n\n\n"
+                "از ۱ تا ۱۲ میتوانید یک تعداد برای اخطار تایین کنید مثلا « 7 »"
+            )
+            await event.reply(
+                prompt_text,
+                formatting_entities=[
+                    MessageEntityBold(
+                        offset=len(prompt_prefix.encode("utf-16-le")) // 2,
+                        length=len(prompt_title.encode("utf-16-le")) // 2,
+                    )
+                ],
+            )
+            return
+
+        if warning_threshold.has_pending(chat_id, user_id):
+            _chosen, _valid = warning_threshold.parse_choice(clean_text)
+            if _chosen is not None:
+                if _valid:
+                    warning_threshold.set_threshold(chat_id, _chosen)
+                    warning_threshold.clear_pending(chat_id, user_id)
+                    await event.reply(
+                        f"🔒 تعداد اخطار تغییر کرد « {_chosen} »"
+                    )
+                else:
+                    await event.reply(
+                        "❌ فقط عددی بین ۱ تا ۱۲ مجاز است. دوباره بنویسید مثلا « 7 »"
+                    )
+                return
+            # متن غیرعددی → انتظار لغو می‌شود و پیام مسیر عادی خود را می‌رود.
+            warning_threshold.clear_pending(chat_id, user_id)
 
         if clean_text == "ثبت اصل":
             _log_command_route(bot, clean_text, "ثبت اصل", "user_original.set")
@@ -5978,7 +6028,8 @@ async def handle_new_message(bot, event):
                 username = getattr(user, "username", None) or "کاربر"
 
                 count = bot.tracker.increment(chat_id, user.id)
-                threshold = bot.config_manager.get("spam_threshold", 5)
+                threshold = warning_threshold.get_threshold(
+                    chat_id, bot.config_manager.get("spam_threshold", 5))
                 admin_tools.log_action(
                     chat_id, sender, "اخطار", target=user,
                     note=f"تعداد {count}")
@@ -6010,10 +6061,10 @@ async def handle_new_message(bot, event):
                     # Formatting failure must not affect warning persistence.
                     await event.reply(manual_text)
 
-                if bot.tracker.should_punish(chat_id, user.id):
+                if bot.tracker.should_punish(chat_id, user.id, threshold=threshold):
                     async def warning_punish_succeeded(_result):
                         if (
-                            count >= 5
+                            count >= threshold
                             and bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
                         ):
                             await _send_moderation_notification_once(
@@ -6585,7 +6636,8 @@ async def handle_new_message(bot, event):
                 f"new_warning_count={count}"
             )
 
-            threshold = bot.config_manager.get("spam_threshold", 3)
+            threshold = warning_threshold.get_threshold(
+                chat_id, bot.config_manager.get("spam_threshold", 3))
             if native_admin_warn_only and count >= threshold:
                 # Native admins may accumulate ordinary warnings, but reaching
                 # the threshold resets their moderation lifecycle instead of
@@ -6648,7 +6700,7 @@ async def handle_new_message(bot, event):
                 pending_spam_cleanup_ids = set()
 
             # بررسی مجازات
-            if bot.tracker.should_punish(chat_id, user_id):
+            if bot.tracker.should_punish(chat_id, user_id, threshold=threshold):
                 punish_key = f"{chat_id}:{user_id}"
                 _log_ban_execution(bot, chat_id, user_id, "رسیدن به آستانه تخلفات")
 

@@ -88,9 +88,14 @@ class UserTracker:
         g_key, u_key = self._key(group_id, user_id)
         return self.spam_counts.get(g_key, {}).get(u_key, 0)
 
-    def should_punish(self, group_id: int, user_id: int) -> bool:
-        """آیا کاربر باید مجازات شود (بیش از آستانه)"""
-        return self.get_count(group_id, user_id) >= self.threshold
+    def should_punish(self, group_id: int, user_id: int, threshold: int = None) -> bool:
+        """آیا کاربر باید مجازات شود (بیش از آستانه)
+
+        ``threshold`` اختیاری است: اگر داده شود (مثلاً آستانهٔ per-group از
+        دستور «تغییر اخطار»)، به‌جای آستانهٔ سراسری استفاده می‌شود.
+        """
+        limit = self.threshold if threshold is None else int(threshold)
+        return self.get_count(group_id, user_id) >= limit
 
     def reset_count(self, group_id: int, user_id: int):
         g_key, u_key = self._key(group_id, user_id)
