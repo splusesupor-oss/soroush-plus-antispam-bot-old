@@ -192,6 +192,11 @@
       "usage": {
         "2026-08-18": {}
       }
+    },
+    "22821719": {
+      "enabled": true,
+      "allowed_users": {},
+      "usage": {}
     }
   }
 }
