@@ -54,14 +54,12 @@ async def handle_admin_commands(bot, event, text: str, admin_id: int, chat_id: i
             disable(chat_id)
             await event.respond(
                 "✅ حالت سختگیرانه (کلمات ممنوعه) برای این گروه خاموش شد.\n"
-                "فیلتر دستی (/filter) همچنان فعال است."
+                "فیلتر دستی همچنان فعال است."
             )
         else:
             enable(chat_id)
             await event.respond(
-                "✅ حالت سختگیرانه (کلمات ممنوعه) برای این گروه فعال شد.\n"
-                "کلمات ممنوعه سراسری (banned_words.txt) اکنون در این گروه اعمال می‌شود.\n"
-                "فیلتر دستی (/filter) مستقل است."
+                "✅ حالت سختگیرانه (کلمات ممنوعه) برای این گروه فعال شد."
             )
         return
 
