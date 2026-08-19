@@ -640,7 +640,7 @@ class SoroushAntiSpamBot:
         # Automatic deletions have their own per-group workers and never run
         # synchronously in the incoming-message handler.
         self.message_delete_queue = MessageDeleteQueue(
-            self.client, self.logger, batch_size=15, max_concurrent=4,
+            self.client, self.logger, batch_size=100, max_concurrent=4,
             inter_batch_delay=0)
         # Outgoing sender for normal replies - separate from delete queue
         self.outgoing_sender = OutgoingSender(self.client, self.logger)
