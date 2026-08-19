@@ -68,24 +68,85 @@ def has_zero_permission(chat_id, user_id):
 
 # ---------------------------------------------------------------------------
 #  لاگ مدیریتی — ماندگار، به تفکیک گروه
+#
+# ⚡️ کش + نوشتن غیرمسدودکننده: قبلاً «هر» اقدام مدیریتی (بن/سکوت/اخطار/
+# حذف) فایل چند صد کیلوبایتی را می‌خواند و با indent دوباره همگام روی
+# حلقهٔ رویداد می‌نوشت؛ در طوفان مجازات‌ها همین، ربات را تکه‌تکه بلاک
+# می‌کرد و با رشد فایل در طول روز بدتر می‌شد. حالا:
+#   - خواندن با کش mtime (مثل admin_storage)
+#   - serialize فشرده و نوشتن اتمیک در نخ نویسندهٔ تک‌نخی (FIFO)
+# منطق لاگ/TTL هیچ تغییری نکرده است.
 # ---------------------------------------------------------------------------
+import os as _os
+import tempfile as _tempfile
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+
+_ADMIN_LOG_WRITER = _ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="admin-log-save")
+_admin_log_cache = None
+_admin_log_mtime = None
+# تا وقتی نوشتنی معلق است کش مرجع است (جلوگیری از بازخوانی دیسک عقب‌مانده).
+_admin_log_pending_writes = 0
+
+
+def _admin_log_file_mtime():
+    try:
+        return _ADMIN_LOG_FILE.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def _load_admin_log():
+    global _admin_log_cache, _admin_log_mtime
+    if _admin_log_cache is not None and _admin_log_pending_writes > 0:
+        return _admin_log_cache
+    mtime = _admin_log_file_mtime()
+    if _admin_log_cache is not None and mtime == _admin_log_mtime:
+        return _admin_log_cache
     try:
         if _ADMIN_LOG_FILE.exists():
             data = json.loads(_ADMIN_LOG_FILE.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
+            _admin_log_cache = data if isinstance(data, dict) else {}
+        else:
+            _admin_log_cache = {}
     except (OSError, ValueError):
-        pass
-    return {}
+        _admin_log_cache = {}
+    _admin_log_mtime = mtime
+    return _admin_log_cache
+
+
+def _write_admin_log_payload(payload):
+    """نوشتن اتمیک؛ فقط داخل نخ نویسنده اجرا می‌شود."""
+    global _admin_log_mtime, _admin_log_pending_writes
+    temp_path = None
+    try:
+        _BASE.mkdir(parents=True, exist_ok=True)
+        handle, temp_path = _tempfile.mkstemp(
+            dir=str(_BASE), suffix=".tmp")
+        with _os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+        _os.replace(temp_path, _ADMIN_LOG_FILE)
+        temp_path = None
+        _admin_log_mtime = _admin_log_file_mtime()
+    except OSError:
+        if temp_path is not None:
+            try:
+                _os.unlink(temp_path)
+            except OSError:
+                pass
+    finally:
+        _admin_log_pending_writes = max(0, _admin_log_pending_writes - 1)
 
 
 def _save_admin_log(data):
+    global _admin_log_cache, _admin_log_pending_writes
+    _admin_log_cache = data
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    _admin_log_pending_writes += 1
     try:
-        _BASE.mkdir(parents=True, exist_ok=True)
-        _ADMIN_LOG_FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass
+        _ADMIN_LOG_WRITER.submit(_write_admin_log_payload, payload)
+    except Exception:
+        _write_admin_log_payload(payload)
 
 
 def _prune_log(data):

@@ -21,10 +21,16 @@ _WRITER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="banned-save")
 # منطق بن هیچ تغییری نکرده است.
 _cache = None
 _cache_mtime = None
+# تا وقتی نوشتنی در صف نخ نویسنده است، کش حافظه مرجع است؛ وگرنه load
+# ممکن بود دیسکِ هنوز-عقب‌مانده را «جدیدتر» ببیند و کش تازه را با آن
+# جایگزین کند.
+_pending_writes = 0
 
 
 def load_banned():
     global _cache, _cache_mtime
+    if _cache is not None and _pending_writes > 0:
+        return _cache
     try:
         mtime = FILE.stat().st_mtime_ns
     except OSError:
@@ -44,7 +50,7 @@ def load_banned():
 
 def _write_payload(payload):
     """نوشتن اتمیک (temp + replace)؛ فقط داخل نخ نویسنده اجرا می‌شود."""
-    global _cache_mtime
+    global _cache_mtime, _pending_writes
     temp_path = None
     try:
         handle, temp_path = tempfile.mkstemp(
@@ -60,6 +66,8 @@ def _write_payload(payload):
                 os.unlink(temp_path)
             except OSError:
                 pass
+    finally:
+        _pending_writes = max(0, _pending_writes - 1)
 
 
 def save_banned(data):
@@ -75,9 +83,10 @@ def save_banned(data):
          کندِ اندروید، حلقهٔ رویداد را بلاک نکند. ترتیب نوشتن‌ها با
          یک worker تضمین‌شده FIFO است.
     """
-    global _cache
+    global _cache, _pending_writes
     _cache = data
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    _pending_writes += 1
     try:
         _WRITER.submit(_write_payload, payload)
     except Exception:
