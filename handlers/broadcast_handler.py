@@ -265,8 +265,13 @@ async def _broadcast_to_groups(bot, text, entities=None, origin="unknown"):
     return successful, failed
 
 
-async def handle_private_broadcast(bot, event, owner_id, text):
-    """Returns True only when the private message belongs to this workflow."""
+async def handle_private_broadcast(bot, event, owner_id, text, origin_key=None):
+    """Returns True only when the private message belongs to this workflow.
+
+    ``origin_key``: کلید گروه وقتی دستور از داخل گروه شروع شده؛ ``None`` یعنی
+    مسیر پیوی (رفتار قبلی). session ای که مبدأ گروهی دارد فقط پیام‌های همان
+    گروه را می‌پذیرد و session پیوی فقط از مسیر پیوی تغذیه می‌شود.
+    """
     _log_phase(bot, "BROADCAST HANDLER START", owner_id, f"text={text!r}")
     raw_text = getattr(getattr(event, "message", None), "message", None) or text or ""
     # فرمان‌ها با متن نرمال‌شده مقایسه می‌شوند تا «اطلاع‌رسانی» با نیم‌فاصله هم
@@ -291,7 +296,7 @@ async def handle_private_broadcast(bot, event, owner_id, text):
     )
 
     if match_broadcast_trigger(text) is not None:
-        begin(owner_id)
+        begin(owner_id, origin=origin_key)
         _log_phase(bot, "BROADCAST START", owner_id)
         _log_phase(
             bot,
@@ -321,6 +326,22 @@ async def handle_private_broadcast(bot, event, owner_id, text):
             "reason=no_active_session (text is not اطلاع رسانی)",
         )
         return False
+
+    # sessionِ گروهی فقط به پیام‌های همان گروه تعلق دارد؛ پیام پیوی یا گروه
+    # دیگر نباید بدنه/تأیید آن حساب شود (و برعکس، session پیوی از مسیر
+    # گروهی اصلاً به این تابع پیشنهاد نمی‌شود).
+    state_origin = state.get("origin")
+    if state_origin is not None:
+        event_chat_key = str(normalize_group_id(getattr(event, "chat_id", None)))
+        if event_chat_key != str(state_origin):
+            _log_phase(
+                bot,
+                "BROADCAST ROUTE SKIP",
+                owner_id,
+                f"reason=origin_mismatch state_origin={state_origin} "
+                f"event_chat={event_chat_key}",
+            )
+            return False
 
     if state["phase"] == "awaiting_confirmation":
         if text in {"لغو", "❌ لغو"}:  # normalized above
@@ -416,3 +437,34 @@ async def handle_private_broadcast(bot, event, owner_id, text):
 
     # The sending state is intentionally not allowed to recreate a preview.
     return True
+
+
+async def handle_group_broadcast(bot, event, owner_id, text):
+    """مسیر گروهی «اطلاع رسانی» — همان workflow پیوی، فقط ورود از داخل گروه.
+
+    فقط برای مالک اصلی ربات صدا زده می‌شود. True یعنی پیام متعلق به این
+    workflow بود و نباید به هندلرهای بعدی برسد. همهٔ قابلیت‌ها (پرامپت،
+    پیش‌نمایش با entity ها، تایید/لغو، قفل ارسال هم‌زمان، گزارش نتیجه)
+    عیناً همان مسیر پیوی است؛ فقط نقطهٔ ورود فرق دارد.
+    """
+    # پیام‌های خود ربات (پرامپت/پیش‌نمایش که در همین گروه می‌فرستد) بدنهٔ
+    # اطلاعیه نیستند؛ همان گارد مسیر پیوی.
+    message_id = getattr(getattr(event, "message", None), "id", None)
+    if (
+        getattr(event, "out", False)
+        and message_id in getattr(bot, "broadcast_bot_message_ids", set())
+    ):
+        return False
+
+    chat_key = str(normalize_group_id(getattr(event, "chat_id", None)))
+    normalized = normalize_command_text(text)
+    if match_broadcast_trigger(normalized) is not None:
+        # شروع (یا شروع مجدد) session با مبدأ همین گروه.
+        return await handle_private_broadcast(
+            bot, event, owner_id, text, origin_key=chat_key
+        )
+    state = get(owner_id)
+    if state and str(state.get("origin") or "") == chat_key:
+        # ادامهٔ session همین گروه: بدنهٔ اطلاعیه یا تایید/لغو.
+        return await handle_private_broadcast(bot, event, owner_id, text)
+    return False

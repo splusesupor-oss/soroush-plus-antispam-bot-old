@@ -33,6 +33,8 @@ def _load_pending():
                     "phase": phase,
                     "text": state.get("text", ""),
                     "entities": [],
+                    # مبدأ session (کلید گروه) — None یعنی پیوی مثل قبل.
+                    "origin": state.get("origin"),
                 }
             return valid
     except (OSError, ValueError, TypeError):
@@ -54,6 +56,7 @@ def _save_pending():
                         # Entities are process-local API objects; text and phase
                         # are the durable recovery contract.
                         "entities": [],
+                        "origin": state.get("origin"),
                     }
                     for owner, state in _PENDING_BROADCASTS.items()
                 },
@@ -143,10 +146,17 @@ def clear(owner_id):
     _save_pending()
 
 
-def begin(owner_id):
-    """Start a brand-new persistent session, replacing any stale one."""
+def begin(owner_id, origin=None):
+    """Start a brand-new persistent session, replacing any stale one.
+
+    ``origin`` کلید نرمال‌شدهٔ گروهی است که session از آن شروع شده؛ ``None``
+    یعنی مسیر پیوی (رفتار قبلی، دست‌نخورده).
+    """
     clear(owner_id)
-    _PENDING_BROADCASTS[str(owner_id)] = {"phase": "awaiting_message"}
+    state = {"phase": "awaiting_message"}
+    if origin is not None:
+        state["origin"] = str(origin)
+    _PENDING_BROADCASTS[str(owner_id)] = state
     _save_pending()
 
 
@@ -158,11 +168,15 @@ def set_message(owner_id, text, entities=None):
     """Store the announcement body together with its formatting entities."""
     # Keep entities in RAM for the current workflow; _save_pending strips
     # non-JSON API objects while persisting the durable text/phase.
-    _PENDING_BROADCASTS[str(owner_id)] = {
+    previous = _PENDING_BROADCASTS.get(str(owner_id)) or {}
+    state = {
         "phase": "awaiting_confirmation",
         "text": text,
         "entities": list(entities) if entities else [],
     }
+    if previous.get("origin") is not None:
+        state["origin"] = previous["origin"]
+    _PENDING_BROADCASTS[str(owner_id)] = state
     _save_pending()
 
 

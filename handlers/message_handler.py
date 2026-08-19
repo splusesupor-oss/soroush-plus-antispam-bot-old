@@ -2681,6 +2681,20 @@ async def handle_new_message(bot, event):
         # get_entity / search / economy time in this stage.
         clean_text = normalize_command(message_text)
         profiler.mark("COMMAND_MATCH")
+        # 📢 مسیر گروهی اطلاع‌رسانی: فقط مالک اصلی ربات؛ همان workflow پیوی.
+        # قبل از هر هندلر دیگری چک می‌شود تا بدنهٔ اطلاعیه (متن آزاد) توسط
+        # بازی/حافظه/جستجو بلعیده نشود. برای بقیهٔ کاربران فقط یک مقایسهٔ
+        # ارزان is_global_owner است.
+        if not getattr(event, "is_private", False) and is_global_owner(user_id):
+            try:
+                from handlers.broadcast_handler import handle_group_broadcast
+                if await handle_group_broadcast(bot, event, user_id, message_text):
+                    return
+            except Exception as broadcast_error:
+                bot.logger.log_error(
+                    "GROUP BROADCAST ROUTE FAILED "
+                    f"chat_id={chat_id} error={broadcast_error!r}"
+                )
         _legacy_commands = {
             "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
             "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",
