@@ -150,6 +150,23 @@ class AdminActions:
 
 
     async def ban_user(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:
+        # 🔇 حالت مجازات گروه: اگر مالک «تغییر مجازات» را روی سکوت گذاشته
+        # باشد، همین‌جا به جای بن، سکوت دائمی اعمال می‌شود. مقدار برگشتی و
+        # مسیر موفقیت/شکست عیناً مثل بن است تا callback ها و سیستم پاکسازی
+        # (حذف پیام‌های موج، اعلان نهایی، punished_users) هیچ تغییری نکنند.
+        # دستورهای دستی (مثل «اخراج») از این تابع عبور نمی‌کنند.
+        try:
+            from modules import punishment_mode
+            mute_instead = punishment_mode.is_mute(chat_id)
+        except Exception:
+            mute_instead = False
+        if mute_instead:
+            success = await self.mute_user(chat_id, user_id, None)
+            if success:
+                self.logger.log_action(
+                    "MUTE_INSTEAD_OF_BAN", user_id, chat_id, reason
+                )
+            return success
         return await self._run_moderation_with_timeout(
             "ban", user_id, 45, self._ban_user_rpc(chat_id, user_id, reason)
         )

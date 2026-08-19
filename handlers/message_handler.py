@@ -140,6 +140,7 @@ from modules import group_level
 from modules import bot_detector
 from modules import ad_name_detector
 from modules import warning_threshold
+from modules import punishment_mode
 from modules.user_display import format_user
 from modules import message_tracker
 from modules import big_spam
@@ -731,9 +732,13 @@ async def _send_spam_ban_cleanup_notification(
         f"{format_user(getattr(event, 'sender', None))}"
         " ⎾"
     )
+    if punishment_mode.is_mute(chat_id):
+        ban_action_line = "به دلیل هرزنامه سکوت دائم شد.\n"
+    else:
+        ban_action_line = "به دلیل هرزنامه از گروه اخراج شد.\n"
     ban_text = (
         f"{ban_header}\n\n"
-        "به دلیل هرزنامه از گروه اخراج شد.\n"
+        f"{ban_action_line}"
         f"🗑 {_fullwidth_digits(deleted_count)} پیام تکراری پاک شد"
     )
     return await _send_moderation_notification_once(
@@ -2045,7 +2050,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "لغو کلمات ممنوعه", "فعال کلمات ممنوعه", "پاکسازی خودکار",
     "ثبت ادمین", "لغو ادمین", "برکناری ادمین", "ثبت مالک", "لغو مالک",
     "برکناری مالک", "ثبت گروه", "حذف گروه", "حذف اخطار", "حذف اخطارها",
-    "تغییر اخطار",
+    "تغییر اخطار", "تغییر مجازات",
     "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
     "وضعیت ربات", "پینگ ربات",
     "جعبه شانسی", "خون آشام", "خون‌آشام", "جرعت", "جرات", "جرئت",
@@ -2573,10 +2578,14 @@ async def handle_new_message(bot, event):
                         return
                     bot.punished_users.add(punish_key)
                     shown_name = ad_name_detector.display_name(sender)
+                    if punishment_mode.is_mute(chat_id):
+                        ad_action_line = "به دلیل داشتن نام تبلیغاتی و لینک سکوت دائم شد."
+                    else:
+                        ad_action_line = "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
                     notice = (
                         "⚠️ کاربر\n"
                         f"{shown_name}\n\n"
-                        "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
+                        f"{ad_action_line}"
                     )
 
                     async def ad_name_ban_succeeded(_result):
@@ -2959,7 +2968,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "تغییر اخطار", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "تغییر اخطار", "تغییر مجازات", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -3443,6 +3452,67 @@ async def handle_new_message(bot, event):
                 return
             # متن غیرعددی → انتظار لغو می‌شود و پیام مسیر عادی خود را می‌رود.
             warning_threshold.clear_pending(chat_id, user_id)
+
+        if clean_text == "تغییر مجازات":
+            _log_command_route(
+                bot, clean_text, "تغییر مجازات", "punishment_mode.prompt")
+            if not _can_manage_group_admins(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            ):
+                await event.reply(
+                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه تغییر مجازات را دارد"
+                )
+                return
+            punish_header = "⚠️ تغییر مجازات"
+            if punishment_mode.is_mute(chat_id):
+                punish_body = (
+                    "در حال حاضر مجازات به صورت سکوت انجام می‌شود "
+                    "آیا میخواهید مجازات به بن تبدیل شود و از این پس "
+                    "به جای سکوت کاربر ؛ مستقیم اخراج شود؟"
+                )
+            else:
+                punish_body = (
+                    "در حال حاضر مجازات به صورت بن انجام می‌شود "
+                    "آیا میخواهید مجازات به سکوت دائمی تبدیل شود و از این پس "
+                    "به جای اخراج کاربر؛ مستقیم سکوت دائم شود؟"
+                )
+            punish_text = (
+                f"{punish_header}\n\n{punish_body}\n\n\n\n🔸تایید\n\n🔸لغو"
+            )
+            punishment_mode.begin_change(chat_id, user_id)
+            _bold_off = len("⚠️ ".encode("utf-16-le")) // 2
+            _bold_len = len("تغییر مجازات".encode("utf-16-le")) // 2
+            try:
+                await event.reply(
+                    punish_text,
+                    formatting_entities=[
+                        MessageEntityBlockquote(
+                            offset=0,
+                            length=len(punish_header.encode("utf-16-le")) // 2,
+                        ),
+                        MessageEntityBold(offset=_bold_off, length=_bold_len),
+                    ],
+                )
+            except Exception:
+                # شکست فرمت نباید جریان تغییر مجازات را بشکند.
+                await event.reply(punish_text)
+            return
+
+        if punishment_mode.has_pending(chat_id, user_id):
+            if clean_text in punishment_mode.CONFIRM_WORDS:
+                new_mode = punishment_mode.toggle(chat_id)
+                punishment_mode.clear_pending(chat_id, user_id)
+                await event.reply(
+                    f"📌 مجازات تغییر کرد « {punishment_mode.mode_label(new_mode)} »\n"
+                    "برای تغییر دوباره مجازات همان دستور رو ارسال کنید"
+                )
+                return
+            if clean_text in punishment_mode.CANCEL_WORDS:
+                punishment_mode.clear_pending(chat_id, user_id)
+                await event.reply("❌ تغییر مجازات لغو شد")
+                return
+            # هر متن دیگر → انتظار لغو می‌شود و پیام مسیر عادی خود را می‌رود.
+            punishment_mode.clear_pending(chat_id, user_id)
 
         if clean_text == "ثبت اصل":
             _log_command_route(bot, clean_text, "ثبت اصل", "user_original.set")
@@ -6071,7 +6141,11 @@ async def handle_new_message(bot, event):
                                 bot, chat_id, user.id, "warning_ban", event.message.id,
                                 "🚫 کاربر 「"
                                 f"{_format_banned_user(user, user.id)}"
-                                "」\nبه دلیل تخلفات از گروه اخراج شد.",
+                                + (
+                                    "」\nبه دلیل تخلفات سکوت دائم شد."
+                                    if punishment_mode.is_mute(chat_id)
+                                    else "」\nبه دلیل تخلفات از گروه اخراج شد."
+                                ),
                             )
 
                     bot.moderation_queue.enqueue(
