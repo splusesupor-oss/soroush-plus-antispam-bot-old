@@ -3,7 +3,10 @@ import json
 import time
 from pathlib import Path
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "name_family_learning.json"
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
+
+FILE = runtime_config_file("name_family_learning.json")
 
 
 def _load():
@@ -15,7 +18,7 @@ def _load():
 
 def _save(data):
     FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(FILE, data, indent=2)
 
 
 def record(

@@ -1,5 +1,7 @@
 from modules.security.security_manager import check_security, remove_message
 from modules.security.attack_guard import check_attack, clear_attack
+from modules.security import attack_guard as security_attack_guard
+from modules.security import media_spam as security_media_spam
 from modules.security.delete_queue import process_delete
 import asyncio
 from modules.admin_storage import is_admin, add_admin, remove_admin
@@ -38,6 +40,7 @@ from economy import flush as flush_economy, settle_previous_days
 from economy import upgrade_migration
 from modules.group_stats import flush as flush_group_stats
 from modules.user_activity import flush as flush_user_activity
+from modules.game_progress_storage import flush_all as flush_game_progress
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
@@ -48,6 +51,7 @@ from modules.group_dispatch import GroupDispatcher, classify_priority, looks_lik
 from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
 from modules import site_policy
+from modules.runtime_maintenance import run as run_runtime_maintenance
 from handlers.message_handler import (
     handle_new_message,
     send_activation_message,
@@ -261,14 +265,20 @@ class SoroushAntiSpamBot:
 
         # UserTracker's current keys and legacy raw group-id keys can coexist
         # in spam_counts.json after a restart; remove both forms.
-        for group_key in list(getattr(self.tracker, "spam_counts", {})):
-            if not same_group(group_key):
-                continue
-            users = self.tracker.spam_counts.get(group_key, {})
-            for candidate_user in (str(user_id), user_id):
-                users.pop(candidate_user, None)
-            if not users:
-                self.tracker.spam_counts.pop(group_key, None)
+        tracker_changed = False
+        with self.tracker._lock:
+            for group_key in list(getattr(self.tracker, "spam_counts", {})):
+                if not same_group(group_key):
+                    continue
+                users = self.tracker.spam_counts.get(group_key, {})
+                before = len(users)
+                for candidate_user in (str(user_id), user_id):
+                    users.pop(candidate_user, None)
+                tracker_changed = tracker_changed or len(users) != before
+                if not users:
+                    self.tracker.spam_counts.pop(group_key, None)
+            if tracker_changed:
+                self.tracker.mark_dirty()
         self.tracker.save()
 
         for mapping_name in ("banned_users", "muted_users"):
@@ -628,6 +638,19 @@ class SoroushAntiSpamBot:
 
     async def run(self):
         """اجرای ربات"""
+        # Database scans, WAL checkpoints and online backup must never run on
+        # the asyncio message loop.  Integrity failure is fatal by design;
+        # continuing to mutate a damaged economy would be unsafe.
+        maintenance = await asyncio.to_thread(run_runtime_maintenance)
+        self.logger.log_info(
+            "RUNTIME STORAGE READY "
+            f"economy_integrity={maintenance.get('economy_integrity')} "
+            f"runtime_integrity={maintenance.get('runtime_integrity', 'json')} "
+            f"backup={'ok' if maintenance.get('backup') else 'not-due'} "
+            f"backup_error={maintenance.get('backup_error') or '-'} "
+            f"temp_removed={len(maintenance.get('temporary_removed', []))} "
+            f"backups_removed={len(maintenance.get('backups_removed', []))}"
+        )
         await self.initialize_client()
 
         await self.client.connect()
@@ -668,6 +691,8 @@ class SoroushAntiSpamBot:
                     # می‌کرد و ربات به‌تدریج کند می‌شد (رفع با ری‌استارت).
                     from modules import spam_history as _spam_history
                     _spam_history.cleanup_expired()
+                    security_attack_guard.cleanup_expired()
+                    security_media_spam.cleanup_expired()
                     # 🧟 هرس دوره‌ای زامبی‌های سِندر (sender_pending).
                     #
                     # drop_stale_pending پیش‌تر فقط هنگام timeout یک RPC
@@ -683,8 +708,11 @@ class SoroushAntiSpamBot:
                     try:
                         _sender = getattr(self.client, "_sender", None)
                         if _sender is not None:
+                            _dropped = connection_guard.drop_completed_pending(
+                                _sender
+                            )
                             connection_guard.note_pending(_sender)
-                            _dropped = connection_guard.drop_stale_pending(
+                            _dropped += connection_guard.drop_stale_pending(
                                 _sender, time.monotonic() - 180)
                             if _dropped:
                                 _left = len(
@@ -702,6 +730,33 @@ class SoroushAntiSpamBot:
 
         self._temporary_state_cleanup_task = asyncio.create_task(
             temporary_state_cleanup_loop()
+        )
+
+        async def runtime_storage_maintenance_loop():
+            # Startup maintenance already ran above.  Repeat only daily so
+            # integrity scans and checkpoints cannot become hot-path pressure.
+            while True:
+                await asyncio.sleep(24 * 60 * 60)
+                try:
+                    report = await asyncio.to_thread(run_runtime_maintenance)
+                    self.logger.log_info(
+                        "RUNTIME STORAGE MAINTENANCE "
+                        f"integrity={report.get('economy_integrity')}/"
+                        f"{report.get('runtime_integrity', 'json')} "
+                        f"backup={'ok' if report.get('backup') else 'not-due'} "
+                        f"backup_error={report.get('backup_error') or '-'} "
+                        f"backups_removed={len(report.get('backups_removed', []))}"
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as maintenance_error:
+                    self.logger.log_error(
+                        "RUNTIME STORAGE MAINTENANCE FAILED: "
+                        f"{maintenance_error!r}"
+                    )
+
+        self._runtime_storage_maintenance_task = asyncio.create_task(
+            runtime_storage_maintenance_loop()
         )
 
         # 🛡️ ناظر اتصال: اگر سشن خراب شد یا RPCها پشت سر هم timeout
@@ -770,6 +825,7 @@ class SoroushAntiSpamBot:
                 try:
                     await asyncio.to_thread(flush_group_stats)
                     await asyncio.to_thread(flush_user_activity)
+                    await asyncio.to_thread(flush_game_progress)
                     await asyncio.to_thread(flush_economy)
                     await asyncio.to_thread(self.tracker.save, True)
                     cost = time.perf_counter() - started
@@ -1216,10 +1272,14 @@ class SoroushAntiSpamBot:
                     profile_id = getattr(profile_user, "id", getattr(_entry_sender, "id", None))
                     if profile_reason:
                         was_blocked = access_profile_guard.is_blocked(profile_id)
-                        access_profile_guard.block(profile_id, profile_reason)
-                        self.logger.log_info(
-                            f"PROFILE ACCESS BLOCK user_id={profile_id} reason={profile_reason!r}"
+                        block_changed = access_profile_guard.block(
+                            profile_id, profile_reason
                         )
+                        if block_changed:
+                            self.logger.log_info(
+                                f"PROFILE ACCESS BLOCK user_id={profile_id} "
+                                f"reason={profile_reason!r}"
+                            )
                         if not was_blocked:
                             notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
                             try:

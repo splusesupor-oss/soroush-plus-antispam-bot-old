@@ -136,8 +136,8 @@ def is_owner_silver_group(chat_id, user_id):
 
 
 def _owner_balance(chat_id, user_id):
-    user = storage.snapshot().get("users", {}).get(user_key(chat_id, user_id), {})
-    balance = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
+    user = storage.user_fields(user_key(chat_id, user_id), COIN_TYPES) or {}
+    balance = {coin: int(user.get(coin, 0) or 0) for coin in COIN_TYPES}
     balance[SILVER] = OWNER_SILVER
     balance["total_coin_value"] = compute_total_value({**user, SILVER: OWNER_SILVER})
     return balance
@@ -419,19 +419,20 @@ def set_name(chat_id, user_id, name):
 
 def get_profile(chat_id, user_id):
     """پروفایل کامل: موجودی، ارزش کل، بردها و نام."""
+    key = user_key(chat_id, user_id)
+    user = storage.user_fields(
+        key, (*COIN_TYPES, "total_coin_value", "wins", "name")
+    )
     if is_main_owner(user_id):
-        data = storage.snapshot()
-        user = data.get("users", {}).get(user_key(chat_id, user_id), {})
+        user = user or {}
         profile = _owner_balance(chat_id, user_id)
-        profile["wins"] = int(user.get("wins", 0))
+        profile["wins"] = int(user.get("wins", 0) or 0)
         profile["name"] = user.get("name")
         return profile
-    data = storage.snapshot()
-    user = data.get("users", {}).get(user_key(chat_id, user_id))
     if not user:
         return {BRONZE: 0, SILVER: 0, GOLD: 0, "total_coin_value": 0,
                 "wins": 0, "name": None}
-    profile = {coin: int(user.get(coin, 0)) for coin in COIN_TYPES}
+    profile = {coin: int(user.get(coin, 0) or 0) for coin in COIN_TYPES}
     profile["total_coin_value"] = compute_total_value(user)
     profile["wins"] = int(user.get("wins", 0))
     profile["name"] = user.get("name")

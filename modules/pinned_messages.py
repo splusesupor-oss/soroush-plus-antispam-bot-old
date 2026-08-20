@@ -1,9 +1,12 @@
 """Persistent last pinned message per Soroush Plus group."""
 import json
 from pathlib import Path
+
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
 from modules.group_id import normalize_group_id
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "pinned_messages.json"
+FILE = runtime_config_file("pinned_messages.json")
 
 
 def _load():
@@ -16,7 +19,7 @@ def _load():
 def save(chat_id, message_id):
     data = _load()
     data[normalize_group_id(chat_id)] = int(message_id)
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(FILE, data, indent=2)
 
 
 def get(chat_id):

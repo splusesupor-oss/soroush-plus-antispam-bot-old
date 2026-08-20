@@ -1,10 +1,12 @@
 import json
 import os
 
+from modules.runtime_paths import runtime_log_file
+
 from modules.group_id import normalize_group_id
 from datetime import datetime
 
-FILE = "logs/group_stats.json"
+FILE = str(runtime_log_file("group_stats.json", migrate=True))
 # 🛟 نسخهٔ پشتیبانِ «آخرین وضعیت سالم». اگر فایل اصلی خراب شود
 # (kill وسط نوشتن، تداخل git stash/pop و...) از این بازیابی می‌شود
 # تا شمارش پیام‌ها — و در نتیجه «سطح گروه» — هرگز صفر نشود.

@@ -25,6 +25,9 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
+
 from modules.time_utils import now_local
 from modules.fox_games.session_core import (
     log,
@@ -51,9 +54,7 @@ CELL_EMOJI = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
 SAFE_EMOJI = "✅"
 MINE_EMOJI = "💣"
 
-STATE_FILE = (
-    Path(__file__).resolve().parents[2] / "config" / "fox_minesweeper.json"
-)
+STATE_FILE = runtime_config_file("fox_minesweeper.json")
 
 _ACTIVE = {}      # (chat_id, user_id) -> state
 _TASKS = {}       # (chat_id, user_id) -> timer task
@@ -109,8 +110,7 @@ def _load_quota():
 def _save_quota():
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(
-            json.dumps(_QUOTA or {}, ensure_ascii=False), encoding="utf-8")
+        write_json(STATE_FILE, _QUOTA or {})
     except OSError:
         pass
 

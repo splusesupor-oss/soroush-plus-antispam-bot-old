@@ -54,23 +54,16 @@ def record_message(chat_id, user_id, name=None, *, now=None):
 
 
 def message_count(chat_id, user_id, *, now=None):
-    data = storage.snapshot()
-    return int(
-        data.get("daily_messages", {})
-        .get(_today(now), {})
-        .get(str(chat_id), {})
-        .get(str(user_id), {})
-        .get("messages", 0)
+    entry = storage.read_path(
+        "daily_messages", _today(now), str(chat_id), str(user_id), default={}
     )
+    return int(entry.get("messages", 0))
 
 
 def daily_ranking(chat_id, limit=3, *, now=None):
     """رتبه‌بندی پیام‌های امروز در یک گروه."""
-    data = storage.snapshot()
-    users = (
-        data.get("daily_messages", {})
-        .get(_today(now), {})
-        .get(str(chat_id), {})
+    users = storage.read_path(
+        "daily_messages", _today(now), str(chat_id), default={}
     )
     rows = [
         {"user_id": key, "messages": int(value.get("messages", 0)),
@@ -138,8 +131,16 @@ def settle_previous_days(*, now=None):
 
 
 def _archive_days(stale_days):
-    """روزهای هرس‌شدهٔ daily_messages را در فایل آرشیو ادغام می‌کند."""
+    """روزهای قدیمی را خارج از مسیر داغ آرشیو می‌کند.
+
+    در Backend جدید، آرشیو داخل جدول SQLite می‌رود و دیگر یک JSON
+    تجمعی و رو‌به‌رشد بازنویسی نمی‌شود. حالت JSON قدیمی فقط برای
+    سازگاری اضطراری حفظ شده است.
+    """
     try:
+        if storage.backend_name() == "sqlite":
+            storage.archive_daily_days(stale_days)
+            return
         archive_file = (
             storage.DATA_FILE.parent / "archive" / "coins_daily_archive.json"
         )

@@ -117,7 +117,15 @@ score = {}
 # تاریخچهٔ سوال‌های دیده‌شده به تفکیک کاربر: تا پایان یک دور کامل هیچ سوال
 # تکراری داده نمی‌شود (قبلاً random.choice خالص بود و تکرار می‌داد).
 _SEEN_BY_USER = {}
+MAX_CACHED_USERS = 5000
 _FALLBACK_TOKENS = count(1)
+
+
+def _cap_user_state():
+    while len(_SEEN_BY_USER) > MAX_CACHED_USERS:
+        _SEEN_BY_USER.pop(next(iter(_SEEN_BY_USER)), None)
+    while len(score) > MAX_CACHED_USERS:
+        score.pop(next(iter(score)), None)
 
 
 def _next_token():
@@ -181,6 +189,7 @@ def new_fill(chat_id, user_id):
 
     question, answer = _RANDOM.choice(remaining)
     seen.add(question)
+    _cap_user_state()
     active_fill[(chat_id, user_id)] = {
         "question": question,
         "answer": answer,
@@ -208,6 +217,7 @@ def check_fill(chat_id, user_id, answer):
     if _norm(answer) == _norm(data["answer"]):
         skey = _score_key(chat_id, user_id)
         score[skey] = score.get(skey, 0) + 1
+        _cap_user_state()
         # پاک کردن پیش از بازگشت: هر سوال فقط یک بار امتیاز می‌دهد.
         del active_fill[key]
         return True

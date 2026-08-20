@@ -1,9 +1,12 @@
 """فیلتر مستقل نام نمایشی/بیوگرافی؛ جدا از banned_words گروه."""
 import json
+import os
 import re
-from pathlib import Path
+import tempfile
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "profile_access_blocks.json"
+from modules.runtime_paths import runtime_config_file
+
+FILE = runtime_config_file("profile_access_blocks.json")
 _CACHE = None
 BLOCKED_TERMS = (
     "فرزند ایران", "جان فدای میهن", "فرزند ایران و جانفدای میهن",
@@ -31,10 +34,23 @@ def _load():
 
 
 def _save(data):
+    """Atomic write; callers already avoid no-op rewrites."""
     global _CACHE
     _CACHE = data
     FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    fd, temp_name = tempfile.mkstemp(dir=str(FILE.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, FILE)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _bio(user):
@@ -46,7 +62,6 @@ def _bio(user):
 
 
 def reason(user, bio=None):
-    """Return the access-block reason from profile name/username/about."""
     text = _norm(" ".join(filter(None, [getattr(user, "first_name", ""),
                                            getattr(user, "last_name", ""),
                                            getattr(user, "username", ""),
@@ -62,13 +77,24 @@ def is_blocked(user_id):
 
 
 def block(user_id, reason_text):
-    data = _load(); data[str(user_id)] = {"reason": reason_text}; _save(data)
+    """Persist a block only when it is new or its reason changed."""
+    data = _load()
+    key = str(user_id)
+    record = {"reason": reason_text}
+    if data.get(key) == record:
+        return False
+    data[key] = record
+    _save(data)
+    return True
 
 
 def unblock(user_id):
     data = _load()
     if str(user_id) in data:
-        data.pop(str(user_id)); _save(data)
+        data.pop(str(user_id))
+        _save(data)
+        return True
+    return False
 
 
 def record_for(user_id):

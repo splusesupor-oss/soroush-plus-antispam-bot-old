@@ -24,10 +24,12 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+
 # منبعِ مرکزیِ زمان و timezone پروژه (تهران).
 from modules.time_utils import TEHRAN
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "group_expiry.json"
+FILE = runtime_config_file("group_expiry.json")
 
 # --- دستورها ------------------------------------------------------------
 FIVE_DAYS = "۵ روز"

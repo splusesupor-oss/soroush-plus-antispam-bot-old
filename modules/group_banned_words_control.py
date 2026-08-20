@@ -1,11 +1,14 @@
 import json
+
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
 import os
 
 from modules.group_id import normalize_group_id
 
 # Per-group switch for GROUP_CUSTOM_WORD_FILTER only.
 # It must never gate GLOBAL_FORBIDDEN_WORDS / SpamDetector.check_banned_words.
-FILE = "config/group_banned_words.json"
+FILE = runtime_config_file("group_banned_words.json")
 
 _cache = None
 _cache_mtime = None
@@ -38,8 +41,7 @@ def load():
 
 def save(data):
     global _cache, _cache_mtime
-    with open(FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_json(FILE, data, indent=2)
     _cache = data
     _cache_mtime = _file_mtime()
 

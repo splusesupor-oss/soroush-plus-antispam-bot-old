@@ -2,8 +2,10 @@
 import json
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "owner.json"
+
+FILE = runtime_config_file("owner.json")
 DEFAULT_GLOBAL_OWNER_ID = 37858988
 
 

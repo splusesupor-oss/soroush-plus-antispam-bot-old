@@ -5,11 +5,29 @@ import json
 import os
 from typing import List, Set
 
+from modules.runtime_paths import PROJECT_ROOT, runtime_config_file
+
+
 class ConfigManager:
-    def __init__(self, config_path: str = "config/config.json", banned_words_path: str = "config/banned_words.txt", whitelist_path: str = "config/whitelist.txt"):
-        self.config_path = config_path
-        self.banned_words_path = banned_words_path
-        self.whitelist_path = whitelist_path
+    def __init__(self, config_path: str = "config/config.json",
+                 banned_words_path: str = "config/banned_words.txt",
+                 whitelist_path: str = "config/whitelist.txt"):
+        # config.json is deployment configuration and stays beside the source.
+        # Mutable lists move to the private runtime directory on Termux.
+        self.config_path = str(
+            PROJECT_ROOT / config_path if not os.path.isabs(config_path)
+            else config_path
+        )
+        self.banned_words_path = str(
+            runtime_config_file("banned_words.txt")
+            if banned_words_path == "config/banned_words.txt"
+            else banned_words_path
+        )
+        self.whitelist_path = str(
+            runtime_config_file("whitelist.txt")
+            if whitelist_path == "config/whitelist.txt"
+            else whitelist_path
+        )
         self.config = {}
         self.banned_words: Set[str] = set()
         self.whitelisted_ids: Set[int] = set()

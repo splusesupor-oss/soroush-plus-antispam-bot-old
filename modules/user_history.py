@@ -27,10 +27,13 @@ import json
 import time
 from pathlib import Path
 
+from modules.runtime_paths import CONFIG_DIR
+from modules.atomic_write import write_json
+
 from modules.admin_tools import display_name
 from modules.group_id import normalize_group_id
 
-_BASE = Path(__file__).resolve().parent.parent / "config"
+_BASE = CONFIG_DIR
 _FILE = _BASE / "user_history.json"
 
 COMMAND = "سابقه ها"
@@ -122,8 +125,7 @@ def _load():
 def _save(data):
     try:
         _BASE.mkdir(parents=True, exist_ok=True)
-        _FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(_FILE, data, indent=2)
     except OSError:
         pass
 

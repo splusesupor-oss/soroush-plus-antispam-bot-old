@@ -58,6 +58,41 @@ soroush-plus-antispam-bot/
 
 ---
 
+## 💾 ذخیره‌سازی امن روی Termux (برای اجرای پرترافیک)
+
+روی Termux، فایل‌های متغیر، لاگ‌ها و SQLite را روی حافظهٔ اشتراکی اندروید
+(`/storage/emulated/0`) قرار ندهید. ربات به‌صورت پیش‌فرض Termux را تشخیص می‌دهد
+و داده‌ها را در مسیر خصوصی زیر نگه می‌دارد:
+
+```text
+~/.local/share/soroush-bot/
+├── config/    # تنظیمات و state متغیر
+├── logs/      # لاگ‌های چرخشی
+├── db/bot.sqlite3
+├── backups/   # بکاپ‌های آنلاینِ تأییدشده
+└── archive/
+```
+
+برای صریح و دائمی‌کردن مسیر، **قبل از اجرای ربات** این متغیر را تنظیم کنید:
+
+```bash
+mkdir -p "$HOME/.local/share/soroush-bot"
+chmod 700 "$HOME/.local/share/soroush-bot"
+printf '\nexport SOROUSH_BOT_DATA_DIR="$HOME/.local/share/soroush-bot"\n' >> "$HOME/.profile"
+. "$HOME/.profile"
+python main.py
+```
+
+اولین اجرا فایل‌های قدیمی را **کپی، fsync و با SHA-256 بررسی** می‌کند؛ فایل
+مبدأ حذف نمی‌شود. اقتصاد، بن‌های دائمی، فعالیت کاربران، لاگ مدیریتی و پیشرفت
+بازی‌های حجیم به SQLite/WAL منتقل می‌شوند. `config/config.json`، `.env` و session
+همچنان فایل‌های deployment پروژه‌اند و نباید در اختیار دیگران قرار گیرند.
+
+جزئیات توقف امن، بررسی مهاجرت، بکاپ، خروجی JSON و rollback در بخش
+«مهاجرت امن داده‌های Termux» فایل [`GUIDE_FA.md`](GUIDE_FA.md) آمده است.
+
+---
+
 ## 🚀 نصب و راه‌اندازی - حالت پیشنهادی (User-Bot)
 
 ### 1. پیش‌نیازها

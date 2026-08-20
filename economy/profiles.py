@@ -153,10 +153,11 @@ def validate_nickname(text, *, owned_titles=()):
 # ---------------------------------------------------------------------------
 def get(chat_id, user_id):
     """کپی فقط-خواندنی از پروفایل؛ همیشه یک dict کامل برمی‌گرداند."""
-    data = storage.snapshot()
-    user = data.get("users", {}).get(accounts.user_key(chat_id, user_id)) or {}
+    fields = storage.user_fields(
+        accounts.user_key(chat_id, user_id), ("profile",)
+    ) or {}
     profile = _blank()
-    stored = user.get("profile")
+    stored = fields.get("profile")
     if isinstance(stored, dict):
         for field in profile:
             if field in stored:

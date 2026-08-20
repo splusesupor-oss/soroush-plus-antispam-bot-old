@@ -2,6 +2,9 @@ import json
 import re
 import time
 from pathlib import Path
+
+from modules.runtime_paths import runtime_log_file
+from modules.atomic_write import write_json
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import requests
@@ -9,7 +12,7 @@ from requests.adapters import HTTPAdapter
 from requests.exceptions import ConnectionError, ReadTimeout, RequestException
 from urllib3.util.retry import Retry
 
-FILE = Path("logs/search_cooldown.json")
+FILE = runtime_log_file("search_cooldown.json", migrate=True)
 SEARCH_UNAVAILABLE = "❌ ارتباط با سرور جستجو برقرار نشد، چند لحظه بعد دوباره تلاش کنید."
 NO_RESULTS = "🔍 نتیجه‌ای پیدا نشد."
 
@@ -22,12 +25,18 @@ def can_search(user_id):
         data = {}
 
     now = time.time()
+    # A cooldown is temporary state, not a permanent user registry.
+    data = {
+        str(key): float(stamp)
+        for key, stamp in data.items()
+        if isinstance(stamp, (int, float)) and now - float(stamp) < 60
+    }
     last = data.get(str(user_id), 0)
     if now - last < 60:
         return False, int(60 - (now - last))
 
     data[str(user_id)] = now
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(FILE, data)
     return True, 0
 
 

@@ -304,6 +304,28 @@ def note_pending(sender):
             table.pop(msg_id, None)
 
 
+def drop_completed_pending(sender):
+    """Remove sender states whose futures have already completed.
+
+    Some SPlusthon versions leave answered keepalive/RPC states in the map
+    until another receive-path sweep.  Removing only ``future.done()`` rows is
+    safe and keeps reconnect from replaying completed requests.
+    """
+    pending = getattr(sender, "_pending_state", None)
+    if not pending:
+        return 0
+    table = _seen_at(sender)
+    removed = 0
+    for msg_id, state in list(pending.items()):
+        future = getattr(state, "future", None)
+        if future is None or not future.done():
+            continue
+        pending.pop(msg_id, None)
+        table.pop(msg_id, None)
+        removed += 1
+    return removed
+
+
 def drop_stale_pending(sender, deadline):
     """درخواست‌های معلقی که از مهلت گذشته‌اند را از جدول سِندر پاک می‌کند.
 

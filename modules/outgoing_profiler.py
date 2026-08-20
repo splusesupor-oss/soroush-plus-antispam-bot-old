@@ -298,7 +298,14 @@ def _ensure_reconnect_hooks(client, logger):
                 f"ping_id={getattr(pong, 'ping_id', None)} "
                 f"msg_id={getattr(pong, 'msg_id', None)}"
             )
-            return await original(message)
+            try:
+                return await original(message)
+            finally:
+                # Original receive handling gets first chance to resolve the
+                # pong.  Completed rows are then removed immediately instead
+                # of waiting for the periodic stale-state sweep.
+                from modules.connection_guard import drop_completed_pending
+                drop_completed_pending(sender)
         if not asyncio.iscoroutinefunction(original):
             def sync_hooked(message):
                 pong = getattr(message, "obj", message)
@@ -307,7 +314,11 @@ def _ensure_reconnect_hooks(client, logger):
                     f"ping_id={getattr(pong, 'ping_id', None)} "
                     f"msg_id={getattr(pong, 'msg_id', None)}"
                 )
-                return original(message)
+                try:
+                    return original(message)
+                finally:
+                    from modules.connection_guard import drop_completed_pending
+                    drop_completed_pending(sender)
             return sync_hooked
         return hooked
 

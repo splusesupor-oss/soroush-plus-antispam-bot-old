@@ -27,8 +27,9 @@ def _parse(value):
 def daily_status(chat_id, user_id, now=None):
     """``(available, seconds_left)`` برای جایزهٔ روزانه."""
     moment = now or _now()
-    data = storage.snapshot()
-    user = data.get("users", {}).get(accounts.user_key(chat_id, user_id), {})
+    user = storage.user_fields(
+        accounts.user_key(chat_id, user_id), ("daily_claimed_at",)
+    ) or {}
     last = _parse(user.get("daily_claimed_at"))
     cooldown = int(settings.get("DailyRewardCooldownSeconds"))
     if last is None:

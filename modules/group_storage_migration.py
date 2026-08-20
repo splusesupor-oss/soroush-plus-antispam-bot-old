@@ -1,11 +1,11 @@
-"""مهاجرت یک‌باره و بدون حذف داده برای کلیدهای گروهی قدیمی SPlusthon."""
+"""One-time, lossless normalization of historical SPlusthon group IDs."""
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from modules.group_id import merge_unique, normalize_group_id
-
-
-ROOT = Path(__file__).resolve().parent.parent
+from modules.runtime_paths import runtime_config_file, runtime_log_file
 
 
 def _load(path):
@@ -19,13 +19,26 @@ def _load(path):
 
 
 def _save(path, value):
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Atomic JSON write; an interrupted migration cannot truncate state."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _merge_group_record(current, incoming):
     current = dict(current) if isinstance(current, dict) else {}
     incoming = incoming if isinstance(incoming, dict) else {}
-    # یک گروه اگر در هر رکورد قدیمی فعال بوده، فعال باقی می‌ماند.
     current["active"] = bool(current.get("active", False) or incoming.get("active", False))
     for key, value in incoming.items():
         if key not in current or current[key] in (None, ""):
@@ -34,11 +47,11 @@ def _merge_group_record(current, incoming):
 
 
 def _merge_list(current, incoming):
-    return merge_unique(current if isinstance(current, list) else [], incoming if isinstance(incoming, list) else [])
+    return merge_unique(current if isinstance(current, list) else [],
+                        incoming if isinstance(incoming, list) else [])
 
 
 def _merge_flag(current, incoming):
-    # False یک انتخاب صریح برای خاموش‌بودن فیلتر است و نباید گم شود.
     return bool(current) and bool(incoming)
 
 
@@ -56,7 +69,6 @@ def _merge_mapping(current, incoming):
 
 
 def _merge_counters(current, incoming):
-    """شمارنده‌های دو کلید هم‌ارز را بدون از دست‌دادن مقدار ادغام می‌کند."""
     current = dict(current) if isinstance(current, dict) else {}
     incoming = incoming if isinstance(incoming, dict) else {}
     for key, value in incoming.items():
@@ -71,8 +83,7 @@ def _merge_counters(current, incoming):
     return current
 
 
-def _migrate_file(relative_path, merger):
-    path = ROOT / relative_path
+def _migrate_file(path, merger):
     data = _load(path)
     migrated = {}
     changed = False
@@ -90,16 +101,16 @@ def _migrate_file(relative_path, merger):
 
 
 def migrate_all_group_storage():
-    """شناسه‌های کانالی را در تمام JSONهای فعال به کلید سازگار تبدیل می‌کند."""
     migrations = (
-        ("config/groups.json", _merge_group_record),
-        ("config/admins.json", _merge_list),
-        ("config/group_words.json", _merge_list),
-        ("config/group_banned_words.json", _merge_flag),
-        ("config/banned_users.json", _merge_list),
-        ("logs/group_stats.json", _merge_counters),
-        ("logs/spam_counts.json", _merge_counters),
-        ("logs/user_map.json", _merge_mapping),
-        ("config/user_activity.json", _merge_mapping),
+        (runtime_config_file("groups.json"), _merge_group_record),
+        (runtime_config_file("admins.json"), _merge_list),
+        (runtime_config_file("group_words.json"), _merge_list),
+        (runtime_config_file("group_banned_words.json"), _merge_flag),
+        (runtime_config_file("banned_users.json"), _merge_list),
+        (runtime_log_file("group_stats.json", migrate=True), _merge_counters),
+        (runtime_log_file("spam_counts.json", migrate=True), _merge_counters),
+        (runtime_log_file("user_map.json", migrate=True), _merge_mapping),
+        (runtime_config_file("user_activity.json"), _merge_mapping),
     )
-    return [path for path, merger in migrations if _migrate_file(path, merger)]
+    return [str(path) for path, merger in migrations
+            if _migrate_file(path, merger)]

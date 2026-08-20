@@ -4,9 +4,11 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from modules.runtime_paths import runtime_log_file
+
 from modules.group_id import normalize_group_id
 
-FILE = Path("logs/user_map.json")
+FILE = runtime_log_file("user_map.json", migrate=True)
 
 # ⚡️ کش mtime + نوشتن غیرمسدودکننده — قبلاً «هر تخلف» فایل را کامل
 # می‌خواند و با indent همگام روی حلقهٔ رویداد می‌نوشت؛ در موج اسپم همین

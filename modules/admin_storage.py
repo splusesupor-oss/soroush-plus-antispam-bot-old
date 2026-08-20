@@ -2,9 +2,12 @@
 import json
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
+
 from modules.group_id import normalize_group_id
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "admins.json"
+FILE = runtime_config_file("admins.json")
 
 _cache = None
 _cache_mtime = None
@@ -31,10 +34,7 @@ def load_admins():
 
 def save_admins(data):
     global _cache, _cache_mtime
-    FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json(FILE, data, indent=2)
     _cache = data
     _cache_mtime = FILE.stat().st_mtime_ns
 

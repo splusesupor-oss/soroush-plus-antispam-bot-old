@@ -10,6 +10,10 @@ import random
 from itertools import count
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.game_progress_storage import SeenProgressStore
+from modules.atomic_write import write_json
+
 COUNTRIES = (
     # --- خاورمیانه و آسیای غربی ---
     ("🇮🇷", "ایران", ("iran",)),
@@ -156,11 +160,14 @@ _SEEN_HISTORY = {}
 _FALLBACK_TOKENS = count(1)
 
 # فایلِ ماندگارِ تاریخچهٔ هر کاربر تا بعد از ری‌استارتِ ربات هم حفظ شود.
-_PROGRESS_FILE = Path(__file__).resolve().parent.parent / "config" / "flag_guess_progress.json"
+_PROGRESS_FILE = runtime_config_file("flag_guess_progress.json")
+_PROGRESS_STORE = SeenProgressStore("flag_guess_progress", _PROGRESS_FILE, _SEEN_HISTORY)
 
 
 def _load_progress():
     """تاریخچهٔ دیده‌شده را از فایل می‌خواند (بعد از ری‌استارت حفظ می‌شود)."""
+    if _PROGRESS_STORE.sqlite:
+        return
     try:
         if _PROGRESS_FILE.exists():
             data = json.loads(_PROGRESS_FILE.read_text(encoding="utf-8"))
@@ -171,13 +178,18 @@ def _load_progress():
         pass
 
 
-def _save_progress():
-    """تاریخچهٔ دیده‌شده را روی دیسک می‌نویسد."""
+def _save_progress(user_key=None, values=None):
+    """Persist JSON or mark one lazy SQLite row for batched persistence."""
+    if _PROGRESS_STORE.sqlite:
+        if user_key is not None:
+            if values is None:
+                _PROGRESS_STORE.mark(user_key)
+            else:
+                _PROGRESS_STORE.replace(user_key, values)
+        return
     try:
-        _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {k: sorted(v) for k, v in _SEEN_HISTORY.items()}
-        _PROGRESS_FILE.write_text(
-            json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        write_json(_PROGRESS_FILE, data)
     except OSError:
         pass
 
@@ -215,31 +227,38 @@ def _user_key(user_id):
     return str(user_id)
 
 
+def _seen(user_id):
+    key = _user_key(user_id)
+    if _PROGRESS_STORE.sqlite:
+        return _PROGRESS_STORE.get(key)
+    return _SEEN_HISTORY.setdefault(key, set())
+
+
 def _chat_key(chat_id):
     return str(chat_id)
 
 
 def is_exhausted(user_id):
     """آیا این کاربر همهٔ پرچم‌ها را دیده و بازی برایش بسته است."""
-    seen = _SEEN_HISTORY.get(_user_key(user_id))
+    seen = _seen(user_id)
     return bool(seen) and len(seen) >= len(COUNTRIES)
 
 
 def remaining_count(user_id):
     """تعداد پرچم‌های باقی‌مانده برای این کاربر."""
-    seen = _SEEN_HISTORY.get(_user_key(user_id), ())
+    seen = _seen(user_id)
     return max(len(COUNTRIES) - len(seen), 0)
 
 
 def seen_count(user_id):
     """تعداد پرچم‌هایی که این کاربر تا کنون دیده است."""
-    return len(_SEEN_HISTORY.get(_user_key(user_id), ()))
+    return len(_seen(user_id))
 
 
 def _pick_country(chat_id, user_id):
     """کشوری تصادفی که این کاربر ندیده است؛ None اگر همه را دیده باشد."""
     ukey = _user_key(user_id)
-    seen = _SEEN_HISTORY.setdefault(ukey, set())
+    seen = _seen(user_id)
 
     remaining = [c for c in COUNTRIES if c[1] not in seen]
     if not remaining:
@@ -253,7 +272,7 @@ def _pick_country(chat_id, user_id):
 
     country = _RANDOM.choice(remaining)
     seen.add(country[1])
-    _save_progress()
+    _save_progress(ukey, seen)
     return country
 
 
@@ -316,8 +335,10 @@ def answer(chat_id, text, user_id=None):
         # پاسخ‌دهنده هم این پرچم را «دیده» ثبت می‌شود، نه فقط شروع‌کننده.
         # در غیر این صورت یک نفر می‌توانست با شروع دادن دستور توسط دیگران
         # بی‌نهایت بار همان پرچم‌ها را جواب دهد و سکه بگیرد.
-        _SEEN_HISTORY.setdefault(_user_key(user_id), set()).add(state["answer"])
-        _save_progress()
+        key = _user_key(user_id)
+        seen = _seen(user_id)
+        seen.add(state["answer"])
+        _save_progress(key, seen)
     return state["answer"]
 
 
@@ -332,10 +353,17 @@ def finish(chat_id, token=None):
 def reset_history(user_id=None):
     """تاریخچهٔ یک کاربر (یا همهٔ کاربران) را پاک می‌کند."""
     if user_id is None:
-        _SEEN_HISTORY.clear()
+        if _PROGRESS_STORE.sqlite:
+            _PROGRESS_STORE.clear()
+        else:
+            _SEEN_HISTORY.clear()
+            _save_progress()
         _LAST_COUNTRY.clear()
         _ACTIVE.clear()
-        _save_progress()
         return
-    _SEEN_HISTORY.pop(_user_key(user_id), None)
-    _save_progress()
+    key = _user_key(user_id)
+    if _PROGRESS_STORE.sqlite:
+        _PROGRESS_STORE.delete(key)
+    else:
+        _SEEN_HISTORY.pop(key, None)
+        _save_progress()

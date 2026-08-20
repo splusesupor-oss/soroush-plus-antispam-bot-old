@@ -19,6 +19,9 @@ import random
 import time
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
+
 from .sentence_guess_puzzles import PUZZLES
 
 GAME = "sentence_guess"
@@ -35,7 +38,7 @@ REWARD = 3
 # که همین حالا جلوی چشمِ همه جواب داده شد.
 RECENT_WINDOW = 15
 
-FILE = Path(__file__).resolve().parents[2] / "config" / "sentence_guess_state.json"
+FILE = runtime_config_file("sentence_guess_state.json")
 _ACTIVE = {}
 _RANDOM = random.SystemRandom()
 
@@ -50,7 +53,7 @@ def _load():
 
 def _save(data):
     FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(FILE, data, indent=2)
 
 
 def _key(chat_id, user_id=None):

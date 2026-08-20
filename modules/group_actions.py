@@ -35,6 +35,9 @@ import json
 import traceback
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
+
 from splusthon.tl import functions, types
 from splusthon.tl.functions.channels import EditPhotoRequest, EditTitleRequest
 
@@ -77,9 +80,7 @@ BANNED_RIGHT_FLAGS = (
 # "قفل works, باز does not" symptom.
 TEXT_MESSAGE_FLAGS = ("send_messages", "send_plain")
 
-_LOCK_STATE_FILE = (
-    Path(__file__).resolve().parent.parent / "config" / "group_message_lock_state.json"
-)
+_LOCK_STATE_FILE = runtime_config_file("group_message_lock_state.json")
 
 
 def _load_lock_state():
@@ -94,9 +95,7 @@ def _load_lock_state():
 def _save_lock_state(data):
     try:
         _LOCK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _LOCK_STATE_FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        write_json(_LOCK_STATE_FILE, data, indent=2)
     except OSError:
         # Persisting the snapshot is best-effort telemetry; never block a lock.
         pass

@@ -1940,6 +1940,7 @@ _DELETE_GROUP_LOCKS = {}
 DELETE_COOLDOWN_MAX_ENTRIES = 2000
 ADMIN_PERMISSION_CACHE = {}
 ADMIN_PERMISSION_CACHE_TTL_SECONDS = 45
+ADMIN_PERMISSION_CACHE_MAX_ENTRIES = 4000
 
 
 def _has_group_management_permission(bot, chat_id, user_id, username):
@@ -1949,6 +1950,8 @@ def _has_group_management_permission(bot, chat_id, user_id, username):
     cached = ADMIN_PERMISSION_CACHE.get(cache_key)
     if cached and cached[0] > now:
         return cached[1]
+    if cached:
+        ADMIN_PERMISSION_CACHE.pop(cache_key, None)
 
     group_owner_id = get_group_owner(chat_id)
     if is_global_owner(user_id):
@@ -1963,6 +1966,12 @@ def _has_group_management_permission(bot, chat_id, user_id, username):
     ADMIN_PERMISSION_CACHE[cache_key] = (
         now + ADMIN_PERMISSION_CACHE_TTL_SECONDS, result
     )
+    if len(ADMIN_PERMISSION_CACHE) > ADMIN_PERMISSION_CACHE_MAX_ENTRIES:
+        for key, (expires_at, _value) in list(ADMIN_PERMISSION_CACHE.items()):
+            if expires_at <= now:
+                ADMIN_PERMISSION_CACHE.pop(key, None)
+        while len(ADMIN_PERMISSION_CACHE) > ADMIN_PERMISSION_CACHE_MAX_ENTRIES:
+            ADMIN_PERMISSION_CACHE.pop(next(iter(ADMIN_PERMISSION_CACHE)), None)
     # این helper برای هر پیام گروهی اجرا می‌شود؛ log synchronous فقط در
     # حالت debug نگه داشته می‌شود تا مسیر عادی کاربران I/O اضافی نداشته باشد.
     if result:

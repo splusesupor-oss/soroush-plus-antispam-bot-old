@@ -2,12 +2,15 @@
 import json
 import re
 from pathlib import Path
+
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
 from random import SystemRandom
 
 from modules import persian_names
 from modules.group_id import normalize_group_id
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "group_memory.json"
+FILE = runtime_config_file("group_memory.json")
 MAX_NAME_LENGTH = 20
 _cache = None
 _cache_mtime = None
@@ -92,7 +95,7 @@ def _load():
 def _save(data):
     global _cache, _cache_mtime
     FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(FILE, data, indent=2)
     _cache = data
     _cache_mtime = _file_mtime()
 

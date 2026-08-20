@@ -146,6 +146,8 @@ _PROCESSING = set()   # processing state set before the async task is created
 # عبارت‌هایِ پرتکرار. بعد از _CACHE_TTL ثانیه منقضی می‌شود.
 _SEARCH_CACHE = {}
 _CACHE_TTL = 3600  # ۱ ساعت
+_CACHE_MAX = 500
+_SESSION_MAX = 2000
 
 
 def reset_all():
@@ -699,6 +701,8 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
     cached = _SEARCH_CACHE.get(cache_key)
     if cached and (now - cached[0]) < _CACHE_TTL:
         return cached[1][:limit]
+    if cached:
+        _SEARCH_CACHE.pop(cache_key, None)
 
     exact_candidates = []  # از عبارتِ دقیق (اولویتِ اول)
     hint_candidates = []   # از عبارتِ انگلیسیِ مکمل (fallback)
@@ -754,6 +758,12 @@ def _search_image_urls(query, limit=IMAGE_COUNT):
     result = [url for _w, url in combined[:limit]]
 
     _SEARCH_CACHE[cache_key] = (now, result)
+    # TTL alone did not remove one-off queries; enforce a hard memory cap.
+    for key, (created, _urls) in list(_SEARCH_CACHE.items()):
+        if now - created >= _CACHE_TTL:
+            _SEARCH_CACHE.pop(key, None)
+    while len(_SEARCH_CACHE) > _CACHE_MAX:
+        _SEARCH_CACHE.pop(next(iter(_SEARCH_CACHE)), None)
     return result
 
 
@@ -1039,8 +1049,14 @@ async def _send_links_together(bot, chat_id, items):
 # ---------------------------------------------------------------------------
 def start_session(chat_id, user_id):
     """شروع جریانِ «دانلود عکس»؛ درخواستِ عبارت."""
+    now = time.monotonic()
+    for stale_key, state in list(_SESSIONS.items()):
+        if now - float(state.get("ts", 0)) > CONFIRM_TIMEOUT:
+            _SESSIONS.pop(stale_key, None)
+    while len(_SESSIONS) >= _SESSION_MAX:
+        _SESSIONS.pop(next(iter(_SESSIONS)), None)
     key = (chat_id, user_id)
-    _SESSIONS[key] = {"query": None, "ts": time.monotonic()}
+    _SESSIONS[key] = {"query": None, "ts": now}
 
 
 def session(chat_id, user_id):

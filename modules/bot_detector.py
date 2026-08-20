@@ -18,7 +18,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-_BASE = Path(__file__).resolve().parent.parent / "config"
+from modules.runtime_paths import CONFIG_DIR
+from modules.atomic_write import write_json
+
+_BASE = CONFIG_DIR
 _FILE = _BASE / "bot_disabled_groups.json"
 
 # دستورِ مجاز برای فعال‌سازیِ دوباره (مالک/ادمین).
@@ -63,8 +66,7 @@ def _save(data):
     global _DISABLED, _DISABLED_MTIME
     try:
         _BASE.mkdir(parents=True, exist_ok=True)
-        _FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(_FILE, data, indent=2)
         _DISABLED = data if isinstance(data, dict) else {}
         try:
             _DISABLED_MTIME = _FILE.stat().st_mtime

@@ -4,6 +4,10 @@ import time
 from itertools import count
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.game_progress_storage import SeenProgressStore
+from modules.atomic_write import write_json
+
 
 # ۱۰۰ چیستان متنوع: منطقی، فکری، خلاقانه و روزمره.
 # پاسخ‌ها یکتا هستند و هیچ سؤال یا جوابی تکراری نیست.
@@ -139,10 +143,13 @@ _FALLBACK_TOKENS = count(1)
 
 # فایلِ ماندگارِ تاریخچهٔ چیستان‌های دیده‌شدهٔ هر کاربر، تا بعد از ری‌استارت
 # ربات هم حفظ شود.
-_PROGRESS_FILE = Path(__file__).resolve().parent.parent / "config" / "riddle_progress.json"
+_PROGRESS_FILE = runtime_config_file("riddle_progress.json")
+_PROGRESS_STORE = SeenProgressStore("riddle_progress", _PROGRESS_FILE, _SEEN_BY_USER)
 
 
 def _load_progress():
+    if _PROGRESS_STORE.sqlite:
+        return
     try:
         if _PROGRESS_FILE.exists():
             data = json.loads(_PROGRESS_FILE.read_text(encoding="utf-8"))
@@ -153,12 +160,17 @@ def _load_progress():
         pass
 
 
-def _save_progress():
+def _save_progress(user_key=None, values=None):
+    if _PROGRESS_STORE.sqlite:
+        if user_key is not None:
+            if values is None:
+                _PROGRESS_STORE.mark(user_key)
+            else:
+                _PROGRESS_STORE.replace(user_key, values)
+        return
     try:
-        _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {k: sorted(v) for k, v in _SEEN_BY_USER.items()}
-        _PROGRESS_FILE.write_text(
-            json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        write_json(_PROGRESS_FILE, data)
     except OSError:
         pass
 
@@ -189,8 +201,15 @@ def _user_key(user_id):
     return str(user_id)
 
 
+def _seen(user_id):
+    key = _user_key(user_id)
+    if _PROGRESS_STORE.sqlite:
+        return _PROGRESS_STORE.get(key)
+    return _SEEN_BY_USER.setdefault(key, set())
+
+
 def seen_count(user_id):
-    return len(_SEEN_BY_USER.get(_user_key(user_id), ()))
+    return len(_seen(user_id))
 
 
 def remaining_count(user_id):
@@ -199,19 +218,29 @@ def remaining_count(user_id):
 
 def reset_user(user_id=None):
     if user_id is None:
-        _SEEN_BY_USER.clear()
-        _save_progress()
+        if _PROGRESS_STORE.sqlite:
+            _PROGRESS_STORE.clear()
+        else:
+            _SEEN_BY_USER.clear()
+            _save_progress()
         return
-    _SEEN_BY_USER.pop(_user_key(user_id), None)
-    _save_progress()
+    key = _user_key(user_id)
+    if _PROGRESS_STORE.sqlite:
+        _PROGRESS_STORE.delete(key)
+    else:
+        _SEEN_BY_USER.pop(key, None)
+        _save_progress()
 
 
 def reset_all():
     """پاک‌سازی کامل — برای تست و ری‌استارت."""
     active_riddles.clear()
     used_riddles.clear()
-    _SEEN_BY_USER.clear()
-    _save_progress()
+    if _PROGRESS_STORE.sqlite:
+        _PROGRESS_STORE.clear()
+    else:
+        _SEEN_BY_USER.clear()
+        _save_progress()
 
 
 def _norm(value):
@@ -229,7 +258,7 @@ def new_riddle(chat_id, user_id):
     چیستان محدودیت دائمی ندارد؛ فقط تکرار درون یک دور ممنوع است).
     """
     key = _user_key(user_id)
-    seen = _SEEN_BY_USER.setdefault(key, set())
+    seen = _seen(user_id)
     remaining = [item for item in RIDDLES if item[0] not in seen]
     if not remaining:
         seen.clear()
@@ -238,7 +267,7 @@ def new_riddle(chat_id, user_id):
     question, answer = _RANDOM.choice(remaining)
     seen.add(question)
     used_riddles.add(RIDDLES.index((question, answer)))
-    _save_progress()
+    _save_progress(key, seen)
 
     active_riddles[(chat_id, user_id)] = {
         "question": question,

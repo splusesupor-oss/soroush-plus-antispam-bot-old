@@ -9,9 +9,9 @@ import os
 import tempfile
 from pathlib import Path
 
-SETTINGS_FILE = (
-    Path(__file__).resolve().parent.parent / "config" / "economy_settings.json"
-)
+from modules.runtime_paths import runtime_config_file
+
+SETTINGS_FILE = runtime_config_file("economy_settings.json")
 
 BRONZE = "bronze"
 SILVER = "silver"

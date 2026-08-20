@@ -7,6 +7,9 @@ import random
 import time
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
+
 from modules.fox_games.session_core import (
     SessionStore,
     log,
@@ -26,9 +29,7 @@ DAILY_LIMIT = 2
 QUOTA_WINDOW = 24 * 60 * 60
 PICK_TIMEOUT = 60
 
-STATE_FILE = (
-    Path(__file__).resolve().parent.parent.parent / "config" / "fox_lucky_box.json"
-)
+STATE_FILE = runtime_config_file("fox_lucky_box.json")
 
 _STORE = SessionStore(GAME_NAME)
 _RANDOM = random.SystemRandom()
@@ -64,9 +65,7 @@ def _load_quota():
 def _save_quota():
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(
-            json.dumps(_QUOTA or {}, ensure_ascii=False), encoding="utf-8"
-        )
+        write_json(STATE_FILE, _QUOTA or {})
     except OSError:
         pass
 

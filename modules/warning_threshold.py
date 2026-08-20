@@ -13,9 +13,11 @@ import tempfile
 import time
 from pathlib import Path
 
+from modules.runtime_paths import CONFIG_DIR
+
 from modules.group_id import normalize_group_id
 
-_BASE = Path(__file__).resolve().parent.parent / "config"
+_BASE = CONFIG_DIR
 _FILE = _BASE / "warning_threshold.json"
 
 DEFAULT_THRESHOLD = 5

@@ -17,9 +17,11 @@ import tempfile
 import time
 from pathlib import Path
 
+from modules.runtime_paths import CONFIG_DIR
+
 from modules.group_id import normalize_group_id
 
-_BASE = Path(__file__).resolve().parent.parent / "config"
+_BASE = CONFIG_DIR
 _FILE = _BASE / "punishment_mode.json"
 
 MODE_BAN = "ban"
@@ -28,6 +30,7 @@ DEFAULT_MODE = MODE_BAN
 
 # انتظار برای «تایید/لغو» بعد از دستور: (chat_key, user_key) → زمان شروع
 _PENDING_TTL = 120
+_PENDING_MAX = 2000
 _pending = {}
 
 _cache = None
@@ -117,6 +120,7 @@ def mode_label(mode):
 def begin_change(chat_id, user_id):
     _prune_pending()
     _pending[(_key(chat_id), str(user_id))] = time.time()
+    _prune_pending()
 
 
 def has_pending(chat_id, user_id):
@@ -132,3 +136,5 @@ def _prune_pending(now=None):
     now = time.time() if now is None else now
     for key in [k for k, ts in _pending.items() if now - ts > _PENDING_TTL]:
         _pending.pop(key, None)
+    while len(_pending) > _PENDING_MAX:
+        _pending.pop(next(iter(_pending)), None)

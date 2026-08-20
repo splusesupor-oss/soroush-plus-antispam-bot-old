@@ -148,7 +148,17 @@ _WIKIPEDIA_API = "https://fa.wikipedia.org/w/api.php"
 _WEB_SEARCH_URL = "https://html.duckduckgo.com/html/"
 _EXTERNAL_TIMEOUT_SECONDS = 2.0
 _EXTERNAL_CACHE_SECONDS = 60 * 60
+_EXTERNAL_CACHE_MAX = 2000
 _EXTERNAL_CACHE = {}
+
+
+def _cache_external(key, now, source):
+    _EXTERNAL_CACHE[key] = (now, source)
+    for stale_key, (created, _value) in list(_EXTERNAL_CACHE.items()):
+        if now - created >= _EXTERNAL_CACHE_SECONDS:
+            _EXTERNAL_CACHE.pop(stale_key, None)
+    while len(_EXTERNAL_CACHE) > _EXTERNAL_CACHE_MAX:
+        _EXTERNAL_CACHE.pop(next(iter(_EXTERNAL_CACHE)), None)
 _CATEGORY_TERMS = {
     "نام": ("given name", "first name", "forename", "personal name", "نام کوچک"),
     "فامیل": ("family name", "surname", "last name", "نام خانوادگی"),
@@ -381,22 +391,24 @@ def _external_confirms_category(category, answer, normalized_answer, logger=None
         logger.log_info(f"NAME FAMILY EXTERNAL START category={category} answer={answer} normalized={normalized_answer}")
     start_t = time.monotonic()
     source = _wikidata_confirms_category(category, answer, normalized_answer)
-    if source and logger is not None:
-        logger.log_info(f"NAME FAMILY EXTERNAL WIKIDATA HIT category={category} answer={answer} elapsed={time.monotonic()-start_t:.3f}s")
-        _EXTERNAL_CACHE[cache_key] = (now, source)
+    if source:
+        if logger is not None:
+            logger.log_info(f"NAME FAMILY EXTERNAL WIKIDATA HIT category={category} answer={answer} elapsed={time.monotonic()-start_t:.3f}s")
+        _cache_external(cache_key, now, source)
         return source
     mid_t = time.monotonic()
     if not source:
         source = _wikipedia_confirms_category(category, answer, normalized_answer)
-        if source and logger is not None:
-            logger.log_info(f"NAME FAMILY EXTERNAL WIKIPEDIA HIT category={category} answer={answer} elapsed={time.monotonic()-mid_t:.3f}s total={time.monotonic()-start_t:.3f}s")
-            _EXTERNAL_CACHE[cache_key] = (now, source)
+        if source:
+            if logger is not None:
+                logger.log_info(f"NAME FAMILY EXTERNAL WIKIPEDIA HIT category={category} answer={answer} elapsed={time.monotonic()-mid_t:.3f}s total={time.monotonic()-start_t:.3f}s")
+            _cache_external(cache_key, now, source)
             return source
     if not source:
         source = _web_confirms_category(category, answer, normalized_answer)
         if logger is not None:
             logger.log_info(f"NAME FAMILY EXTERNAL WEB result={source} category={category} answer={answer} total_elapsed={time.monotonic()-start_t:.3f}s")
-    _EXTERNAL_CACHE[cache_key] = (now, source)
+    _cache_external(cache_key, now, source)
     if logger is not None and not source:
         logger.log_info(f"NAME FAMILY EXTERNAL MISS category={category} answer={answer} total_elapsed={time.monotonic()-start_t:.3f}s")
     return source

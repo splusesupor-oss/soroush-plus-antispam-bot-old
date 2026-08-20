@@ -19,6 +19,10 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from modules.runtime_paths import CONFIG_DIR
+from modules import runtime_db
+from modules.atomic_write import write_json
+
 # منبعِ مرکزیِ زمان و timezone پروژه (تهران).
 from modules.time_utils import TEHRAN, now_local
 
@@ -30,7 +34,7 @@ from modules.admin_storage import is_admin
 from modules.group_storage import get_group_owner
 from modules.user_display import format_user
 
-_BASE = Path(__file__).resolve().parent.parent / "config"
+_BASE = CONFIG_DIR
 _ADMIN_LOG_FILE = _BASE / "admin_log.json"
 _CLEANUP_FILE = _BASE / "auto_cleanup.json"
 
@@ -38,6 +42,7 @@ _CLEANUP_FILE = _BASE / "auto_cleanup.json"
 MAX_LOG_PER_GROUP = 200
 # لاگ فقط برای ۲۴ ساعت نگه داشته می‌شود؛ قدیمی‌ترها خودکار حذف می‌شوند.
 LOG_TTL_SECONDS = 24 * 60 * 60
+_USE_SQLITE_LOG = runtime_db.SQLITE_ENABLED
 
 
 # ---------------------------------------------------------------------------
@@ -177,14 +182,61 @@ def _prune_log(data):
     return changed
 
 
+def _ensure_admin_log_sqlite():
+    if not _USE_SQLITE_LOG:
+        return
+    marker = "admin_log_json_import_v1"
+    if runtime_db.meta_get(marker):
+        return
+    existing = runtime_db.query_one("SELECT COUNT(*) FROM admin_events")[0]
+    if existing:
+        runtime_db.meta_set(marker, "existing-db")
+        return
+    data = _load_admin_log()
+    cutoff = time.time() - LOG_TTL_SECONDS
+    with runtime_db.transaction() as conn:
+        for group_id, entries in data.items():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries[-MAX_LOG_PER_GROUP:]:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    event_ts = float(entry.get("_ts", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if event_ts < cutoff:
+                    continue
+                conn.execute(
+                    "INSERT INTO admin_events(group_id,actor_id,actor,action,"
+                    "target,note,event_time,event_ts) VALUES(?,?,?,?,?,?,?,?)",
+                    (str(group_id), entry.get("actor_id"),
+                     str(entry.get("actor") or "کاربر ناشناس"),
+                     str(entry.get("action") or ""), entry.get("target"),
+                     str(entry.get("note") or ""),
+                     str(entry.get("time") or ""), event_ts),
+                )
+        conn.execute(
+            "INSERT OR REPLACE INTO storage_meta(key,value) VALUES(?,?)",
+            (marker, "ok"),
+        )
+
+
+def _sqlite_log_entry(row):
+    return {
+        "time": row["event_time"], "_ts": float(row["event_ts"]),
+        "actor_id": row["actor_id"], "actor": row["actor"],
+        "action": row["action"], "target": row["target"],
+        "note": row["note"] or "",
+    }
+
+
 def log_action(chat_id, actor, action, target=None, note=""):
     """یک اقدامِ مدیریتی را در لاگِ گروه ثبت می‌کند.
 
     ``actor``/``target`` می‌توانند شیءِ کاربر یا dict باشند.
     """
     key = str(chat_id)
-    data = _load_admin_log()
-    bucket = data.setdefault(key, [])
     actor_id = None
     if isinstance(actor, dict):
         actor_id = actor.get("id", actor.get("user_id"))
@@ -201,6 +253,29 @@ def log_action(chat_id, actor, action, target=None, note=""):
         "target": display_name(target) if target is not None else None,
         "note": note or "",
     }
+    if _USE_SQLITE_LOG:
+        _ensure_admin_log_sqlite()
+        with runtime_db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO admin_events(group_id,actor_id,actor,action,"
+                "target,note,event_time,event_ts) VALUES(?,?,?,?,?,?,?,?)",
+                (key, entry["actor_id"], entry["actor"], entry["action"],
+                 entry["target"], entry["note"], entry["time"], entry["_ts"]),
+            )
+            conn.execute(
+                "DELETE FROM admin_events WHERE event_ts < ?",
+                (entry["_ts"] - LOG_TTL_SECONDS,),
+            )
+            conn.execute(
+                "DELETE FROM admin_events WHERE group_id=? AND id NOT IN ("
+                "SELECT id FROM admin_events WHERE group_id=? "
+                "ORDER BY event_ts DESC,id DESC LIMIT ?)",
+                (key, key, MAX_LOG_PER_GROUP),
+            )
+        return entry
+
+    data = _load_admin_log()
+    bucket = data.setdefault(key, [])
     bucket.append(entry)
     if len(bucket) > MAX_LOG_PER_GROUP:
         del bucket[:-MAX_LOG_PER_GROUP]
@@ -212,6 +287,16 @@ def log_action(chat_id, actor, action, target=None, note=""):
 
 def get_log(chat_id, limit=30):
     """آخرین لاگ‌های ۲۴ ساعتِ اخیرِ این گروه (جدیدترین‌ها اول)."""
+    if _USE_SQLITE_LOG:
+        _ensure_admin_log_sqlite()
+        cutoff = time.time() - LOG_TTL_SECONDS
+        runtime_db.execute("DELETE FROM admin_events WHERE event_ts < ?", (cutoff,))
+        rows = runtime_db.query_all(
+            "SELECT * FROM admin_events WHERE group_id=? AND event_ts>=? "
+            "ORDER BY event_ts DESC,id DESC LIMIT ?",
+            (str(chat_id), cutoff, max(0, int(limit))),
+        )
+        return [_sqlite_log_entry(row) for row in rows]
     data = _load_admin_log()
     if _prune_log(data):
         _save_admin_log(data)
@@ -220,9 +305,39 @@ def get_log(chat_id, limit=30):
 
 
 def clear_log(chat_id):
+    if _USE_SQLITE_LOG:
+        _ensure_admin_log_sqlite()
+        runtime_db.execute(
+            "DELETE FROM admin_events WHERE group_id=?", (str(chat_id),)
+        )
+        return
     data = _load_admin_log()
     data.pop(str(chat_id), None)
     _save_admin_log(data)
+
+
+def export_admin_log_json(path=None):
+    """Export retained admin events for an emergency JSON rollback."""
+    target = Path(path) if path else _ADMIN_LOG_FILE
+    if _USE_SQLITE_LOG:
+        _ensure_admin_log_sqlite()
+        cutoff = time.time() - LOG_TTL_SECONDS
+        payload = {}
+        rows = runtime_db.query_all(
+            "SELECT * FROM admin_events WHERE event_ts>=? "
+            "ORDER BY group_id,event_ts,id", (cutoff,)
+        )
+        for row in rows:
+            payload.setdefault(str(row["group_id"]), []).append(
+                _sqlite_log_entry(row)
+            )
+    else:
+        payload = _load_admin_log()
+        _prune_log(payload)
+    write_json(target, payload)
+    if json.loads(target.read_text(encoding="utf-8")) != payload:
+        raise OSError(f"admin log JSON rollback export failed: {target}")
+    return target
 
 
 def _u16_len(value):
@@ -321,8 +436,7 @@ def _load_cleanups():
 def _save_cleanups(data):
     try:
         _BASE.mkdir(parents=True, exist_ok=True)
-        _CLEANUP_FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(_CLEANUP_FILE, data, indent=2)
     except OSError:
         pass
 

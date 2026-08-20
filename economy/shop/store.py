@@ -13,14 +13,13 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+
 from economy import settings, storage
 from economy.coins import accounts
 from economy.transactions import ledger
 
-ITEMS_FILE = (
-    Path(__file__).resolve().parent.parent.parent
-    / "config" / "economy_shop.json"
-)
+ITEMS_FILE = runtime_config_file("economy_shop.json")
 
 _cache = None
 _cache_mtime = None
@@ -185,6 +184,10 @@ def buy(chat_id, user_id, item_id, *, reference=None):
             "coin_type": coin_type,
             "at": datetime.now(timezone.utc).isoformat(),
         })
+        # تاریخچهٔ نمایشی خرید محدود است؛ مالکیت آیتم‌های پروفایل در
+        # profile نگه‌داری می‌شود و با این هرس از بین نمی‌رود.
+        if len(owned) > 500:
+            del owned[:-500]
         ledger.record(
             data, key, ledger.KIND_PURCHASE, {coin_type: -price},
             reference=reference, note=item["title"],
@@ -206,6 +209,7 @@ def buy(chat_id, user_id, item_id, *, reference=None):
 
 def purchases(chat_id, user_id):
     """فهرست خریدهای یک کاربر."""
-    data = storage.snapshot()
-    user = data.get("users", {}).get(accounts.user_key(chat_id, user_id), {})
-    return [dict(entry) for entry in user.get("purchases", [])]
+    fields = storage.user_fields(
+        accounts.user_key(chat_id, user_id), ("purchases",)
+    ) or {}
+    return [dict(entry) for entry in (fields.get("purchases") or [])]

@@ -85,9 +85,10 @@ def history(chat_id, user_id, limit=20, kind=None):
     """تاریخچهٔ یک کاربر در همین گروه، تازه‌ترین اول."""
     from economy.coins.accounts import user_key
 
-    data = storage.snapshot()
-    entries = data.get("users", {}).get(user_key(chat_id, user_id), {}).get(
-        "transactions", [])
+    fields = storage.user_fields(
+        user_key(chat_id, user_id), ("transactions",)
+    ) or {}
+    entries = fields.get("transactions") or []
     if kind is not None:
         entries = [e for e in entries if e.get("kind") == kind]
     ordered = sorted(entries, key=lambda e: e.get("id", 0), reverse=True)

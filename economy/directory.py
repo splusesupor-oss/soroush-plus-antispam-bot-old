@@ -61,15 +61,14 @@ def lookup(chat_id, username):
     if not key:
         return None
     chat = accounts.chat_key(chat_id)
-    data = storage.snapshot()
-    found = data.get("usernames", {}).get(chat, {}).get(key)
+    found = storage.read_path("usernames", chat, key, default=None)
     return str(found) if found is not None else None
 
 
 def username_of(chat_id, user_id):
     """یوزرنیم ثبت‌شدهٔ یک کاربر در این گروه، یا ``None``."""
     chat = accounts.chat_key(chat_id)
-    book = storage.snapshot().get("usernames", {}).get(chat, {})
+    book = storage.read_path("usernames", chat, default={})
     target = str(user_id)
     for name, stored in book.items():
         if str(stored) == target:
@@ -90,4 +89,4 @@ def forget(chat_id, username):
 def entries(chat_id):
     """کپی فقط-خواندنی از دفترچهٔ این گروه."""
     chat = accounts.chat_key(chat_id)
-    return dict(storage.snapshot().get("usernames", {}).get(chat, {}))
+    return dict(storage.read_path("usernames", chat, default={}))

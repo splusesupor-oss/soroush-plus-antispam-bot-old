@@ -1,11 +1,17 @@
 """Persistent administrator-managed rules for each group."""
 import json
+import time
 from pathlib import Path
+
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
 
 from modules.group_id import normalize_group_id
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "group_rules.json"
-_WAITING = set()
+FILE = runtime_config_file("group_rules.json")
+_WAITING = {}
+_WAITING_TTL = 10 * 60
+_WAITING_MAX = 2000
 MAX_RULES_LENGTH = 4000
 
 
@@ -22,19 +28,30 @@ def _load():
 
 def _save(data):
     FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(FILE, data, indent=2)
+
+
+def _prune_waiting(now=None):
+    now = time.monotonic() if now is None else now
+    for key, created in list(_WAITING.items()):
+        if now - float(created) > _WAITING_TTL:
+            _WAITING.pop(key, None)
+    while len(_WAITING) > _WAITING_MAX:
+        _WAITING.pop(next(iter(_WAITING)), None)
 
 
 def begin(chat_id, user_id):
-    _WAITING.add((_key(chat_id), str(user_id)))
+    _prune_waiting()
+    _WAITING[(_key(chat_id), str(user_id))] = time.monotonic()
 
 
 def waiting(chat_id, user_id):
+    _prune_waiting()
     return (_key(chat_id), str(user_id)) in _WAITING
 
 
 def cancel(chat_id, user_id):
-    _WAITING.discard((_key(chat_id), str(user_id)))
+    _WAITING.pop((_key(chat_id), str(user_id)), None)
 
 
 def save(chat_id, user_id, text):

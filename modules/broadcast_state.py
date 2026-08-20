@@ -10,8 +10,11 @@ import os
 import uuid as _uuid
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / "config" / "broadcast_state.json"
+
+_STATE_FILE = runtime_config_file("broadcast_state.json")
 
 
 def _load_pending():
@@ -45,27 +48,21 @@ def _load_pending():
 def _save_pending():
     """Persist only the pending workflow; delivery locks remain runtime-only."""
     try:
-        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temporary = _STATE_FILE.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(
-                {
-                    owner: {
-                        "phase": state.get("phase"),
-                        "text": state.get("text", ""),
-                        # Entities are process-local API objects; text and phase
-                        # are the durable recovery contract.
-                        "entities": [],
-                        "origin": state.get("origin"),
-                    }
-                    for owner, state in _PENDING_BROADCASTS.items()
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+        write_json(
+            _STATE_FILE,
+            {
+                owner: {
+                    "phase": state.get("phase"),
+                    "text": state.get("text", ""),
+                    # Entities are process-local API objects; text and phase
+                    # are the durable recovery contract.
+                    "entities": [],
+                    "origin": state.get("origin"),
+                }
+                for owner, state in _PENDING_BROADCASTS.items()
+            },
+            indent=2,
         )
-        os.replace(temporary, _STATE_FILE)
     except OSError:
         # The caller keeps the in-memory state; the next operation retries the
         # write and the error is not allowed to crash message handling.

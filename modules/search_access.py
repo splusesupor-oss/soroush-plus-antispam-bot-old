@@ -3,11 +3,14 @@ import json
 import logging
 from pathlib import Path
 
+from modules.runtime_paths import runtime_config_file
+from modules.atomic_write import write_json
+
 from modules.group_id import normalize_group_id
 from modules.user_display import format_user
 from modules.time_utils import now_local
 
-FILE = Path(__file__).resolve().parent.parent / "config" / "search_access.json"
+FILE = runtime_config_file("search_access.json")
 DAILY_LIMIT = 27
 _CACHE = None
 
@@ -57,8 +60,7 @@ def _load():
 def _save(data):
     global _CACHE
     _CACHE = data
-    FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(FILE, data, indent=2)
 
 
 def _group(data, chat_id, create=False):

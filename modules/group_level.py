@@ -10,10 +10,13 @@
 import json
 from pathlib import Path
 
+from modules.runtime_paths import CONFIG_DIR
+from modules.atomic_write import write_json
+
 from modules.group_id import normalize_group_id
 from modules.group_stats import get_stats, top_users
 
-_BASE = Path(__file__).resolve().parent.parent / "config"
+_BASE = CONFIG_DIR
 _FILE = _BASE / "group_level.json"
 
 COMMAND = "سطح گروه"
@@ -113,8 +116,7 @@ def _load():
 def _save(data):
     try:
         _BASE.mkdir(parents=True, exist_ok=True)
-        _FILE.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(_FILE, data, indent=2)
     except OSError:
         pass
 
