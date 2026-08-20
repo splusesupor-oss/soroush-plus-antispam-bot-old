@@ -46,6 +46,29 @@ def test_normal_message_and_three_ordinary_copies_are_not_auto_banned():
     assert big_spam.detect_big_spam(text, _rows(text, text, text, text))[0]
 
 
+def test_detector_returns_only_wave_ids_not_unrelated_recent_messages():
+    packed = " ".join(["بیوچک"] * 6)
+    hit, reason, ids = big_spam.detect_big_spam(
+        packed, _rows("سلام", "حالت خوبه", packed)
+    )
+    assert hit and reason == "repeated_promotional_phrase" and ids == {3}
+
+    repeated = "متن تکراری موج"
+    hit, reason, ids = big_spam.detect_big_spam(
+        repeated,
+        _rows(repeated, "گفتگوی عادی", repeated, "پاسخ متفاوت", repeated, repeated),
+    )
+    assert hit and reason == "repeated_identical_messages"
+    assert ids == {1, 3, 5, 6}
+
+    gibberish = "خخخخخخخ"
+    hit, reason, ids = big_spam.detect_big_spam(
+        gibberish, _rows(gibberish, "سلام دوست من", gibberish, gibberish)
+    )
+    assert hit and reason == "repeated_gibberish_messages"
+    assert ids == {1, 3, 4}
+
+
 def test_active_game_answers_bypass_generic_flood_but_not_explicit_promotions():
     answer = "گزینه سه"
     rows = _rows(answer, answer, answer, answer)

@@ -548,8 +548,8 @@ def detect_big_spam(text, recent_rows, *, now=None, allow_generic=True):
     """Return ``(is_big, reason, ids)`` from the current text and tracker rows.
 
     ``recent_rows`` should already include the current message. On a hit the
-    IDs are every in-window tracker row for this caller-scoped user, not only
-    the rows the detector matched exactly.
+    IDs contain the detected sender-scoped wave only: matching generic spam or
+    promotional payloads, never unrelated ordinary rows retained by tracker.
     """
     raw = str(text or "").strip()
     if not raw:
@@ -564,12 +564,25 @@ def detect_big_spam(text, recent_rows, *, now=None, allow_generic=True):
     current_rows = (in_window or list(recent_rows or ()))[-1:]
 
     if intra_message_spam(raw):
-        selected = in_window if allow_generic else current_rows
+        # A packed payload must not sweep preceding ordinary chat. If it is an
+        # explicit promotion, however, retain every other promotional payload
+        # from this sender's active window as part of the same wave.
+        selected = current_rows
+        if looks_promotional(raw):
+            selected = [
+                row for row in in_window
+                if looks_promotional(row.get("text", ""))
+            ]
         return True, "repeated_promotional_phrase", _row_ids(selected)
 
     # 🎨 قالب تزئینی تبلیغاتی: از اولین پیام موج حساب می‌شود.
     if decorative_spam(raw):
-        selected = in_window if allow_generic else current_rows
+        selected = current_rows
+        if looks_promotional(raw):
+            selected = [
+                row for row in in_window
+                if looks_promotional(row.get("text", ""))
+            ]
         return True, "decorative_spam", _row_ids(selected)
 
     short_wave = consecutive_short_promo_rows(raw, in_window)
@@ -594,7 +607,17 @@ def detect_big_spam(text, recent_rows, *, now=None, allow_generic=True):
             if flood_fingerprint(row.get("text", "")) == flood_key
         ]
         if len(identical) >= IDENTICAL_MESSAGE_THRESHOLD:
-            return True, "repeated_identical_messages", _row_ids(flood_rows)
+            if wave_needed(raw) is not None:
+                promotional_rows = [
+                    row for row in in_window
+                    if looks_promotional(row.get("text", ""))
+                ]
+                return (
+                    True,
+                    "repeated_promotional_messages",
+                    _row_ids(promotional_rows),
+                )
+            return True, "repeated_identical_messages", _row_ids(identical)
 
     # Obfuscated nonsense often changes one stretched letter on every line,
     # so exact equality is deliberately not required for this low-entropy
@@ -605,7 +628,7 @@ def detect_big_spam(text, recent_rows, *, now=None, allow_generic=True):
             if low_entropy_text(row.get("text", ""))
         ]
         if len(low_entropy_rows) >= LOW_ENTROPY_MESSAGE_THRESHOLD:
-            return True, "repeated_gibberish_messages", _row_ids(flood_rows)
+            return True, "repeated_gibberish_messages", _row_ids(low_entropy_rows)
 
     # Ten messages from one member using only a few rotating payloads are a
     # flood.  Requiring a bounded distinct set protects fast game answers or a
@@ -625,13 +648,19 @@ def detect_big_spam(text, recent_rows, *, now=None, allow_generic=True):
 
     needed = wave_needed(raw)
     if needed is not None:
-        promo = [
+        promotional_rows = [
             row for row in in_window
+            if looks_promotional(row.get("text", ""))
+        ]
+        promo = [
+            row for row in promotional_rows
             if similar_promotional(raw, row.get("text", ""))
         ]
         if len(promo) >= needed:
-            selected = in_window if allow_generic else promo
-            return True, "repeated_promotional_messages", _row_ids(selected)
+            # Preserve every promotional payload in the sender's active
+            # window, including heavily obfuscated variants, but never pull in
+            # unrelated ordinary chat merely because it is still in tracker.
+            return True, "repeated_promotional_messages", _row_ids(promotional_rows)
 
     return False, "", set()
 

@@ -422,17 +422,19 @@ def test_obfuscated_promotional_wave():
     rows = _rows(*wave)
     hit, reason, ids = big_spam.detect_big_spam(wave[-1], rows)
     check("موج ۵۰تایی تشخیص داده شد", hit, f"-> {reason}")
-    check("همه ۵۰ id وارد incident شد", ids == set(range(1, 51)), f"-> {len(ids)} ids")
+    check("همه payloadهای تبلیغاتی پنجره وارد موج شدند",
+          ids == set(range(1, 51)), f"-> {len(ids)} ids")
 
     early = big_spam.detect_big_spam(wave[1], _rows(wave[0], wave[1]))
     check("از پیام دوم موج قوی شروع می‌شود", early[0], f"-> {early[1]}")
-    check("idهای همان لحظه از دست نرفت", early[2] == {1, 2}, f"-> {early[2]}")
+    check("هر دو payload تبلیغاتی همان موج seed شدند",
+          early[2] == {1, 2}, f"-> {early[2]}")
 
     mixed_texts = ["سلام ظهر بخیر"] + wave[:9]
     hit, _, ids = big_spam.detect_big_spam(mixed_texts[-1], _rows(*mixed_texts))
     check(
-        "بعد از تشخیص، همه idهای پنجره برمی‌گردد نه فقط match دقیق",
-        hit and ids == set(range(1, 11)),
+        "بعد از تشخیص فقط موج تبلیغاتی پاک می‌شود نه پیام عادی قبلی",
+        hit and ids == set(range(2, 11)),
         f"-> {ids}",
     )
 
@@ -457,11 +459,29 @@ def test_incident_stays_per_chat_user():
     hit_other, _, ids_other = handler._big_repeated_spam(chat_a, user_b, wave[-1])
     hit_b, _, ids_b = handler._big_repeated_spam(chat_b, user_a, wave[-1])
     check("کاربر A در گروه A تشخیص داده شد", hit_a, f"-> {ids_a}")
-    check("cleanup همان کاربر همان گروه همه idها را دارد", ids_a == set(range(1, 9)), f"-> {ids_a}")
-    check("کاربر B در همان گروه جدا است", hit_other and ids_other == set(range(101, 109)), f"-> {ids_other}")
-    check("همان کاربر در گروه B قاطی نشد", hit_b and ids_b == set(range(201, 209)), f"-> {ids_b}")
+    check("فقط payloadهای تبلیغاتی همان کاربر جمع شدند",
+          ids_a == set(range(1, 9)), f"-> {ids_a}")
+    check("کاربر B در همان گروه جدا است",
+          hit_other and ids_other == set(range(101, 109)), f"-> {ids_other}")
+    check("همان کاربر در گروه B قاطی نشد",
+          hit_b and ids_b == set(range(201, 209)), f"-> {ids_b}")
     message_tracker.reset_all()
 
+
+
+def test_big_incident_does_not_import_old_tracker_history():
+    print("\n### incident جدید پیام‌های قدیمی tracker را حذف نمی‌کند")
+    message_tracker.reset_all()
+    chat_id, user_id = -703, 13
+    for message_id in range(1, 83):
+        message_tracker.add_message(
+            chat_id, user_id, message_id, f"پیام قدیمی {message_id}"
+        )
+    selected = handler._collect_big_spam_ids(
+        chat_id, user_id, {83, 84}, current_id=84
+    )
+    check("فقط seed موج جدید انتخاب شد", selected == {83, 84}, f"-> {selected}")
+    message_tracker.reset_all()
 
 
 def test_late_wave_ids_rejoin_after_early_drain():
@@ -589,11 +609,13 @@ def test_generic_decoration_normalization():
               and "🐥" not in big_spam.normalize_text(text)
               for text in variants))
     hit, _, ids = big_spam.detect_big_spam(variants[1], _rows(variants[0], variants[1]))
-    check("نمونه کاربر با ایموجی تازه تشخیص داده شد", hit and ids == {1, 2}, f"-> {hit} {ids}")
+    check("دو payload تبلیغاتی همان موج انتخاب شدند",
+          hit and ids == {1, 2}, f"-> {hit} {ids}")
     hit, _, ids = big_spam.detect_big_spam(
-        variants[2], _rows(variants[0], variants[1], variants[2], variants[3])
+        variants[3], _rows(variants[0], variants[1], variants[2], variants[3])
     )
-    check("چهار تزئین متفاوت همان موج‌اند", hit and ids == {1, 2, 3, 4}, f"-> {ids}")
+    check("چهار payload تبلیغاتی همان موج‌اند",
+          hit and ids == {1, 2, 3, 4}, f"-> {ids}")
 
     hit, _, ids = big_spam.detect_big_spam(
         "بیا گروه فیلم جدید🐥",
@@ -744,6 +766,7 @@ def main():
     test_obfuscated_promotional_wave()
     test_normalization_does_not_break_ordinary_chat()
     test_incident_stays_per_chat_user()
+    test_big_incident_does_not_import_old_tracker_history()
     test_late_wave_ids_rejoin_after_early_drain()
     test_generic_decoration_normalization()
     test_short_separate_promotional_wave()

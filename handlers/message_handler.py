@@ -808,12 +808,18 @@ async def _send_spam_ban_cleanup_notification(
 
 
 def _collect_big_spam_ids(chat_id, user_id, seed_ids=(), current_id=None):
-    """Every recorded ID for this chat+user, not only the detector match set."""
+    """Return only detector-selected/current IDs for this spam incident.
+
+    The tracker intentionally retains up to 30 minutes for detection. Pulling
+    its entire snapshot here made one new spam hit delete old, unrelated chat
+    from the same user and inflated small incidents into dozens of delete RPCs.
+    The detector supplies the initial wave; after creation, light ingest adds
+    every later message directly to ``incident['ids']``.
+    """
     collected = {
         message_id for message_id in (seed_ids or ())
         if isinstance(message_id, int) and message_id > 0
     }
-    collected.update(message_tracker.spam_snapshot(chat_id, user_id, current_id))
     if isinstance(current_id, int) and current_id > 0:
         collected.add(current_id)
     return collected
