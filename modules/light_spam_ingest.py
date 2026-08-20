@@ -3,9 +3,12 @@
 Only ``chat_id``, ``user_id``, ``message_id`` and the raw text are used.
 No RPC, no ``get_sender`` / ``get_chat``, no profile/games, no per-message log.
 """
+import time
+
 from modules import big_spam
 from modules import message_tracker
 from modules.group_dispatch import PRIORITY_NORMAL, classify_priority
+from modules.group_id import normalize_group_id
 
 
 class IngestResult:
@@ -16,6 +19,55 @@ class IngestResult:
         self.detected = bool(detected)
         self.reason = reason or ""
         self.tracked = bool(tracked)
+
+
+def incident_key(chat_id, user_id):
+    """One runtime key for both full ``-100...`` and short channel IDs."""
+    return normalize_group_id(chat_id), str(user_id)
+
+
+def _peer_id(value):
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    for attr in ("user_id", "channel_id", "chat_id", "id"):
+        try:
+            found = getattr(value, attr, None)
+        except Exception:
+            continue
+        if isinstance(found, int):
+            return found
+        if found is not None:
+            try:
+                return int(found)
+            except (TypeError, ValueError):
+                pass
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_user_id(event, message):
+    """Read the sender without an RPC across SPlusthon event shapes."""
+    candidates = [
+        getattr(event, "sender_id", None),
+        getattr(message, "sender_id", None) if message is not None else None,
+        getattr(event, "sender", None),
+        getattr(message, "from_id", None) if message is not None else None,
+    ]
+    update = getattr(event, "original_update", None)
+    if update is not None:
+        candidates.extend((
+            getattr(update, "user_id", None),
+            getattr(update, "from_id", None),
+        ))
+    for candidate in candidates:
+        found = _peer_id(candidate)
+        if found is not None:
+            return found
+    return None
 
 
 def extract_event(event):
@@ -30,10 +82,7 @@ def extract_event(event):
             or getattr(message, "caption", None)
             or ""
         )
-    user_id = getattr(event, "sender_id", None)
-    if user_id is None:
-        sender = getattr(event, "sender", None)
-        user_id = getattr(sender, "id", None)
+    user_id = _event_user_id(event, message)
     is_private = bool(getattr(event, "is_private", False))
     return chat_id, user_id, message_id, text, is_private
 
@@ -72,7 +121,7 @@ def _capture(bot, chat_id, user_id, message_id):
     incidents = getattr(bot, "_big_spam_incidents", None)
     if not incidents:
         return
-    incident = incidents.get((chat_id, user_id))
+    incident = incidents.get(incident_key(chat_id, user_id))
     if incident is not None and isinstance(message_id, int) and message_id > 0:
         incident["ids"].add(message_id)
 
@@ -92,7 +141,21 @@ def ingest(bot, chat_id, user_id, message_id, text, *, event=None, is_private=Fa
             bot, chat_id, user_id, message_id, text,
             event=event, is_private=is_private,
         )
-    except Exception:
+    except Exception as error:
+        # Never let the early safety path crash message delivery, but do not
+        # fail silently either.  Rate-limit the diagnostic so one malformed
+        # event cannot create a second log flood.
+        now = time.monotonic()
+        last = float(getattr(bot, "_light_spam_error_logged_at", 0.0) or 0.0)
+        if now - last >= 30.0:
+            bot._light_spam_error_logged_at = now
+            logger = getattr(bot, "logger", None)
+            if logger is not None:
+                logger.log_error(
+                    "LIGHT SPAM INGEST FAILED "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"message_id={message_id} error={error!r}"
+                )
         return IngestResult(skip_heavy=False, detected=False)
 
 
@@ -119,7 +182,7 @@ def _ingest(bot, chat_id, user_id, message_id, text, *, event=None, is_private=F
     if _cheap_admin_bypass(bot, chat_id, user_id):
         return IngestResult(skip_heavy=False, detected=False)
 
-    key = (chat_id, user_id)
+    key = incident_key(chat_id, user_id)
     incidents = getattr(bot, "_big_spam_incidents", {}) or {}
     if key in incidents:
         tracked = message_tracker.add_message(chat_id, user_id, message_id, text)
@@ -128,9 +191,31 @@ def _ingest(bot, chat_id, user_id, message_id, text, *, event=None, is_private=F
             skip_heavy=True, detected=True, tracked=tracked,
         )
 
+    # A confirmed spam lock may outlive the short incident drain. Delete new
+    # burst messages here instead of sending them through the expensive full
+    # handler, where get_chat/get_sender and a full normal queue delayed them.
+    lock_probe = getattr(bot, "is_spam_locked", None)
+    if callable(lock_probe) and lock_probe(key):
+        tracked = message_tracker.add_message(chat_id, user_id, message_id, text)
+        queue = getattr(bot, "message_delete_queue", None)
+        if queue is not None:
+            queue.enqueue(chat_id, [message_id], priority=1)
+            return IngestResult(
+                skip_heavy=True, detected=True,
+                reason="active_spam_lock", tracked=tracked,
+            )
+        return IngestResult(
+            skip_heavy=False, detected=True,
+            reason="active_spam_lock", tracked=tracked,
+        )
+
     tracked = message_tracker.add_message(chat_id, user_id, message_id, text)
     rows = message_tracker.get_user_recent_messages(chat_id, user_id)
-    hit, reason, ids = big_spam.detect_big_spam(text, rows)
+    game_probe = getattr(bot, "_light_game_answer_active", None)
+    game_answer = bool(game_probe(chat_id, user_id)) if callable(game_probe) else False
+    hit, reason, ids = big_spam.detect_big_spam(
+        text, rows, allow_generic=not game_answer,
+    )
     if not hit:
         return IngestResult(skip_heavy=False, detected=False, tracked=tracked)
 

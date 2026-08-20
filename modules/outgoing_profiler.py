@@ -192,7 +192,11 @@ def _format_trace(fields):
 
 
 def _log_trace(logger, fields):
-    logger.log_info(_format_trace(fields))
+    line = _format_trace(fields)
+    if str(fields.get("result", "")).startswith("failed"):
+        logger.log_error(line)
+    else:
+        logger.log_info(line)
 
 
 def _hook_method(obj, name):
@@ -646,11 +650,17 @@ def _wrap(owner, attribute, operation, logger):
                     f"rpc_ms={elapsed_ms:.1f} result={result}"
                 )
             if elapsed_ms > _RPC_SLOW_WARNING_MS:
-                logger.log_error(
+                line = (
                     "OUTGOING RPC WARNING "
                     f"request_id={request_id} operation={operation} "
-                    f"chat_id={chat_id} rpc_ms={elapsed_ms:.2f}"
+                    f"chat_id={chat_id} rpc_ms={elapsed_ms:.2f} result={result}"
                 )
+                if result.startswith("failed"):
+                    logger.log_error(line)
+                else:
+                    # A slow success is diagnostic, not an ERROR.  This keeps
+                    # genuine failures visually distinct in production logs.
+                    logger.log_info(line)
 
     measured._outgoing_profiled = True
     try:

@@ -56,7 +56,7 @@ def test_big_incident_drains_ids_captured_during_cleanup(monkeypatch):
 
     assert batches == [{101}, {102}]
     assert sent == [2]
-    assert (chat_id, user_id) not in bot._big_spam_incidents
+    assert handler._spam_runtime_key(chat_id, user_id) not in bot._big_spam_incidents
 
 
 def test_big_incident_retries_remaining_ids(monkeypatch):
@@ -84,4 +84,123 @@ def test_big_incident_retries_remaining_ids(monkeypatch):
     ))
 
     assert calls == [{201}, {201}]
-    assert (chat_id, user_id) not in bot._big_spam_incidents
+    assert handler._spam_runtime_key(chat_id, user_id) not in bot._big_spam_incidents
+
+
+def test_big_incident_uses_resolved_event_peer_for_delete_queue(monkeypatch):
+    peer = object()
+    calls = []
+
+    class Queue:
+        async def enqueue(self, chat_id, ids, *, priority=1, rpc_peer=None):
+            calls.append((chat_id, list(ids), rpc_peer))
+            return len(ids), []
+
+    bot = SimpleNamespace(
+        logger=_Logger(), _big_spam_incidents={}, message_delete_queue=Queue(),
+    )
+    chat_id, user_id = -90004, 76
+    incident = handler._big_spam_incident(bot, (chat_id, user_id), {401})
+    incident["rpc_peer"] = peer
+
+    async def fake_notice(*_args):
+        return True
+
+    monkeypatch.setattr(handler, "_send_spam_ban_cleanup_notification", fake_notice)
+    asyncio.run(handler._drain_big_spam_incident(
+        bot, SimpleNamespace(sender=None), chat_id, user_id, incident
+    ))
+
+    assert calls == [(chat_id, [401], peer)]
+    assert handler._spam_runtime_key(chat_id, user_id) not in bot._big_spam_incidents
+
+
+def test_pending_ban_deadline_extends_while_moderation_job_is_active(monkeypatch):
+    class Logger:
+        def __init__(self):
+            self.errors = []
+
+        def log_info(self, _message):
+            pass
+
+        def log_error(self, message):
+            self.errors.append(message)
+
+    logger = Logger()
+    chat_id, user_id = -90005, 77
+    key = handler._spam_runtime_key(chat_id, user_id)
+    moderation = SimpleNamespace(_pending_keys={(key[0], user_id, "ban")})
+    bot = SimpleNamespace(
+        logger=logger,
+        _big_spam_incidents={},
+        moderation_queue=moderation,
+        punished_users={handler._punishment_key(chat_id, user_id)},
+        clear_spam_lock=lambda _key: None,
+    )
+    incident = handler._big_spam_incident(bot, key)
+
+    async def run():
+        now = asyncio.get_running_loop().time()
+        incident["ban_state"] = "pending"
+        incident["ban_deadline"] = now - 1
+        incident["ban_absolute_deadline"] = now + 100
+
+        async def progress(seconds):
+            if seconds == 0.05:
+                moderation._pending_keys.clear()
+                incident["ban_state"] = "confirmed"
+
+        monkeypatch.setattr(handler._asyncio, "sleep", progress)
+        await handler._drain_big_spam_incident(
+            bot, SimpleNamespace(sender=None), chat_id, user_id, incident
+        )
+
+    async def fake_notice(*_args):
+        return True
+
+    monkeypatch.setattr(handler, "_send_spam_ban_cleanup_notification", fake_notice)
+    asyncio.run(run())
+
+    assert not any("BAN CALLBACK TIMEOUT" in row for row in logger.errors)
+    assert key not in bot._big_spam_incidents
+
+
+def test_big_incident_bounds_permanently_unresolved_delete_retries(monkeypatch):
+    class Logger:
+        def __init__(self):
+            self.errors = []
+
+        def log_info(self, _message):
+            pass
+
+        def log_error(self, message):
+            self.errors.append(message)
+
+    logger = Logger()
+    bot = SimpleNamespace(logger=logger, _big_spam_incidents={})
+    chat_id, user_id = -90003, 75
+    incident = handler._big_spam_incident(bot, (chat_id, user_id), {301, 302})
+    calls = []
+
+    async def always_unresolved(_bot, _chat_id, _user_id, ids):
+        calls.append(set(ids))
+        return 0, list(ids)
+
+    async def instant_sleep(_seconds):
+        return None
+
+    async def fake_notice(*_args):
+        return True
+
+    monkeypatch.setattr(handler, "cleanup_spam_messages", always_unresolved)
+    monkeypatch.setattr(handler, "_send_spam_ban_cleanup_notification", fake_notice)
+    monkeypatch.setattr(handler._asyncio, "sleep", instant_sleep)
+
+    asyncio.run(handler._drain_big_spam_incident(
+        bot, SimpleNamespace(sender=None), chat_id, user_id, incident
+    ))
+
+    # Initial queue attempt plus three bounded incident retry rounds.
+    assert calls == [{301, 302}] * 4
+    assert any("BIG SPAM DELETE UNRESOLVED" in row for row in logger.errors)
+    assert handler._spam_runtime_key(chat_id, user_id) not in bot._big_spam_incidents

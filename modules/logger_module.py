@@ -35,6 +35,20 @@ _NOISY_PREFIXES = (
     "KEEPALIVE PONG RECEIVED",
     "BANNED WORD SKIP strict_off",
     "EXPIRY CHECK due_count=0",
+    # Successful per-RPC traces generated several lines for every send/delete.
+    # Keep failures, queue pressure and slow warnings; verbose mode can restore
+    # these hot diagnostics when investigating a specific incident.
+    "RPC TRACE",
+    "RPC TIME",
+    "OUTGOING SEND TIME",
+    "DELETE TASK START",
+    "BATCH DELETE START",
+    "DELETE MESSAGE RPC TIME",
+    "BATCH DELETE FINISHED",
+    "NOTICE CLEANUP DUE",
+    "NOTICE CLEANUP QUEUED",
+    "NOTICE CLEANUP DELETED",
+    "SPAM HISTORY SWEEP SKIPPED",
 )
 
 

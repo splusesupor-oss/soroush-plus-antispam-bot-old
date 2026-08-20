@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
 
 from modules import message_tracker
 from modules.group_dispatch import PRIORITY_ADMIN, PRIORITY_NORMAL, GroupDispatcher
-from modules.light_spam_ingest import ingest, ingest_event
+from modules.light_spam_ingest import incident_key, ingest, ingest_event
 
 PASSED = FAILED = 0
 
@@ -35,7 +35,7 @@ def _bot():
     )
 
     def start(event, chat_id, user_id, _sender, ids, reason):
-        key = (chat_id, user_id)
+        key = incident_key(chat_id, user_id)
         incident = bot._big_spam_incidents.setdefault(key, {"ids": set()})
         incident["ids"].update(
             message_id for message_id in (ids or ())
@@ -92,7 +92,7 @@ def test_hundred_separate_promo_not_lost_to_overflow():
         submitted += 1
 
     ids = set(message_tracker.spam_snapshot(chat_id, user_id))
-    incident = bot._big_spam_incidents.get((chat_id, user_id), {})
+    incident = bot._big_spam_incidents.get(incident_key(chat_id, user_id), {})
     cleanup_ids = set(incident.get("ids", ()))
     check("tracker هر ۱۰۰ id را دارد", ids == set(range(1, 101)), f"-> {len(ids)}")
     check("هیچ id قبل از detector در overflow گم نشد", overflowed == [], f"-> {overflowed}")
@@ -113,7 +113,7 @@ def test_packed_box_is_one_message_id():
     result = ingest(bot, -4102, 8, 501, packed)
     rows = message_tracker.get_user_recent_messages(-4102, 8)
     ids = set(message_tracker.spam_snapshot(-4102, 8))
-    incident = bot._big_spam_incidents.get((-4102, 8), {})
+    incident = bot._big_spam_incidents.get(incident_key(-4102, 8), {})
     check("تشخیص intra-message", result.detected, f"-> {result.reason}")
     check("شغل سنگین لازم نیست", result.skip_heavy)
     check("فقط یک ردیف tracker", len(rows) == 1, f"-> {len(rows)}")
@@ -136,8 +136,10 @@ def test_fast_ordinary_messages_are_not_spam():
         result = ingest(bot, -4103, 3, index, text)
         if result.detected:
             detected.append((index, text, result.reason))
-    check("هیچ پیام عادی Big Spam نشد", detected == [], f"-> {detected}")
-    check("incident ساخته نشد", (-4103, 3) not in bot._big_spam_incidents)
+    check("ده پیام سریع از همان کاربر flood است",
+          detected and detected[0][0] == 10 and detected[0][2] == "rapid_message_flood",
+          f"-> {detected[:2]}")
+    check("incident ساخته شد", incident_key(-4103, 3) in bot._big_spam_incidents)
     check("tracker همه را ثبت کرد",
           set(message_tracker.spam_snapshot(-4103, 3)) == set(range(1, 41)))
     for word in words:
@@ -188,7 +190,7 @@ def test_stress_spam_does_not_freeze_admin_or_other_group():
         hold.set()
         await dispatcher.join(timeout=1)
         ids = set(message_tracker.spam_snapshot(chat_spam, user))
-        cleanup = set(bot._big_spam_incidents.get((chat_spam, user), {}).get("ids", ()))
+        cleanup = set(bot._big_spam_incidents.get(incident_key(chat_spam, user), {}).get("ids", ()))
         message_tracker.reset_all()
         return isolated, order, overflowed, ids, cleanup, dispatcher.stats["dropped"]
 

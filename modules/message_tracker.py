@@ -83,6 +83,27 @@ def cleanup_expired(now=None, retention=_RETENTION):
         _prune_key(key, now=now, retention=retention)
 
 
+def remove_message_ids(chat_id, user_id, message_ids):
+    """Forget selected IDs without clearing newer history for this sender."""
+    key = _key(chat_id, user_id)
+    rows = _HISTORY.get(key)
+    if not rows:
+        return 0
+    remove = {
+        message_id for message_id in (message_ids or ())
+        if isinstance(message_id, int) and message_id > 0
+    }
+    if not remove:
+        return 0
+    kept = [row for row in rows if row.get("message_id") not in remove]
+    removed = len(rows) - len(kept)
+    if kept:
+        _HISTORY[key] = deque(kept, maxlen=_MAX)
+    else:
+        _HISTORY.pop(key, None)
+    return removed
+
+
 def clear_user_history(chat_id, user_id):
     _HISTORY.pop(_key(chat_id, user_id), None)
 

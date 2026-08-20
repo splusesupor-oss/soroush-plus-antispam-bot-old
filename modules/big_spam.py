@@ -23,10 +23,17 @@ PHRASE_REPEAT_THRESHOLD = 6  # more than 5 meaningful phrases
 PACKED_TOKEN_THRESHOLD = 6
 LARGE_PAYLOAD_CHARS = 120
 DELETE_BATCH_MAX = 100
-# پیام یکسان (بعد از حذف ایموجی/علائم/فاصله) که ۳ بار در پنجره تکرار شود
-# و بیش از ۵ حرف داشته باشد = موج؛ حتی اگر تبلیغاتی شناخته نشود.
-IDENTICAL_MESSAGE_THRESHOLD = 3
-IDENTICAL_MIN_CHARS = 5
+# Generic text floods are detected before the heavy handler/dispatcher.  Four
+# identical non-trivial messages are enough even when no ad marker is known.
+# This is intentionally sender-scoped (the caller supplies one user's rows): a busy
+# group never combines different members into one incident.
+IDENTICAL_MESSAGE_THRESHOLD = 4
+IDENTICAL_MIN_CHARS = 3
+GENERIC_FLOOD_WINDOW_SECONDS = 10
+GENERIC_FLOOD_MESSAGE_THRESHOLD = 10
+GENERIC_FLOOD_DISTINCT_MAX = 4
+LOW_ENTROPY_MESSAGE_THRESHOLD = 3
+LOW_ENTROPY_MIN_CHARS = 5
 
 # ---------------------------------------------------------------------------
 # 🎨 اسپم تزئینی — الگوهایی مثل «▃▅▆█ 웃 - 웃 █▆▅▃» و «■■□□□ 40%» که
@@ -195,6 +202,49 @@ def tokens(text):
     return _TOKEN_RE.findall(normalize_text(text))
 
 
+def flood_fingerprint(text):
+    """Comparison key for arbitrary rapid floods.
+
+    Normal campaign comparison collapses stretched letters completely.  That
+    is useful for ads, but strings such as ``خخخخخ`` would become one character
+    and evade the generic duplicate path.  A flood key keeps at most two copies
+    of a stretched character while still dropping spaces/decorations.
+    """
+    value = str(text or "").translate(_TRANSLATE).lower()
+    value = _NON_WORD_RE.sub("", value)
+    value = re.sub(r"(.)\1{2,}", r"\1\1", value, flags=re.UNICODE)
+    return value
+
+
+def _alnum_chars(text):
+    value = str(text or "").translate(_TRANSLATE).lower()
+    return [ch for ch in value if ch.isalnum()]
+
+
+def low_entropy_text(text):
+    """True for repeated-letter/gibberish payloads, not one normal short word."""
+    chars = _alnum_chars(text)
+    if len(chars) < LOW_ENTROPY_MIN_CHARS:
+        return False
+    counts = Counter(chars)
+    dominant = max(counts.values())
+    # A long payload made from one/two characters, or one character occupying
+    # at least two thirds of it, is a strong flood signal only when repeated
+    # across several messages (never from this predicate alone).
+    return (
+        (len(counts) <= 2 and len(chars) >= 7)
+        or dominant / len(chars) >= 0.66
+    )
+
+
+def _innocent_short_message(text):
+    toks = tokens(text)
+    if not toks or len(toks) > 3:
+        return False
+    short_keys = {compact_text(word) for word in _SHORT_CHAT}
+    return all(token in _SHORT_CHAT or compact_text(token) in short_keys for token in toks)
+
+
 def is_contentful(text):
     """Skip greetings and single-word chatter; keep real repeated campaigns."""
     toks = tokens(text)
@@ -307,11 +357,19 @@ def intra_message_spam(text):
     raw = str(text or "").strip()
     if not raw:
         return False
-    if max_token_repeats(raw) >= PACKED_TOKEN_THRESHOLD:
+    token_repeats = max_token_repeats(raw)
+    phrase_repeats = max_phrase_repeats(raw)
+    compact_repeats = max_compact_repeats(raw)
+    if token_repeats >= PACKED_TOKEN_THRESHOLD:
         return True
-    if max_phrase_repeats(raw) >= PHRASE_REPEAT_THRESHOLD:
+    if phrase_repeats >= PHRASE_REPEAT_THRESHOLD:
         return True
-    if max_compact_repeats(raw) >= PACKED_TOKEN_THRESHOLD:
+    if compact_repeats >= PACKED_TOKEN_THRESHOLD:
+        return True
+    # A known advertising phrase repeated in one message does not need six
+    # copies.  Two copies are already unambiguous while a single «بیو چک» is
+    # still left to the normal word-filter/warning policy.
+    if looks_promotional(raw) and (token_repeats >= 2 or phrase_repeats >= 2):
         return True
     return False
 
@@ -420,6 +478,10 @@ def is_strong_promotional(text):
     compact = compact_text(text)
     if len(toks) >= 2:
         return True
+    # Compact «بیوچک» is an explicit campaign token, not ordinary use of a
+    # generic word such as «فیلم» or «لینک»; detect its second copy too.
+    if compact in {"بیوچک", "چکبیو"}:
+        return True
     if len(compact) >= 10:
         return True
     promo_hits = sum(1 for token in toks if looks_promotional(token))
@@ -482,7 +544,7 @@ def _row_ids(rows):
     }
 
 
-def detect_big_spam(text, recent_rows, *, now=None):
+def detect_big_spam(text, recent_rows, *, now=None, allow_generic=True):
     """Return ``(is_big, reason, ids)`` from the current text and tracker rows.
 
     ``recent_rows`` should already include the current message. On a hit the
@@ -499,28 +561,67 @@ def detect_big_spam(text, recent_rows, *, now=None):
         row for row in recent_rows
         if (stamp - float(row.get("timestamp", stamp))) <= window
     ]
+    current_rows = (in_window or list(recent_rows or ()))[-1:]
 
     if intra_message_spam(raw):
-        return True, "repeated_promotional_phrase", _row_ids(in_window or recent_rows)
+        selected = in_window if allow_generic else current_rows
+        return True, "repeated_promotional_phrase", _row_ids(selected)
 
     # 🎨 قالب تزئینی تبلیغاتی: از اولین پیام موج حساب می‌شود.
     if decorative_spam(raw):
-        return True, "decorative_spam", _row_ids(in_window or recent_rows)
+        selected = in_window if allow_generic else current_rows
+        return True, "decorative_spam", _row_ids(selected)
 
     short_wave = consecutive_short_promo_rows(raw, in_window)
     if len(short_wave) >= SHORT_SEPARATE_THRESHOLD:
         return True, "repeated_short_promotional_messages", _row_ids(short_wave)
 
-    # 🔁 پیام یکسان (ایموجی/فاصله/علائم حذف‌شده) ۳ بار در پنجره:
-    # «بیو چک🐥» و «بیو چک» و «بیوچک🌐» همگی یک کلیدند.
-    identical_key = compact_text(raw)
-    if len(identical_key) >= IDENTICAL_MIN_CHARS:
+    # Generic flood detection belongs here, before GroupDispatcher.  The older
+    # copy lived near the end of the heavy handler, so a burst could fill the
+    # queue or return through a word-filter branch before ever reaching it.
+    flood_rows = [
+        row for row in in_window
+        if (stamp - float(row.get("timestamp", stamp))) <= GENERIC_FLOOD_WINDOW_SECONDS
+    ]
+    flood_key = flood_fingerprint(raw)
+    if (
+        allow_generic
+        and len(flood_key) >= IDENTICAL_MIN_CHARS
+        and not _innocent_short_message(raw)
+    ):
         identical = [
-            row for row in in_window
-            if compact_text(row.get("text", "")) == identical_key
+            row for row in flood_rows
+            if flood_fingerprint(row.get("text", "")) == flood_key
         ]
         if len(identical) >= IDENTICAL_MESSAGE_THRESHOLD:
-            return True, "repeated_identical_messages", _row_ids(in_window)
+            return True, "repeated_identical_messages", _row_ids(flood_rows)
+
+    # Obfuscated nonsense often changes one stretched letter on every line,
+    # so exact equality is deliberately not required for this low-entropy
+    # path.  Three sender-scoped messages in ten seconds are enough.
+    if allow_generic and low_entropy_text(raw):
+        low_entropy_rows = [
+            row for row in flood_rows
+            if low_entropy_text(row.get("text", ""))
+        ]
+        if len(low_entropy_rows) >= LOW_ENTROPY_MESSAGE_THRESHOLD:
+            return True, "repeated_gibberish_messages", _row_ids(flood_rows)
+
+    # Ten messages from one member using only a few rotating payloads are a
+    # flood.  Requiring a bounded distinct set protects fast game answers or a
+    # real conversation whose messages are all different. Different members
+    # are never combined.
+    flood_keys = {
+        flood_fingerprint(row.get("text", ""))
+        for row in flood_rows
+        if flood_fingerprint(row.get("text", ""))
+    }
+    if (
+        allow_generic
+        and len(flood_rows) >= GENERIC_FLOOD_MESSAGE_THRESHOLD
+        and len(flood_keys) <= GENERIC_FLOOD_DISTINCT_MAX
+    ):
+        return True, "rapid_message_flood", _row_ids(flood_rows)
 
     needed = wave_needed(raw)
     if needed is not None:
@@ -529,7 +630,8 @@ def detect_big_spam(text, recent_rows, *, now=None):
             if similar_promotional(raw, row.get("text", ""))
         ]
         if len(promo) >= needed:
-            return True, "repeated_promotional_messages", _row_ids(in_window)
+            selected = in_window if allow_generic else promo
+            return True, "repeated_promotional_messages", _row_ids(selected)
 
     return False, "", set()
 

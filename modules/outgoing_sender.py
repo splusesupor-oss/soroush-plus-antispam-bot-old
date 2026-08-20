@@ -89,6 +89,10 @@ def _key_for_dict(chat_id):
 # Value is priority (0=admin, 1=command, 2=normal) or False when not in dispatch.
 # The patched send_message/reply uses this to decide enqueue vs direct and to set send priority.
 _DISPATCH_ACTIVE = contextvars.ContextVar("outgoing_dispatch_active", default=False)
+# Priority of the currently executing OutgoingSender job.  The low-level
+# ``_call`` gate cannot otherwise tell an urgent priority-0 moderation notice
+# from an ordinary SendMessageRequest.
+_SEND_PRIORITY = contextvars.ContextVar("outgoing_send_priority", default=None)
 
 # Each client gets its own OutgoingSender via client._outgoing_sender
 _SENDER_ATTR = "_outgoing_sender"
@@ -241,13 +245,11 @@ class OutgoingSender:
                     self.logger.log_info(f"OUTGOING SEND QUEUE_WAIT chat_id={chat_id} queue_wait_ms={queue_wait_ms:.1f} priority={priority}")
                 started = time.perf_counter()
                 result = None
-                _is_low = int(priority) >= 1
+                # The low-level request wrapper is the single owner of the
+                # per-chat RPC gate.  Acquiring the same gate here as well made
+                # one normal send consume both slots and forced urgent
+                # priority-0 notices to wait behind it.
                 gate_wait_ms = 0
-                _gate = _gate_for_chat(chat_id) if _is_low else None
-                if _is_low:
-                    gate_wait_ms = await _gate.acquire()
-                    if gate_wait_ms >= 20 and self.logger:
-                        self.logger.log_info(f"OUTGOING SEND GATE wait_ms={gate_wait_ms:.1f} chat_id={chat_id} priority={priority}")
                 try:
                     # ⚠️ همیشه خارج از حالت dispatch اجرا شود: worker با
                     # create_task از داخل کانتکست dispatcher ساخته می‌شود و
@@ -257,6 +259,7 @@ class OutgoingSender:
                     # sent=None اجرا می‌شد و اعلان هرگز برای پاکسازی ۶۰
                     # ثانیه ثبت نمی‌شد (خطای NOTICE CLEANUP ID MISSING).
                     _token = _DISPATCH_ACTIVE.set(False)
+                    _priority_token = _SEND_PRIORITY.set(int(priority))
                     try:
                         coro = factory()
                         if inspect.isawaitable(coro):
@@ -264,6 +267,7 @@ class OutgoingSender:
                         else:
                             result = coro
                     finally:
+                        _SEND_PRIORITY.reset(_priority_token)
                         _DISPATCH_ACTIVE.reset(_token)
                     self.stats["sent"] += 1
                     if on_done:
@@ -281,8 +285,6 @@ class OutgoingSender:
                     if self.logger:
                         self.logger.log_error(f"OUTGOING SEND FAILED chat_id={chat_id} error={e!r}")
                 finally:
-                    if _is_low:
-                        _gate.release()
                     queue.task_done()
                     if self.logger:
                         elapsed = (time.perf_counter() - started) * 1000
@@ -466,7 +468,11 @@ def _wrap_call_with_gate(client, logger):
     @functools.wraps(orig)
     async def wrapped(sender, request, ordered=False, flood_sleep_threshold=None):
         name = _req_name(request)
-        is_low = name in _LOW
+        send_priority = _SEND_PRIORITY.get()
+        # Priority-0 moderation/admin notices really bypass the low gate.
+        # Previously the queue worker bypassed it but this inner wrapper did
+        # not, producing the observed 933ms urgent-send wait.
+        is_low = name in _LOW and send_priority != 0
         is_high = name in _HIGH
         # Only gate low-priority per-chat; high bypasses
         gate_wait = 0

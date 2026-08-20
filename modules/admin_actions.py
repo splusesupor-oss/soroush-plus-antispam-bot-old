@@ -186,23 +186,18 @@ class AdminActions:
                 )
                 return False
 
-            await self.client.kick_participant(
+            # A permanent ban is one EditBannedRequest.  ``kick_participant``
+            # performs a temporary ban + unban internally; following it with a
+            # permanent edit produced three EditBannedRequest RPCs for one
+            # spammer and made bans several seconds slower under load.
+            # Do not swallow failure: success callbacks must run only after the
+            # permanent restriction was actually accepted by SPlus.
+            await self.client.edit_permissions(
                 chat_id,
-                user
+                user,
+                until_date=None,
+                view_messages=False,
             )
-            try:
-                await self.client.edit_permissions(
-                    chat_id,
-                    user,
-                    until_date=None,
-                    view_messages=False,
-                )
-            except Exception as permission_error:
-                if _is_flood_wait(permission_error):
-                    raise
-                self.logger.log_error(
-                    f"خطا در اعمال محدودیت دائمی {user_id}: {permission_error}"
-                )
 
             try:
                 from modules.banned_storage import add_banned

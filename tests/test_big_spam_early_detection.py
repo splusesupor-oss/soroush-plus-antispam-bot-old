@@ -37,6 +37,7 @@ from modules import big_spam
 from modules.message_delete_queue import MessageDeleteQueue
 import handlers.message_handler as handler
 from modules import message_tracker
+from modules.group_id import normalize_group_id
 
 
 PASSED = FAILED = 0
@@ -324,7 +325,7 @@ def test_early_ban_starts_cleanup_before_ban_rpc():
             await asyncio.sleep(0.01)
         finally:
             handler._drain_big_spam_incident = original
-        return ok, started, started_cleanup, ( -8, 11) in getattr(bot, "_big_spam_incidents", {})
+        return ok, started, started_cleanup, ("-8", "11") in getattr(bot, "_big_spam_incidents", {})
 
     ok, started, started_cleanup, incident_present = asyncio.run(scenario())
     check("ban همان لحظه صف شد", started == [("ban", -8, "ban")], f"-> {started}")
@@ -377,10 +378,11 @@ def test_separate_short_messages_are_not_big_spam():
     ordinary = "فیلم دیشب عالی بود"
     hit, reason, _ = big_spam.detect_big_spam(ordinary, _rows(ordinary, ordinary))
     check("جمله عادی x2 Big Spam نیست", not hit, f"-> {reason}")
-    hit, _, _ = big_spam.detect_big_spam(
+    hit, reason, _ = big_spam.detect_big_spam(
         ordinary, _rows(ordinary, ordinary, ordinary, ordinary)
     )
-    check("جمله عادی x4 هم موج تبلیغاتی نیست", not hit)
+    check("چهار پیام کاملاً یکسان موج تکراری است",
+          hit and reason == "repeated_identical_messages", f"-> {reason}")
 
 
 def _bio_wave_variant(index):
@@ -472,6 +474,13 @@ def test_late_wave_ids_rejoin_after_early_drain():
 
         class Queue:
             def enqueue(self, chat_id, action, operation, **kwargs):
+                callback = kwargs.get("on_success")
+                if callback is not None:
+                    async def confirm():
+                        result = callback(True)
+                        if asyncio.iscoroutine(result):
+                            await result
+                    asyncio.create_task(confirm())
                 return True
 
         bot = SimpleNamespace(
@@ -492,12 +501,14 @@ def test_late_wave_ids_rejoin_after_early_drain():
         async def fake_notice(*_args):
             return True
 
+        original_sleep = handler._asyncio.sleep
+
         async def instant(_seconds):
-            return None
+            # Still yield so the simulated moderation success callback can run.
+            await original_sleep(0)
 
         original_cleanup = handler.cleanup_spam_messages
         original_notice = handler._send_spam_ban_cleanup_notification
-        original_sleep = handler._asyncio.sleep
         handler.cleanup_spam_messages = fake_cleanup
         handler._send_spam_ban_cleanup_notification = fake_notice
         handler._asyncio.sleep = instant
@@ -526,7 +537,7 @@ def test_late_wave_ids_rejoin_after_early_drain():
                 handler._capture_big_spam_message(bot, chat_id, user_id, index)
                 message_tracker.add_message(chat_id, user_id, index, text)
                 if bot.is_spam_locked((chat_id, user_id)) and (
-                    chat_id, user_id
+                    normalize_group_id(chat_id), str(user_id)
                 ) in getattr(bot, "_big_spam_incidents", {}):
                     continue
                 hit, reason, ids = handler._big_repeated_spam(
@@ -624,8 +635,9 @@ def test_short_separate_promotional_wave():
     hit, reason, ids = big_spam.detect_big_spam(emojis[-1], _rows(*emojis))
     check("بیوچک با ایموجی‌های مختلف x4 تشخیص شد", hit and ids == {1, 2, 3, 4},
           f"-> {reason} {ids}")
-    hit, _, _ = big_spam.detect_big_spam("بیوچک❤️", _rows("بیوچک🥺", "بیوچک🧸", "بیوچک🥲"))
-    check("بیوچک x3 هنوز واکنشی ندارد", not hit)
+    hit, reason, ids = big_spam.detect_big_spam("بیوچک❤️", _rows("بیوچک🥺", "بیوچک🧸", "بیوچک🥲"))
+    check("بیوچک تبلیغاتی پیش از پیام سوم هم واکنش دارد",
+          hit and ids == {1, 2, 3}, f"-> {reason} {ids}")
 
     stretched = ("بیووووچک", "بیوچککک", "بیوچک🥺", "بیییووچک❤️")
     hit, _, ids = big_spam.detect_big_spam(stretched[-1], _rows(*stretched))
@@ -635,11 +647,12 @@ def test_short_separate_promotional_wave():
         hit, reason, _ = big_spam.detect_big_spam(word, _rows(*([word] * 5)))
         check(f"{word} x5 عادی است", not hit, f"-> {reason}")
 
-    hit, _, _ = big_spam.detect_big_spam(
+    hit, reason, _ = big_spam.detect_big_spam(
         "فیلم دیشب عالی بود",
         _rows(*(["فیلم دیشب عالی بود"] * 4)),
     )
-    check("جمله عادی دارای فیلم x4 اسپم کوتاه نیست", not hit)
+    check("چهار جمله یکسان generic flood است نه تبلیغ کوتاه",
+          hit and reason == "repeated_identical_messages", f"-> {reason}")
 
     packed = " ".join(["جوین"] * 6)
     hit, reason, _ = big_spam.detect_big_spam(packed, _rows(packed))

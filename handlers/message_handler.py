@@ -152,6 +152,22 @@ from splusthon.tl import functions
 from splusthon import Button, types
 
 
+def _resolved_event_peer(event):
+    """Read an already-resolved InputPeer from an event without any RPC."""
+    message = getattr(event, "message", None)
+    for owner in (message, event):
+        if owner is None:
+            continue
+        for attr in ("_input_chat", "input_chat"):
+            try:
+                peer = getattr(owner, attr, None)
+            except Exception:
+                peer = None
+            if peer is not None:
+                return peer
+    return None
+
+
 def _warm_reply_input_chat(bot, event, chat=None):
     """Populate a reply InputPeer from the per-bot chat cache when possible.
 
@@ -474,7 +490,7 @@ def _handle_forwarded_group_message(
 
 
 def _log_ban_execution(bot, chat_id, user_id, reason):
-    punish_key = f"{chat_id}:{user_id}"
+    punish_key = _punishment_key(chat_id, user_id)
     _debug_log(
         bot,
         "BAN EXECUTION DEBUG\n"
@@ -546,6 +562,22 @@ def _schedule_reply(bot, event, *args, **kwargs):
     return _asyncio.create_task(run())
 
 
+def is_game_answer_active(chat_id, user_id):
+    """Cheap in-memory guard for answers that must bypass generic flood rules."""
+    return bool(
+        name_family_active(chat_id)
+        or fox_game_active(chat_id)
+        or emoji_guess_active(chat_id, user_id)
+        or flag_guess_active(chat_id)
+        or get_correction(chat_id) is not None
+        or get_active_question(chat_id) is not None
+        or get_fill_token(chat_id, user_id) is not None
+        or get_riddle_token(chat_id, user_id) is not None
+        or _who_knows.is_active(chat_id)
+        or _truth_lie.is_active(chat_id)
+    )
+
+
 def _chat_game_busy(chat_id):
     """آیا یکی از بازی‌های «چت‌محور» همین حالا در این گروه فعال است.
 
@@ -598,6 +630,16 @@ def _track_group_timer(bot, chat_id, task):
     return task
 
 
+def _spam_runtime_key(chat_id, user_id):
+    """Canonical in-memory key across full and short SPlus channel IDs."""
+    return normalize_group_id(chat_id), str(user_id)
+
+
+def _punishment_key(chat_id, user_id):
+    group_id, member_id = _spam_runtime_key(chat_id, user_id)
+    return f"{group_id}:{member_id}"
+
+
 def finalize_spam_wave(chat_id, user_id, requested, deleted, remaining):
     """Clear both spam histories only after complete cleanup."""
     if remaining or deleted != requested:
@@ -623,11 +665,18 @@ _BIG_SPAM_REPEAT_MESSAGES = big_spam.SIMILAR_MESSAGE_THRESHOLD
 def _big_repeated_spam(chat_id, user_id, text):
     """Detect a promotional wave on the second similar message, or one packed box."""
     rows = message_tracker.get_user_recent_messages(chat_id, user_id)
-    return big_spam.detect_big_spam(text, rows)
+    return big_spam.detect_big_spam(
+        text, rows,
+        allow_generic=not is_game_answer_active(chat_id, user_id),
+    )
 
 
 def _big_spam_incident(bot, key, seed_ids=()):
     """Create the bounded ID registry used only after big-spam detection."""
+    try:
+        key = _spam_runtime_key(key[0], key[1])
+    except (TypeError, IndexError):
+        pass
     incidents = getattr(bot, "_big_spam_incidents", None)
     if incidents is None:
         incidents = bot._big_spam_incidents = {}
@@ -640,7 +689,13 @@ def _big_spam_incident(bot, key, seed_ids=()):
             "ids": set(),
             "deleted_ids": set(),
             "retry_ids": set(),
+            "retry_rounds": 0,
+            "abandoned_ids": set(),
             "cleanup_task": None,
+            # Reopened incidents for an already-punished user can drain at
+            # once. A newly queued ban changes this to ``pending`` below and
+            # keeps the incident open until SPlus confirms the restriction.
+            "ban_state": "confirmed",
         }
     incident["ids"].update(
         message_id for message_id in seed_ids
@@ -654,14 +709,14 @@ def _big_spam_incident(bot, key, seed_ids=()):
 def _capture_big_spam_message(bot, chat_id, user_id, message_id):
     """Add every post-detection message ID before any later handler branch."""
     incidents = getattr(bot, "_big_spam_incidents", {})
-    incident = incidents.get((chat_id, user_id))
+    incident = incidents.get(_spam_runtime_key(chat_id, user_id))
     if incident is not None and isinstance(message_id, int) and message_id > 0:
         incident["ids"].add(message_id)
 
 
 def _record_spam_ban_deletes(bot, event, chat_id, user_id, deleted_ids):
     """Accumulate unique deleted IDs for the one final ban notice."""
-    key = (chat_id, user_id)
+    key = _spam_runtime_key(chat_id, user_id)
     shared = _spam_cleanup_incident(bot, key, event)
     counted = shared.setdefault("counted_ids", set())
     counted.update(
@@ -677,7 +732,7 @@ def _record_spam_ban_deletes(bot, event, chat_id, user_id, deleted_ids):
 
 def _schedule_spam_ban_notice(bot, event, chat_id, user_id):
     """Send the ban notice once, after every in-flight cleanup stage finishes."""
-    key = (chat_id, user_id)
+    key = _spam_runtime_key(chat_id, user_id)
     shared = _spam_cleanup_incident(bot, key, event)
     shared["generation"] = shared.get("generation", 0) + 1
     my_gen = shared["generation"]
@@ -766,41 +821,120 @@ def _collect_big_spam_ids(chat_id, user_id, seed_ids=(), current_id=None):
 
 async def _drain_big_spam_incident(bot, event, chat_id, user_id, incident):
     """Keep draining IDs added during cleanup; retain failed IDs for retry."""
-    key = (chat_id, user_id)
+    key = _spam_runtime_key(chat_id, user_id)
     while True:
         incident["ids"].update(_collect_big_spam_ids(chat_id, user_id))
-        pending = set(incident["ids"]) - set(incident["deleted_ids"])
+        pending = (
+            set(incident["ids"])
+            - set(incident["deleted_ids"])
+            - set(incident.get("abandoned_ids", ()))
+        )
         if pending:
             remaining = set()
             # Any pending count is deleted now. 100 is only the RPC max.
             for chunk in big_spam.chunk_ids(pending, big_spam.DELETE_BATCH_MAX):
-                _deleted, leftover = await cleanup_spam_messages(
-                    bot, chat_id, user_id, chunk
-                )
+                queue = getattr(bot, "message_delete_queue", None)
+                rpc_peer = incident.get("rpc_peer")
+                if queue is not None and rpc_peer is not None:
+                    _deleted, leftover = await queue.enqueue(
+                        chat_id, chunk, rpc_peer=rpc_peer,
+                    )
+                else:
+                    _deleted, leftover = await cleanup_spam_messages(
+                        bot, chat_id, user_id, chunk
+                    )
                 leftover = set(leftover)
                 incident["deleted_ids"].update(set(chunk) - leftover)
                 remaining.update(leftover)
             incident["retry_ids"] = remaining
             if remaining:
-                # Preserve IDs and retry rather than declaring a partial wave
-                # complete. This task is per incident, never per normal user.
-                await _asyncio.sleep(1)
-                continue
+                incident["retry_rounds"] = int(incident.get("retry_rounds", 0)) + 1
+                if incident["retry_rounds"] <= 3:
+                    # Bounded incident-level retries. The queue itself already
+                    # handles transient RPC retries, so an entity failure must
+                    # never spin forever once per second.
+                    await _asyncio.sleep(min(incident["retry_rounds"], 3))
+                    continue
+                incident.setdefault("abandoned_ids", set()).update(remaining)
+                bot.logger.log_error(
+                    "BIG SPAM DELETE UNRESOLVED "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"remaining={len(remaining)} retries={incident['retry_rounds']}"
+                )
+            else:
+                incident["retry_rounds"] = 0
             continue
+
+        # Keep capturing/deleting while the permanent-ban RPC is in flight.
+        # Previously a fast first delete could close the incident before a
+        # slow (1–5s) ban completed; later burst messages then escaped the
+        # light path and accumulated in the heavy handler queue.
+        ban_state = incident.get("ban_state", "confirmed")
+        if ban_state == "pending":
+            deadline = incident.get("ban_deadline")
+            now = _asyncio.get_running_loop().time()
+            if deadline is not None and now >= deadline:
+                # A per-chat moderation worker can legitimately queue several
+                # different spammers. Do not expire this incident while its ban
+                # job is still queued/running, but retain a hard five-minute
+                # bound for a wedged worker or lost callback.
+                moderation = getattr(bot, "moderation_queue", None)
+                pending_key = (key[0], user_id, "ban")
+                still_pending = pending_key in getattr(
+                    moderation, "_pending_keys", set()
+                )
+                absolute = float(incident.get("ban_absolute_deadline", deadline))
+                if still_pending and now < absolute:
+                    incident["ban_deadline"] = min(now + 50.0, absolute)
+                    await _asyncio.sleep(0.05)
+                    continue
+                incident["ban_state"] = "failed"
+                bot.punished_users.discard(_punishment_key(chat_id, user_id))
+                bot.clear_spam_lock(key)
+                bot.logger.log_error(
+                    "BIG SPAM BAN CALLBACK TIMEOUT "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"still_pending={still_pending}"
+                )
+                continue
+            await _asyncio.sleep(0.05)
+            continue
+        if ban_state == "failed":
+            message_tracker.remove_message_ids(
+                chat_id, user_id,
+                set(incident["deleted_ids"]) | set(incident.get("abandoned_ids", ()))
+            )
+            getattr(bot, "_big_spam_incidents", {}).pop(key, None)
+            return
 
         # Two event-loop turns close the race with received messages that had
         # already entered the handler when the ban succeeded.
         await _asyncio.sleep(0)
         incident["ids"].update(_collect_big_spam_ids(chat_id, user_id))
-        if set(incident["ids"]) - set(incident["deleted_ids"]):
+        if (
+            set(incident["ids"])
+            - set(incident["deleted_ids"])
+            - set(incident.get("abandoned_ids", ()))
+        ):
             continue
         await _asyncio.sleep(0)
         incident["ids"].update(_collect_big_spam_ids(chat_id, user_id))
-        if set(incident["ids"]) - set(incident["deleted_ids"]):
+        if (
+            set(incident["ids"])
+            - set(incident["deleted_ids"])
+            - set(incident.get("abandoned_ids", ()))
+        ):
             continue
 
         _record_spam_ban_deletes(
             bot, event, chat_id, user_id, incident["deleted_ids"],
+        )
+        # Do not leave completed or permanently-unresolvable IDs in the
+        # 30-minute tracker. Reopening an incident used to retry every old ID,
+        # turning one new spam message into a long batch of stale requests.
+        message_tracker.remove_message_ids(
+            chat_id, user_id,
+            set(incident["deleted_ids"]) | set(incident.get("abandoned_ids", ()))
         )
         getattr(bot, "_big_spam_incidents", {}).pop(key, None)
         _schedule_spam_ban_notice(bot, event, chat_id, user_id)
@@ -821,8 +955,8 @@ def _start_big_spam_cleanup(bot, event, chat_id, user_id, incident):
 
 def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
     """Ban at once and start deleting whatever IDs are already recorded."""
-    key = (chat_id, user_id)
-    punish_key = f"{chat_id}:{user_id}"
+    key = _spam_runtime_key(chat_id, user_id)
+    punish_key = _punishment_key(chat_id, user_id)
     current_id = getattr(getattr(event, "message", None), "id", None)
     collected = _collect_big_spam_ids(chat_id, user_id, seed_ids, current_id)
     if punish_key in bot.punished_users:
@@ -830,16 +964,37 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
         # arrived. Re-open the same chat+user incident with every ID the
         # tracker still has so messages 3..N are not dropped.
         incident = _big_spam_incident(bot, key, collected)
+        resolved_peer = _resolved_event_peer(event)
+        if resolved_peer is not None:
+            incident["rpc_peer"] = resolved_peer
         _start_big_spam_cleanup(bot, event, chat_id, user_id, incident)
         return False
 
     incident = _big_spam_incident(bot, key, collected)
+    resolved_peer = _resolved_event_peer(event)
+    if resolved_peer is not None:
+        incident["rpc_peer"] = resolved_peer
+    incident["ban_state"] = "pending"
+    queued_at = _asyncio.get_running_loop().time()
+    incident["ban_deadline"] = queued_at + 50.0
+    incident["ban_absolute_deadline"] = queued_at + 300.0
     bot.punished_users.add(punish_key)
     bot.set_spam_lock(key)
     _start_big_spam_cleanup(bot, event, chat_id, user_id, incident)
 
     async def succeeded(_result):
+        incident["ban_state"] = "confirmed"
+        bot.punished_users.add(punish_key)
         await _asyncio.sleep(0)
+        # A success arriving after the hard callback deadline still proves the
+        # user is banned, but must not resurrect a detached old incident that
+        # could pop a newer incident with the same key.
+        if getattr(bot, "_big_spam_incidents", {}).get(key) is not incident:
+            bot.logger.log_info(
+                "BIG SPAM BAN CONFIRMED LATE "
+                f"chat_id={chat_id} user_id={user_id}"
+            )
+            return
         incident["ids"].update(_collect_big_spam_ids(
             chat_id, user_id, (), getattr(event.message, "id", None)
         ))
@@ -850,6 +1005,7 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
         )
 
     async def failed(error):
+        incident["ban_state"] = "failed"
         bot.punished_users.discard(punish_key)
         bot.clear_spam_lock(key)
         bot.logger.log_error(
@@ -865,6 +1021,7 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
         on_success=succeeded, on_failure=failed,
     )
     if not queued:
+        incident["ban_state"] = "failed"
         bot.punished_users.discard(punish_key)
         bot.clear_spam_lock(key)
         bot.logger.log_info(
@@ -1226,7 +1383,7 @@ def _spam_cleanup_incident(bot, key, event):
 
 def _confirm_spam_ban_cleanup(bot, event, chat_id, user_id, seed_ids=()):
     """Seal a spam incident only after its ban/kick RPC really succeeded."""
-    key = (chat_id, user_id)
+    key = _spam_runtime_key(chat_id, user_id)
     incident = _spam_cleanup_incident(bot, key, event)
     incident["ban_confirmed"] = True
     return _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids)
@@ -1234,7 +1391,7 @@ def _confirm_spam_ban_cleanup(bot, event, chat_id, user_id, seed_ids=()):
 
 def _schedule_auto_spam_cleanup(bot, event, chat_id, user_id, seed_ids, *, announce_cleanup=True):
     """Aggregate all batches in one incident and emit one final cleanup notice."""
-    key = (chat_id, user_id)
+    key = _spam_runtime_key(chat_id, user_id)
     incident = _spam_cleanup_incident(bot, key, event)
     pending = getattr(bot, "_auto_spam_cleanup_pending", None)
     if pending is None:
@@ -2416,7 +2573,7 @@ async def handle_new_message(bot, event):
             f"state_cleared={state_cleared} is_admin={admin_bypass} "
             f"blocked_cache={blocked_cache} spam_history={False if admin_bypass else 'unchecked'}"
         )
-        status_key = f"{chat_id}:{user_id}"
+        status_key = _punishment_key(chat_id, user_id)
         tracker_is_banned = getattr(bot.tracker, "is_banned", None)
         tracker_is_muted = getattr(bot.tracker, "is_muted", None)
         status_banned = False if admin_bypass else (
@@ -2519,7 +2676,7 @@ async def handle_new_message(bot, event):
                 and not admin_bypass
                 and not native_admin_warn_only
                 and bot.is_spam_locked(spam_lock_key)):
-            if spam_lock_key in getattr(bot, "_big_spam_incidents", {}):
+            if _spam_runtime_key(chat_id, user_id) in getattr(bot, "_big_spam_incidents", {}):
                 # Ban and drain are already running. The ID was captured
                 # before this branch and will be deleted with the incident.
                 bot.logger.log_info(
@@ -2577,7 +2734,7 @@ async def handle_new_message(bot, event):
                     # Claim the incident before any await. A burst can produce
                     # several NewMessage events before the kick RPC completes;
                     # only its first event may queue the ban or later notify.
-                    punish_key = f"{chat_id}:{user_id}"
+                    punish_key = _punishment_key(chat_id, user_id)
                     if punish_key in bot.punished_users:
                         bot.logger.log_info(
                             "AD NAME INCIDENT DUPLICATE SKIPPED "
@@ -3635,7 +3792,7 @@ async def handle_new_message(bot, event):
         if not fast_command and not auto_punish_protected:
             try:
                 if is_repeat(chat_id, user_id, message_text):
-                    punish_key = f"{chat_id}:{user_id}"
+                    punish_key = _punishment_key(chat_id, user_id)
                     _log_ban_execution(bot, chat_id, user_id, "اسپم تکراری")
                     if punish_key in bot.punished_users:
                         tracked_existing = message_tracker.get_user_recent_messages(
@@ -5809,7 +5966,7 @@ async def handle_new_message(bot, event):
                             f"spam_count={before_spam}\n"
                             f"warning_count={before_warning}"
                         )
-                        released_key = f"{_c}:{_u.id}"
+                        released_key = _punishment_key(_c, _u.id)
                         if hasattr(_b, "clear_released_user_state"):
                             _b.clear_released_user_state(_c, _u.id)
                         _b.punished_users.discard(released_key)
@@ -6495,7 +6652,7 @@ async def handle_new_message(bot, event):
 
                 print("🚨 HEAVY REPEAT SPAM BAN:", username, user_id)
 
-                punish_key = f"{chat_id}:{user_id}"
+                punish_key = _punishment_key(chat_id, user_id)
                 _log_ban_execution(bot, chat_id, user_id, "تکرار شدید داخل پیام")
 
                 if punish_key not in bot.punished_users:
@@ -6691,7 +6848,7 @@ async def handle_new_message(bot, event):
                     )
 
                     if hasattr(bot.admin_actions, "ban_user"):
-                        punish_key = f"{chat_id}:{user_id}"
+                        punish_key = _punishment_key(chat_id, user_id)
                         _log_ban_execution(bot, chat_id, user_id, "اسپم تکراری شدید")
                         if punish_key not in bot.punished_users:
                             bot.punished_users.add(punish_key)
@@ -6808,7 +6965,7 @@ async def handle_new_message(bot, event):
 
             # بررسی مجازات
             if bot.tracker.should_punish(chat_id, user_id, threshold=threshold):
-                punish_key = f"{chat_id}:{user_id}"
+                punish_key = _punishment_key(chat_id, user_id)
                 _log_ban_execution(bot, chat_id, user_id, "رسیدن به آستانه تخلفات")
 
                 if punish_key not in bot.punished_users:

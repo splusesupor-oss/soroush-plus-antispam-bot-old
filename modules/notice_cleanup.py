@@ -16,6 +16,8 @@ import time
 
 DEFAULT_TTL_SECONDS = 60
 MAX_PER_CHAT = 500
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_DELAY_SECONDS = 2
 
 
 def _chat_key(chat_id):
@@ -111,6 +113,39 @@ def extract_sent_id(sent):
     return None
 
 
+def extract_sent_peer(sent):
+    """Return a resolved RPC peer retained on a sent message, when available."""
+    if sent is None or isinstance(sent, (bool, int, str, bytes)):
+        return None
+    for attr in ("_input_chat", "input_chat"):
+        try:
+            peer = getattr(sent, attr, None)
+        except Exception:
+            peer = None
+        if peer is not None:
+            return peer
+    inner = getattr(sent, "message", None)
+    if inner is not None and inner is not sent:
+        peer = extract_sent_peer(inner)
+        if peer is not None:
+            return peer
+    if isinstance(sent, (list, tuple)):
+        for item in sent:
+            peer = extract_sent_peer(item)
+            if peer is not None:
+                return peer
+    updates = getattr(sent, "updates", None)
+    if updates:
+        for update in updates:
+            peer = extract_sent_peer(getattr(update, "message", update))
+            if peer is not None:
+                return peer
+    update = getattr(sent, "update", None)
+    if update is not None:
+        return extract_sent_peer(getattr(update, "message", update))
+    return None
+
+
 def _message_id(value):
     return extract_sent_id(value)
 
@@ -127,12 +162,18 @@ class NoticeCleanup:
     """Independent per-chat notice TTL workers."""
 
     def __init__(self, persist_path, logger=None, *, ttl_seconds=DEFAULT_TTL_SECONDS,
-                 delete_queue=None):
+                 delete_queue=None, max_retries=DEFAULT_MAX_RETRIES,
+                 retry_delay_seconds=DEFAULT_RETRY_DELAY_SECONDS):
         self.persist_path = persist_path
         self.logger = logger
         self.ttl_seconds = float(ttl_seconds)
         self.delete_queue = delete_queue
+        self.max_retries = max(0, int(max_retries))
+        self.retry_delay_seconds = max(0.01, float(retry_delay_seconds))
         self._items = {}
+        # InputPeer/access-hash objects are process-local and intentionally not
+        # serialized. They are retained from send results for reliable deletes.
+        self._rpc_peers = {}
         self._workers = {}
         self._events = {}
         self._dirty = False
@@ -176,6 +217,9 @@ class NoticeCleanup:
                 )
             return False
         key = _chat_key(chat_id)
+        rpc_peer = extract_sent_peer(raw)
+        if rpc_peer is not None:
+            self._rpc_peers[key] = rpc_peer
         ttl_s = float(self.ttl_seconds if ttl is None else ttl)
         expires_at = (time.time() if now is None else float(now)) + ttl_s
         rows = self._items.setdefault(key, [])
@@ -183,12 +227,14 @@ class NoticeCleanup:
             if int(row["message_id"]) == message_id:
                 row["expires_at"] = expires_at
                 row["chat_id"] = chat_id
+                row["attempts"] = 0
                 break
         else:
             rows.append({
                 "message_id": int(message_id),
                 "expires_at": expires_at,
                 "chat_id": chat_id,
+                "attempts": 0,
             })
             if len(rows) > MAX_PER_CHAT:
                 rows.sort(key=lambda item: item["expires_at"])
@@ -271,13 +317,80 @@ class NoticeCleanup:
             # Future صف حذف هم برگردانده می‌شود تا نتیجهٔ واقعی
             # (deleted, remaining) لاگ شود، نه deleted=0 همیشگی.
             target = rpc_chat if rpc_chat is not None else _chat_id_for_rpc(chat_id)
-            return queue.enqueue(target, message_ids, priority=0)
+            peer = self._rpc_peers.get(_chat_key(chat_id))
+            try:
+                return queue.enqueue(
+                    target, message_ids, priority=0, rpc_peer=peer,
+                )
+            except TypeError as error:
+                # Compatibility with a custom/legacy queue that predates the
+                # optional resolved-peer keyword.
+                if "rpc_peer" not in str(error):
+                    raise
+                return queue.enqueue(target, message_ids, priority=0)
         except Exception as error:
             if self.logger is not None:
                 self.logger.log_error(
                     f"NOTICE CLEANUP ENQUEUE FAILED chat_id={chat_id} error={error!r}"
                 )
             return None
+
+    def _requeue_unresolved(self, chat_id, due_rows, remaining, *, now=None):
+        """Persist unresolved notice IDs for bounded delayed retries."""
+        key = _chat_key(chat_id)
+        now = time.time() if now is None else float(now)
+        source = {
+            int(row["message_id"]): row for row in due_rows
+            if isinstance(row.get("message_id"), int)
+        }
+        retry_rows = []
+        abandoned = []
+        for message_id in dict.fromkeys(remaining or ()):
+            row = source.get(message_id, {"message_id": message_id})
+            attempts = max(0, int(row.get("attempts", 0))) + 1
+            if attempts > self.max_retries:
+                abandoned.append(message_id)
+                continue
+            delay = min(60.0, self.retry_delay_seconds * (2 ** (attempts - 1)))
+            retry_row = {
+                "message_id": int(message_id),
+                "expires_at": now + delay,
+                "attempts": attempts,
+            }
+            if row.get("chat_id") is not None:
+                retry_row["chat_id"] = row.get("chat_id")
+            retry_rows.append(retry_row)
+
+        if retry_rows:
+            rows = self._items.setdefault(key, [])
+            retry_ids = {row["message_id"] for row in retry_rows}
+            rows[:] = [
+                row for row in rows
+                if int(row.get("message_id", 0)) not in retry_ids
+            ]
+            rows.extend(retry_rows)
+            rows.sort(key=lambda row: float(row["expires_at"]))
+            if len(rows) > MAX_PER_CHAT:
+                del rows[:-MAX_PER_CHAT]
+            self._dirty = True
+            self._ensure_worker(key)
+            event = self._events.get(key)
+            if event is not None and not event.is_set():
+                event.set()
+        if self.logger is not None and (retry_rows or abandoned):
+            if retry_rows:
+                self.logger.log_error(
+                    "NOTICE CLEANUP RETRY QUEUED "
+                    f"chat_id={chat_id} remaining={len(retry_rows)} "
+                    f"max_attempt={max(row['attempts'] for row in retry_rows)}"
+                )
+            if abandoned:
+                self.logger.log_error(
+                    "NOTICE CLEANUP ABANDONED "
+                    f"chat_id={chat_id} message_ids={abandoned!r} "
+                    f"max_retries={self.max_retries}"
+                )
+        return len(retry_rows), abandoned
 
     async def _worker(self, chat_id):
         event = self._events[chat_id]
@@ -287,26 +400,35 @@ class NoticeCleanup:
             while self._started:
                 rows = self._items.get(chat_id) or []
                 if not rows:
-                    event.clear()
-                    await event.wait()
-                    continue
+                    # Retire idle per-chat tasks instead of retaining one task
+                    # and Event for every group ever seen. schedule() starts a
+                    # fresh worker synchronously when the next notice arrives.
+                    return
+                # Persist pending rows before sleeping or issuing the delete.
+                # If the process dies while the RPC is in flight, the due IDs
+                # therefore remain available for recovery after restart.
+                if self._dirty:
+                    self._persist()
                 now = time.time()
-                # آی‌دی اصلیِ ذخیره‌شده در رکوردها (فرم کامل ‎-100...‎)
-                # قبل از pop برداشته می‌شود تا RPC حذف با همان انجام شود.
+                # Use the original stored chat ID (full -100... form) for RPC.
+                # Due rows remain in memory and on disk until the result is
+                # known, so cancellation or a process crash cannot lose them.
                 rpc_chat = None
                 for row in rows:
                     if row.get("chat_id") is not None:
                         rpc_chat = row.get("chat_id")
                         break
-                due = self.pop_due(chat_id, now=now)
+                due_rows = [
+                    dict(row) for row in rows
+                    if float(row["expires_at"]) <= now
+                ]
+                due = [int(row["message_id"]) for row in due_rows]
                 if due:
                     if self.logger is not None:
                         self.logger.log_info(
                             "NOTICE CLEANUP DUE "
                             f"chat_id={chat_id} message_ids={due!r}"
                         )
-                    if self._dirty:
-                        self._persist()
                     result = self._enqueue_delete(chat_id, due, rpc_chat=rpc_chat)
                     deleted, remaining = 0, list(due)
                     try:
@@ -329,6 +451,23 @@ class NoticeCleanup:
                                 f"chat_id={chat_id} message_ids={due!r} "
                                 f"deleted={deleted} remaining={len(remaining or ())}"
                             )
+                    due_set = set(due)
+                    current_rows = self._items.get(chat_id, [])
+                    kept_rows = [
+                        row for row in current_rows
+                        if int(row.get("message_id", 0)) not in due_set
+                    ]
+                    if kept_rows:
+                        self._items[chat_id] = kept_rows
+                    else:
+                        self._items.pop(chat_id, None)
+                    self._dirty = True
+                    if remaining:
+                        self._requeue_unresolved(
+                            chat_id, due_rows, remaining, now=time.time(),
+                        )
+                    if self._dirty:
+                        self._persist()
                     continue
                 next_at = self.next_expiry(chat_id)
                 if next_at is None:
@@ -349,6 +488,9 @@ class NoticeCleanup:
         finally:
             if self._workers.get(chat_id) is asyncio.current_task():
                 self._workers.pop(chat_id, None)
+            if not self._items.get(chat_id):
+                self._events.pop(chat_id, None)
+                self._rpc_peers.pop(chat_id, None)
             if self._dirty:
                 self._persist()
 
@@ -380,7 +522,15 @@ class NoticeCleanup:
                         expires_at = float(expires_at)
                     except (TypeError, ValueError):
                         continue
-                    item = {"message_id": message_id, "expires_at": expires_at}
+                    try:
+                        attempts = max(0, int(row.get("attempts", 0)))
+                    except (TypeError, ValueError):
+                        attempts = 0
+                    item = {
+                        "message_id": message_id,
+                        "expires_at": expires_at,
+                        "attempts": attempts,
+                    }
                     if row.get("chat_id") is not None:
                         item["chat_id"] = row.get("chat_id")
                     cleaned.append(item)

@@ -57,6 +57,7 @@ from handlers.message_handler import (
     send_activation_message,
     handle_fast_owner_command,
     is_fast_owner_command,
+    is_game_answer_active,
 )
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.name_family import cancel_round as cancel_name_family_round
@@ -163,6 +164,9 @@ class SoroushAntiSpamBot:
         # user/chat forever.
         self.delete_notice_lock = {}
         self.punished_users = set()
+        # Light ingest runs before the heavy game router. This pure state probe
+        # prevents legitimate game answers from entering generic flood rules.
+        self._light_game_answer_active = is_game_answer_active
         # Per-user/group fast gate set as soon as severe spam is detected.
         # Values are monotonic timestamps, not just set membership.
         self.spam_lock = {}
@@ -225,14 +229,23 @@ class SoroushAntiSpamBot:
             self._state_now() if now is None else now
         )
 
+    @staticmethod
+    def _spam_state_key(key):
+        try:
+            return normalize_group_id(key[0]), str(key[1])
+        except (TypeError, IndexError):
+            return key
+
     def set_spam_lock(self, key, now=None):
         if not hasattr(self, "spam_lock"):
             self.spam_lock = {}
+        key = self._spam_state_key(key)
         self.spam_lock[key] = self._state_now() if now is None else now
 
     def is_spam_locked(self, key, now=None):
         now = self._state_now() if now is None else now
         locks = getattr(self, "spam_lock", {})
+        key = self._spam_state_key(key)
         created = locks.get(key)
         if created is None:
             return False
@@ -242,7 +255,7 @@ class SoroushAntiSpamBot:
         return True
 
     def clear_spam_lock(self, key):
-        getattr(self, "spam_lock", {}).pop(key, None)
+        getattr(self, "spam_lock", {}).pop(self._spam_state_key(key), None)
 
     def clear_released_user_state(self, chat_id, user_id):
         """Erase every prior punishment/delete cache for a released user.
@@ -994,8 +1007,9 @@ class SoroushAntiSpamBot:
 
                 user_id = user.id
                 username = getattr(user, "username", None)
-                punish_key = f"{chat_id}:{user_id}"
-                burst_key = (chat_id, user_id)
+                runtime_group, runtime_user = self._spam_state_key((chat_id, user_id))
+                punish_key = f"{runtime_group}:{runtime_user}"
+                burst_key = (runtime_group, runtime_user)
                 history = get_user_history(chat_id, user_id)
                 rejoin_state = self.rejoin_spam_state.get(burst_key, {})
                 self.logger.log_info(
