@@ -36,13 +36,28 @@ class FakePeerChannel:
 
 
 class FakeClient:
-    def __init__(self, owner_id, *, resolve_to_group=False):
+    def __init__(
+        self,
+        owner_id,
+        *,
+        resolve_to_group=False,
+        self_owner=True,
+    ):
         self.owner_id = owner_id
         self.resolve_to_group = resolve_to_group
+        self.self_owner = self_owner
+        self.get_me_calls = []
         self.resolve_calls = []
         self.sent = []
 
-    async def get_input_entity(self, entity_id):
+    async def get_me(self, input_peer=False):
+        self.get_me_calls.append(input_peer)
+        if self.self_owner:
+            return FakePeerUser(self.owner_id)
+        return FakePeerUser(self.owner_id + 1)
+
+    async def get_input_entity(self, entity):
+        entity_id = getattr(entity, "user_id", entity)
         self.resolve_calls.append(entity_id)
         if self.resolve_to_group:
             return FakePeerChannel(entity_id)
@@ -295,7 +310,8 @@ class WatchdogTests(unittest.TestCase):
                 ))
 
                 self.assertEqual(delivered, 1)
-                self.assertEqual(client.resolve_calls, [synthetic_owner_id])
+                self.assertEqual(client.get_me_calls, [True])
+                self.assertEqual(client.resolve_calls, [])
                 self.assertEqual(len(client.sent), 1)
                 target, message = client.sent[0]
                 self.assertIsInstance(target, FakePeerUser)
@@ -394,7 +410,11 @@ class WatchdogTests(unittest.TestCase):
                     state_path=state_file,
                     now=2,
                 )
-                client = FakeClient(synthetic_owner_id, resolve_to_group=True)
+                client = FakeClient(
+                    synthetic_owner_id,
+                    resolve_to_group=True,
+                    self_owner=False,
+                )
                 with self.assertRaises(reporting.WatchdogDeliveryError):
                     asyncio.run(reporting.deliver_pending_reports(
                         client,

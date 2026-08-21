@@ -23,6 +23,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from modules.owner_check import get_owner, is_global_owner
+from modules.owner_private import (
+    OwnerPrivateResolveError,
+    resolve_private_owner_peer,
+)
 from modules.runtime_paths import PROJECT_ROOT, runtime_config_file
 
 
@@ -268,27 +272,21 @@ def _owner_id() -> int:
     return owner_id
 
 
-async def _resolve_private_owner(client: Any, owner_id: int) -> Any:
-    """Resolve only a user peer; channel/chat peers are explicitly rejected."""
-    target: Any = owner_id
-    resolver = getattr(client, "get_input_entity", None)
-    if callable(resolver):
-        try:
-            resolved = resolver(owner_id)
-            target = await resolved if inspect.isawaitable(resolved) else resolved
-        except Exception:
-            # SPlusthon can still resolve a known numeric user in send_message.
-            target = owner_id
-
-    if not isinstance(target, int):
-        if getattr(target, "channel_id", None) is not None:
-            raise WatchdogDeliveryError("owner resolved to a channel peer")
-        if getattr(target, "chat_id", None) is not None:
-            raise WatchdogDeliveryError("owner resolved to a chat peer")
-        resolved_id = getattr(target, "user_id", getattr(target, "id", None))
-        if resolved_id is not None and not is_global_owner(resolved_id):
-            raise WatchdogDeliveryError("resolved private peer is not the owner")
-    return target
+async def _resolve_private_owner(
+    client: Any,
+    owner_id: int,
+    logger: Any = None,
+) -> Any:
+    """Use the same strict user-only resolver as live performance reports."""
+    try:
+        return await resolve_private_owner_peer(
+            client,
+            owner_id,
+            logger=logger,
+            context="WATCHDOG_CRASH",
+        )
+    except OwnerPrivateResolveError as error:
+        raise WatchdogDeliveryError(str(error)) from error
 
 
 def _log(logger: Any, level: str, message: str) -> None:
@@ -318,7 +316,7 @@ async def deliver_pending_reports(
         return 0
 
     owner_id = _owner_id()
-    target = await _resolve_private_owner(client, owner_id)
+    target = await _resolve_private_owner(client, owner_id, logger)
     delivered = 0
 
     for snapshot in list(state["pending"]):

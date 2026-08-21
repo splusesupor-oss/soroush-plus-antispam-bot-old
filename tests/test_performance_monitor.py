@@ -39,18 +39,34 @@ class PeerChannel:
 
 
 class FakeClient:
-    def __init__(self, owner_id, *, delay=0.0, group_target=False):
+    def __init__(
+        self,
+        owner_id,
+        *,
+        delay=0.0,
+        group_target=False,
+        self_owner=True,
+    ):
         self.owner_id = owner_id
         self.delay = delay
         self.group_target = group_target
+        self.self_owner = self_owner
+        self.get_me_calls = []
         self.resolved = []
         self.sent = []
 
-    async def get_input_entity(self, owner_id):
-        self.resolved.append(owner_id)
+    async def get_me(self, input_peer=False):
+        self.get_me_calls.append(input_peer)
+        if self.self_owner:
+            return PeerUser(self.owner_id)
+        return PeerUser(self.owner_id + 1)
+
+    async def get_input_entity(self, entity):
+        user_id = getattr(entity, "user_id", entity)
+        self.resolved.append(user_id)
         if self.group_target:
-            return PeerChannel(owner_id)
-        return PeerUser(owner_id)
+            return PeerChannel(user_id)
+        return PeerUser(user_id)
 
     async def send_message(self, target, text):
         if self.delay:
@@ -147,7 +163,8 @@ class SlowProcessMonitorTests(unittest.TestCase):
             ))
             self.assertFalse((root / "watchdog_pending.json").exists())
 
-        self.assertEqual(client.resolved, [self.owner_id])
+        self.assertEqual(client.get_me_calls, [True])
+        self.assertEqual(client.resolved, [])
         self.assertEqual(len(client.sent), 1)
         target, report = client.sent[0]
         self.assertIsInstance(target, PeerUser)
@@ -264,7 +281,11 @@ class SlowProcessMonitorTests(unittest.TestCase):
     def test_group_peer_is_rejected_before_slow_report_send(self):
         async def scenario(state_file):
             logger = Logger()
-            client = FakeClient(self.owner_id, group_target=True)
+            client = FakeClient(
+                self.owner_id,
+                group_target=True,
+                self_owner=False,
+            )
             monitor = monitoring.SlowProcessMonitor(
                 client,
                 logger,
@@ -292,6 +313,45 @@ class SlowProcessMonitorTests(unittest.TestCase):
             "SLOW_PROCESS OWNER REPORT FAILED" in row
             for row in logger.errors
         ))
+
+    def test_getusers_not_found_logs_owner_id_method_and_traceback(self):
+        class NotFoundClient(FakeClient):
+            async def get_input_entity(self, entity):
+                user_id = getattr(entity, "user_id", entity)
+                self.resolved.append(user_id)
+                raise RuntimeError("GetUsersRequest NOT_FOUND")
+
+        async def scenario(state_file):
+            logger = Logger()
+            client = NotFoundClient(self.owner_id, self_owner=False)
+            monitor = monitoring.SlowProcessMonitor(
+                client,
+                logger,
+                cooldown_seconds=0,
+                global_min_interval_seconds=0,
+                state_path=state_file,
+            )
+            monitor.start()
+            self.assertTrue(monitor.record(
+                total_ms=190,
+                chat_id=10,
+                message_id=11,
+                handler="resolve_failure_test",
+            ))
+            await monitor.queue.join()
+            await monitor.close()
+            return logger, client
+
+        with tempfile.TemporaryDirectory() as directory:
+            logger, client = asyncio.run(scenario(
+                Path(directory) / "performance_state.json"
+            ))
+        self.assertEqual(client.sent, [])
+        full_log = "\n".join(logger.errors)
+        self.assertIn(f"owner_id={self.owner_id}", full_log)
+        self.assertIn("method=get_input_entity(PeerUser)", full_log)
+        self.assertIn("GetUsersRequest NOT_FOUND", full_log)
+        self.assertIn("traceback=Traceback", full_log)
 
 
 if __name__ == "__main__":

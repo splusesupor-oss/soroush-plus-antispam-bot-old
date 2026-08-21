@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from modules.owner_check import get_owner, is_global_owner
+from modules.owner_private import resolve_private_owner_peer
 from modules.runtime_paths import runtime_config_file
 from modules.time_utils import now_local
 
@@ -297,25 +298,12 @@ class SlowProcessMonitor:
 
     async def _private_owner_target(self) -> Any:
         owner_id = self._owner_id()
-        target: Any = owner_id
-        resolver = getattr(self.client, "get_input_entity", None)
-        if callable(resolver):
-            try:
-                resolved = resolver(owner_id)
-                target = await resolved if inspect.isawaitable(resolved) else resolved
-            except Exception:
-                target = owner_id
-        if not isinstance(target, int):
-            if getattr(target, "channel_id", None) is not None:
-                raise SlowReportDeliveryError("owner resolved to a channel peer")
-            if getattr(target, "chat_id", None) is not None:
-                raise SlowReportDeliveryError("owner resolved to a chat peer")
-            resolved_id = getattr(target, "user_id", getattr(target, "id", None))
-            if resolved_id is not None and not is_global_owner(resolved_id):
-                raise SlowReportDeliveryError(
-                    "resolved private peer is not the global owner"
-                )
-        return target
+        return await resolve_private_owner_peer(
+            self.client,
+            owner_id,
+            logger=self.logger,
+            context="SLOW_PROCESS",
+        )
 
     @staticmethod
     def format_report(event: Dict[str, Any]) -> str:
