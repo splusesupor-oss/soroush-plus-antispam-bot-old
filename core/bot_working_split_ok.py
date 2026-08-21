@@ -14,6 +14,7 @@ from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminAc
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
+from modules.owner_private import remember_owner_peer
 from modules.group_expiry import match_command as expiry_command
 from modules.expiry_report import build_report as build_expiry_report
 from modules.admin_tools import run_cleanup_watcher
@@ -1215,6 +1216,17 @@ class SoroushAntiSpamBot:
                     event._bot_cached_sender = sender
                 except Exception:
                     pass
+                if sender is not None and is_global_owner(
+                    getattr(sender, "id", None)
+                ):
+                    asyncio.create_task(
+                        remember_owner_peer(
+                            self.client,
+                            event=event,
+                            sender=sender,
+                            logger=self.logger,
+                        )
+                    )
                 chat_id = getattr(event, "chat_id", None)
                 if chat_id is None or not is_active(chat_id):
                     sender_id = getattr(sender, "id", None)
@@ -1315,6 +1327,17 @@ class SoroushAntiSpamBot:
                         event._bot_cached_sender = _entry_sender
                     except Exception:
                         pass
+                    if _entry_sender is not None and is_global_owner(
+                        getattr(_entry_sender, "id", None)
+                    ):
+                        asyncio.create_task(
+                            remember_owner_peer(
+                                self.client,
+                                event=event,
+                                sender=_entry_sender,
+                                logger=self.logger,
+                            )
+                        )
                     self.debug_message_log(
                         "BOT EVENT ENTRY DEBUG\n"
                         f"event_out={getattr(event, 'out', None)}\n"

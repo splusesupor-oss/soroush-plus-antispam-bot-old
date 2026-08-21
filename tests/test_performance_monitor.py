@@ -30,13 +30,20 @@ class Logger:
 
 
 class PeerUser:
-    def __init__(self, user_id):
+    def __init__(self, user_id, access_hash=None):
         self.user_id = user_id
+        self.access_hash = access_hash
 
 
 class PeerChannel:
     def __init__(self, channel_id):
         self.channel_id = channel_id
+
+
+class OwnerEvent:
+    def __init__(self, owner_id, input_sender):
+        self.sender_id = owner_id
+        self.input_sender = input_sender
 
 
 class FakeClient:
@@ -308,6 +315,69 @@ class SlowProcessMonitorTests(unittest.TestCase):
         self.assertTrue(any(
             "SLOW_PROCESS OWNER REPORT FAILED" in row
             for row in logger.errors
+        ))
+
+    def test_captured_owner_peer_survives_old_logged_in_account(self):
+        async def scenario(peer_file, state_file):
+            original_peer_file = private_owner.PEER_FILE
+            private_owner.PEER_FILE = peer_file
+            private_owner._PEER_CACHE.clear()
+            private_owner._PERSISTED_ACCESS_HASH.clear()
+            try:
+                input_peer = PeerUser(self.owner_id, access_hash=99887766)
+                event = OwnerEvent(self.owner_id, input_peer)
+                captured = await private_owner.remember_owner_peer(
+                    None,
+                    event=event,
+                    sender=None,
+                    logger=Logger(),
+                )
+                self.assertTrue(captured)
+                for _ in range(100):
+                    if peer_file.exists():
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertTrue(peer_file.exists())
+
+                # Force the report to prove it can recover from persisted peer
+                # data even when get_me() is a different, former account.
+                private_owner._PEER_CACHE.clear()
+                client = FakeClient(self.owner_id, self_owner=False)
+                logger = Logger()
+                monitor = monitoring.SlowProcessMonitor(
+                    client,
+                    logger,
+                    cooldown_seconds=0,
+                    global_min_interval_seconds=0,
+                    state_path=state_file,
+                )
+                monitor.start()
+                self.assertTrue(monitor.record(
+                    total_ms=180,
+                    chat_id=12,
+                    message_id=13,
+                    handler="persisted_owner_peer_test",
+                ))
+                await monitor.queue.join()
+                await monitor.close()
+                return client, logger
+            finally:
+                private_owner.PEER_FILE = original_peer_file
+                private_owner._PEER_CACHE.clear()
+                private_owner._PERSISTED_ACCESS_HASH.clear()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client, logger = asyncio.run(scenario(
+                root / "owner-peer.json",
+                root / "performance-state.json",
+            ))
+        self.assertEqual(len(client.sent), 1)
+        target, report = client.sent[0]
+        self.assertEqual(target.user_id, self.owner_id)
+        self.assertIn("SLOW_PROCESS", report)
+        self.assertFalse(any(
+            "GetUsersRequest NOT_FOUND" in row for row in logger.errors
         ))
 
     def test_getusers_not_found_logs_owner_id_method_and_traceback(self):
