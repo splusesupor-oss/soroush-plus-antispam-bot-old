@@ -1199,6 +1199,76 @@ def _store_native_admin_cache(cache, key, value, expires_at):
         cache.pop(next(iter(cache)), None)
 
 
+def _native_participant_is_admin(participant):
+    """Read Soroush TL participant role without Telegram-specific imports."""
+    name = type(participant).__name__
+    return name in {
+        "ChannelParticipantAdmin", "ChannelParticipantCreator",
+        "ChatParticipantAdmin", "ChatParticipantCreator",
+    }
+
+
+async def _native_admin_from_resolved_peer(
+    bot, resolved_chat, sender, user_id
+):
+    """Query the Soroush participant directly, bypassing entity re-resolution.
+
+    Returns ``None`` only when the event did not provide enough resolved peer
+    data, so the compatibility ``get_permissions`` fallback may be used. Once
+    a direct request is constructed, its server errors are deliberately raised
+    to the caller instead of causing a second duplicate RPC.
+    """
+    if resolved_chat is None or sender is None:
+        return None
+    try:
+        from splusthon import utils as _sutils
+        chat_peer = _sutils.get_input_peer(resolved_chat)
+        user_peer = _sutils.get_input_peer(sender)
+    except Exception:
+        return None
+    if chat_peer is None or user_peer is None:
+        return None
+
+    chat_peer_name = type(chat_peer).__name__
+    if (
+        chat_peer_name in {"InputPeerChannel", "InputChannel"}
+        or getattr(chat_peer, "channel_id", None) is not None
+    ):
+        request = functions.channels.GetParticipantRequest(
+            channel=chat_peer, participant=user_peer
+        )
+        response = await bot.client(request)
+        participant = getattr(response, "participant", None)
+        if participant is None:
+            raise LookupError("GetParticipant returned no participant")
+        return _native_participant_is_admin(participant)
+
+    if (
+        chat_peer_name in {"InputPeerChat", "InputChat"}
+        or getattr(chat_peer, "chat_id", None) is not None
+    ):
+        short_chat_id = getattr(chat_peer, "chat_id", None)
+        response = await bot.client(
+            functions.messages.GetFullChatRequest(chat_id=short_chat_id)
+        )
+        container = getattr(
+            getattr(response, "full_chat", None), "participants", None
+        )
+        participants = getattr(container, "participants", ()) or ()
+        target_id = str(user_id)
+        for participant in participants:
+            participant_id = getattr(participant, "user_id", None)
+            if participant_id is None:
+                participant_id = getattr(
+                    getattr(participant, "peer", None), "user_id", None
+                )
+            if str(participant_id) == target_id:
+                return _native_participant_is_admin(participant)
+        return False
+
+    return None
+
+
 async def _is_native_group_admin(
     bot, chat_id, user_id, sender, resolved_chat=None
 ):
@@ -1223,10 +1293,14 @@ async def _is_native_group_admin(
     if cached and cached[1] > now:
         return cached[0]
     try:
-        permissions = await bot.client.get_permissions(
-            resolved_chat or chat_id, sender or user_id
+        is_admin = await _native_admin_from_resolved_peer(
+            bot, resolved_chat, sender, user_id
         )
-        is_admin = bool(getattr(permissions, "is_admin", False))
+        if is_admin is None:
+            permissions = await bot.client.get_permissions(
+                resolved_chat or chat_id, sender or user_id
+            )
+            is_admin = bool(getattr(permissions, "is_admin", False))
         # Admin status stays short-lived so a demotion is seen soon.
         # A confirmed non-admin uses the longer negative TTL to avoid
         # repeating get_permissions on every ordinary group message.

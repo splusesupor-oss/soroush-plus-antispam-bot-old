@@ -169,6 +169,82 @@ def test_management_command_does_call_get_permissions():
     )
 
 
+def test_resolved_channel_bypasses_broken_get_permissions():
+    print("\n### peer حل‌شده مستقیماً GetParticipant می‌زند")
+
+    class InputPeerChannel:
+        def __init__(self, channel_id):
+            self.channel_id = channel_id
+
+    class InputPeerUser:
+        def __init__(self, user_id):
+            self.user_id = user_id
+
+    class GetParticipantRequest:
+        def __init__(self, channel, participant):
+            self.channel = channel
+            self.participant = participant
+
+    ChannelParticipantAdmin = type("ChannelParticipantAdmin", (), {})
+    resolved_chat = SimpleNamespace(id=23168821, access_hash=111)
+    resolved_sender = SimpleNamespace(id=69221075, access_hash=222)
+    input_chat = InputPeerChannel(23168821)
+    input_sender = InputPeerUser(69221075)
+
+    class DirectClient:
+        def __init__(self):
+            self.calls = []
+            self.permission_calls = 0
+
+        async def __call__(self, request):
+            self.calls.append(request)
+            return SimpleNamespace(participant=ChannelParticipantAdmin())
+
+        async def get_permissions(self, *_args):
+            self.permission_calls += 1
+            raise KeyError(23168821)
+
+    fake_root = sys.modules["splusthon"]
+    old_utils = getattr(fake_root, "utils", None)
+    had_channels = hasattr(handler.functions, "channels")
+    old_channels = getattr(handler.functions, "channels", None)
+    fake_root.utils = SimpleNamespace(
+        get_input_peer=lambda value: (
+            input_chat if value is resolved_chat
+            else input_sender if value is resolved_sender
+            else None
+        )
+    )
+    handler.functions.channels = SimpleNamespace(
+        GetParticipantRequest=GetParticipantRequest
+    )
+    client = DirectClient()
+    bot = _bot(client)
+
+    try:
+        result = asyncio.run(handler._is_native_group_admin(
+            bot, 23168821, 69221075, resolved_sender, resolved_chat
+        ))
+    finally:
+        if old_utils is None:
+            delattr(fake_root, "utils")
+        else:
+            fake_root.utils = old_utils
+        if had_channels:
+            handler.functions.channels = old_channels
+        else:
+            delattr(handler.functions, "channels")
+
+    check("direct participant says admin", result is True)
+    check("one direct RPC", len(client.calls) == 1, f"-> {client.calls}")
+    check(
+        "broken get_permissions was bypassed",
+        client.permission_calls == 0,
+        f"-> {client.permission_calls}",
+    )
+    check("no native failure log", bot.logger.errors == [], f"-> {bot.logger.errors}")
+
+
 def test_keyerror_is_fail_closed_and_cached():
     print("\n### KeyError سروش → False و بدون RPC دوباره")
     client = _Client(error=KeyError(12345))
@@ -323,6 +399,7 @@ if __name__ == "__main__":
     test_native_admin_check_is_only_for_management_commands()
     test_regular_message_does_not_call_get_permissions()
     test_management_command_does_call_get_permissions()
+    test_resolved_channel_bypasses_broken_get_permissions()
     test_keyerror_is_fail_closed_and_cached()
     test_repeat_keyerror_does_not_relog()
     test_successful_admin_is_cached()
