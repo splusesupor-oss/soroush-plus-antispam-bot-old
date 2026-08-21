@@ -52,6 +52,7 @@ from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
 from modules import site_policy
 from modules.runtime_maintenance import run as run_runtime_maintenance
+from modules.watchdog_reporting import deliver_pending_reports
 from handlers.message_handler import (
     handle_new_message,
     send_activation_message,
@@ -716,6 +717,36 @@ class SoroushAntiSpamBot:
         self.outgoing_sender = install_outgoing_sender(
             self.client, self, self.logger
         )
+
+        # Watchdog reports are handed to the normal, already-connected bot
+        # client.  This runs once at startup (never per message), targets only
+        # the global owner from owner_check.py, and leaves a failed report
+        # pending for the next healthy restart.  It is deliberately a
+        # background task so a slow private-message RPC cannot delay startup.
+        async def deliver_watchdog_startup_reports():
+            try:
+                delivered = await deliver_pending_reports(
+                    self.client,
+                    status="ربات دوباره راه‌اندازی شد",
+                    logger=self.logger,
+                )
+                if delivered:
+                    self.logger.log_info(
+                        "WATCHDOG STARTUP REPORT DELIVERY "
+                        f"delivered={delivered}"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as watchdog_report_error:
+                self.logger.log_error(
+                    "WATCHDOG STARTUP REPORT DELIVERY FAILED "
+                    f"error={watchdog_report_error!r}"
+                )
+
+        self._watchdog_report_task = asyncio.create_task(
+            deliver_watchdog_startup_reports()
+        )
+
         self.notice_cleanup.bind_delete_queue(self.message_delete_queue)
         self.notice_cleanup.client = self.client
         if getattr(self, "admin_actions", None) is not None:

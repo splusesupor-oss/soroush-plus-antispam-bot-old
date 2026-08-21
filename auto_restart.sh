@@ -1,12 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-
+# نام قدیمی برای سازگاری؛ حلقه restart فقط در watchdog.py قرار دارد.
+set -u
 cd "$(dirname "$0")"
-
-while true
-do
-    echo "START BOT..."
-    python3 main.py
-
-    echo "BOT STOPPED - RESTART AFTER 5 SEC..."
-    sleep 5
-done
+exec python3 watchdog.py

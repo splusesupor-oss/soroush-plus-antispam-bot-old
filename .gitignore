@@ -55,4 +55,6 @@ config/notice_cleanup.json
 # runtime files
 backups/runtime/
 config/tmp*.tmp
+config/watchdog.lock
+config/watchdog_pending.json
 logs/

@@ -300,29 +300,31 @@ python test_detector.py
 
 ```bash
 screen -S soroush
-python main.py
+python3 watchdog.py
 # Ctrl+A سپس D برای خروج از screen
 ```
 
 ### روش nohup:
 
 ```bash
-nohup python main.py > logs/bot.log 2>&1 &
+nohup python3 watchdog.py >/dev/null 2>&1 &
 ```
 
 ### روش systemd (حرفه‌ای):
 
-فایل `/etc/systemd/system/soroush-bot.service` بسازید:
+فایل `/etc/systemd/system/soroush-bot.service` بسازید. Watchdog خودش restart
+ربات را انجام می‌دهد؛ `systemd` فقط در صورت خرابی خود Watchdog آن را برمی‌گرداند:
 
 ```
 [Unit]
-Description=Soroush AntiSpam Bot
+Description=Soroush AntiSpam Bot Watchdog
 After=network.target
 
 [Service]
 WorkingDirectory=/root/soroush-plus-antispam-bot
-ExecStart=/usr/bin/python3 main.py
-Restart=always
+ExecStart=/usr/bin/python3 watchdog.py
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

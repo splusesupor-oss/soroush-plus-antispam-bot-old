@@ -1,12 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-
+# ورودی دائمی ربات: Watchdog مالک اجرای main.py و restartها است.
+set -u
 cd "$(dirname "$0")"
-
-while true
-do
-    pkill -f "python3 main.py"
-    sleep 2
-    python3 main.py
-    echo "BOT CRASH - RESTART"
-    sleep 5
-done
+exec python3 watchdog.py

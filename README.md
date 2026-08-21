@@ -80,7 +80,7 @@ mkdir -p "$HOME/.local/share/soroush-bot"
 chmod 700 "$HOME/.local/share/soroush-bot"
 printf '\nexport SOROUSH_BOT_DATA_DIR="$HOME/.local/share/soroush-bot"\n' >> "$HOME/.profile"
 . "$HOME/.profile"
-python main.py
+./run_bot.sh
 ```
 
 اولین اجرا فایل‌های قدیمی را **کپی، fsync و با SHA-256 بررسی** می‌کند؛ فایل
@@ -138,8 +138,19 @@ cp .env.example .env
 ### 4. اجرای ربات برای اولین بار
 
 ```bash
-python main.py
+./run_bot.sh
+# یا:
+python3 watchdog.py
 ```
+
+`watchdog.py` فرایندی جدا از ربات است و فقط در صورت Crash، Exception
+مدیریت‌نشده یا توقف غیرعادی گزارش می‌سازد. Traceback کامل در مسیر runtime
+`logs/` ذخیره می‌شود، اجرای ربات با backoff از سر گرفته می‌شود و گزارش فقط به
+پیوی مالک سراسری ثبت‌شده در `modules/owner_check.py` می‌رود. خطاهای تکراری در
+بازهٔ `WATCHDOG_REPORT_COOLDOWN` دوباره برای مالک ارسال نمی‌شوند.
+
+برای اجرای مستقیم بدون ناظر ــ فقط هنگام عیب‌یابی ــ می‌توان همچنان
+`python3 main.py` را اجرا کرد.
 
 - شماره سروش پلاس خود را وارد کنید (مثلاً +98912...)
 - کد تأییدی که در سروش دریافت می‌کنید را وارد کنید
@@ -287,11 +298,12 @@ MIT - استفاده آزاد با ذکر منبع.
 بله، کافی است python و کتابخانه‌ها را نصب کنید و با `nohup` یا `screen` اجرا کنید.
 
 ```bash
-nohup python main.py &
+nohup python3 watchdog.py >/dev/null 2>&1 &
 ```
 
 **چگونه ربات را 24 ساعته روشن نگه دارم؟**  
-از سرویس‌هایی مثل سرور مجازی یا `systemd service` استفاده کنید.
+`watchdog.py` را زیر Termux:Boot یا یک سرویس `systemd` اجرا کنید؛ خود Watchdog
+restartهای ربات را مدیریت می‌کند و نباید یک حلقهٔ restart دوم دور آن قرار گیرد.
 
 **چطور آیدی عددی خودم را پیدا کنم؟**  
 بعد از اجرای ربات، در لاگ آیدی شما نمایش داده می‌شود یا از ربات `@get_id` در سروش استفاده کنید.

@@ -1,0 +1,285 @@
+"""Offline crash/owner-isolation tests for the permanent watchdog.
+
+Run directly without SPlusthon network access:
+
+    python3 tests/test_watchdog.py
+"""
+import asyncio
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import watchdog
+from modules import watchdog_reporting as reporting
+
+
+class FakePeerUser:
+    def __init__(self, user_id):
+        self.user_id = user_id
+
+
+class FakePeerChannel:
+    def __init__(self, channel_id):
+        self.channel_id = channel_id
+
+
+class FakeClient:
+    def __init__(self, owner_id, *, resolve_to_group=False):
+        self.owner_id = owner_id
+        self.resolve_to_group = resolve_to_group
+        self.resolve_calls = []
+        self.sent = []
+
+    async def get_input_entity(self, entity_id):
+        self.resolve_calls.append(entity_id)
+        if self.resolve_to_group:
+            return FakePeerChannel(entity_id)
+        return FakePeerUser(entity_id)
+
+    async def send_message(self, target, text):
+        self.sent.append((target, text))
+        return {"id": len(self.sent)}
+
+
+class WatchdogTests(unittest.TestCase):
+    def test_experimental_process_crash_is_fully_extracted(self):
+        code = (
+            "def explode():\n"
+            "    raise ValueError('خطای آزمایشی Watchdog')\n"
+            "\n"
+            "explode()\n"
+        )
+        result = watchdog.run_child(
+            [sys.executable, "-u", "-c", code],
+            threading.Event(),
+        )
+        incident = watchdog.analyze_child_result(result)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(incident["error_type"], "ValueError")
+        self.assertEqual(incident["file"], "<string>")
+        self.assertEqual(incident["line"], 2)
+        self.assertIn("خطای آزمایشی Watchdog", incident["summary"])
+        self.assertIn("Traceback (most recent call last):", incident["traceback"])
+        self.assertIn("raise ValueError", incident["traceback"])
+        self.assertIn("ValueError: خطای آزمایشی Watchdog", incident["traceback"])
+
+    def test_supervisor_restarts_after_experimental_crash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            counter = root / "runs.txt"
+            child = root / "crash_then_stop_watchdog.py"
+            child.write_text(
+                "import os, signal, sys, time\n"
+                "counter = sys.argv[1]\n"
+                "try:\n"
+                "    run = int(open(counter, encoding='utf-8').read()) + 1\n"
+                "except Exception:\n"
+                "    run = 1\n"
+                "open(counter, 'w', encoding='utf-8').write(str(run))\n"
+                "if run == 1:\n"
+                "    raise RuntimeError('restart integration crash')\n"
+                "os.kill(os.getppid(), signal.SIGTERM)\n"
+                "time.sleep(5)\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.update({
+                "SOROUSH_BOT_DATA_DIR": str(root / "runtime"),
+                "WATCHDOG_RESTART_DELAY": "0.05",
+                "WATCHDOG_MAX_RESTART_DELAY": "0.1",
+                "WATCHDOG_STABLE_SECONDS": "5",
+            })
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "watchdog.py"),
+                    "--no-owner-report",
+                    "--",
+                    sys.executable,
+                    str(child),
+                    str(counter),
+                ],
+                cwd=str(ROOT),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(counter.read_text(encoding="utf-8"), "2")
+            crash_logs = list((root / "runtime" / "logs").glob(
+                "watchdog-crash-*.log"
+            ))
+            self.assertEqual(len(crash_logs), 1)
+            crash_text = crash_logs[0].read_text(encoding="utf-8")
+            self.assertIn("RuntimeError", crash_text)
+            self.assertIn("restart integration crash", crash_text)
+
+    def test_pending_crash_report_is_sent_only_to_configured_owner(self):
+        synthetic_owner_id = 987654321
+        incident = {
+            "time_local": "2026-08-21 20:00:00 +0330",
+            "error_type": "RuntimeError",
+            "file": "main.py",
+            "line": 12,
+            "summary": "خطای آزمایشی مالک",
+            "traceback": (
+                'Traceback (most recent call last):\n'
+                '  File "main.py", line 12, in <module>\n'
+                '    raise RuntimeError("خطای آزمایشی مالک")\n'
+                'RuntimeError: خطای آزمایشی مالک'
+            ),
+            "crash_log": "logs/watchdog-crash-test.log",
+            "created_at_epoch": 1,
+        }
+        original_get_owner = reporting.get_owner
+        original_is_global_owner = reporting.is_global_owner
+        try:
+            reporting.get_owner = lambda: {
+                "user_id": synthetic_owner_id,
+                "username": None,
+            }
+            reporting.is_global_owner = (
+                lambda value: int(getattr(value, "id", value)) == synthetic_owner_id
+            )
+            with tempfile.TemporaryDirectory() as directory:
+                state_file = Path(directory) / "watchdog_pending.json"
+                self.assertTrue(reporting.queue_incident(
+                    incident,
+                    state_path=state_file,
+                    now=1,
+                ))
+                client = FakeClient(synthetic_owner_id)
+                delivered = asyncio.run(reporting.deliver_pending_reports(
+                    client,
+                    state_path=state_file,
+                    message_limit=20000,
+                    status="ربات دوباره راه‌اندازی شد",
+                ))
+
+                self.assertEqual(delivered, 1)
+                self.assertEqual(client.resolve_calls, [synthetic_owner_id])
+                self.assertEqual(len(client.sent), 1)
+                target, message = client.sent[0]
+                self.assertIsInstance(target, FakePeerUser)
+                self.assertEqual(target.user_id, synthetic_owner_id)
+                self.assertIn("🚨 خطای ربات", message)
+                self.assertIn("نوع خطا:\nRuntimeError", message)
+                self.assertIn("فایل:\nmain.py", message)
+                self.assertIn("خط:\n12", message)
+                self.assertIn("Traceback کامل", message)
+                self.assertIn("وضعیت:\nربات دوباره راه‌اندازی شد", message)
+                saved = json.loads(state_file.read_text(encoding="utf-8"))
+                self.assertEqual(saved["pending"], [])
+                self.assertEqual(len(saved["sent"]), 1)
+        finally:
+            reporting.get_owner = original_get_owner
+            reporting.is_global_owner = original_is_global_owner
+
+    def test_identical_crash_is_deduplicated_during_cooldown(self):
+        synthetic_owner_id = 987654323
+        incident = {
+            "time_local": "2026-08-21 20:00:00 +0330",
+            "error_type": "ValueError",
+            "file": "worker.py",
+            "line": 7,
+            "summary": "same crash",
+            "traceback": "ValueError: same crash",
+        }
+        original_get_owner = reporting.get_owner
+        original_is_global_owner = reporting.is_global_owner
+        try:
+            reporting.get_owner = lambda: {
+                "user_id": synthetic_owner_id,
+                "username": None,
+            }
+            reporting.is_global_owner = lambda value: int(value) == synthetic_owner_id
+            with tempfile.TemporaryDirectory() as directory:
+                state_file = Path(directory) / "watchdog_pending.json"
+                now = time.time()
+                self.assertTrue(reporting.queue_incident(
+                    incident,
+                    state_path=state_file,
+                    now=now,
+                    cooldown_seconds=900,
+                ))
+                self.assertFalse(reporting.queue_incident(
+                    incident,
+                    state_path=state_file,
+                    now=now + 1,
+                    cooldown_seconds=900,
+                ))
+                client = FakeClient(synthetic_owner_id)
+                asyncio.run(reporting.deliver_pending_reports(
+                    client,
+                    state_path=state_file,
+                    message_limit=20000,
+                ))
+                self.assertEqual(len(client.sent), 1)
+                self.assertIn("تعداد تکرار پیش از بازیابی: 2", client.sent[0][1])
+
+                # The same fingerprint after successful delivery is suppressed
+                # during cooldown and therefore cannot spam the owner.
+                self.assertFalse(reporting.queue_incident(
+                    incident,
+                    state_path=state_file,
+                    now=time.time() + 2,
+                    cooldown_seconds=900,
+                ))
+                self.assertEqual(reporting.pending_count(state_file), 0)
+        finally:
+            reporting.get_owner = original_get_owner
+            reporting.is_global_owner = original_is_global_owner
+
+    def test_group_peer_is_rejected_before_any_send(self):
+        synthetic_owner_id = 987654322
+        incident = {
+            "time_local": "2026-08-21 20:00:00 +0330",
+            "error_type": "RuntimeError",
+            "file": "main.py",
+            "line": 99,
+            "summary": "group isolation test",
+            "traceback": "RuntimeError: group isolation test",
+            "created_at_epoch": 2,
+        }
+        original_get_owner = reporting.get_owner
+        original_is_global_owner = reporting.is_global_owner
+        try:
+            reporting.get_owner = lambda: {
+                "user_id": synthetic_owner_id,
+                "username": None,
+            }
+            reporting.is_global_owner = lambda value: int(value) == synthetic_owner_id
+            with tempfile.TemporaryDirectory() as directory:
+                state_file = Path(directory) / "watchdog_pending.json"
+                reporting.queue_incident(
+                    incident,
+                    state_path=state_file,
+                    now=2,
+                )
+                client = FakeClient(synthetic_owner_id, resolve_to_group=True)
+                with self.assertRaises(reporting.WatchdogDeliveryError):
+                    asyncio.run(reporting.deliver_pending_reports(
+                        client,
+                        state_path=state_file,
+                    ))
+                self.assertEqual(client.sent, [])
+        finally:
+            reporting.get_owner = original_get_owner
+            reporting.is_global_owner = original_is_global_owner
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
