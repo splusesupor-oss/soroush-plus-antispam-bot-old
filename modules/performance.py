@@ -39,8 +39,17 @@ class MessagePerformance:
     def finish(self, logger, chat_id, threshold_ms=1000):
         now = time.perf_counter()
         total_ms = (now - self.started_at) * 1000
+        slowest_stage = max(
+            self.STAGES, key=lambda stage: self.values.get(stage, 0.0)
+        )
+        result = {
+            "total_ms": total_ms,
+            "slowest_stage": slowest_stage,
+            "slowest_ms": self.values.get(slowest_stage, 0.0),
+            "stages": dict(self.values),
+        }
         if total_ms < threshold_ms:
-            return
+            return result
         parts = []
         for stage in self.STAGES:
             value = self.values[stage]
@@ -53,3 +62,4 @@ class MessagePerformance:
             logger.log_info(
                 "PERF " + " ".join(parts) + f" TOTAL={total_ms:.2f}ms"
             )
+        return result

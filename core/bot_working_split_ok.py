@@ -60,7 +60,10 @@ from handlers.message_handler import (
     send_activation_message,
     handle_fast_owner_command,
     is_fast_owner_command,
+    handle_fast_moderation_command,
+    is_fast_moderation_command,
     is_game_answer_active,
+    _resolved_event_peer,
 )
 from handlers.broadcast_handler import handle_private_broadcast
 from modules.name_family import cancel_round as cancel_name_family_round
@@ -1236,6 +1239,11 @@ class SoroushAntiSpamBot:
                     ):
                         await process_incoming_message(event)
                     return
+                if is_fast_moderation_command(text):
+                    if await handle_fast_moderation_command(
+                        self, event, text, sender
+                    ):
+                        return
                 await handle_new_message(self, event)
             except Exception as handler_error:
                 import traceback as _tb
@@ -1552,6 +1560,7 @@ class SoroushAntiSpamBot:
                 routing_chat = (
                     getattr(event, "_bot_cached_chat", None)
                     or getattr(event, "chat", None)
+                    or _resolved_event_peer(event)
                 )
                 if routing_chat is None:
                     try:
@@ -1796,7 +1805,12 @@ class SoroushAntiSpamBot:
                             self.logger.log_error(
                                 f"GROUP GATE get_chat FAILED error={error!r}"
                             )
-                    lock_id = getattr(chat_lock, "id", None) if chat_lock is not None else None
+                    lock_id = (
+                        getattr(chat_lock, "id", None)
+                        or getattr(event, "chat_id", None)
+                        or getattr(chat_lock, "channel_id", None)
+                        or getattr(chat_lock, "chat_id", None)
+                    )
                     sender_lock = _entry_sender or _trace_sender
                     if sender_lock is None:
                         try:
@@ -2199,13 +2213,21 @@ class SoroushAntiSpamBot:
                 ) * 1000
                 monitor = getattr(self, "performance_monitor", None)
                 if monitor is not None:
+                    handler_name = "process_incoming_message"
+                    stage_result = getattr(
+                        event, "_bot_performance_result", None
+                    )
+                    if isinstance(stage_result, dict):
+                        slowest_stage = stage_result.get("slowest_stage")
+                        if slowest_stage:
+                            handler_name += f":{str(slowest_stage).lower()}"
                     monitor.record(
                         total_ms=total_message_ms,
                         chat_id=getattr(event, "chat_id", None),
                         message_id=getattr(
                             getattr(event, "message", None), "id", None
                         ),
-                        handler="process_incoming_message",
+                        handler=handler_name,
                     )
 
 

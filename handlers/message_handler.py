@@ -2115,6 +2115,171 @@ async def handle_fast_owner_command(bot, event, text=None):
     return False
 
 
+FAST_MODERATION_COMMANDS = frozenset({"سکوت"})
+
+
+def is_fast_moderation_command(text):
+    try:
+        return normalize_command(text) in FAST_MODERATION_COMMANDS
+    except Exception:
+        return False
+
+
+async def handle_fast_moderation_command(
+    bot, event, text=None, sender=None
+):
+    """Queue manual mute without traversing the multi-thousand-line pipeline.
+
+    The command handler performs only cached authorization and enqueue. Reply
+    lookup, target resolution and the potentially slow native-admin list RPC
+    run inside ``ModerationQueue`` so the admin lane is released immediately.
+    Returns ``False`` when the sender is not a registered/global/group owner so
+    the existing compatibility path may still verify native Soroush admins.
+    """
+    clean_text = normalize_command(text or "")
+    if clean_text not in FAST_MODERATION_COMMANDS:
+        return False
+    if getattr(event, "is_private", False):
+        return False
+
+    chat_id = getattr(event, "chat_id", None)
+    if sender is None:
+        sender = (
+            getattr(event, "_bot_cached_sender", None)
+            or getattr(event, "sender", None)
+        )
+    if sender is None:
+        try:
+            sender = await event.get_sender()
+        except Exception:
+            sender = None
+    user_id = getattr(sender, "id", getattr(event, "sender_id", None))
+    sender_username = getattr(sender, "username", None)
+
+    # This synchronous check is cache/file backed and costs no Soroush RPC.
+    if not _has_group_management_permission(
+        bot, chat_id, user_id, sender_username
+    ):
+        return False
+
+    if not getattr(event, "reply_to", None):
+        _schedule_reply(bot, event, "❌ باید روی پیام کاربر ریپلای کنید")
+        return True
+
+    reply_id = getattr(event.reply_to, "reply_to_msg_id", None)
+    if reply_id is None:
+        _schedule_reply(bot, event, "❌ پیام ریپلای شده پیدا نشد")
+        return True
+
+    resolved_permission_chat = (
+        getattr(event, "_bot_cached_chat", None)
+        or getattr(event, "chat", None)
+        or _resolved_event_peer(event)
+        or getattr(bot, "reply_input_peer_cache", {}).get(chat_id)
+    )
+
+    async def fast_mute_operation():
+        # Reply lookup, target resolution and native-admin RPC all run in the
+        # isolated moderation worker.  The command dispatcher only enqueues.
+        reply_msg = await bot.client.get_messages(chat_id, ids=reply_id)
+        if not reply_msg:
+            return {"error": "reply_not_found"}
+        target_user = await reply_msg.get_sender()
+        if not target_user:
+            return {"error": "user_not_found"}
+
+        target_username = getattr(target_user, "username", None)
+        if _has_group_management_permission(
+            bot, chat_id, target_user.id, target_username
+        ):
+            return {
+                "protected_admin": True,
+                "muted": False,
+                "target_user": target_user,
+            }
+        # This can take one network RTT on a cold admin-list cache, but it no
+        # longer holds the command lane or blocks a following mute/ban command.
+        if await _is_native_group_admin(
+            bot,
+            chat_id,
+            target_user.id,
+            target_user,
+            resolved_permission_chat,
+        ):
+            return {
+                "protected_admin": True,
+                "muted": False,
+                "target_user": target_user,
+            }
+        muted = await bot.admin_actions.mute_user(
+            chat_id, target_user.id, user=target_user,
+            chat=resolved_permission_chat,
+        )
+        if not muted:
+            raise RuntimeError("mute operation returned False")
+        return {
+            "protected_admin": False,
+            "muted": True,
+            "target_user": target_user,
+        }
+
+    async def fast_mute_succeeded(result):
+        error = result.get("error") if isinstance(result, dict) else None
+        if error == "reply_not_found":
+            await event.reply("❌ پیام ریپلای شده پیدا نشد")
+            return
+        if error == "user_not_found":
+            await event.reply("❌ کاربر پیدا نشد")
+            return
+        if isinstance(result, dict) and result.get("protected_admin"):
+            await event.reply("⚠️ این کاربر ادمین است و سکوت نشد")
+            return
+        target_user = result.get("target_user") if isinstance(result, dict) else None
+        if target_user is None:
+            await event.reply("❌ انجام سکوت ناموفق بود")
+            return
+        add_mute(chat_id)
+        admin_tools.log_action(
+            chat_id, sender, "سکوت کاربر", target=target_user
+        )
+        try:
+            user_history.add_mute(
+                chat_id,
+                target_user,
+                "سکوت دستی توسط مالک یا ادمین",
+            )
+        except Exception as history_error:
+            bot.logger.log_error(
+                f"USER HISTORY MUTE FAILED: {history_error}"
+            )
+        await event.reply(
+            f"🔕 کاربر 『 {_format_banned_user(target_user, target_user.id)} 』 سکوت شد"
+        )
+
+    async def fast_mute_failed(_error):
+        await event.reply("❌ انجام سکوت ناموفق بود")
+
+    accepted = bot.moderation_queue.enqueue(
+        chat_id,
+        "mute",
+        user_id=f"reply:{reply_id}",
+        timeout_seconds=15,
+        operation=fast_mute_operation,
+        on_success=fast_mute_succeeded,
+        on_failure=fast_mute_failed,
+    )
+    bot.logger.log_info(
+        "FAST MODERATION QUEUED "
+        f"command=سکوت chat_id={chat_id} reply_id={reply_id} "
+        f"accepted={accepted}"
+    )
+    if accepted:
+        _schedule_reply(bot, event, "⏳ درخواست سکوت ثبت شد")
+    else:
+        _schedule_reply(bot, event, "⏳ درخواست سکوت این کاربر از قبل در حال اجراست")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Command routing
 #
@@ -7229,5 +7394,9 @@ async def handle_new_message(bot, event):
         traceback.print_exc()
     finally:
         profiler.set("SEND_RESPONSE", response_rpc_ms())
-        profiler.finish(bot.logger, chat_id)
+        performance_result = profiler.finish(bot.logger, chat_id)
+        try:
+            event._bot_performance_result = performance_result
+        except Exception:
+            pass
         end_response_measurement(response_token)

@@ -8,12 +8,12 @@ This dispatcher keeps **isolated workers per (chat_id, lane)**:
 
 * ``admin``     — owner/moderation commands; never dropped; 1 worker per chat (serial, preserves order)
 * ``command``   — public/user commands (help, games, shop); never dropped; 1 worker per chat
-* ``normal``    — ordinary chat / spam; capped by ``max_pending_normal``; **4 concurrent workers per chat**
+* ``normal``    — ordinary chat / spam; capped by ``max_pending_normal``; **6 concurrent workers per chat** by default
 
 Lanes of the same group run at the same time, so mute/ban/lock do not wait
 for a heavy normal job.  Different chats stay independent.
 Normal lane uses multiple workers per chat so a burst in one chat
-(15×150ms) is absorbed in ~600ms instead of ~2200ms (queue_wait 2.2s → ~450ms).
+(15×150ms) is absorbed in roughly 400ms instead of ~2200ms.
 
 Heavy background work (spam cleanup, moderation callbacks, notice expiry,
 delete batches, flush) never goes through this dispatcher; each has its
@@ -25,6 +25,7 @@ Classification is text-only: no await, no RPC, no file I/O.
 import asyncio
 import contextvars
 import inspect
+import os
 import time
 
 try:
@@ -217,10 +218,19 @@ class GroupDispatcher:
     # yield only added queue_wait after Soroush had already answered.
     HIGHER_LANE_WAIT_SECONDS = 0.0
 
-    def __init__(self, *, max_pending_normal=40, logger=None, normal_concurrency=4,
-                 debug_timing=False):
+    def __init__(self, *, max_pending_normal=40, logger=None,
+                 normal_concurrency=None, debug_timing=False):
         self.max_pending_normal = int(max_pending_normal)
-        self.normal_concurrency = int(normal_concurrency) if int(normal_concurrency) > 0 else 1
+        if normal_concurrency is None:
+            normal_concurrency = os.getenv(
+                "BOT_NORMAL_WORKERS_PER_CHAT", "6"
+            )
+        try:
+            self.normal_concurrency = min(
+                8, max(1, int(normal_concurrency))
+            )
+        except (TypeError, ValueError):
+            self.normal_concurrency = 6
         self.logger = logger
         # 📝 در حالت عادی فقط موارد به‌شدت کند ثبت می‌شوند تا نوشتن مکرر
         # روی دیسک، خودش عامل کندی نشود؛ در حالت debug (کلید

@@ -352,6 +352,18 @@ def test_normal_does_not_yield_for_busy_admin():
           "admin_end" in order and "normal" in order, f"-> {order}")
 
 
+def test_normal_worker_capacity_is_bounded_and_burst_ready():
+    print("\n### ظرفیت worker پیام عادی")
+    default = GroupDispatcher(logger=Logger())
+    capped = GroupDispatcher(logger=Logger(), normal_concurrency=99)
+    check("پیش‌فرض شش worker برای هر گروه است",
+          default.normal_concurrency == 6,
+          f"-> {default.normal_concurrency}")
+    check("سقف worker از هشت بیشتر نمی‌شود",
+          capped.normal_concurrency == 8,
+          f"-> {capped.normal_concurrency}")
+
+
 def test_tracker_increment_does_not_write_file():
     print("\n### شمارنده تخلف فایل سراسری را در مسیر داغ نمی‌نویسد")
     import tempfile
@@ -404,6 +416,7 @@ def main():
     test_overflow_keeps_admin_and_command()
     test_overflow_drops_normal_keeps_admin()
     test_normal_does_not_yield_for_busy_admin()
+    test_normal_worker_capacity_is_bounded_and_burst_ready()
     test_delete_queue_priority_and_isolation()
     test_admin_delete_jumps_same_chat()
     test_tracker_increment_does_not_write_file()
