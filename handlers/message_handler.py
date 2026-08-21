@@ -6548,20 +6548,16 @@ async def handle_new_message(bot, event):
                     await event.reply("❌ کاربر پیدا نشد")
                     return
 
-                # بررسی ادمین بودن (سازگار با SPlus)
-                try:
-                    admins = await bot.client.get_participants(chat_id)
-                    admin_ids = [
-                        getattr(x, "id", 0)
-                        for x in admins
-                        if getattr(x, "admin_rights", None)
-                    ]
-
-                    if target_user.id in admin_ids:
-                        await event.reply("⚠️ این کاربر ادمین است و سکوت نشد")
-                        return
-                except Exception:
-                    pass
+                # Protect native Soroush admins without fetching every member
+                # of a large group. The old unfiltered get_participants call
+                # scaled with group size and ran before moderation enqueue.
+                # Reuse the bounded filtered admin-list cache instead.
+                if await _is_native_group_admin(
+                    bot, chat_id, target_user.id, target_user,
+                    resolved_permission_chat,
+                ):
+                    await event.reply("⚠️ این کاربر ادمین است و سکوت نشد")
+                    return
 
                 async def mute_succeeded(_result):
                     add_mute(chat_id)

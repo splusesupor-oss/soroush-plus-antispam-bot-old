@@ -1,5 +1,6 @@
 """Native admin RPC miss must be cached. No network."""
 import asyncio
+import inspect
 import sys
 import types
 from pathlib import Path
@@ -371,6 +372,19 @@ def test_expired_failure_retries():
     check("two RPCs after expiry", len(client.calls) == 2, f"-> {len(client.calls)}")
 
 
+def test_mute_target_check_never_fetches_all_group_members():
+    print("\n### سکوت برای حفاظت ادمین همه اعضای گروه را نمی‌گیرد")
+    source = inspect.getsource(handler.handle_new_message)
+    check(
+        "unfiltered participant fetch removed",
+        "get_participants(chat_id)" not in source,
+    )
+    check(
+        "mute target uses bounded native-admin helper",
+        "_is_native_group_admin(\n                    bot, chat_id, target_user.id, target_user,\n                    resolved_permission_chat,\n                )" in source,
+    )
+
+
 def test_ban_execution_and_admin_check_logs_are_debug_only():
     print("\n### لاگ BAN/ADMIN CHECK فقط در debug")
     quiet = SimpleNamespace(
@@ -439,6 +453,7 @@ if __name__ == "__main__":
     test_successful_admin_is_cached()
     test_successful_member_is_cached()
     test_expired_failure_retries()
+    test_mute_target_check_never_fetches_all_group_members()
     test_ban_execution_and_admin_check_logs_are_debug_only()
     print(f"\n{PASSED} passed, {FAILED} failed")
     raise SystemExit(1 if FAILED else 0)
