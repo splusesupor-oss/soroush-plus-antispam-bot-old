@@ -51,3 +51,8 @@ config/*.json
 __pycache__/
 *.pyc
 config/notice_cleanup.json
+
+# runtime files
+backups/runtime/
+config/tmp*.tmp
+logs/
