@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from modules import owner_private as private_owner
 from modules import performance_monitor as monitoring
 
 
@@ -78,19 +79,14 @@ class FakeClient:
 class SlowProcessMonitorTests(unittest.TestCase):
     def setUp(self):
         self.owner_id = 876543210
-        self.original_get_owner = monitoring.get_owner
-        self.original_is_global_owner = monitoring.is_global_owner
-        monitoring.get_owner = lambda: {
+        self.original_get_owner = private_owner.get_owner
+        private_owner.get_owner = lambda: {
             "user_id": self.owner_id,
             "username": None,
         }
-        monitoring.is_global_owner = (
-            lambda value: int(getattr(value, "id", value)) == self.owner_id
-        )
 
     def tearDown(self):
-        monitoring.get_owner = self.original_get_owner
-        monitoring.is_global_owner = self.original_is_global_owner
+        private_owner.get_owner = self.original_get_owner
 
     def test_at_or_below_150ms_never_logs_or_sends(self):
         async def scenario(state_file):

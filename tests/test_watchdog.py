@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import watchdog
+from modules import owner_private as private_owner
 from modules import watchdog_reporting as reporting
 
 
@@ -176,17 +177,12 @@ class WatchdogTests(unittest.TestCase):
         )
         incident = watchdog.analyze_child_result(result)
         incident["crash_log"] = "logs/watchdog-crash-owner-test.log"
-        original_get_owner = reporting.get_owner
-        original_is_global_owner = reporting.is_global_owner
+        original_get_owner = private_owner.get_owner
         try:
-            reporting.get_owner = lambda: {
+            private_owner.get_owner = lambda: {
                 "user_id": synthetic_owner_id,
                 "username": None,
             }
-            reporting.is_global_owner = (
-                lambda value: int(getattr(value, "id", value))
-                == synthetic_owner_id
-            )
             with tempfile.TemporaryDirectory() as directory:
                 state_file = Path(directory) / "watchdog_pending.json"
                 self.assertTrue(reporting.queue_incident(
@@ -211,8 +207,7 @@ class WatchdogTests(unittest.TestCase):
                 self.assertIn("فایل:\n<string>", report)
                 self.assertNotIn("main.py", incident.get("command", []))
         finally:
-            reporting.get_owner = original_get_owner
-            reporting.is_global_owner = original_is_global_owner
+            private_owner.get_owner = original_get_owner
 
     def test_supervisor_restarts_after_experimental_crash(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -284,16 +279,12 @@ class WatchdogTests(unittest.TestCase):
             "crash_log": "logs/watchdog-crash-test.log",
             "created_at_epoch": 1,
         }
-        original_get_owner = reporting.get_owner
-        original_is_global_owner = reporting.is_global_owner
+        original_get_owner = private_owner.get_owner
         try:
-            reporting.get_owner = lambda: {
+            private_owner.get_owner = lambda: {
                 "user_id": synthetic_owner_id,
                 "username": None,
             }
-            reporting.is_global_owner = (
-                lambda value: int(getattr(value, "id", value)) == synthetic_owner_id
-            )
             with tempfile.TemporaryDirectory() as directory:
                 state_file = Path(directory) / "watchdog_pending.json"
                 self.assertTrue(reporting.queue_incident(
@@ -326,8 +317,7 @@ class WatchdogTests(unittest.TestCase):
                 self.assertEqual(saved["pending"], [])
                 self.assertEqual(len(saved["sent"]), 1)
         finally:
-            reporting.get_owner = original_get_owner
-            reporting.is_global_owner = original_is_global_owner
+            private_owner.get_owner = original_get_owner
 
     def test_identical_crash_is_deduplicated_during_cooldown(self):
         synthetic_owner_id = 987654323
@@ -339,14 +329,12 @@ class WatchdogTests(unittest.TestCase):
             "summary": "same crash",
             "traceback": "ValueError: same crash",
         }
-        original_get_owner = reporting.get_owner
-        original_is_global_owner = reporting.is_global_owner
+        original_get_owner = private_owner.get_owner
         try:
-            reporting.get_owner = lambda: {
+            private_owner.get_owner = lambda: {
                 "user_id": synthetic_owner_id,
                 "username": None,
             }
-            reporting.is_global_owner = lambda value: int(value) == synthetic_owner_id
             with tempfile.TemporaryDirectory() as directory:
                 state_file = Path(directory) / "watchdog_pending.json"
                 now = time.time()
@@ -381,8 +369,7 @@ class WatchdogTests(unittest.TestCase):
                 ))
                 self.assertEqual(reporting.pending_count(state_file), 0)
         finally:
-            reporting.get_owner = original_get_owner
-            reporting.is_global_owner = original_is_global_owner
+            private_owner.get_owner = original_get_owner
 
     def test_group_peer_is_rejected_before_any_send(self):
         synthetic_owner_id = 987654322
@@ -395,14 +382,12 @@ class WatchdogTests(unittest.TestCase):
             "traceback": "RuntimeError: group isolation test",
             "created_at_epoch": 2,
         }
-        original_get_owner = reporting.get_owner
-        original_is_global_owner = reporting.is_global_owner
+        original_get_owner = private_owner.get_owner
         try:
-            reporting.get_owner = lambda: {
+            private_owner.get_owner = lambda: {
                 "user_id": synthetic_owner_id,
                 "username": None,
             }
-            reporting.is_global_owner = lambda value: int(value) == synthetic_owner_id
             with tempfile.TemporaryDirectory() as directory:
                 state_file = Path(directory) / "watchdog_pending.json"
                 reporting.queue_incident(
@@ -422,8 +407,7 @@ class WatchdogTests(unittest.TestCase):
                     ))
                 self.assertEqual(client.sent, [])
         finally:
-            reporting.get_owner = original_get_owner
-            reporting.is_global_owner = original_is_global_owner
+            private_owner.get_owner = original_get_owner
 
 
 if __name__ == "__main__":

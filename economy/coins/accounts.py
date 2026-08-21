@@ -7,6 +7,7 @@
   • ثبت تاریخچه در همان تراکنش انجام می‌گیرد.
 """
 from datetime import datetime, timezone
+import importlib
 import logging
 
 from economy import settings, storage
@@ -17,13 +18,24 @@ SILVER = settings.SILVER
 GOLD = settings.GOLD
 COIN_TYPES = settings.COIN_TYPES
 
-MAIN_OWNER_ID = "37858988"
 OWNER_SILVER = 200000
 OWNER_SILVER_GROUPS = frozenset({"22770700", "9429374"})
 
 
 def is_main_owner(user_id):
-    return str(user_id) == MAIN_OWNER_ID
+    """Economy owner checks read the canonical get_owner() source lazily.
+
+    The lazy import preserves the economy package's no-bot-import boundary at
+    module load time while avoiding any embedded owner ID.
+    """
+    get_owner = importlib.import_module("modules.owner_check").get_owner
+    owner_id = get_owner().get("user_id")
+    if owner_id is None:
+        return False
+    try:
+        return int(user_id) == int(owner_id)
+    except (TypeError, ValueError):
+        return False
 
 
 class EconomyError(Exception):

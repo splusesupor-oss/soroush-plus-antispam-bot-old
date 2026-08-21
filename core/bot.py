@@ -10,6 +10,7 @@ from modules.group_words_commands import handle_group_word_command
 from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active
 from modules.group_actions import GroupActions
+from modules.owner_check import is_global_owner
 from handlers.message_handler import handle_new_message
 from handlers.admin_handler import handle_admin_commands
 import random
@@ -151,8 +152,8 @@ class SoroushAntiSpamBot:
             if is_admin(chat_id, username):
                 return True
 
-            # بررسی مالک یا ادمین با آیدی عددی
-            if str(user_id) == "37858988":
+            # مالک فقط از منبع مرکزی get_owner() تشخیص داده می‌شود.
+            if is_global_owner(user_id):
                 return True
 
             return False

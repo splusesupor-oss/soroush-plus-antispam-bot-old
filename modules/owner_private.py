@@ -12,6 +12,8 @@ import inspect
 import traceback
 from typing import Any, List, Optional
 
+from modules.owner_check import get_owner
+
 
 class OwnerPrivateResolveError(RuntimeError):
     """No safe private-user peer could be resolved for the configured owner."""
@@ -25,7 +27,7 @@ def _log(logger: Any, level: str, message: str) -> None:
         method(message)
 
 
-def _peer_user_id(peer: Any) -> Optional[int]:
+def peer_user_id(peer: Any) -> Optional[int]:
     if peer is None:
         return None
     if getattr(peer, "channel_id", None) is not None:
@@ -50,7 +52,7 @@ def _validated_user_peer(peer: Any, owner_id: int, method: str) -> Any:
         raise OwnerPrivateResolveError(
             f"{method} resolved owner as chat peer"
         )
-    peer_id = _peer_user_id(peer)
+    peer_id = peer_user_id(peer)
     if peer_id != int(owner_id):
         raise OwnerPrivateResolveError(
             f"{method} user mismatch: expected={owner_id} actual={peer_id} "
@@ -66,14 +68,27 @@ def _attempt_text(method: str, error: BaseException) -> str:
     )
 
 
+def current_owner_user_id() -> int:
+    """Read the sole owner authority through ``get_owner()``."""
+    owner = get_owner()
+    if not isinstance(owner, dict) or owner.get("user_id") is None:
+        raise OwnerPrivateResolveError("global owner is not configured")
+    try:
+        owner_id = int(owner["user_id"])
+    except (TypeError, ValueError) as error:
+        raise OwnerPrivateResolveError("global owner user_id is invalid") from error
+    if owner_id <= 0:
+        raise OwnerPrivateResolveError("global owner user_id must be positive")
+    return owner_id
+
+
 async def resolve_private_owner_peer(
     client: Any,
-    owner_id: int,
     *,
     logger: Any = None,
     context: str = "OWNER_REPORT",
 ) -> Any:
-    """Return only a concrete private-user input peer for ``owner_id``.
+    """Return only a concrete private-user peer for the current ``get_owner()``.
 
     Resolution order is deliberately user-only:
 
@@ -85,10 +100,9 @@ async def resolve_private_owner_peer(
     The final fallback may internally use ``GetUsersRequest``.  If it fails,
     the complete traceback, owner ID and method are logged as requested.
     """
-    try:
-        configured_owner_id = int(owner_id)
-    except (TypeError, ValueError) as error:
-        raise OwnerPrivateResolveError("configured owner user_id is invalid") from error
+    # Do not accept an owner ID from callers.  This prevents stale runtime or
+    # legacy call sites from injecting a former owner into report delivery.
+    configured_owner_id = current_owner_user_id()
     attempts: List[str] = []
 
     # Expected production path: osine2 is the logged-in user-bot account.

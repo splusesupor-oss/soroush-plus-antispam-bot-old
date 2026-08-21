@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from modules.owner_check import get_owner, is_global_owner
 from modules.owner_private import resolve_private_owner_peer
 from modules.runtime_paths import runtime_config_file
 from modules.time_utils import now_local
@@ -27,10 +26,6 @@ DEFAULT_COOLDOWN_SECONDS = 10 * 60.0
 DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS = 30.0
 DEFAULT_QUEUE_SIZE = 32
 _STATE_RETENTION_SECONDS = 24 * 60 * 60
-
-
-class SlowReportDeliveryError(RuntimeError):
-    """The slow-process report could not be routed safely to the owner."""
 
 
 def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
@@ -281,26 +276,9 @@ class SlowProcessMonitor:
         self._last_global = now
         return True
 
-    @staticmethod
-    def _owner_id() -> int:
-        owner = get_owner()
-        if not isinstance(owner, dict) or owner.get("user_id") is None:
-            raise SlowReportDeliveryError("global owner is not configured")
-        try:
-            owner_id = int(owner["user_id"])
-        except (TypeError, ValueError) as error:
-            raise SlowReportDeliveryError("global owner ID is invalid") from error
-        if not is_global_owner(owner_id):
-            raise SlowReportDeliveryError(
-                "owner_check rejected its configured global owner"
-            )
-        return owner_id
-
     async def _private_owner_target(self) -> Any:
-        owner_id = self._owner_id()
         return await resolve_private_owner_peer(
             self.client,
-            owner_id,
             logger=self.logger,
             context="SLOW_PROCESS",
         )

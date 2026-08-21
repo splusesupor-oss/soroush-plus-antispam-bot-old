@@ -165,7 +165,10 @@ background فقط به پیوی مالک سراسری می‌رود. cooldown ه
 برای ارسال خصوصی مالک، فقط `user_id` برگشتی `get_owner()` اعتبارسنجی می‌شود؛
 اگر همان حسابِ لاگین‌شده باشد، `get_me(input_peer=True)` یک user peer دارای
 access-hash می‌دهد تا ID مثبت اشتباهاً resolve گروه/کانال یا
-`GetUsersRequest(..., access_hash=0)` نشود.
+`GetUsersRequest(..., access_hash=0)` نشود. تنها منبع مالک
+`config/owner.json` است؛ هیچ ID مالک داخل کد ثابت نیست و اگر نسخهٔ خصوصی
+Termux از `owner.json` قدیمی باشد، با مقدار canonical همین فایل به‌صورت اتمیک
+همگام می‌شود.
 
 برای اجرای مستقیم بدون ناظر ــ فقط هنگام عیب‌یابی ــ می‌توان همچنان
 `python3 main.py` را اجرا کرد.

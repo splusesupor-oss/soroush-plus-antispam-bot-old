@@ -22,9 +22,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from modules.owner_check import get_owner, is_global_owner
 from modules.owner_private import (
     OwnerPrivateResolveError,
+    peer_user_id,
     resolve_private_owner_peer,
 )
 from modules.runtime_paths import PROJECT_ROOT, runtime_config_file
@@ -259,29 +259,14 @@ def split_message(text: str, limit: Optional[int] = None) -> List[str]:
     ]
 
 
-def _owner_id() -> int:
-    owner = get_owner()
-    if not isinstance(owner, dict) or owner.get("user_id") is None:
-        raise WatchdogDeliveryError("global owner is not configured")
-    try:
-        owner_id = int(owner["user_id"])
-    except (TypeError, ValueError) as error:
-        raise WatchdogDeliveryError("global owner ID is invalid") from error
-    if not is_global_owner(owner_id):
-        raise WatchdogDeliveryError("owner_check rejected its configured owner")
-    return owner_id
-
-
 async def _resolve_private_owner(
     client: Any,
-    owner_id: int,
     logger: Any = None,
 ) -> Any:
-    """Use the same strict user-only resolver as live performance reports."""
+    """Resolve only the user ID currently returned by get_owner()."""
     try:
         return await resolve_private_owner_peer(
             client,
-            owner_id,
             logger=logger,
             context="WATCHDOG_CRASH",
         )
@@ -315,8 +300,8 @@ async def deliver_pending_reports(
     if not state["pending"]:
         return 0
 
-    owner_id = _owner_id()
-    target = await _resolve_private_owner(client, owner_id, logger)
+    target = await _resolve_private_owner(client, logger)
+    owner_id = peer_user_id(target)
     delivered = 0
 
     for snapshot in list(state["pending"]):
