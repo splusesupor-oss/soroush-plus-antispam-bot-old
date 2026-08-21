@@ -108,6 +108,11 @@ def test_native_admin_check_is_only_for_management_commands():
     check("قفل is management", handler._is_management_command("قفل") is True)
     check("پاک 10 is management", handler._is_management_command("پاک 10") is True)
     check("سکوت is management", handler._is_management_command("سکوت") is True)
+    check(".قفل is management", handler._is_management_command(".قفل") is True)
+    check("decorative dots are not management",
+          handler._is_management_command("........") is False)
+    check("unknown dotted text is not management",
+          handler._is_management_command(".spammmmm") is False)
     check("regular chat skips native RPC",
           handler._should_check_native_admin(False, False, "سلام") is False)
     check("filter path skips native RPC",
@@ -169,8 +174,8 @@ def test_management_command_does_call_get_permissions():
     )
 
 
-def test_resolved_channel_bypasses_broken_get_permissions():
-    print("\n### peer حل‌شده مستقیماً GetParticipant می‌زند")
+def test_resolved_channel_uses_supported_admin_list():
+    print("\n### peer حل‌شده فهرست ادمین پشتیبانی‌شده را می‌گیرد")
 
     class InputPeerChannel:
         def __init__(self, channel_id):
@@ -180,16 +185,26 @@ def test_resolved_channel_bypasses_broken_get_permissions():
         def __init__(self, user_id):
             self.user_id = user_id
 
-    class GetParticipantRequest:
-        def __init__(self, channel, participant):
+    class GetParticipantsRequest:
+        def __init__(self, channel, filter, offset, limit, hash):
             self.channel = channel
-            self.participant = participant
+            self.filter = filter
+            self.offset = offset
+            self.limit = limit
+            self.hash = hash
 
-    ChannelParticipantAdmin = type("ChannelParticipantAdmin", (), {})
+    class ChannelParticipantsAdmins:
+        pass
+
+    class ChannelParticipantAdmin:
+        def __init__(self, user_id):
+            self.user_id = user_id
     resolved_chat = SimpleNamespace(id=23168821, access_hash=111)
     resolved_sender = SimpleNamespace(id=69221075, access_hash=222)
     input_chat = InputPeerChannel(23168821)
     input_sender = InputPeerUser(69221075)
+    other_sender = SimpleNamespace(id=123456, access_hash=333)
+    input_other_sender = InputPeerUser(123456)
 
     class DirectClient:
         def __init__(self):
@@ -198,7 +213,10 @@ def test_resolved_channel_bypasses_broken_get_permissions():
 
         async def __call__(self, request):
             self.calls.append(request)
-            return SimpleNamespace(participant=ChannelParticipantAdmin())
+            return SimpleNamespace(
+                participants=[ChannelParticipantAdmin(69221075)],
+                users=[SimpleNamespace(id=69221075)],
+            )
 
         async def get_permissions(self, *_args):
             self.permission_calls += 1
@@ -208,23 +226,34 @@ def test_resolved_channel_bypasses_broken_get_permissions():
     old_utils = getattr(fake_root, "utils", None)
     had_channels = hasattr(handler.functions, "channels")
     old_channels = getattr(handler.functions, "channels", None)
+    had_admin_filter = hasattr(handler.types, "ChannelParticipantsAdmins")
+    old_admin_filter = getattr(handler.types, "ChannelParticipantsAdmins", None)
     fake_root.utils = SimpleNamespace(
         get_input_peer=lambda value: (
             input_chat if value is resolved_chat
             else input_sender if value is resolved_sender
+            else input_other_sender if value is other_sender
             else None
         )
     )
     handler.functions.channels = SimpleNamespace(
-        GetParticipantRequest=GetParticipantRequest
+        GetParticipantsRequest=GetParticipantsRequest
     )
+    handler.types.ChannelParticipantsAdmins = ChannelParticipantsAdmins
     client = DirectClient()
     bot = _bot(client)
 
-    try:
-        result = asyncio.run(handler._is_native_group_admin(
+    async def run():
+        first = await handler._is_native_group_admin(
             bot, 23168821, 69221075, resolved_sender, resolved_chat
-        ))
+        )
+        second = await handler._native_admin_from_resolved_peer(
+            bot, resolved_chat, other_sender, 123456
+        )
+        return first, second
+
+    try:
+        result, other_result = asyncio.run(run())
     finally:
         if old_utils is None:
             delattr(fake_root, "utils")
@@ -234,9 +263,14 @@ def test_resolved_channel_bypasses_broken_get_permissions():
             handler.functions.channels = old_channels
         else:
             delattr(handler.functions, "channels")
+        if had_admin_filter:
+            handler.types.ChannelParticipantsAdmins = old_admin_filter
+        else:
+            delattr(handler.types, "ChannelParticipantsAdmins")
 
-    check("direct participant says admin", result is True)
-    check("one direct RPC", len(client.calls) == 1, f"-> {client.calls}")
+    check("admin-list result says admin", result is True)
+    check("other user is not in admin list", other_result is False)
+    check("one cached admin-list RPC", len(client.calls) == 1, f"-> {client.calls}")
     check(
         "broken get_permissions was bypassed",
         client.permission_calls == 0,
@@ -399,7 +433,7 @@ if __name__ == "__main__":
     test_native_admin_check_is_only_for_management_commands()
     test_regular_message_does_not_call_get_permissions()
     test_management_command_does_call_get_permissions()
-    test_resolved_channel_bypasses_broken_get_permissions()
+    test_resolved_channel_uses_supported_admin_list()
     test_keyerror_is_fail_closed_and_cached()
     test_repeat_keyerror_does_not_relog()
     test_successful_admin_is_cached()

@@ -1048,6 +1048,7 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
 # A newly promoted native admin is still re-checked after this window.
 _NATIVE_ADMIN_FAIL_TTL = 180
 _NATIVE_ADMIN_NEGATIVE_TTL = 90
+_NATIVE_ADMIN_LIST_TTL = 60
 
 
 async def _bot_status_text(bot):
@@ -1170,8 +1171,18 @@ async def _bot_status_text(bot):
 
 
 def _is_management_command(text):
-    """True only for owner/moderation commands, never ordinary chat or filters."""
-    priority, _kind = classify_priority(text)
+    """True only for a recognized owner/moderation command.
+
+    Group dispatch keeps any ``.``, ``/`` or ``!`` prefix in the fast admin
+    lane, but decorative spam such as ``.....`` is not a command and must not
+    trigger a native-role RPC. Strip prefixes and classify the actual command.
+    """
+    value = normalize_command(text)
+    if value[:1] in {".", "/", "!"}:
+        value = value.lstrip("./!").strip()
+        if not value:
+            return False
+    priority, _kind = classify_priority(value)
     return int(priority) <= PRIORITY_ADMIN
 
 
@@ -1218,15 +1229,14 @@ async def _native_admin_from_resolved_peer(
     a direct request is constructed, its server errors are deliberately raised
     to the caller instead of causing a second duplicate RPC.
     """
-    if resolved_chat is None or sender is None:
+    if resolved_chat is None:
         return None
     try:
         from splusthon import utils as _sutils
         chat_peer = _sutils.get_input_peer(resolved_chat)
-        user_peer = _sutils.get_input_peer(sender)
     except Exception:
         return None
-    if chat_peer is None or user_peer is None:
+    if chat_peer is None:
         return None
 
     chat_peer_name = type(chat_peer).__name__
@@ -1234,14 +1244,48 @@ async def _native_admin_from_resolved_peer(
         chat_peer_name in {"InputPeerChannel", "InputChannel"}
         or getattr(chat_peer, "channel_id", None) is not None
     ):
-        request = functions.channels.GetParticipantRequest(
-            channel=chat_peer, participant=user_peer
+        # Soroush returns NOT_SUPPORTED for channels.GetParticipant even
+        # though SPlusthon's get_permissions uses it. Fetch the supported
+        # filtered admin list once and reuse it for all users of this chat.
+        channel_id = getattr(chat_peer, "channel_id", None)
+        list_key = normalize_group_id(channel_id)
+        list_cache = getattr(bot, "native_group_admin_ids_cache", None)
+        if list_cache is None:
+            list_cache = bot.native_group_admin_ids_cache = {}
+        now = _asyncio.get_running_loop().time()
+        cached = list_cache.get(list_key)
+        if cached and cached[1] > now:
+            return str(user_id) in cached[0]
+
+        request = functions.channels.GetParticipantsRequest(
+            channel=chat_peer,
+            filter=types.ChannelParticipantsAdmins(),
+            offset=0,
+            limit=200,
+            hash=0,
         )
         response = await bot.client(request)
-        participant = getattr(response, "participant", None)
-        if participant is None:
-            raise LookupError("GetParticipant returned no participant")
-        return _native_participant_is_admin(participant)
+        admin_ids = {
+            str(getattr(user, "id", ""))
+            for user in (getattr(response, "users", ()) or ())
+            if getattr(user, "id", None) is not None
+        }
+        for participant in getattr(response, "participants", ()) or ():
+            participant_id = getattr(participant, "user_id", None)
+            if participant_id is None:
+                participant_id = getattr(
+                    getattr(participant, "peer", None), "user_id", None
+                )
+            if participant_id is not None and _native_participant_is_admin(
+                participant
+            ):
+                admin_ids.add(str(participant_id))
+        list_cache[list_key] = (
+            frozenset(admin_ids), now + _NATIVE_ADMIN_LIST_TTL
+        )
+        if len(list_cache) > 1000:
+            list_cache.pop(next(iter(list_cache)), None)
+        return str(user_id) in admin_ids
 
     if (
         chat_peer_name in {"InputPeerChat", "InputChat"}
