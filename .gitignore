@@ -50,3 +50,4 @@ config/notice_cleanup.json
 config/*.json
 __pycache__/
 *.pyc
+config/notice_cleanup.json
