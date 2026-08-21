@@ -4031,10 +4031,6 @@ async def handle_new_message(bot, event):
                         bot.punished_users.discard(punish_key)
                         bot.spam_burst_users.discard((chat_id, user_id))
 
-                    bot.logger.log_info(
-                        "PUNISHMENT TRIGGERED user="
-                        f"{user_id} action=ban"
-                    )
                     bot.moderation_queue.enqueue(
                         chat_id,
                         "ban",

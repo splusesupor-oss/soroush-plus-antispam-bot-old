@@ -2100,14 +2100,15 @@ class SoroushAntiSpamBot:
                 await handle_new_message(self, event)
                 elapsed = time.perf_counter() - started
                 if elapsed >= 0.25:
+                    # ``started`` از time.perf_counter می‌آمد که یک ساعتِ
+                    # monotonic دلخواه است (مثلاً ثانیه‌های از بوت) و در لاگ
+                    # به‌صورت «receive=363650» گمراه‌کننده دیده می‌شد. فقط
+                    # مدتِ واقعی پردازش و شناسهٔ پیام گزارش می‌شود.
                     self.logger.log_info(
                         "MESSAGE PROCESS TIME "
-                        f"receive={started:.6f} total={elapsed:.4f}s "
+                        f"total={elapsed:.4f}s "
+                        f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
                         f"chat_id={event.chat_id} text={text!r}"
-                    )
-                    self.logger.log_info(
-                        "MESSAGE RESPONSE TIME "
-                        f"chat_id={event.chat_id} total_ms={elapsed * 1000:.2f}"
                     )
             except Exception as handler_error:
                 import traceback as _tb

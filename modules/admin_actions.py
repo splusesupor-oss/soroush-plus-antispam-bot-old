@@ -148,7 +148,8 @@ class AdminActions:
                 "MUTE",
                 user_id,
                 chat_id,
-                f"به مدت {duration_seconds} ثانیه"
+                "سکوت دائم" if duration_seconds is None
+                else f"به مدت {duration_seconds} ثانیه"
             )
 
             return True
