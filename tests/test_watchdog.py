@@ -148,6 +148,57 @@ class WatchdogTests(unittest.TestCase):
         self.assertIn("raise ValueError", incident["traceback"])
         self.assertIn("ValueError: خطای آزمایشی Watchdog", incident["traceback"])
 
+    def test_experimental_crash_reaches_only_owner_without_main(self):
+        synthetic_owner_id = 987654324
+        result = watchdog.run_child(
+            [
+                sys.executable,
+                "-u",
+                "-c",
+                "raise RuntimeError('owner crash delivery test')",
+            ],
+            threading.Event(),
+        )
+        incident = watchdog.analyze_child_result(result)
+        incident["crash_log"] = "logs/watchdog-crash-owner-test.log"
+        original_get_owner = reporting.get_owner
+        original_is_global_owner = reporting.is_global_owner
+        try:
+            reporting.get_owner = lambda: {
+                "user_id": synthetic_owner_id,
+                "username": None,
+            }
+            reporting.is_global_owner = (
+                lambda value: int(getattr(value, "id", value))
+                == synthetic_owner_id
+            )
+            with tempfile.TemporaryDirectory() as directory:
+                state_file = Path(directory) / "watchdog_pending.json"
+                self.assertTrue(reporting.queue_incident(
+                    incident,
+                    state_path=state_file,
+                ))
+                client = FakeClient(synthetic_owner_id)
+                delivered = asyncio.run(reporting.deliver_pending_reports(
+                    client,
+                    state_path=state_file,
+                    message_limit=20000,
+                    status="نیاز به بررسی دارد",
+                ))
+                self.assertEqual(delivered, 1)
+                self.assertEqual(len(client.sent), 1)
+                target, report = client.sent[0]
+                self.assertIsInstance(target, FakePeerUser)
+                self.assertEqual(target.user_id, synthetic_owner_id)
+                self.assertIn("🚨 خطای ربات", report)
+                self.assertIn("نوع خطا:\nRuntimeError", report)
+                self.assertIn("owner crash delivery test", report)
+                self.assertIn("فایل:\n<string>", report)
+                self.assertNotIn("main.py", incident.get("command", []))
+        finally:
+            reporting.get_owner = original_get_owner
+            reporting.is_global_owner = original_is_global_owner
+
     def test_supervisor_restarts_after_experimental_crash(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

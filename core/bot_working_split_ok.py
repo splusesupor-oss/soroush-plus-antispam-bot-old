@@ -53,6 +53,7 @@ from modules import connection_guard
 from modules import site_policy
 from modules.runtime_maintenance import run as run_runtime_maintenance
 from modules.watchdog_reporting import deliver_pending_reports
+from modules.performance_monitor import SlowProcessMonitor
 from handlers.message_handler import (
     handle_new_message,
     send_activation_message,
@@ -196,6 +197,7 @@ class SoroushAntiSpamBot:
         # ⏱️ زمان شروع برای دستور تشخیصی «وضعیت ربات».
         self.started_at = time.time()
         self.outgoing_sender = None
+        self.performance_monitor = None
         self.notice_cleanup = NoticeCleanup(
             os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -561,6 +563,8 @@ class SoroushAntiSpamBot:
                 self.outgoing_sender.client = new_client
                 # re-install wrapper for new client
                 install_outgoing_sender(new_client, self, self.logger)
+            if getattr(self, "performance_monitor", None) is not None:
+                self.performance_monitor.update_client(new_client)
             self.admin_actions = AdminActions(
                 new_client, self.logger, self.config_manager,
                 peer_cache=self.reply_input_peer_cache,
@@ -717,6 +721,13 @@ class SoroushAntiSpamBot:
         self.outgoing_sender = install_outgoing_sender(
             self.client, self, self.logger
         )
+        # Live slow-handler monitoring is separate from crash delivery.  Its
+        # bounded worker sends only deduplicated >150ms reports to the owner;
+        # the message hot path performs no await, disk write, or network call.
+        self.performance_monitor = SlowProcessMonitor(
+            self.client, self.logger
+        )
+        self.performance_monitor.start()
 
         # Watchdog reports are handed to the normal, already-connected bot
         # client.  This runs once at startup (never per message), targets only
@@ -1223,6 +1234,16 @@ class SoroushAntiSpamBot:
                 )
             finally:
                 elapsed_ms = (time.perf_counter() - started_cmd) * 1000
+                monitor = getattr(self, "performance_monitor", None)
+                if monitor is not None:
+                    monitor.record(
+                        total_ms=elapsed_ms,
+                        chat_id=getattr(event, "chat_id", None),
+                        message_id=getattr(
+                            getattr(event, "message", None), "id", None
+                        ),
+                        handler="process_priority_command",
+                    )
                 # در حالت عادی فقط دستورهای واقعاً کند ثبت می‌شوند؛ حالت
                 # debug همان آستانهٔ قبلی ۵۰ms را نگه می‌دارد.
                 _timing_threshold_ms = (
@@ -1243,6 +1264,7 @@ class SoroushAntiSpamBot:
                     )
 
         async def process_incoming_message(event):
+            started_message_handler = time.perf_counter()
             # === SPAM DEBUG INCOMING — اولین خط NewMessage ===
             try:
                 _sd_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
@@ -2148,6 +2170,20 @@ class SoroushAntiSpamBot:
                     f"chat_id={getattr(event, 'chat_id', None)} "
                     f"error={handler_error!r}\n{_tb.format_exc()}"
                 )
+            finally:
+                total_message_ms = (
+                    time.perf_counter() - started_message_handler
+                ) * 1000
+                monitor = getattr(self, "performance_monitor", None)
+                if monitor is not None:
+                    monitor.record(
+                        total_ms=total_message_ms,
+                        chat_id=getattr(event, "chat_id", None),
+                        message_id=getattr(
+                            getattr(event, "message", None), "id", None
+                        ),
+                        handler="process_incoming_message",
+                    )
 
 
         @self.client.on(events.NewMessage())
