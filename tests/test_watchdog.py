@@ -5,6 +5,7 @@ Run directly without SPlusthon network access:
     python3 tests/test_watchdog.py
 """
 import asyncio
+import errno
 import json
 import os
 import subprocess
@@ -14,6 +15,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -52,6 +54,78 @@ class FakeClient:
 
 
 class WatchdogTests(unittest.TestCase):
+    def test_stale_lock_file_never_blocks_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_file = Path(directory) / "watchdog.lock"
+            lock_file.write_text(
+                json.dumps({
+                    "version": 2,
+                    "kind": "soroush-watchdog",
+                    "pid": 999999999,
+                    "start_ticks": "stale",
+                    "token": "old",
+                }),
+                encoding="utf-8",
+            )
+            instance = watchdog.SingleInstance(lock_file)
+            instance.acquire()
+            try:
+                self.assertIn(instance.mode, {"flock", "pidfile"})
+                current = json.loads(lock_file.read_text(encoding="utf-8"))
+                self.assertEqual(current["pid"], os.getpid())
+                self.assertEqual(current["token"], instance.token)
+            finally:
+                instance.close()
+
+    def test_second_instance_is_rejected_only_while_first_is_live(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_file = Path(directory) / "watchdog.lock"
+            first = watchdog.SingleInstance(lock_file)
+            first.acquire()
+            try:
+                second = watchdog.SingleInstance(lock_file)
+                with self.assertRaises(watchdog.WatchdogAlreadyRunning) as raised:
+                    second.acquire()
+                self.assertEqual(raised.exception.pid, os.getpid())
+            finally:
+                first.close()
+
+            # The on-disk record may remain after flock close.  It must not
+            # block a new instance because no kernel lock is alive anymore.
+            third = watchdog.SingleInstance(lock_file)
+            third.acquire()
+            third.close()
+
+    def test_android_unsupported_flock_uses_stale_aware_pid_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_file = Path(directory) / "watchdog.lock"
+            lock_file.write_text("999999999\n", encoding="utf-8")
+            unsupported = OSError(errno.EOPNOTSUPP, "flock unsupported")
+            with mock.patch("fcntl.flock", side_effect=unsupported):
+                instance = watchdog.SingleInstance(lock_file)
+                instance.acquire()
+                self.assertEqual(instance.mode, "pidfile")
+                record = json.loads(lock_file.read_text(encoding="utf-8"))
+                self.assertEqual(record["pid"], os.getpid())
+
+                second = watchdog.SingleInstance(lock_file)
+                with self.assertRaises(watchdog.WatchdogAlreadyRunning):
+                    second.acquire()
+                instance.close()
+            self.assertFalse(lock_file.exists())
+
+    def test_android_false_busy_without_live_pid_falls_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_file = Path(directory) / "watchdog.lock"
+            lock_file.write_text("999999999\n", encoding="utf-8")
+            false_busy = OSError(errno.EACCES, "filesystem reports busy")
+            with mock.patch("fcntl.flock", side_effect=false_busy):
+                instance = watchdog.SingleInstance(lock_file)
+                instance.acquire()
+                self.assertEqual(instance.mode, "pidfile")
+                instance.close()
+            self.assertFalse(lock_file.exists())
+
     def test_experimental_process_crash_is_fully_extracted(self):
         code = (
             "def explode():\n"

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import hashlib
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -25,11 +27,27 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
+
+# runtime_paths chooses its directories at import time.  Load only the data-dir
+# override early (not credentials) so LOCK_FILE and the bot agree even when the
+# override lives in .env rather than the parent shell.  Termux still defaults
+# to its private ~/.local/share/soroush-bot directory.
+_BOOTSTRAP_ROOT = Path(__file__).resolve().parent
+if not os.environ.get("SOROUSH_BOT_DATA_DIR"):
+    try:
+        _bootstrap_data_dir = dotenv_values(
+            _BOOTSTRAP_ROOT / ".env"
+        ).get("SOROUSH_BOT_DATA_DIR")
+    except Exception:
+        _bootstrap_data_dir = None
+    if _bootstrap_data_dir:
+        os.environ["SOROUSH_BOT_DATA_DIR"] = str(_bootstrap_data_dir)
 
 from modules.runtime_paths import PROJECT_ROOT, runtime_config_file, runtime_log_file
 from modules.time_utils import now_local
@@ -214,44 +232,340 @@ class ReporterLoggerAdapter:
         self.logger.error(message)
 
 
+class WatchdogAlreadyRunning(RuntimeError):
+    """Raised only when a live watchdog owns the single-instance lock."""
+
+    def __init__(self, path: Path, pid: Optional[int] = None):
+        self.path = Path(path)
+        self.pid = pid
+        detail = f" pid={pid}" if pid else ""
+        super().__init__(
+            "another watchdog instance is already running"
+            f" ({detail.strip() or 'pid=unknown'}, lock={self.path})"
+        )
+
+
+class WatchdogLockError(RuntimeError):
+    """The lock mechanism failed for a reason other than another instance."""
+
+
 class SingleInstance:
-    """Keep two launch scripts from supervising the same bot concurrently."""
+    """Cross-filesystem single-instance lock for Linux and Termux/Android.
+
+    On normal Linux/Termux private storage, ``flock`` is authoritative and a
+    stale file is harmless because kernel locks disappear with the process.
+    Some Android/FUSE shared-storage mounts return EOPNOTSUPP/ENOSYS/EINVAL for
+    ``flock``.  Those errors are *not* another running instance; in that case
+    an atomic PID-file fallback validates PID + process start time and removes
+    stale records safely.
+    """
+
+    _BUSY_ERRNOS = {errno.EACCES, errno.EAGAIN}
+    _UNSUPPORTED_ERRNOS = {
+        value
+        for value in (
+            getattr(errno, "ENOSYS", None),
+            getattr(errno, "EOPNOTSUPP", None),
+            getattr(errno, "ENOTSUP", None),
+            getattr(errno, "EINVAL", None),
+            getattr(errno, "ENOLCK", None),
+            getattr(errno, "EPERM", None),
+        )
+        if value is not None
+    }
 
     def __init__(self, path: Path):
-        self.path = path
+        self.path = Path(path)
         self.stream = None
+        self.mode: Optional[str] = None
+        self.token = uuid.uuid4().hex
+        self._fcntl = None
 
-    def acquire(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.stream = self.path.open("a+", encoding="utf-8")
+    @staticmethod
+    def _process_start_ticks(pid: int) -> Optional[str]:
         try:
-            import fcntl
-            fcntl.flock(self.stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except ImportError:
-            # Termux/Linux has fcntl.  On other platforms the PID text is still
-            # useful, but advisory locking may not be available.
-            pass
+            text = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8")
+            # Fields after the final ')' begin at field 3; starttime is field 22.
+            fields = text.rsplit(")", 1)[1].strip().split()
+            return fields[19]
+        except (OSError, ValueError, IndexError):
+            return None
+
+    @staticmethod
+    def _pid_alive(pid: Optional[int]) -> bool:
+        try:
+            value = int(pid)
+        except (TypeError, ValueError):
+            return False
+        if value <= 0:
+            return False
+        try:
+            os.kill(value, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
         except OSError as error:
-            raise RuntimeError("another watchdog instance is already running") from error
+            return error.errno != errno.ESRCH
+
+    @staticmethod
+    def _watchdog_cmdline(pid: int) -> Optional[bool]:
+        """Return True/False when /proc is readable, otherwise None."""
+        try:
+            raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+        except OSError:
+            return None
+        args = [
+            part.decode("utf-8", "replace")
+            for part in raw.split(b"\0")
+            if part
+        ]
+        for index, argument in enumerate(args):
+            if Path(argument).name == "watchdog.py":
+                return True
+            if argument == "-m" and index + 1 < len(args):
+                if args[index + 1] in {"watchdog", "watchdog.py"}:
+                    return True
+        return False
+
+    @classmethod
+    def _read_record(cls, path: Path) -> Dict[str, Any]:
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return {}
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (TypeError, ValueError):
+            pass
+        # Compatibility with the first watchdog version, which stored only PID.
+        try:
+            return {"pid": int(raw), "legacy": True}
+        except (TypeError, ValueError):
+            return {}
+
+    @classmethod
+    def _active_watchdog_pid(cls, record: Dict[str, Any]) -> Optional[int]:
+        try:
+            pid = int(record.get("pid"))
+        except (TypeError, ValueError):
+            return None
+        if not cls._pid_alive(pid):
+            return None
+
+        recorded_start = record.get("start_ticks")
+        actual_start = cls._process_start_ticks(pid)
+        if recorded_start and actual_start and str(recorded_start) != str(actual_start):
+            # PID was reused by a newer, unrelated process.
+            return None
+
+        # Records written by this implementation are trustworthy when their
+        # process start time still matches.  For old PID-only records, verify
+        # cmdline so an unrelated process that reused the PID cannot block boot.
+        if record.get("kind") == "soroush-watchdog" and recorded_start:
+            return pid
+        cmdline_match = cls._watchdog_cmdline(pid)
+        if cmdline_match is True:
+            return pid
+        if cmdline_match is None and record.get("kind") == "soroush-watchdog":
+            # Android may restrict /proc; a matching live structured record is
+            # safer to treat as active than to start a duplicate supervisor.
+            return pid
+        return None
+
+    def _record(self) -> Dict[str, Any]:
+        return {
+            "version": 2,
+            "kind": "soroush-watchdog",
+            "pid": os.getpid(),
+            "start_ticks": self._process_start_ticks(os.getpid()),
+            "token": self.token,
+            "created_at": time.time(),
+            "script": str(Path(__file__).resolve()),
+        }
+
+    def _write_locked_record(self) -> None:
+        if self.stream is None:
+            raise WatchdogLockError(f"lock stream is not open: {self.path}")
         self.stream.seek(0)
         self.stream.truncate()
-        self.stream.write(str(os.getpid()))
+        json.dump(self._record(), self.stream, ensure_ascii=False)
+        self.stream.write("\n")
         self.stream.flush()
+        try:
+            os.fsync(self.stream.fileno())
+        except OSError:
+            # fsync may be unavailable on a few Android virtual filesystems;
+            # the lock remains valid and the flushed PID record is sufficient.
+            pass
         try:
             self.path.chmod(0o600)
         except OSError:
             pass
 
-    def close(self) -> None:
+    def _open_stream(self) -> None:
+        self.stream = self.path.open("a+", encoding="utf-8")
+
+    def _close_stream(self) -> None:
         if self.stream is None:
             return
         try:
-            import fcntl
-            fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)
-        except (ImportError, OSError):
-            pass
-        self.stream.close()
-        self.stream = None
+            self.stream.close()
+        finally:
+            self.stream = None
+
+    def _try_flock(self) -> None:
+        import fcntl
+        self._fcntl = fcntl
+        if self.stream is None:
+            self._open_stream()
+        fcntl.flock(self.stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.mode = "flock"
+        self._write_locked_record()
+
+    def _remove_same_inode(self, expected_stat: os.stat_result) -> bool:
+        try:
+            current = self.path.stat()
+            if (current.st_dev, current.st_ino) != (
+                expected_stat.st_dev,
+                expected_stat.st_ino,
+            ):
+                return False
+            self.path.unlink()
+            return True
+        except OSError:
+            return False
+
+    def _acquire_pid_fallback(self) -> None:
+        """Atomic stale-aware lock for Android filesystems without flock."""
+        self.mode = None
+        self._close_stream()
+        for _attempt in range(40):
+            try:
+                fd = os.open(
+                    str(self.path),
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+            except FileExistsError:
+                try:
+                    before = self.path.stat()
+                except OSError:
+                    time.sleep(0.05)
+                    continue
+                record = self._read_record(self.path)
+                active_pid = self._active_watchdog_pid(record)
+                if active_pid is not None:
+                    raise WatchdogAlreadyRunning(self.path, active_pid)
+
+                # A just-created empty file may belong to a contender that has
+                # not written its record yet.  Give it a short grace period.
+                age = max(0.0, time.time() - before.st_mtime)
+                if not record and age < 1.0:
+                    time.sleep(0.05)
+                    continue
+                self._remove_same_inode(before)
+                time.sleep(0.01)
+                continue
+            except OSError as error:
+                raise WatchdogLockError(
+                    f"cannot create watchdog PID lock {self.path}: "
+                    f"[errno {error.errno}] {error.strerror or error}"
+                ) from error
+            else:
+                self.stream = os.fdopen(fd, "r+", encoding="utf-8")
+                self.mode = "pidfile"
+                self._write_locked_record()
+                return
+        raise WatchdogLockError(
+            f"could not acquire watchdog PID lock after stale cleanup: {self.path}"
+        )
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._open_stream()
+            self._try_flock()
+            return
+        except ImportError:
+            # fcntl is expected on Termux, but the PID fallback is portable.
+            self._acquire_pid_fallback()
+            return
+        except OSError as error:
+            error_number = error.errno
+            self._close_stream()
+            if error_number in self._UNSUPPORTED_ERRNOS:
+                # Most important Android fix: unsupported flock is not a
+                # duplicate process.  Validate/remove stale PID state instead.
+                self._acquire_pid_fallback()
+                return
+            if error_number not in self._BUSY_ERRNOS:
+                raise WatchdogLockError(
+                    f"cannot lock {self.path}: [errno {error_number}] "
+                    f"{error.strerror or error}"
+                ) from error
+
+        # EAGAIN/EACCES means a kernel lock is busy.  Verify the structured PID
+        # and retry briefly to cover the acquire-before-record-write race.
+        for _attempt in range(10):
+            record = self._read_record(self.path)
+            active_pid = self._active_watchdog_pid(record)
+            if active_pid is not None:
+                raise WatchdogAlreadyRunning(self.path, active_pid)
+            time.sleep(0.1)
+            try:
+                self._open_stream()
+                self._try_flock()
+                return
+            except OSError as retry_error:
+                self._close_stream()
+                if retry_error.errno in self._UNSUPPORTED_ERRNOS:
+                    self._acquire_pid_fallback()
+                    return
+                if retry_error.errno not in self._BUSY_ERRNOS:
+                    raise WatchdogLockError(
+                        f"cannot lock {self.path}: [errno {retry_error.errno}] "
+                        f"{retry_error.strerror or retry_error}"
+                    ) from retry_error
+
+        record = self._read_record(self.path)
+        active_pid = self._active_watchdog_pid(record)
+        if active_pid is not None:
+            raise WatchdogAlreadyRunning(self.path, active_pid)
+        # A busy result without a verifiable live owner can occur on Android
+        # FUSE implementations that overload EACCES/EAGAIN.  Do not turn that
+        # filesystem quirk into a permanent lockout; the atomic fallback will
+        # remove only a stale/same-inode record and still rejects a live PID.
+        self._acquire_pid_fallback()
+
+    def close(self) -> None:
+        if self.stream is None:
+            return
+        if self.mode == "pidfile":
+            # Remove only our own fallback record.  Inode + token checks avoid
+            # deleting a newer process's lock after a race.
+            try:
+                before = os.fstat(self.stream.fileno())
+                record = self._read_record(self.path)
+            except OSError:
+                before = None
+                record = {}
+            self._close_stream()
+            if before is not None and record.get("token") == self.token:
+                self._remove_same_inode(before)
+        else:
+            try:
+                if self._fcntl is not None:
+                    self._fcntl.flock(self.stream.fileno(), self._fcntl.LOCK_UN)
+            except OSError:
+                pass
+            self._close_stream()
+        self.mode = None
 
 
 def _terminate_process(process: subprocess.Popen, logger: logging.Logger) -> None:
@@ -547,10 +861,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     instance = SingleInstance(LOCK_FILE)
     try:
         instance.acquire()
-    except RuntimeError as error:
+    except WatchdogAlreadyRunning as error:
         print(f"Watchdog اجرا نشد: {error}", file=sys.stderr)
-        logger.error("WATCHDOG DUPLICATE INSTANCE error=%s", error)
+        logger.error(
+            "WATCHDOG DUPLICATE INSTANCE pid=%s lock=%s",
+            error.pid,
+            error.path,
+        )
         return 2
+    except WatchdogLockError as error:
+        # Do not misreport filesystem/permission problems as a duplicate.
+        print(f"Watchdog lock error: {error}", file=sys.stderr)
+        logger.error("WATCHDOG LOCK ERROR lock=%s error=%s", LOCK_FILE, error)
+        return 3
+
+    logger.info(
+        "WATCHDOG LOCK ACQUIRED mode=%s pid=%s path=%s",
+        instance.mode,
+        os.getpid(),
+        LOCK_FILE,
+    )
 
     base_delay = _env_float("WATCHDOG_RESTART_DELAY", 5.0)
     max_delay = _env_float("WATCHDOG_MAX_RESTART_DELAY", 60.0, base_delay)
