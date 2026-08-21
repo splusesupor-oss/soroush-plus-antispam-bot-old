@@ -169,37 +169,47 @@ def _resolved_event_peer(event):
 
 
 def _warm_reply_input_chat(bot, event, chat=None):
-    """Populate a reply InputPeer from the per-bot chat cache when possible.
+    """Retain an event's resolved InputPeer for replies and later RPCs.
 
     A cached InputPeer makes ``Message.reply`` skip SPlusthon's expensive
-    ``iter_dialogs(100)`` fallback.  The cache is capped because group IDs are
-    unbounded over the lifetime of a userbot.
+    ``iter_dialogs(100)`` fallback. Delete workers also reuse it so a positive
+    Soroush group ID is not misclassified as a user and resolved through a
+    failing ``GetUsersRequest``. The cache stays bounded for long runtimes.
     """
     message = getattr(event, "message", None)
-    if message is None or getattr(message, "input_chat", None) is not None:
+    if message is None:
         return False
     chat_id = getattr(event, "chat_id", None)
     cache = getattr(bot, "reply_input_peer_cache", None)
     if cache is None:
         cache = bot.reply_input_peer_cache = {}
-    input_chat = cache.get(chat_id)
-    if input_chat is not None:
-        message._input_chat = input_chat
-        return True
-    if chat is None:
+
+    # Many SPlusthon events already contain the best access-hash-bearing peer.
+    # The former early return left that peer on the message only, so background
+    # delete/notice workers later fell back to an ambiguous positive integer.
+    input_chat = _resolved_event_peer(event)
+    if input_chat is None:
+        input_chat = cache.get(chat_id)
+    if input_chat is None:
+        wanted = normalize_group_id(chat_id)
+        for cached_id, peer in list(cache.items()):
+            if peer is not None and normalize_group_id(cached_id) == wanted:
+                input_chat = peer
+                break
+    if input_chat is None and chat is not None:
+        try:
+            from splusthon import utils
+            input_chat = utils.get_input_peer(chat)
+        except Exception:
+            input_chat = None
+    if input_chat is None:
         return False
-    try:
-        from splusthon import utils
-        input_chat = utils.get_input_peer(chat)
-        if input_chat is None:
-            return False
-        message._input_chat = input_chat
-        cache[chat_id] = input_chat
-        if len(cache) > 500:
-            cache.pop(next(iter(cache)), None)
-        return True
-    except Exception:
-        return False
+
+    message._input_chat = input_chat
+    cache[chat_id] = input_chat
+    while len(cache) > 500:
+        cache.pop(next(iter(cache)), None)
+    return True
 
 
 def _message_debug_enabled(bot):

@@ -30,6 +30,10 @@ class FloodWaitError(Exception):
         self.seconds = seconds
 
 
+class NotFoundError(Exception):
+    pass
+
+
 def test_entity_failure_does_not_amplify_into_per_id_rpcs():
     class Client:
         def __init__(self):
@@ -49,6 +53,28 @@ def test_entity_failure_does_not_amplify_into_per_id_rpcs():
     calls, result = asyncio.run(run())
     assert calls == [(-10001, list(range(1, 51)))]
     assert result == (0, list(range(1, 51)))
+
+
+def test_getusers_not_found_is_one_entity_failure_not_three_retries():
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def delete_messages(self, _chat_id, _ids):
+            self.calls += 1
+            raise NotFoundError(
+                "RPCError 404: NOT_FOUND (caused by GetUsersRequest)"
+            )
+
+    async def run():
+        client = Client()
+        queue = MessageDeleteQueue(client, _Logger(), batch_size=100)
+        result = await queue._delete_ids(23375191, [10, 11])
+        return client.calls, result
+
+    calls, result = asyncio.run(run())
+    assert calls == 1
+    assert result == (0, [10, 11])
 
 
 def test_only_message_id_failure_is_isolated_and_partial_success_is_exact():
@@ -146,6 +172,35 @@ def test_delete_queue_uses_resolved_rpc_peer_but_stable_chat_queue_key():
         result = queue.enqueue(-10001, [7], priority=0, rpc_peer=peer)
         assert await result == (1, [])
         await asyncio.gather(*list(queue._workers.values()), return_exceptions=True)
+        return client.targets
+
+    assert asyncio.run(run()) == [peer]
+
+
+def test_delete_queue_resolves_short_group_id_from_shared_peer_cache():
+    peer = object()
+
+    class Client:
+        def __init__(self):
+            self.targets = []
+
+        async def delete_messages(self, target, _ids):
+            self.targets.append(target)
+            return True
+
+    async def run():
+        client = Client()
+        # The cache may have been warmed with the full -100... event form,
+        # while a persisted notice still carries Soroush's short positive ID.
+        peer_cache = {-1000023375191: peer}
+        queue = MessageDeleteQueue(
+            client, _Logger(), batch_size=100, peer_cache=peer_cache,
+        )
+        result = queue.enqueue(23375191, [7])
+        assert await result == (1, [])
+        await asyncio.gather(
+            *list(queue._workers.values()), return_exceptions=True,
+        )
         return client.targets
 
     assert asyncio.run(run()) == [peer]

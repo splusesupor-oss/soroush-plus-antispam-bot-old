@@ -372,6 +372,35 @@ def test_expired_failure_retries():
     check("two RPCs after expiry", len(client.calls) == 2, f"-> {len(client.calls)}")
 
 
+def test_event_input_peer_warms_shared_background_rpc_cache():
+    print("\n### peer حل‌شده رویداد برای حذف پس‌زمینه نگه داشته می‌شود")
+    peer = object()
+    message = SimpleNamespace(_input_chat=peer)
+    event = SimpleNamespace(chat_id=23375191, message=message)
+    bot = SimpleNamespace(reply_input_peer_cache={})
+    result = handler._warm_reply_input_chat(bot, event)
+    check("existing event peer retained", result is True)
+    check(
+        "short group id maps to resolved peer",
+        bot.reply_input_peer_cache.get(23375191) is peer,
+    )
+
+    normalized_peer = object()
+    second_message = SimpleNamespace()
+    second_event = SimpleNamespace(chat_id=23375191, message=second_message)
+    second_bot = SimpleNamespace(
+        reply_input_peer_cache={-1000023375191: normalized_peer}
+    )
+    normalized_result = handler._warm_reply_input_chat(
+        second_bot, second_event
+    )
+    check("normalized cache form is reused", normalized_result is True)
+    check(
+        "reused peer attached to message",
+        second_message._input_chat is normalized_peer,
+    )
+
+
 def test_mute_target_check_never_fetches_all_group_members():
     print("\n### سکوت برای حفاظت ادمین همه اعضای گروه را نمی‌گیرد")
     source = inspect.getsource(handler.handle_new_message)
@@ -453,6 +482,7 @@ if __name__ == "__main__":
     test_successful_admin_is_cached()
     test_successful_member_is_cached()
     test_expired_failure_retries()
+    test_event_input_peer_warms_shared_background_rpc_cache()
     test_mute_target_check_never_fetches_all_group_members()
     test_ban_execution_and_admin_check_logs_are_debug_only()
     print(f"\n{PASSED} passed, {FAILED} failed")

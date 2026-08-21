@@ -70,6 +70,22 @@ def _event_user_id(event, message):
     return None
 
 
+def _event_rpc_peer(event):
+    """Read an already-resolved Soroush InputPeer without an RPC."""
+    message = getattr(event, "message", None)
+    for owner in (message, event):
+        if owner is None:
+            continue
+        for attr in ("_input_chat", "input_chat"):
+            try:
+                peer = getattr(owner, attr, None)
+            except Exception:
+                peer = None
+            if peer is not None:
+                return peer
+    return None
+
+
 def extract_event(event):
     """Read ids and text from the event object only. Never awaits."""
     message = getattr(event, "message", None)
@@ -199,7 +215,19 @@ def _ingest(bot, chat_id, user_id, message_id, text, *, event=None, is_private=F
         tracked = message_tracker.add_message(chat_id, user_id, message_id, text)
         queue = getattr(bot, "message_delete_queue", None)
         if queue is not None:
-            queue.enqueue(chat_id, [message_id], priority=1)
+            rpc_peer = _event_rpc_peer(event)
+            if rpc_peer is None:
+                queue.enqueue(chat_id, [message_id], priority=1)
+            else:
+                try:
+                    queue.enqueue(
+                        chat_id, [message_id], priority=1,
+                        rpc_peer=rpc_peer,
+                    )
+                except TypeError as error:
+                    if "rpc_peer" not in str(error):
+                        raise
+                    queue.enqueue(chat_id, [message_id], priority=1)
             return IngestResult(
                 skip_heavy=True, detected=True,
                 reason="active_spam_lock", tracked=tracked,

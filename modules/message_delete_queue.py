@@ -65,6 +65,7 @@ def _entity_resolution_error(error):
     """Failures that cannot be repaired by retrying each message ID."""
     name = _error_name(error)
     text = _error_text(error)
+    compact_text = text.replace("_", "").replace(" ", "")
     if isinstance(error, (IndexError, KeyError, TypeError, ValueError)):
         return True
     return (
@@ -72,6 +73,15 @@ def _entity_resolution_error(error):
             "channelprivate", "channelinvalid", "peeridinvalid",
             "entity", "chatidinvalid", "channelpublicgroupna",
         ))
+        # A positive Soroush group ID can be misread as a user by
+        # SPlusthon. Its implicit GetUsers lookup then returns 404. Retrying
+        # the identical delete only repeats that expensive global lookup.
+        or (
+            "notfound" in name
+            and any(request in compact_text for request in (
+                "getusersrequest", "getchannelsrequest",
+            ))
+        )
         or "could not find the input entity" in text
         or "cannot find any entity" in text
         or "list index out of range" in text
@@ -112,17 +122,42 @@ class MessageDeleteQueue:
     semaphore: a flood in group A occupies only that group's worker.  Other
     chats keep deleting/replying in parallel.
     """
-    def __init__(self, client, logger, *, batch_size=15, max_concurrent=None, inter_batch_delay=0.0):
+    def __init__(self, client, logger, *, batch_size=15, max_concurrent=None,
+                 inter_batch_delay=0.0, peer_cache=None):
         self.client = client
         self.logger = logger
         self.batch_size = batch_size
         self.inter_batch_delay = inter_batch_delay
+        # Shared bot cache of resolved Soroush InputPeers. Keeping the stable
+        # numeric chat ID as the queue key still isolates groups, while the RPC
+        # uses the access-hash-bearing peer and skips implicit GetUsers lookup.
+        self.peer_cache = peer_cache
         self._queues = {}
         self._workers = {}
         self._pending_ids = set()
         # Kept only so older callers that pass max_concurrent still construct.
         self._rpc_slots = None
         self._seq = 0
+
+    def _cached_rpc_peer(self, chat_id):
+        cache = self.peer_cache
+        if not cache:
+            return None
+        try:
+            direct = cache.get(chat_id)
+        except Exception:
+            direct = None
+        if direct is not None:
+            return direct
+        wanted = _chat_key(chat_id)
+        try:
+            rows = list(cache.items())
+        except Exception:
+            return None
+        for cached_id, peer in rows:
+            if peer is not None and _chat_key(cached_id) == wanted:
+                return peer
+        return None
 
     def enqueue(self, chat_id, message_ids, *, priority=1, rpc_peer=None):
         """Schedule unique IDs and return a Future of ``(deleted, remaining)``.
@@ -145,6 +180,9 @@ class MessageDeleteQueue:
         if not ids:
             result.set_result((0, []))
             return result
+
+        if rpc_peer is None:
+            rpc_peer = self._cached_rpc_peer(chat_id)
 
         queue = self._queues.get(_chat_key(chat_id))
         if queue is None:
@@ -322,8 +360,13 @@ class MessageDeleteQueue:
                 rpc_target = next(
                     (peer for _p, _ids, _r, _e, peer in reversed(jobs)
                      if peer is not None),
-                    chat_id,
+                    None,
                 )
+                if rpc_target is None:
+                    # The event handler may have warmed the shared peer cache
+                    # after this job was queued but before its worker ran.
+                    cached_peer = self._cached_rpc_peer(chat_id)
+                    rpc_target = chat_id if cached_peer is None else cached_peer
                 try:
                     deleted, remaining = await self._delete_ids(
                         rpc_target, all_ids)

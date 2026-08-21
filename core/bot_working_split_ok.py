@@ -644,7 +644,23 @@ class SoroushAntiSpamBot:
                 return
             queue = getattr(self, "message_delete_queue", None)
             if queue is not None:
-                queue.enqueue(chat_id, [message_id], priority=1)
+                rpc_peer = None
+                for owner in (message, event):
+                    if owner is None:
+                        continue
+                    for attr in ("_input_chat", "input_chat"):
+                        try:
+                            rpc_peer = getattr(owner, attr, None)
+                        except Exception:
+                            rpc_peer = None
+                        if rpc_peer is not None:
+                            break
+                    if rpc_peer is not None:
+                        break
+                queue.enqueue(
+                    chat_id, [message_id], priority=1,
+                    rpc_peer=rpc_peer,
+                )
             self.logger.log_info(
                 "GROUP DISPATCH OVERFLOW DELETE "
                 f"chat_id={chat_id} message_id={message_id} locked={locked}"
@@ -680,7 +696,9 @@ class SoroushAntiSpamBot:
         # synchronously in the incoming-message handler.
         self.message_delete_queue = MessageDeleteQueue(
             self.client, self.logger, batch_size=100, max_concurrent=4,
-            inter_batch_delay=0)
+            inter_batch_delay=0,
+            peer_cache=self.reply_input_peer_cache,
+        )
         # Outgoing sender for normal replies - separate from delete queue.
         # install() is the single constructor so there is never an unused
         # duplicate sender/queue object at startup.
