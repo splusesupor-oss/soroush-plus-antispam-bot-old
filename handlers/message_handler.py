@@ -5421,6 +5421,7 @@ async def handle_new_message(bot, event):
                 chat_id,
                 banned_data.get(group_key, []),
                 bot.logger,
+                resolved_chat=chat,
             )
             if remaining_entries:
                 banned_data[group_key] = remaining_entries
