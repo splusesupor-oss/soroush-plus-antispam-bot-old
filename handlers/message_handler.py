@@ -1082,6 +1082,14 @@ async def _bot_status_text(bot):
     except Exception:
         pass
 
+    governor_snapshot = {}
+    governor = getattr(bot, "rpc_governor", None)
+    if governor is not None:
+        try:
+            governor_snapshot = governor.snapshot()
+        except Exception:
+            governor_snapshot = {}
+
     # ۴) صف‌ها و کش‌های داخلی
     dispatcher = getattr(bot, "group_dispatcher", None)
     workers = dispatcher.worker_count() if dispatcher is not None else 0
@@ -1125,12 +1133,26 @@ async def _bot_status_text(bot):
         verdict.append("⚠️ مصرف حافظه بالا — احتمال swap شدن پروسه")
     if sender_pending >= 300:
         verdict.append("⚠️ انباشت صف اتصال — sender_pending غیرعادی")
+    if int(governor_snapshot.get("waiting", 0) or 0) >= 20:
+        verdict.append("⚠️ فشار RPC چندگروهی — بودجه اتصال در حال backpressure است")
     if rpc_ms >= 1000 and loop_lag_ms < 100:
         verdict.append("🌐 کندی از شبکه/سرور سروش است، نه از ربات")
     if not verdict:
         verdict.append("✅ همه چیز سالم است")
 
     rpc_display = "خطا/مهلت" if rpc_ms < 0 else f"{rpc_ms:.0f} ms"
+    if governor_snapshot:
+        governor_mode = (
+            "shadow" if governor_snapshot.get("shadow")
+            else ("فعال" if governor_snapshot.get("enabled") else "خاموش")
+        )
+        governor_display = (
+            f"{governor_mode} | فعال: {governor_snapshot.get('active', 0)}/"
+            f"{governor_snapshot.get('total_limit', 0)} | "
+            f"منتظر: {governor_snapshot.get('waiting', 0)}"
+        )
+    else:
+        governor_display = "نصب نشده"
     return (
         "🩺 وضعیت ربات\n\n"
         f"⏳ مدت اجرا: {up_h} ساعت و {up_m} دقیقه\n"
@@ -1138,6 +1160,7 @@ async def _bot_status_text(bot):
         f"🌀 تاخیر حلقه رویداد: {loop_lag_ms:.0f} ms\n"
         f"🌐 پاسخ سرور (RPC تست): {rpc_display}\n"
         f"📡 صف معلق اتصال: {sender_pending}\n"
+        f"🚦 بودجه RPC: {governor_display}\n"
         f"👷 ورکرها: {workers} | پردازش: {stats.get('processed', 0)} | "
         f"خطا: {stats.get('failed', 0)} | حذف از صف: {stats.get('dropped', 0)}\n"
         f"🗑 صف حذف: {delete_pending} پیام\n"
@@ -1176,17 +1199,20 @@ def _store_native_admin_cache(cache, key, value, expires_at):
         cache.pop(next(iter(cache)), None)
 
 
-async def _is_native_group_admin(bot, chat_id, user_id, sender):
+async def _is_native_group_admin(
+    bot, chat_id, user_id, sender, resolved_chat=None
+):
     """Read the actual Soroush group role for a management command only.
 
     Regular chat and content-filter paths must never call this.  The result
     is short-lived cached so a later management command does not repeat the
     RPC, while role changes are still seen after the TTL.
 
-    SPlusthon ``get_permissions`` looks the member up in the GetParticipant
-    ``users`` map.  Soroush often returns that map without this user, which
-    raises ``KeyError``.  The miss must be cached so a later command does
-    not retry the same RPC.
+    ``get_permissions`` first resolves its chat argument. Passing only the
+    short numeric Soroush id can miss SPlusthon's entity cache and raise a
+    ``KeyError`` before GetParticipant is sent. Reuse the event's already
+    resolved chat/InputPeer whenever available; the numeric id remains only
+    a compatibility fallback.
     """
     cache = getattr(bot, "native_group_admin_cache", None)
     if cache is None:
@@ -1197,7 +1223,9 @@ async def _is_native_group_admin(bot, chat_id, user_id, sender):
     if cached and cached[1] > now:
         return cached[0]
     try:
-        permissions = await bot.client.get_permissions(chat_id, sender or user_id)
+        permissions = await bot.client.get_permissions(
+            resolved_chat or chat_id, sender or user_id
+        )
         is_admin = bool(getattr(permissions, "is_admin", False))
         # Admin status stays short-lived so a demotion is seen soon.
         # A confirmed non-admin uses the longer negative TTL to avoid
@@ -2546,11 +2574,20 @@ async def handle_new_message(bot, event):
         # Native Soroush role is only needed to authorize management
         # commands. Regular chat and filter paths must not call
         # get_permissions (KeyError + one RTT per ordinary user).
+        resolved_permission_chat = (
+            event_chat
+            or _resolved_event_peer(event)
+            or getattr(bot, "reply_input_peer_cache", {}).get(
+                getattr(event, "chat_id", None)
+            )
+        )
         native_admin_bypass = bool(
             _should_check_native_admin(
                 event.is_private, registered_admin_bypass, message_text
             )
-            and await _is_native_group_admin(bot, chat_id, user_id, sender)
+            and await _is_native_group_admin(
+                bot, chat_id, user_id, sender, resolved_permission_chat
+            )
         )
         # A native group admin who is not registered in the bot follows the
         # warning counter, but can never enter automatic delete/ban/mute state.
@@ -6981,13 +7018,21 @@ async def handle_new_message(bot, event):
                         f"⚠️ کاربر {username}({user_id}) به آستانه {threshold} رسید - اعمال مجازات"
                     )
 
+                    threshold_action = bot.config_manager.get(
+                        "action_on_threshold", "mute"
+                    )
                     bot.logger.log_info(
                         "PUNISH START "
-                        f"user={user_id} chat_id={chat_id} action={bot.config_manager.get('action_on_threshold')}"
+                        f"user={user_id} chat_id={chat_id} "
+                        f"action={threshold_action}"
                     )
                     async def threshold_punish_succeeded(_result):
-                        bot.logger.log_info(f"MUTE FINISHED user={user_id} chat_id={chat_id} success=True")
-                        permanent = bot.config_manager.get("action_on_threshold") in ["ban", "kick"]
+                        bot.logger.log_info(
+                            "PUNISH FINISHED "
+                            f"user={user_id} chat_id={chat_id} "
+                            f"action={threshold_action} success=True"
+                        )
+                        permanent = threshold_action in ["ban", "kick"]
                         # The spam cleanup task sends the single combined
                         # cleanup notification; do not emit a second notice.
                         if permanent:
@@ -7005,8 +7050,9 @@ async def handle_new_message(bot, event):
                         bot.punished_users.discard(punish_key)
 
                     bot.logger.log_info(
-                        "MUTE START "
-                        f"user={user_id} chat_id={chat_id}"
+                        "PUNISH QUEUED "
+                        f"user={user_id} chat_id={chat_id} "
+                        f"action={threshold_action}"
                     )
                     bot.moderation_queue.enqueue(
                         chat_id,

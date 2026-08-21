@@ -20,6 +20,8 @@ import contextvars
 import inspect
 import time
 
+from modules.rpc_governor import RpcGovernor, classify_request
+
 try:
     from modules.group_id import normalize_group_id
     _HAS_NORMALIZE = True
@@ -102,34 +104,52 @@ _PATCHED_ATTR = "_outgoing_sender_patched"
 # Each chat has its own gate with limit 2, so 32+ groups do not share a global lock.
 # High-priority (admin/moderation, priority 0) bypasses the gate.
 class _LowGate:
+    """Small FIFO semaphore used only by ordinary sends of one chat."""
+
     def __init__(self, limit=1):
         self.limit = int(limit)
         self.inflight = 0
         self._waiters = []
+
     async def acquire(self):
-        import asyncio, time
         started = time.perf_counter()
         loop = asyncio.get_running_loop()
-        while self.inflight >= self.limit:
-            fut = loop.create_future()
-            self._waiters.append(fut)
-            try:
-                await fut
-            except asyncio.CancelledError:
-                if fut in self._waiters:
-                    self._waiters.remove(fut)
-                raise
-        self.inflight += 1
+        if self.inflight < self.limit and not self._waiters:
+            self.inflight += 1
+            return (time.perf_counter() - started) * 1000
+
+        future = loop.create_future()
+        self._waiters.append(future)
+        try:
+            # release() transfers an existing slot to this waiter, so the
+            # resumed task must not increment inflight a second time.
+            await future
+        except asyncio.CancelledError:
+            if future in self._waiters:
+                self._waiters.remove(future)
+            elif future.done() and not future.cancelled():
+                # Cancellation landed after slot transfer but before resume.
+                self.release()
+            raise
         return (time.perf_counter() - started) * 1000
+
     def release(self):
+        while self._waiters:
+            future = self._waiters.pop(0)
+            if future.done():
+                continue
+            # Keep inflight unchanged: the slot moves to this waiter.
+            future.set_result(True)
+            return
         if self.inflight > 0:
             self.inflight -= 1
-        while self._waiters and self.inflight < self.limit:
-            fut = self._waiters.pop(0)
-            if not fut.done():
-                fut.set_result(True)
 
-# Per-chat gates: chat_key -> _LowGate, so no global lock between groups
+    def idle(self):
+        return self.inflight == 0 and not self._waiters
+
+
+# Per-chat gates: chat_key -> _LowGate, so no global lock between groups.
+# Idle gates are removed after use to prevent one permanent dict row per chat.
 _CHAT_GATES = {}
 def _gate_for_chat(chat_id):
     key = _chat_key(chat_id)
@@ -138,6 +158,13 @@ def _gate_for_chat(chat_id):
         gate = _LowGate(limit=2)
         _CHAT_GATES[key] = gate
     return gate
+
+
+def _release_chat_gate(chat_id, gate):
+    gate.release()
+    key = _chat_key(chat_id)
+    if gate.idle() and _CHAT_GATES.get(key) is gate:
+        _CHAT_GATES.pop(key, None)
 
 
 class OutgoingSender:
@@ -442,82 +469,103 @@ def install_event_wrapper(event, sender):
     except (AttributeError, TypeError):
         return False
 
-def _wrap_call_with_gate(client, logger):
+def _wrap_call_with_gate(client, logger, governor=None):
+    """Install the outermost per-chat gate and global RPC governor.
+
+    ``orig`` already contains the profiler and 60-second network timeout.
+    Waiting here therefore cannot consume that timeout. No request is dropped:
+    every waiter either receives a permit or is cancelled by its own caller.
+    """
     orig = getattr(client, "_call", None)
     if orig is None or getattr(orig, "_patched_gate", False):
         return False
     import functools
-    # Define request priorities
-    _LOW = {"SendMessageRequest", "SendMediaRequest", "SendMultiMediaRequest", "ForwardMessagesRequest", "SendInlineBotResultRequest"}
-    _HIGH = {"DeleteMessagesRequest", "EditBannedRequest", "EditAdminRequest", "EditChatDefaultBannedRightsRequest", "DeleteChatUserRequest"}
-    _HEAVY = {"GetHistoryRequest", "GetMessagesRequest", "GetChannelDifferenceRequest", "GetDifferenceRequest", "GetParticipantsRequest"}
+
+    _LOW = {
+        "SendMessageRequest", "SendMediaRequest", "SendMultiMediaRequest",
+        "ForwardMessagesRequest", "SendInlineBotResultRequest",
+    }
+
     def _req_name(req):
         try:
-            # Unwrap InvokeWithoutUpdates etc.
-            cur = req
+            current = req
             seen = set()
-            while cur is not None and id(cur) not in seen:
-                seen.add(id(cur))
-                inner = getattr(cur, "query", None)
+            while current is not None and id(current) not in seen:
+                seen.add(id(current))
+                inner = getattr(current, "query", None)
                 if inner is None:
                     break
-                cur = inner
-            return type(cur).__name__
+                current = inner
+            return type(current).__name__
         except Exception:
             return type(req).__name__
+
+    def _request_chat(req):
+        for attr in ("peer", "channel", "entity", "chat_id"):
+            value = getattr(req, attr, None)
+            if value is None:
+                continue
+            for nested in ("channel_id", "chat_id", "user_id", "id"):
+                found = getattr(value, nested, None)
+                if found is not None:
+                    return found
+            if isinstance(value, (int, str)):
+                return value
+        return "global"
+
     @functools.wraps(orig)
     async def wrapped(sender, request, ordered=False, flood_sleep_threshold=None):
         name = _req_name(request)
         send_priority = _SEND_PRIORITY.get()
-        # Priority-0 moderation/admin notices really bypass the low gate.
-        # Previously the queue worker bypassed it but this inner wrapper did
-        # not, producing the observed 933ms urgent-send wait.
-        is_low = name in _LOW and send_priority != 0
-        is_high = name in _HIGH
-        # Only gate low-priority per-chat; high bypasses
-        gate_wait = 0
-        _gate = None
-        # For low-priority, we need chat_id to get per-chat gate. Try to extract from request.
-        if is_low:
-            try:
-                # Try to get chat_id from request for per-chat gate
-                _chat_for_gate = None
-                for attr in ("peer", "channel", "entity", "chat_id"):
-                    val = getattr(request, attr, None)
-                    if val is not None:
-                        for nested in ("channel_id", "chat_id", "user_id", "id"):
-                            v2 = getattr(val, nested, None)
-                            if v2 is not None:
-                                _chat_for_gate = v2
-                                break
-                        if _chat_for_gate is not None:
-                            break
-                        if isinstance(val, int):
-                            _chat_for_gate = val
-                            break
-                if _chat_for_gate is None:
-                    _chat_for_gate = "global"
-                _gate = _gate_for_chat(_chat_for_gate)
-                gate_wait = await _gate.acquire()
-            except Exception:
-                gate_wait = 0
-                _gate = None
-            if gate_wait >= 20 and logger:
-                # Find inflight for logging
-                try:
-                    infl = _gate.inflight if _gate else 0
-                except Exception:
-                    infl = 0
-                logger.log_info(f"OUTGOING RPC GATE request={name} wait_ms={gate_wait:.1f} inflight_low={infl}")
+        dispatch_priority = _DISPATCH_ACTIVE.get()
+        urgent_send = send_priority == 0
+        critical_context = bool(
+            dispatch_priority is not False
+            and dispatch_priority is not None
+            and not isinstance(dispatch_priority, bool)
+            and int(dispatch_priority) == 0
+        )
+        is_low = name in _LOW and not urgent_send
+        chat_for_gate = _request_chat(request)
+        gate_wait = 0.0
+        gate = None
+        gate_acquired = False
+        permit = None
+
         try:
-            return await orig(sender, request, ordered=ordered, flood_sleep_threshold=flood_sleep_threshold)
+            if is_low:
+                gate = _gate_for_chat(chat_for_gate)
+                gate_wait = await gate.acquire()
+                gate_acquired = True
+                if gate_wait >= 20 and logger:
+                    logger.log_info(
+                        "OUTGOING RPC GATE "
+                        f"request={name} wait_ms={gate_wait:.1f} "
+                        f"inflight_low={gate.inflight}"
+                    )
+
+            if governor is not None and (governor.enabled or governor.shadow):
+                admission = classify_request(
+                    request,
+                    urgent_send=urgent_send,
+                    critical_context=critical_context,
+                )
+                permit = await governor.acquire(admission)
+
+            return await orig(
+                sender,
+                request,
+                ordered=ordered,
+                flood_sleep_threshold=flood_sleep_threshold,
+            )
         finally:
-            if is_low and _gate is not None:
-                try:
-                    _gate.release()
-                except Exception:
-                    pass
+            if permit is not None:
+                permit.release()
+            if is_low and gate is not None and gate_acquired:
+                _release_chat_gate(chat_for_gate, gate)
+
     wrapped._patched_gate = True
+    wrapped._rpc_governor = governor
     try:
         client._call = wrapped
         return True
@@ -525,24 +573,45 @@ def _wrap_call_with_gate(client, logger):
         return False
 
 def install(client, bot, logger=None):
-    """Create OutgoingSender for this client/bot and patch send_message."""
+    """Install per-chat sending plus one shared bot-level RPC governor."""
     if getattr(client, _SENDER_ATTR, None) is not None:
         return getattr(client, _SENDER_ATTR)
-    sender = OutgoingSender(client, logger or getattr(bot, "logger", None))
+
+    effective_logger = logger or getattr(bot, "logger", None)
+    governor = getattr(bot, "rpc_governor", None)
+    if governor is None:
+        governor = RpcGovernor.from_environment(effective_logger)
+        try:
+            bot.rpc_governor = governor
+        except Exception:
+            pass
+        if effective_logger:
+            effective_logger.log_info(
+                "RPC GOVERNOR READY "
+                f"mode={governor.mode_label()} total={governor.total_limit} "
+                f"noncritical={governor.noncritical_limit} "
+                f"delete={governor.class_limits['delete']} "
+                f"send={governor.class_limits['send']} "
+                f"heavy={governor.class_limits['heavy']}"
+            )
+
+    sender = OutgoingSender(client, effective_logger)
     try:
         client._outgoing_sender = sender
         bot.outgoing_sender = sender
     except Exception:
         pass
     _wrap_send_message(client, sender)
-    _wrap_call_with_gate(client, logger)
+    _wrap_call_with_gate(client, effective_logger, governor)
     # Also store bot reference for event patching
     try:
         client._outgoing_sender_bot = bot
     except Exception:
         pass
-    if logger:
-        logger.log_info("OUTGOING SENDER installed (per-chat, separate from delete queue) + _call gate")
+    if effective_logger:
+        effective_logger.log_info(
+            "OUTGOING SENDER installed (per-chat queues + fair global RPC admission)"
+        )
     return sender
 
 def dispatch_active():

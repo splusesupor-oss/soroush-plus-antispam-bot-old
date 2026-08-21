@@ -143,22 +143,30 @@ def test_regular_message_does_not_call_get_permissions():
 
 
 def test_management_command_does_call_get_permissions():
-    print("\n### دستور مدیریتی native check را اجرا می‌کند")
+    print("\n### دستور مدیریتی native check را با chat حل‌شده اجرا می‌کند")
     client = _Client(is_admin=True)
     bot = _bot(client)
+    resolved_chat = SimpleNamespace(id=-1010, access_hash=987)
 
     async def run():
         called = False
         result = False
         if handler._should_check_native_admin(False, False, "قفل"):
             called = True
-            result = await handler._is_native_group_admin(bot, -1010, 55, None)
+            result = await handler._is_native_group_admin(
+                bot, -1010, 55, None, resolved_chat
+            )
         return called, result
 
     called, result = asyncio.run(run())
     check("management path entered", called is True)
     check("native admin True", result is True)
     check("one RPC", len(client.calls) == 1, f"-> {client.calls}")
+    check(
+        "resolved chat passed instead of short id",
+        client.calls[0][0] is resolved_chat,
+        f"-> {client.calls}",
+    )
 
 
 def test_keyerror_is_fail_closed_and_cached():

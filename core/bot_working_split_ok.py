@@ -46,7 +46,7 @@ from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from modules.message_delete_queue import MessageDeleteQueue
 from modules.notice_cleanup import NoticeCleanup
-from modules.outgoing_sender import OutgoingSender, install as install_outgoing_sender, install_event_wrapper
+from modules.outgoing_sender import install as install_outgoing_sender, install_event_wrapper
 from modules.group_dispatch import GroupDispatcher, classify_priority, looks_like_link
 from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
@@ -153,6 +153,9 @@ class SoroushAntiSpamBot:
                 3))
 
         self.client = None
+        # One fair connection-wide application RPC budget. It is created by
+        # outgoing_sender.install after .env has loaded and reused on rebuild.
+        self.rpc_governor = None
         # InputPeer cache used by ordinary replies; avoids per-message dialog
         # lookup while staying bounded for long-running multi-group sessions.
         self.reply_input_peer_cache = {}
@@ -678,9 +681,12 @@ class SoroushAntiSpamBot:
         self.message_delete_queue = MessageDeleteQueue(
             self.client, self.logger, batch_size=100, max_concurrent=4,
             inter_batch_delay=0)
-        # Outgoing sender for normal replies - separate from delete queue
-        self.outgoing_sender = OutgoingSender(self.client, self.logger)
-        install_outgoing_sender(self.client, self, self.logger)
+        # Outgoing sender for normal replies - separate from delete queue.
+        # install() is the single constructor so there is never an unused
+        # duplicate sender/queue object at startup.
+        self.outgoing_sender = install_outgoing_sender(
+            self.client, self, self.logger
+        )
         self.notice_cleanup.bind_delete_queue(self.message_delete_queue)
         self.notice_cleanup.client = self.client
         if getattr(self, "admin_actions", None) is not None:
