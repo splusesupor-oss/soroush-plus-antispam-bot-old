@@ -114,6 +114,19 @@ def _chat_id(owner, args, kwargs):
         return getattr(chat, "id", chat)
     if args and isinstance(args[0], int):
         return args[0]
+    # ``delete_messages(InputPeerChannel(...), ids)`` آرگومان اولش یک شیء
+    # peer است نه عدد؛ قبلاً اینجا None برمی‌گشت و در لاگِ
+    # «OUTGOING RPC WARNING … delete_message» به‌صورت chat_id=None دیده
+    # می‌شد. شناسهٔ عددی را از خود peer استخراج می‌کنیم.
+    if args:
+        first = args[0]
+        for attr in ("channel_id", "chat_id", "user_id", "id"):
+            try:
+                value = getattr(first, attr, None)
+            except Exception:
+                value = None
+            if isinstance(value, int):
+                return value
     return getattr(owner, "chat_id", None)
 
 
@@ -274,6 +287,24 @@ def _ensure_reconnect_hooks(client, logger):
 
     def ping_factory(original):
         def hooked(rnd_id):
+            # 🧟 پیش‌گیری از «سیل PingRequest»: پینگ‌های keepalive از مسیر
+            # client._call عبور نمی‌کنند، پس مهر زمانِ ردیفِ ۶۰ثانیه‌ای
+            # هرگز روی آن‌ها نمی‌خورد و در صورت از دست رفتن Pong برای
+            # همیشه در _pending_state می‌ماندند (در لاگ: sender_pending=63
+            # و سیل «pending msg … PingRequest»). پیش از ارسال هر پینگِ
+            # تازه، همهٔ ورودی‌های تکمیل‌شده و زامبی‌های قدیمی‌تر از ۱۸۰
+            # ثانیه را پاک می‌کنیم تا انباشت غیرممکن شود.
+            try:
+                from modules.connection_guard import (
+                    drop_completed_pending,
+                    drop_stale_pending,
+                    note_pending,
+                )
+                drop_completed_pending(sender)
+                note_pending(sender)
+                drop_stale_pending(sender, time.monotonic() - 180)
+            except Exception:
+                pass
             outstanding = getattr(sender, "_ping", None)
             snapshot = pending_rpc_snapshot(sender)
             if outstanding is None:
