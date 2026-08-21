@@ -33,6 +33,7 @@ from modules.owner_check import is_global_owner
 from modules.admin_storage import is_admin
 from modules.group_storage import get_group_owner
 from modules.user_display import format_user
+from modules.group_id import normalize_group_id
 
 _BASE = CONFIG_DIR
 _ADMIN_LOG_FILE = _BASE / "admin_log.json"
@@ -813,30 +814,75 @@ def get_group_lock(chat_id):
     return lock
 
 
+def _cleanup_rpc_targets(bot, chat_id):
+    """Prefer a resolved event InputPeer, then safe full/legacy ID forms."""
+    targets = []
+    wanted = normalize_group_id(chat_id)
+    cache = getattr(bot, "reply_input_peer_cache", {}) or {}
+    direct = cache.get(chat_id)
+    if direct is not None:
+        targets.append(direct)
+    for cached_id, peer in list(cache.items()):
+        if peer is not None and normalize_group_id(cached_id) == wanted:
+            targets.append(peer)
+            break
+
+    candidate_factory = getattr(
+        getattr(bot, "group_actions", None), "_peer_id_candidates", None
+    )
+    if callable(candidate_factory):
+        targets.extend(candidate_factory(chat_id))
+    targets.append(chat_id)
+
+    unique = []
+    markers = set()
+    for target in targets:
+        marker = repr(target)
+        if marker in markers:
+            continue
+        markers.add(marker)
+        unique.append(target)
+    return unique
+
+
 async def _snapshot_cleanup_message_ids(bot, chat_id, count, log):
-    """Freeze the IDs that existed when cleanup began; never chase new posts."""
-    ids = []
+    """Freeze existing IDs, distinguishing an empty group from RPC failure."""
     iterator_factory = getattr(bot.client, "iter_messages", None)
-    try:
-        if callable(iterator_factory):
-            async for message in iterator_factory(chat_id, limit=count):
-                message_id = getattr(message, "id", None)
-                if isinstance(message_id, int) and message_id > 0:
-                    ids.append(message_id)
-        else:
-            # Compatibility fallback for older clients. It may return fewer
-            # than requested, which is still a completed snapshot.
-            messages = await bot.client.get_messages(chat_id, limit=count)
-            ids = [getattr(message, "id", None) for message in messages]
-            ids = [message_id for message_id in ids
-                   if isinstance(message_id, int) and message_id > 0]
-    except Exception as error:
-        log(f"SNAPSHOT FAILED chat_id={chat_id} error={error!r}")
-        return []
-    # History APIs can overlap a page on reconnect; one ID must be deleted once.
-    ids = list(dict.fromkeys(ids))
-    log(f"SNAPSHOT chat_id={chat_id} requested={count} found={len(ids)}")
-    return ids
+    errors = []
+    for target in _cleanup_rpc_targets(bot, chat_id):
+        ids = []
+        try:
+            if callable(iterator_factory):
+                async for message in iterator_factory(target, limit=count):
+                    message_id = getattr(message, "id", None)
+                    if isinstance(message_id, int) and message_id > 0:
+                        ids.append(message_id)
+            else:
+                # Compatibility fallback for older clients. It may return fewer
+                # than requested, which is still a completed snapshot.
+                messages = await bot.client.get_messages(target, limit=count)
+                ids = [getattr(message, "id", None) for message in messages]
+                ids = [message_id for message_id in ids
+                       if isinstance(message_id, int) and message_id > 0]
+        except Exception as error:
+            errors.append(error)
+            log(
+                f"SNAPSHOT RETRY chat_id={chat_id} "
+                f"target_type={type(target).__name__} error={error!r}"
+            )
+            continue
+
+        # History pages can overlap after reconnect; delete every ID once.
+        ids = list(dict.fromkeys(ids))
+        log(
+            f"SNAPSHOT chat_id={chat_id} requested={count} found={len(ids)} "
+            f"target_type={type(target).__name__}"
+        )
+        return ids
+
+    last_error = errors[-1] if errors else RuntimeError("no cleanup target")
+    log(f"SNAPSHOT FAILED chat_id={chat_id} error={last_error!r}")
+    return None
 
 
 async def execute_cleanup(bot, chat_id, count, logger=None):
@@ -863,6 +909,11 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
             # notice messages are sent.  The delete phase receives this fixed
             # list and therefore can never wait for or consume new messages.
             ids = await _snapshot_cleanup_message_ids(bot, chat_id, count, _log)
+            if ids is None:
+                # Never mark a failed history lookup as a successful zero-item
+                # cleanup. The watcher retains the schedule for a later retry.
+                _log(f"ABORT chat_id={chat_id} reason=snapshot_failed")
+                return False
 
             # ۱) قفلِ گروه
             try:

@@ -163,7 +163,24 @@ class GroupActions:
         return tuple(candidates)
 
     async def _group_peer(self, chat_id):
-        """Use the legacy InputPeer resolution path without get_entity()."""
+        """Prefer the bot's resolved InputPeer, then legacy ID resolution."""
+        bot = getattr(self.client, "_outgoing_sender_bot", None)
+        cache = getattr(bot, "reply_input_peer_cache", {}) or {}
+        wanted = normalize_group_id(chat_id)
+        direct = cache.get(chat_id)
+        if direct is not None:
+            self.logger.log_info(
+                f"GROUP PEER CACHE HIT chat_id={chat_id} peer_type={type(direct).__name__}"
+            )
+            return direct
+        for cached_id, peer in list(cache.items()):
+            if peer is not None and normalize_group_id(cached_id) == wanted:
+                self.logger.log_info(
+                    f"GROUP PEER CACHE HIT chat_id={chat_id} "
+                    f"cached_id={cached_id} peer_type={type(peer).__name__}"
+                )
+                return peer
+
         last_error = None
         for candidate_id in self._peer_id_candidates(chat_id):
             try:
