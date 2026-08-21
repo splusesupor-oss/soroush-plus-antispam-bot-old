@@ -18,6 +18,7 @@ Priority: 0 = admin/moderation/urgent, 1 = normal chat.
 import asyncio
 import contextvars
 import inspect
+import os
 import time
 
 from modules.rpc_governor import RpcGovernor, classify_request
@@ -170,18 +171,35 @@ def _release_chat_gate(chat_id, gate):
 class OutgoingSender:
     """Per-chat queue for outgoing sends. Separate from delete queues."""
 
-    def __init__(self, client, logger, *, max_per_chat=800):
+    def __init__(self, client, logger, *, max_per_chat=800,
+                 normal_concurrency=None):
         self.client = client
         self.logger = logger
         self.max_per_chat = int(max_per_chat)
-        # Per-chat queues: separate for notification (priority 0, auto) vs normal (priority 1)
-        # This ensures a flood of normal replies does not delay an urgent auto notification,
-        # and vice versa. Each has its own worker per chat.
-        self._queues = {}  # (chat_key, kind) -> PriorityQueue where kind is "notif" or "normal"
-        self._workers = {}  # (chat_key, kind) -> Task
+        if normal_concurrency is None:
+            normal_concurrency = os.getenv(
+                "BOT_SEND_NORMAL_WORKERS_PER_CHAT", "2"
+            )
+        try:
+            self.normal_concurrency = min(
+                2, max(1, int(normal_concurrency))
+            )
+        except (TypeError, ValueError):
+            self.normal_concurrency = 2
+        # Urgent notifications and normal replies remain separate. Normal
+        # sends use both slots already allowed by the low-level per-chat gate;
+        # the former single worker left the second safe slot idle.
+        self._queues = {}
+        self._workers = {}  # (chat_key, kind) -> list[Task]
         self._seq = 0
         self._closed = False
         self.stats = {"enqueued": 0, "sent": 0, "failed": 0, "dropped": 0}
+        if self.logger:
+            self.logger.log_info(
+                "OUTGOING SENDER READY "
+                f"normal_workers_per_chat={self.normal_concurrency} "
+                "notification_workers_per_chat=1"
+            )
 
     def _queue_key(self, chat_id, priority):
         kind = "notif" if int(priority) == 0 else "normal"
@@ -194,6 +212,22 @@ class OutgoingSender:
             q = asyncio.PriorityQueue()
             self._queues[key] = q
         return q
+
+    def _worker_limit(self, qkey):
+        return 1 if qkey[1] == "notif" else self.normal_concurrency
+
+    def _start_worker_if_needed(self, qkey, chat_id, queue):
+        workers = self._workers.get(qkey)
+        if workers is None:
+            workers = []
+            self._workers[qkey] = workers
+        workers[:] = [worker for worker in workers if not worker.done()]
+        if queue.empty() or len(workers) >= self._worker_limit(qkey):
+            return False
+        workers.append(asyncio.create_task(
+            self._worker(qkey, chat_id, queue)
+        ))
+        return True
 
     def enqueue(self, chat_id, coro_factory, *, priority=1, on_done=None):
         """Enqueue a send. Never awaits. Returns True if accepted."""
@@ -216,9 +250,7 @@ class OutgoingSender:
         self._seq += 1
         q.put_nowait((pri, self._seq, chat_id, coro_factory, on_done, time.perf_counter()))
         self.stats["enqueued"] += 1
-        worker = self._workers.get(qkey)
-        if worker is None or worker.done():
-            self._workers[qkey] = asyncio.create_task(self._worker(qkey, chat_id, q))
+        self._start_worker_if_needed(qkey, chat_id, q)
         return True
 
     def enqueue_reply(self, event, text, *, priority=1, on_done=None, **kwargs):
@@ -256,7 +288,10 @@ class OutgoingSender:
         try:
             while True:
                 try:
-                    item = await queue.get()
+                    item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                try:
                     # Support both old (5-tuple) and new (6-tuple with chat_id) formats
                     if len(item) == 6:
                         priority, seq, orig_chat_id, factory, on_done, enqueued_at = item
@@ -322,16 +357,28 @@ class OutgoingSender:
                     if queue.empty():
                         return
         finally:
-            if self._workers.get(qkey) is asyncio.current_task():
+            workers = self._workers.get(qkey, [])
+            current = asyncio.current_task()
+            workers[:] = [
+                worker for worker in workers
+                if worker is not current and not worker.done()
+            ]
+            if not workers:
                 self._workers.pop(qkey, None)
-            if queue.empty():
+            if not self._closed and not queue.empty():
+                self._start_worker_if_needed(qkey, chat_id, queue)
+            elif queue.empty() and qkey not in self._workers:
                 self._queues.pop(qkey, None)
 
     async def close(self):
         self._closed = True
-        workers = list(self._workers.values())
-        for w in workers:
-            w.cancel()
+        workers = [
+            worker
+            for group in self._workers.values()
+            for worker in group
+        ]
+        for worker in workers:
+            worker.cancel()
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
         self._workers.clear()

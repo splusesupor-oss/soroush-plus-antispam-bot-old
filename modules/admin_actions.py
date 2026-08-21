@@ -4,6 +4,7 @@
 import asyncio
 import re
 from modules.group_stats import add_deleted
+from modules.group_id import normalize_group_id
 from datetime import timedelta
 
 try:
@@ -20,10 +21,40 @@ def _is_flood_wait(error):
 
 
 class AdminActions:
-    def __init__(self, client, logger, config_manager):
+    def __init__(self, client, logger, config_manager, *, peer_cache=None,
+                 bot_account_id=None):
         self.client = client
         self.logger = logger
         self.config = config_manager
+        self.peer_cache = peer_cache
+        self.bot_account_id = bot_account_id
+
+    def bind_runtime_context(self, *, peer_cache=None, bot_account_id=None):
+        if peer_cache is not None:
+            self.peer_cache = peer_cache
+        if bot_account_id is not None:
+            self.bot_account_id = bot_account_id
+
+    def _cached_chat_peer(self, chat_id):
+        cache = self.peer_cache
+        if not cache:
+            return None
+        direct = cache.get(chat_id)
+        if direct is not None:
+            return direct
+        wanted = normalize_group_id(chat_id)
+        for cached_id, peer in list(cache.items()):
+            if peer is not None and normalize_group_id(cached_id) == wanted:
+                return peer
+        return None
+
+    async def _input_entity(self, value):
+        resolver = getattr(self.client, "get_input_entity", None)
+        if callable(resolver):
+            return await resolver(value)
+        # Compatibility for lightweight clients/tests; active SPlusthon uses
+        # get_input_entity and therefore keeps the no-extra-full-entity path.
+        return await self.client.get_entity(value)
 
     async def _run_moderation_with_timeout(self, action, user_id, timeout_seconds, operation):
         """حد بالای عملیات؛ FloodWait را برای worker نگه می‌دارد."""
@@ -63,19 +94,31 @@ class AdminActions:
             return False
         return False
 
-    async def mute_user(self, chat_id, user_id, duration_seconds=None):
+    async def mute_user(self, chat_id, user_id, duration_seconds=None, *,
+                        user=None, chat=None):
         return await self._run_moderation_with_timeout(
-            "mute", user_id, 45, self._mute_user_rpc(chat_id, user_id, duration_seconds)
+            "mute", user_id, 45,
+            self._mute_user_rpc(
+                chat_id, user_id, duration_seconds, user=user, chat=chat,
+            )
         )
 
-    async def _mute_user_rpc(self, chat_id, user_id, duration_seconds=None):
+    async def _mute_user_rpc(self, chat_id, user_id, duration_seconds=None, *,
+                             user=None, chat=None):
         try:
             from datetime import datetime, timedelta, timezone
             from splusthon import types
             from splusthon.tl import functions
 
-            user = await self.client.get_input_entity(user_id)
-            chat = await self.client.get_input_entity(chat_id)
+            user = await self._input_entity(
+                user if user is not None else user_id
+            )
+            cached_chat = self._cached_chat_peer(chat_id)
+            chat = await self._input_entity(
+                chat if chat is not None else (
+                    cached_chat if cached_chat is not None else chat_id
+                )
+            )
 
             until_date = None if duration_seconds is None else datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
 
@@ -117,18 +160,31 @@ class AdminActions:
             self.logger.log_error(f"خطا در سکوت کاربر: {e}")
             return False
 
-    async def unmute_user(self, chat_id, user_id) -> bool:
+    async def unmute_user(self, chat_id, user_id, *, user=None,
+                          chat=None) -> bool:
         return await self._run_moderation_with_timeout(
-            "unmute", user_id, 15, self._unmute_user_rpc(chat_id, user_id)
+            "unmute", user_id, 15,
+            self._unmute_user_rpc(
+                chat_id, user_id, user=user, chat=chat,
+            )
         )
 
-    async def _unmute_user_rpc(self, chat_id, user_id) -> bool:
+    async def _unmute_user_rpc(self, chat_id, user_id, *, user=None,
+                               chat=None) -> bool:
         try:
-            user = await self.client.get_entity(user_id)
+            user_peer = await self._input_entity(
+                user if user is not None else user_id
+            )
+            cached_chat = self._cached_chat_peer(chat_id)
+            chat_peer = await self._input_entity(
+                chat if chat is not None else (
+                    cached_chat if cached_chat is not None else chat_id
+                )
+            )
 
             await self.client.edit_permissions(
-                chat_id,
-                user,
+                chat_peer,
+                user_peer,
                 send_messages=True,
                 send_media=True,
                 send_stickers=True,
@@ -149,7 +205,9 @@ class AdminActions:
             return False
 
 
-    async def ban_user(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:
+    async def ban_user(self, chat_id, user_id,
+                       reason="حذف دائمی به دلیل اسپم", *, user=None,
+                       chat=None) -> bool:
         # 🔇 حالت مجازات گروه: اگر مالک «تغییر مجازات» را روی سکوت گذاشته
         # باشد، همین‌جا به جای بن، سکوت دائمی اعمال می‌شود. مقدار برگشتی و
         # مسیر موفقیت/شکست عیناً مثل بن است تا callback ها و سیستم پاکسازی
@@ -161,22 +219,32 @@ class AdminActions:
         except Exception:
             mute_instead = False
         if mute_instead:
-            success = await self.mute_user(chat_id, user_id, None)
+            success = await self.mute_user(
+                chat_id, user_id, None, user=user, chat=chat,
+            )
             if success:
                 self.logger.log_action(
                     "MUTE_INSTEAD_OF_BAN", user_id, chat_id, reason
                 )
             return success
         return await self._run_moderation_with_timeout(
-            "ban", user_id, 45, self._ban_user_rpc(chat_id, user_id, reason)
+            "ban", user_id, 45,
+            self._ban_user_rpc(
+                chat_id, user_id, reason, user=user, chat=chat,
+            )
         )
 
-    async def _ban_user_rpc(self, chat_id, user_id, reason="حذف دائمی به دلیل اسپم") -> bool:
+    async def _ban_user_rpc(self, chat_id, user_id,
+                            reason="حذف دائمی به دلیل اسپم", *, user=None,
+                            chat=None) -> bool:
         """بن دائمی و ثبت پایدار کاربر برای جلوگیری از بازگشت."""
         try:
-            user = await self.client.get_entity(user_id)
-            me = await self.client.get_me()
-            if getattr(user, "id", user_id) == getattr(me, "id", None):
+            # Startup already resolved the bot identity. Repeating get_me for
+            # every ban added an avoidable Soroush request to the hot path.
+            if self.bot_account_id is None:
+                me = await self.client.get_me()
+                self.bot_account_id = getattr(me, "id", None)
+            if str(user_id) == str(self.bot_account_id):
                 self.logger.log_error(
                     "LEAVE REQUEST DEBUG\n"
                     f"chat_id={chat_id}\n"
@@ -186,15 +254,22 @@ class AdminActions:
                 )
                 return False
 
-            # A permanent ban is one EditBannedRequest.  ``kick_participant``
-            # performs a temporary ban + unban internally; following it with a
-            # permanent edit produced three EditBannedRequest RPCs for one
-            # spammer and made bans several seconds slower under load.
-            # Do not swallow failure: success callbacks must run only after the
-            # permanent restriction was actually accepted by SPlus.
+            source_user = user
+            user_peer = await self._input_entity(
+                source_user if source_user is not None else user_id
+            )
+            cached_chat = self._cached_chat_peer(chat_id)
+            chat_peer = await self._input_entity(
+                chat if chat is not None else (
+                    cached_chat if cached_chat is not None else chat_id
+                )
+            )
+
+            # A permanent ban remains one EditBannedRequest. Passing resolved
+            # peers prevents edit_permissions from re-resolving short IDs.
             await self.client.edit_permissions(
-                chat_id,
-                user,
+                chat_peer,
+                user_peer,
                 until_date=None,
                 view_messages=False,
             )
@@ -202,11 +277,12 @@ class AdminActions:
             try:
                 from modules.banned_storage import add_banned
 
-                username = getattr(user, "username", None)
+                metadata = source_user if source_user is not None else user_peer
+                username = getattr(metadata, "username", None)
                 display_name = " ".join(
                     part for part in (
-                        getattr(user, "first_name", None),
-                        getattr(user, "last_name", None),
+                        getattr(metadata, "first_name", None),
+                        getattr(metadata, "last_name", None),
                     ) if part
                 ).strip()
                 add_banned(
@@ -314,14 +390,17 @@ class AdminActions:
             self.logger.log_error(f"خطا در ارسال هشدار: {e}")
 
     async def punish_user(
-        self, chat_id, user_id, username: str = None, announce: bool = True
+        self, chat_id, user_id, username: str = None, announce: bool = True,
+        *, user=None, chat=None,
     ):
         """اعمال مجازات بر اساس تنظیمات"""
         action = self.config.get("action_on_threshold", "mute")
         duration = self.config.get("action_duration_seconds", 3600)
 
         if action == "mute":
-            success = await self.mute_user(chat_id, user_id, duration)
+            success = await self.mute_user(
+                chat_id, user_id, duration, user=user, chat=chat,
+            )
             if success and announce:
                 try:
                     sender2 = getattr(self.client, "_outgoing_sender", None)
@@ -345,7 +424,8 @@ class AdminActions:
             return success
         elif action in ["ban", "kick"]:
             success = await self.ban_user(
-                chat_id, user_id, reason="رسیدن به آستانه تخلفات"
+                chat_id, user_id, reason="رسیدن به آستانه تخلفات",
+                user=user, chat=chat,
             )
             if success and announce:
                 try:

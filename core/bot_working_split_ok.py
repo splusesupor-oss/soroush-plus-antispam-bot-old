@@ -502,7 +502,10 @@ class SoroushAntiSpamBot:
         )
 
         self.admin_actions = AdminActions(
-            self.client, self.logger, self.config_manager)
+            self.client, self.logger, self.config_manager,
+            peer_cache=self.reply_input_peer_cache,
+            bot_account_id=getattr(self, "bot_account_id", None),
+        )
         self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
 
         self.group_actions = GroupActions(
@@ -558,7 +561,10 @@ class SoroushAntiSpamBot:
                 # re-install wrapper for new client
                 install_outgoing_sender(new_client, self, self.logger)
             self.admin_actions = AdminActions(
-                new_client, self.logger, self.config_manager)
+                new_client, self.logger, self.config_manager,
+                peer_cache=self.reply_input_peer_cache,
+                bot_account_id=self.bot_account_id,
+            )
             self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
             if getattr(self, "notice_cleanup", None) is not None:
                 self.notice_cleanup.client = new_client
@@ -691,6 +697,11 @@ class SoroushAntiSpamBot:
         except Exception as error:
             self.bot_account_id = None
             self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
+        if getattr(self, "admin_actions", None) is not None:
+            self.admin_actions.bind_runtime_context(
+                peer_cache=self.reply_input_peer_cache,
+                bot_account_id=self.bot_account_id,
+            )
         asyncio.create_task(process_delete(self))
         # Automatic deletions have their own per-group workers and never run
         # synchronously in the incoming-message handler.

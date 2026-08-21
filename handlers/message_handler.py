@@ -484,7 +484,7 @@ def _handle_forwarded_group_message(
                     user_id=user_id,
                     timeout_seconds=15,
                     operation=lambda: bot.admin_actions.mute_user(
-                        chat_id, user_id, 24 * 60 * 60
+                        chat_id, user_id, 24 * 60 * 60, user=sender,
                     ),
                     on_success=forward_mute_finished,
                     on_failure=forward_mute_failed,
@@ -971,6 +971,11 @@ def _start_big_spam_cleanup(bot, event, chat_id, user_id, incident):
 
 def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
     """Ban at once and start deleting whatever IDs are already recorded."""
+    if sender is None:
+        sender = (
+            getattr(event, "sender", None)
+            or getattr(getattr(event, "message", None), "sender", None)
+        )
     key = _spam_runtime_key(chat_id, user_id)
     punish_key = _punishment_key(chat_id, user_id)
     current_id = getattr(getattr(event, "message", None), "id", None)
@@ -1032,7 +1037,7 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
     queued = bot.moderation_queue.enqueue(
         chat_id, "ban", user_id=user_id, timeout_seconds=45,
         operation=lambda: bot.admin_actions.ban_user(
-            chat_id, user_id, reason="اسپم بزرگ تکراری"
+            chat_id, user_id, reason="اسپم بزرگ تکراری", user=sender,
         ),
         on_success=succeeded, on_failure=failed,
     )
@@ -2977,7 +2982,8 @@ async def handle_new_message(bot, event):
                         user_id=user_id,
                         timeout_seconds=45,
                         operation=lambda: bot.admin_actions.ban_user(
-                            chat_id, user_id, reason="نام تبلیغاتی"
+                            chat_id, user_id, reason="نام تبلیغاتی",
+                            user=sender,
                         ),
                         on_success=ad_name_ban_succeeded,
                         on_failure=ad_name_ban_failed,
@@ -3498,7 +3504,9 @@ async def handle_new_message(bot, event):
                         "mute",
                         user_id=user_id,
                         timeout_seconds=15,
-                        operation=lambda: bot.admin_actions.mute_user(chat_id, user_id, 3600),
+                        operation=lambda: bot.admin_actions.mute_user(
+                            chat_id, user_id, 3600, user=sender,
+                        ),
                         on_success=gif_mute_succeeded,
                         on_failure=gif_mute_failed,
                     )
@@ -4033,7 +4041,8 @@ async def handle_new_message(bot, event):
                         user_id=user_id,
                         timeout_seconds=20,
                         operation=lambda: bot.admin_actions.ban_user(
-                            chat_id, user_id, reason="اسپم تکراری"
+                            chat_id, user_id, reason="اسپم تکراری",
+                            user=sender,
                         ),
                         on_success=repeat_history_ban_succeeded,
                         on_failure=repeat_history_ban_failed,
@@ -6516,7 +6525,8 @@ async def handle_new_message(bot, event):
                         user_id=user.id,
                         timeout_seconds=20,
                         operation=lambda: bot.admin_actions.punish_user(
-                            chat_id, user.id, username, announce=False
+                            chat_id, user.id, username, announce=False,
+                            user=user,
                         ),
                         on_success=warning_punish_succeeded,
                     )
@@ -6593,7 +6603,9 @@ async def handle_new_message(bot, event):
                     "mute",
                     user_id=target_user.id,
                     timeout_seconds=15,
-                    operation=lambda: bot.admin_actions.mute_user(chat_id, target_user.id),
+                    operation=lambda: bot.admin_actions.mute_user(
+                        chat_id, target_user.id, user=target_user,
+                    ),
                     on_success=mute_succeeded,
                     on_failure=mute_failed,
                 )
@@ -6666,7 +6678,9 @@ async def handle_new_message(bot, event):
                     "unmute",
                     user_id=target_user.id,
                     timeout_seconds=15,
-                    operation=lambda: bot.admin_actions.unmute_user(chat_id, target_user.id),
+                    operation=lambda: bot.admin_actions.unmute_user(
+                        chat_id, target_user.id, user=target_user,
+                    ),
                     on_success=unmute_succeeded,
                     on_failure=unmute_failed,
                 )
@@ -6859,7 +6873,8 @@ async def handle_new_message(bot, event):
                         user_id=user_id,
                         timeout_seconds=20,
                         operation=lambda: bot.admin_actions.punish_user(
-                            chat_id, user_id, username, announce=False
+                            chat_id, user_id, username, announce=False,
+                            user=sender,
                         ),
                         on_success=heavy_repeat_succeeded,
                         on_failure=heavy_repeat_failed,
@@ -7037,7 +7052,8 @@ async def handle_new_message(bot, event):
                                 user_id=user_id,
                                 timeout_seconds=20,
                                 operation=lambda: bot.admin_actions.ban_user(
-                                    chat_id, user_id, reason="اسپم مکرر شدید"
+                                    chat_id, user_id, reason="اسپم مکرر شدید",
+                                    user=sender,
                                 ),
                                 on_success=repeat_ban_succeeded,
                                 on_failure=repeat_ban_failed,
@@ -7185,7 +7201,8 @@ async def handle_new_message(bot, event):
                         user_id=user_id,
                         timeout_seconds=20,
                         operation=lambda: bot.admin_actions.punish_user(
-                            chat_id, user_id, username, announce=False
+                            chat_id, user_id, username, announce=False,
+                            user=sender,
                         ),
                         on_success=threshold_punish_succeeded,
                         on_failure=threshold_punish_failed,

@@ -1,5 +1,6 @@
-"""صف FIFO عملیات moderation، با worker مستقل برای هر گروه."""
+"""صف moderation با هم‌زمانی محدود برای کاربران مستقل هر گروه."""
 import asyncio
+import os
 try:
     from modules.group_id import normalize_group_id
     _HAS_NORMALIZE = True
@@ -59,6 +60,15 @@ _DEFAULT_TIMEOUT_SECONDS = 20
 _MAX_FLOOD_WAIT_RETRIES = 1
 
 
+def _per_chat_limit(value=None):
+    if value is None:
+        value = os.getenv("BOT_MODERATION_PER_CHAT_LIMIT", "3")
+    try:
+        return min(3, max(1, int(value)))
+    except (TypeError, ValueError):
+        return 3
+
+
 def flood_wait_seconds(error):
     """مدت FloodWait را بدون وابستگی مستقیم به نسخهٔ SPlusthon استخراج می‌کند."""
     name = error.__class__.__name__.lower()
@@ -85,18 +95,30 @@ class ModerationJob:
 
 
 class ModerationQueue:
-    """یک moderation RPC هم‌زمان برای هر chat، بدون تأخیر مصنوعی."""
+    """Moderation مستقل کاربران را محدود و هم‌زمان اجرا می‌کند.
 
-    def __init__(self, logger):
+    حداکثر سه کاربر از یک گروه هم‌زمان‌اند؛ کارهای یک کاربر همچنان سریال
+    می‌مانند. Governor سقف سراسری اتصال را جداگانه حفظ می‌کند.
+    """
+
+    def __init__(self, logger, *, per_chat_limit=None):
         self.logger = logger
+        self.per_chat_limit = _per_chat_limit(per_chat_limit)
         self._queues = {}
+        # chat key -> list[Task]
         self._workers = {}
+        self._user_locks = {}
         self._pending_keys = set()
         self._closed = False
         self._sequence = 0
         self._completed = 0
         self._queue_wait_total_ms = 0.0
         self._rpc_total_ms = 0.0
+        if self.logger is not None:
+            self.logger.log_info(
+                "MODERATION QUEUE READY "
+                f"per_chat_limit={self.per_chat_limit}"
+            )
 
     def enqueue(
         self,
@@ -142,85 +164,140 @@ class ModerationQueue:
         priority = 0 if action in {"punish", "ban"} else 1
         self._sequence += 1
         queue.put_nowait((priority, self._sequence, job))
+        workers = self._workers.get(k)
+        if workers is None:
+            workers = []
+            self._workers[k] = workers
+        workers[:] = [worker for worker in workers if not worker.done()]
         self.logger.log_info(
             "MODERATION QUEUE ENQUEUED "
-            f"chat_id={chat_id} action={action} user_id={user_id} pending={queue.qsize()}"
+            f"chat_id={chat_id} action={action} user_id={user_id} "
+            f"pending={queue.qsize()} active_workers={len(workers)} "
+            f"per_chat_limit={self.per_chat_limit}"
         )
-        worker = self._workers.get(k)
-        if worker is None or worker.done():
-            self._workers[k] = asyncio.create_task(self._worker(chat_id, queue))
+        # One new worker per accepted job, up to the strict per-chat cap.
+        # This removes the old 1–2 second wait behind an unrelated user while
+        # never allowing one noisy group to consume the whole connection.
+        if len(workers) < self.per_chat_limit:
+            workers.append(asyncio.create_task(
+                self._worker(chat_id, queue)
+            ))
+        return True
+
+    def _start_worker_if_needed(self, chat_id, queue):
+        key = _chat_key(chat_id)
+        workers = self._workers.get(key)
+        if workers is None:
+            workers = []
+            self._workers[key] = workers
+        workers[:] = [worker for worker in workers if not worker.done()]
+        if queue.empty() or len(workers) >= self.per_chat_limit:
+            return False
+        workers.append(asyncio.create_task(self._worker(chat_id, queue)))
         return True
 
     async def _worker(self, chat_id, queue):
         self.logger.log_info(f"MODERATION WORKER START chat_id={chat_id}")
+        key = _chat_key(chat_id)
         try:
             while True:
-                _priority, _sequence, job = await queue.get()
-                rpc_started_at = time.perf_counter()
-                queue_wait_ms = (rpc_started_at - job.enqueued_at) * 1000
-                started_wall = time.time()
-                result = "failed"
-                error = None
                 try:
-                    self.logger.log_info(
-                        "MODERATION RPC START "
-                        f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
-                        f"queue_wait_ms={queue_wait_ms:.2f} rpc_started_at={started_wall:.3f}"
-                    )
-                    value = await self._run_job(chat_id, job)
-                    if value is False:
-                        raise RuntimeError("moderation operation returned False")
-                    result = "success"
-                    if job.on_success:
-                        # Cleanup/notifications can involve slow delete/send
-                        # RPCs. They must never hold this chat's punish worker.
-                        asyncio.create_task(
-                            self._run_callback(job.on_success, value, chat_id, job.action)
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as caught:
-                    error = caught
-                    if isinstance(caught, asyncio.TimeoutError):
-                        result = "timeout"
-                    else:
-                        result = "failed"
-                    if job.on_failure:
-                        # Same as on_success: never hold this chat's punish
-                        # worker on a slow failure callback / reply.
-                        asyncio.create_task(
-                            self._run_callback(
-                                job.on_failure, caught, chat_id, job.action
-                            )
-                        )
-                    self.logger.log_error(
-                        "MODERATION RPC FAILED "
-                        f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
-                        f"error={caught!r}"
-                    )
-                finally:
-                    finished_wall = time.time()
-                    rpc_ms = (time.perf_counter() - rpc_started_at) * 1000
-                    self._record_completed(queue_wait_ms, rpc_ms)
-                    self.logger.log_info(
-                        "MODERATION RPC FINISHED "
-                        f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
-                        f"queue_wait_ms={queue_wait_ms:.2f} "
-                        f"rpc_started_at={started_wall:.3f} rpc_finished_at={finished_wall:.3f} "
-                        f"rpc_ms={rpc_ms:.2f} result={result} "
-                        f"avg_queue_wait_ms={self._queue_wait_total_ms / self._completed:.2f} "
-                        f"avg_rpc_ms={self._rpc_total_ms / self._completed:.2f}"
-                    )
-                    self._pending_keys.discard((_chat_key(chat_id), job.user_id, job.action))
-                    queue.task_done()
-                if queue.empty():
+                    _priority, _sequence, job = queue.get_nowait()
+                except asyncio.QueueEmpty:
                     return
+
+                # Different users may run concurrently, but two actions for
+                # the same user must retain the old serialization guarantee.
+                user_key = (key, str(job.user_id))
+                user_lock = self._user_locks.get(user_key)
+                if user_lock is None:
+                    user_lock = self._user_locks[user_key] = asyncio.Lock()
+                try:
+                    async with user_lock:
+                        await self._execute_job(chat_id, job)
+                finally:
+                    self._pending_keys.discard(
+                        (key, job.user_id, job.action)
+                    )
+                    queue.task_done()
+                    if (
+                        not user_lock.locked()
+                        and not any(
+                            pending[0] == key and str(pending[1]) == str(job.user_id)
+                            for pending in self._pending_keys
+                        )
+                    ):
+                        self._user_locks.pop(user_key, None)
         finally:
-            kk = _chat_key(chat_id)
-            if self._workers.get(kk) is asyncio.current_task():
-                self._workers.pop(kk, None)
-            if queue.empty():
-                self._queues.pop(kk, None)
+            workers = self._workers.get(key, [])
+            current = asyncio.current_task()
+            workers[:] = [
+                worker for worker in workers
+                if worker is not current and not worker.done()
+            ]
+            if not workers:
+                self._workers.pop(key, None)
+            # Close the enqueue/worker-exit race: if a job arrived after this
+            # worker observed an empty queue, immediately hand it a new worker.
+            if not self._closed and not queue.empty():
+                self._start_worker_if_needed(chat_id, queue)
+            elif queue.empty() and key not in self._workers:
+                self._queues.pop(key, None)
+
+    async def _execute_job(self, chat_id, job):
+        rpc_started_at = time.perf_counter()
+        queue_wait_ms = (rpc_started_at - job.enqueued_at) * 1000
+        started_wall = time.time()
+        result = "failed"
+        try:
+            self.logger.log_info(
+                "MODERATION RPC START "
+                f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
+                f"queue_wait_ms={queue_wait_ms:.2f} rpc_started_at={started_wall:.3f}"
+            )
+            value = await self._run_job(chat_id, job)
+            if value is False:
+                raise RuntimeError("moderation operation returned False")
+            result = "success"
+            if job.on_success:
+                # Cleanup/notifications can involve slow delete/send RPCs.
+                asyncio.create_task(
+                    self._run_callback(
+                        job.on_success, value, chat_id, job.action
+                    )
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as caught:
+            result = (
+                "timeout" if isinstance(caught, asyncio.TimeoutError)
+                else "failed"
+            )
+            if job.on_failure:
+                asyncio.create_task(
+                    self._run_callback(
+                        job.on_failure, caught, chat_id, job.action
+                    )
+                )
+            self.logger.log_error(
+                "MODERATION RPC FAILED "
+                f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
+                f"error={caught!r}"
+            )
+        finally:
+            finished_wall = time.time()
+            rpc_ms = (time.perf_counter() - rpc_started_at) * 1000
+            self._record_completed(queue_wait_ms, rpc_ms)
+            self.logger.log_info(
+                "MODERATION RPC FINISHED "
+                f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
+                f"queue_wait_ms={queue_wait_ms:.2f} "
+                f"rpc_started_at={started_wall:.3f} "
+                f"rpc_finished_at={finished_wall:.3f} "
+                f"rpc_ms={rpc_ms:.2f} result={result} "
+                f"avg_queue_wait_ms={self._queue_wait_total_ms / self._completed:.2f} "
+                f"avg_rpc_ms={self._rpc_total_ms / self._completed:.2f}"
+            )
 
     async def _run_job(self, chat_id, job):
         """deadline هر کوشش و تنها یک retry پس از FloodWait در همان worker."""
@@ -267,11 +344,16 @@ class ModerationQueue:
 
     async def close(self):
         self._closed = True
-        workers = list(self._workers.values())
+        workers = [
+            worker
+            for group in self._workers.values()
+            for worker in group
+        ]
         for worker in workers:
             worker.cancel()
         if workers:
             await asyncio.gather(*workers, return_exceptions=True)
         self._workers.clear()
         self._queues.clear()
+        self._user_locks.clear()
         self._pending_keys.clear()
