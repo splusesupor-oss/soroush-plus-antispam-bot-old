@@ -51,6 +51,7 @@ import time
 
 # Automatic cleanup must never hold the shared Soroush connection for a minute.
 _DELETE_RPC_TIMEOUT_SECONDS = 8.0
+_AUTOMATIC_DELETE_COOLDOWN_SECONDS = 60.0
 
 
 def _error_name(error):
@@ -138,6 +139,10 @@ class MessageDeleteQueue:
         self._queues = {}
         self._workers = {}
         self._pending_ids = set()
+        # A failing Soroush delete endpoint can retain calls for tens of
+        # seconds. Pause only automatic cleanup after that; manual priority-0
+        # deletes remain available to administrators.
+        self._automatic_pause_until = 0.0
         # Kept only so older callers that pass max_concurrent still construct.
         self._rpc_slots = None
         self._seq = 0
@@ -169,8 +174,19 @@ class MessageDeleteQueue:
         spam/link cleanup in the same chat. ``rpc_peer`` may carry a resolved
         InputPeer while ``chat_id`` remains the stable per-chat queue key.
         """
+        try:
+            priority = int(priority)
+        except (TypeError, ValueError):
+            priority = 1
+        requested_ids = [message_id for message_id in message_ids
+                         if isinstance(message_id, int) and message_id > 0]
+        loop = asyncio.get_running_loop()
+        if priority > 0 and time.monotonic() < self._automatic_pause_until:
+            result = loop.create_future()
+            result.set_result((0, requested_ids))
+            return result
         ids = []
-        for message_id in message_ids:
+        for message_id in requested_ids:
             if not isinstance(message_id, int) or message_id <= 0:
                 continue
             key = (_chat_key(chat_id), message_id)
@@ -178,7 +194,6 @@ class MessageDeleteQueue:
                 continue
             self._pending_ids.add(key)
             ids.append(message_id)
-        loop = asyncio.get_running_loop()
         result = loop.create_future()
         if not ids:
             result.set_result((0, []))
@@ -242,6 +257,10 @@ class MessageDeleteQueue:
                     raise
                 except Exception as error:
                     last_error = error
+                    self._automatic_pause_until = max(
+                        self._automatic_pause_until,
+                        time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
+                    )
                     self.logger.log_error(
                         "DELETE MESSAGE RPC FAILED "
                         f"chat_id={chat_id} count={len(batch)} attempt={attempt} "
@@ -307,6 +326,10 @@ class MessageDeleteQueue:
                     raise
                 except Exception as error:
                     item_error = error
+                    self._automatic_pause_until = max(
+                        self._automatic_pause_until,
+                        time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
+                    )
                 if not item_ok:
                     remaining.append(message_id)
                     self.logger.log_error(

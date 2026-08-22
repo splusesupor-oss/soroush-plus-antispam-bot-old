@@ -317,10 +317,8 @@ class NoticeCleanup:
         if queue is None or not message_ids:
             return None
         try:
-            # Notification deletes should have high priority (0) so they are not
-            # head-blocked by a heavy spam or manual delete for the same chat.
-            # They share the per-chat PriorityQueue with manual/spam, but with
-            # priority 0 they will jump ahead.
+            # Expired bot notices are cosmetic. Keep them behind manual deletes
+            # and inside the automatic-delete circuit breaker during outages.
             #
             # ⚠️ برای RPC حذف باید chat_id «اصلی» رویداد استفاده شود
             # (مثلاً ‎-1000022790753‎)؛ آی‌دی نرمال‌شدهٔ خام (22790753)
@@ -331,14 +329,14 @@ class NoticeCleanup:
             peer = self._rpc_peers.get(_chat_key(chat_id))
             try:
                 return queue.enqueue(
-                    target, message_ids, priority=0, rpc_peer=peer,
+                    target, message_ids, priority=1, rpc_peer=peer,
                 )
             except TypeError as error:
                 # Compatibility with a custom/legacy queue that predates the
                 # optional resolved-peer keyword.
                 if "rpc_peer" not in str(error):
                     raise
-                return queue.enqueue(target, message_ids, priority=0)
+                return queue.enqueue(target, message_ids, priority=1)
         except Exception as error:
             if self.logger is not None:
                 self.logger.log_error(
