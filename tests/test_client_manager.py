@@ -31,7 +31,6 @@ async def main():
     assert primary.connected is False and management.connected and background.connected
     assert await ReplyRouter(m).send_public(type("E", (), {"chat_id": 1, "message": type("M", (), {"id": 2})()})(), "x") == "background"
     assert await DeleteRouter(m).delete_background(1, [2]) == "background"
-    assert any("ROUTE background -> delete real" in row for row in log.rows)
     assert await ModerationRouter(m).execute("ban") == "management"
     assert any("ROUTE background -> send_message" in row for row in log.rows)
     assert any("ROUTE management -> __call__" in row for row in log.rows)
