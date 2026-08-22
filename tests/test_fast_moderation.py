@@ -137,7 +137,7 @@ class FastModerationTests(unittest.TestCase):
                 self.assertTrue(handled)
                 self.assertLess(handler_ms, 25.0)
                 await asyncio.sleep(0)
-                self.assertIn("⏳ درخواست سکوت ثبت شد", event.replies)
+                self.assertEqual(event.replies, [])
                 self.assertEqual(bot.client.get_messages_calls, 0)
                 self.assertIsNotNone(bot.moderation_queue.job)
                 self.assertEqual(
