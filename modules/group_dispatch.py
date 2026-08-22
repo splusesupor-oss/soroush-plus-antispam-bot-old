@@ -438,8 +438,10 @@ class GroupDispatcher:
                             queue_wait_threshold = 50.0
                             handler_threshold = 100.0
                         else:
-                            queue_wait_threshold = 2000.0
-                            handler_threshold = 1000.0
+                            # Production timing is reported by the silent
+                            # aggregate monitor; terminal timing logs are debug-only.
+                            queue_wait_threshold = float("inf")
+                            handler_threshold = float("inf")
                         if queue_wait_ms >= queue_wait_threshold:
                             self.logger.log_info(
                                 "QUEUE WAIT TIME "

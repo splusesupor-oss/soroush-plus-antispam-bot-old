@@ -2273,10 +2273,9 @@ async def handle_fast_moderation_command(
         f"command=سکوت chat_id={chat_id} reply_id={reply_id} "
         f"accepted={accepted}"
     )
-    if accepted:
-        _schedule_reply(bot, event, "⏳ درخواست سکوت ثبت شد")
-    else:
-        _schedule_reply(bot, event, "⏳ درخواست سکوت این کاربر از قبل در حال اجراست")
+    # Do not send an interim queue acknowledgement.  It costs another outgoing
+    # RPC and is misleading when the mute later fails; the callback above sends
+    # exactly one final success or failure message.
     return True
 
 

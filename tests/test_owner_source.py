@@ -108,11 +108,12 @@ class OwnerSourceTests(unittest.TestCase):
                 logger,
                 cooldown_seconds=0,
                 global_min_interval_seconds=0,
+                owner_notify_threshold_ms=150,
                 state_path=state_file,
             )
             monitor.start()
             self.assertTrue(monitor.record(
-                total_ms=175,
+                total_ms=1001,
                 chat_id=700,
                 message_id=701,
                 handler="canonical_owner_test",
@@ -130,7 +131,7 @@ class OwnerSourceTests(unittest.TestCase):
         self.assertEqual(len(client.sent), 1)
         target, report = client.sent[0]
         self.assertEqual(target.user_id, current["user_id"])
-        self.assertIn("نوع: SLOW_PROCESS", report)
+        self.assertIn("گزارش کندی شدید", report)
         self.assertFalse(logger.errors)
 
 
