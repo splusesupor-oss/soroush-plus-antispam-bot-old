@@ -1,5 +1,4 @@
 import json
-import re
 from pathlib import Path
 
 from modules.runtime_paths import runtime_config_file
@@ -78,11 +77,6 @@ def get_words(group_id):
     return data.get(normalize_group_id(group_id), [])
 
 
-# Independent of SpamDetector.check_banned_words. Split on anything that is
-# not a Latin/Persian letter or digit so punctuation stays a separator.
-_TOKEN_SPLIT = re.compile(r"[^0-9A-Za-zء-یگ]+")
-
-
 def normalize_filter_text(value):
     """Fold ي/ك, ZWNJ and case for group-filter matching only."""
     if not value:
@@ -92,27 +86,18 @@ def normalize_filter_text(value):
     return " ".join(text.split())
 
 
-def _tokens(value):
-    normalized = normalize_filter_text(value)
-    if not normalized:
-        return ()
-    return tuple(part for part in _TOKEN_SPLIT.split(normalized) if part)
-
-
 def find_matching_filter_word(text, words):
-    """Return the first group-filter word that appears as a standalone token."""
-    haystack = _tokens(text)
+    """Return the first group filter occurring anywhere in the message.
+
+    This intentionally preserves the original strict group-filter behavior:
+    a stored «پی» also matches «پیر».  Global forbidden words remain on their
+    separate whole-word path in SpamDetector and are not changed here.
+    """
+    haystack = normalize_filter_text(text)
     if not haystack:
         return None
     for word in words or ():
-        if not word:
-            continue
-        needle = _tokens(word)
-        if not needle:
-            continue
-        size = len(needle)
-        limit = len(haystack) - size + 1
-        for index in range(limit):
-            if haystack[index:index + size] == needle:
-                return word
+        needle = normalize_filter_text(word)
+        if needle and needle in haystack:
+            return word
     return None
