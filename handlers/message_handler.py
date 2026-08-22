@@ -7045,6 +7045,14 @@ async def handle_new_message(bot, event):
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی تکرار داخلی: {e}")
 
+        # Every public @username from a normal user is prohibited.  This is
+        # intentionally after the registered-admin/owner decision above: only
+        # those recorded authorities are exempt, never a merely native admin.
+        public_username_spam = bool(
+            not admin_bypass
+            and bot.detector.has_public_username(message_text)
+        )
+
         # Keep the cause separate from the shared deletion path.  The
         # ModerationQueue deletes both content-filter and spam messages, but
         # only a real spam trigger is allowed to emit the spam cleanup notice.
@@ -7102,6 +7110,10 @@ async def handle_new_message(bot, event):
                 _debug_log(bot, f"✅ ADMIN BYPASS FILTER: {sender_username}")
             is_spam = False
             reason = ""
+        elif public_username_spam:
+            is_spam = True
+            reason = "آیدی عمومی ممنوع"
+            moderation_trigger = "public_username"
         elif group_word_spam:
             is_spam = True
             reason = group_word_reason

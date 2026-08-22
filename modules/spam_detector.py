@@ -32,6 +32,11 @@ class SpamDetector:
 
         # الگوی آیدی و یوزرنیم
         self.username_pattern = re.compile(r'@[\w\d_]{4,32}|(?:آیدی|ایدی|پی وی|پی‌وی|pv)\s*[:：]?\s*@?\w+', re.IGNORECASE)
+        # Strict group policy: a plain public @username is advertising for
+        # ordinary users. Authorization is checked by the message handler.
+        self.public_username_pattern = re.compile(
+            r"(?<![A-Za-z0-9_@])@[A-Za-z0-9_]{4,32}(?![A-Za-z0-9_])"
+        )
 
         # الگوی تبلیغاتی عمومی
         self.mention_spam_pattern = re.compile(r'@everyone|@all|@here', re.IGNORECASE)
@@ -101,6 +106,10 @@ class SpamDetector:
         if self.persian_phone_pattern.search(text):
             return True, "شماره تماس"
         return False, None
+
+    def has_public_username(self, text: str) -> bool:
+        """Fast, allocation-free check for a public @username mention."""
+        return bool(self.public_username_pattern.search(str(text or "")))
 
     def check_usernames(self, text: str) -> Tuple[bool, Optional[str]]:
         if not self.config.get("check_usernames", True):

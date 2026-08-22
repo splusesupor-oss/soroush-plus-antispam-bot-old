@@ -2239,6 +2239,7 @@ class SoroushAntiSpamBot:
 
 
         @self.client.on(events.NewMessage())
+        @self.client.on(events.MessageEdited())
         async def new_message_handler(event):
             """Light-detect first, then enqueue heavy work.
 
