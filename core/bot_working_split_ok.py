@@ -47,7 +47,11 @@ from modules.moderation_queue import ModerationQueue
 from modules.outgoing_profiler import instrument_client, instrument_event
 from modules.message_delete_queue import MessageDeleteQueue
 from modules.notice_cleanup import NoticeCleanup
-from modules.outgoing_sender import install as install_outgoing_sender, install_event_wrapper
+from modules.outgoing_sender import (
+    install as install_outgoing_sender,
+    install_event_wrapper,
+    _SEND_PRIORITY,
+)
 from modules.group_dispatch import GroupDispatcher, classify_priority, looks_like_link
 from modules.light_spam_ingest import ingest_event
 from modules import connection_guard
@@ -1186,6 +1190,10 @@ class SoroushAntiSpamBot:
             (فعال / ثبت گروه / ثبت مالک) run on a dedicated fast path.
             """
             started_cmd = time.perf_counter()
+            # All replies generated while handling an explicit command get a
+            # reserved P0 send slot. Background notices remain P2 and may be
+            # shed under spam pressure instead of making commands feel dead.
+            _send_priority_token = _SEND_PRIORITY.set(0)
             text = ""
             try:
                 instrument_event(event, self.logger)
@@ -1260,6 +1268,7 @@ class SoroushAntiSpamBot:
                     f"error={handler_error!r}\n{_tb.format_exc()}"
                 )
             finally:
+                _SEND_PRIORITY.reset(_send_priority_token)
                 elapsed_ms = (time.perf_counter() - started_cmd) * 1000
                 monitor = getattr(self, "performance_monitor", None)
                 if monitor is not None:
