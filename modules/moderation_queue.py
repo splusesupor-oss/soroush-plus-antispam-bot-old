@@ -354,10 +354,19 @@ class ModerationQueue:
         self._rpc_total_ms += rpc_ms
 
     async def _run_callback(self, callback, argument, chat_id, action):
+        # Completion callbacks send cosmetic notices/history updates. They are
+        # created by a worker that originally inherited an admin dispatcher
+        # context; clear it so those sends are P2, never P0 beside manual mute.
+        try:
+            from modules.outgoing_sender import DISPATCH_ACTIVE_VAR, _SEND_PRIORITY
+            dispatch_token = DISPATCH_ACTIVE_VAR.set(False)
+            send_token = _SEND_PRIORITY.set(1)
+        except Exception:
+            DISPATCH_ACTIVE_VAR = _SEND_PRIORITY = None
+            dispatch_token = send_token = None
         try:
             result = callback(argument)
             if inspect.isawaitable(result):
-                # callbackها نیز ممکن است پاسخ شبکه‌ای ارسال کنند؛ بی‌deadline نمی‌مانند.
                 await asyncio.wait_for(result, timeout=10)
         except asyncio.CancelledError:
             raise
@@ -366,6 +375,11 @@ class ModerationQueue:
                 "MODERATION QUEUE CALLBACK FAILED "
                 f"chat_id={chat_id} action={action} error={error!r}"
             )
+        finally:
+            if _SEND_PRIORITY is not None:
+                _SEND_PRIORITY.reset(send_token)
+            if DISPATCH_ACTIVE_VAR is not None:
+                DISPATCH_ACTIVE_VAR.reset(dispatch_token)
 
     async def close(self):
         self._closed = True
