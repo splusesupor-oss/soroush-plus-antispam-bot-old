@@ -3196,14 +3196,20 @@ async def handle_new_message(bot, event):
                             f"name={shown_name!r} reason={ad_reason!r}"
                         )
                     return
-        # حساب خود ربات هرگز نباید وارد مسیرهای activity، فیلتر یا مجازات شود.
-        is_bot_account = (
-            user_id == getattr(bot, "bot_account_id", None)
-            or sender_username in {"aifox", "osine2"}
+        # حساب سشن نباید وارد activity، فیلتر یا مجازات شود. با این حال، در
+        # معماری userbot مالک همان حساب برای صدور فرمان عمومی استفاده می‌کند.
+        # پیش‌تر این گیتِ دوم، فرمانی را که از گیت اول عبور کرده بود دوباره
+        # می‌بلعید و «راهنما»/«روباه» هیچ‌وقت به handler نمی‌رسیدند.
+        clean_text = normalize_command(message_text)
+        is_session_account = user_id == getattr(bot, "bot_account_id", None)
+        is_named_bot_account = sender_username in {"aifox", "osine2"}
+        _self_priority, self_command_kind = classify_priority(clean_text, event)
+        is_session_command = (
+            is_session_account and self_command_kind in {"admin", "command"}
         )
-        # مالک اصلی باید به فرمان‌ها برسد؛ bypass امنیتی او از مسیر moderator
-        # اعمال می‌شود، نه با return پیش از handler.
-        if is_bot_account and not is_global_owner(user_id):
+        if ((is_session_account or is_named_bot_account)
+                and not is_global_owner(user_id)
+                and not is_session_command):
             if message_text.strip() == "اسم فامیل" or len(message_text.splitlines()) >= 7:
                 bot.logger.log_info(
                     "NAME FAMILY TRACE HANDLER_BLOCK "
@@ -3217,7 +3223,6 @@ async def handle_new_message(bot, event):
         # Normalize only the routing copy; keep message_text unchanged for filters.
         # COMMAND_MATCH is the cheap text classify only — never include
         # get_entity / search / economy time in this stage.
-        clean_text = normalize_command(message_text)
         profiler.mark("COMMAND_MATCH")
         # 📢 مسیر گروهی اطلاع‌رسانی: فقط مالک اصلی ربات؛ همان workflow پیوی.
         # قبل از هر هندلر دیگری چک می‌شود تا بدنهٔ اطلاعیه (متن آزاد) توسط
