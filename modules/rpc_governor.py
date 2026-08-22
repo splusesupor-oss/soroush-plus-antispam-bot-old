@@ -252,8 +252,8 @@ class RpcGovernor:
     def __init__(
         self,
         *,
-        total_limit=4,
-        noncritical_limit=2,
+        total_limit=2,
+        noncritical_limit=1,
         delete_limit=1,
         send_limit=1,
         heavy_limit=1,
@@ -299,8 +299,8 @@ class RpcGovernor:
         return cls(
             # A single Soroush connection becomes unstable above these caps;
             # retain env configurability only for making limits stricter.
-            total_limit=min(4, _env_int("BOT_RPC_TOTAL_LIMIT", 4)),
-            noncritical_limit=min(2, _env_int("BOT_RPC_NONCRITICAL_LIMIT", 2)),
+            total_limit=min(2, _env_int("BOT_RPC_TOTAL_LIMIT", 2)),
+            noncritical_limit=min(1, _env_int("BOT_RPC_NONCRITICAL_LIMIT", 1)),
             delete_limit=min(1, _env_int("BOT_RPC_DELETE_LIMIT", 1)),
             send_limit=min(1, _env_int("BOT_RPC_SEND_LIMIT", 1)),
             heavy_limit=_env_int("BOT_RPC_HEAVY_LIMIT", 1),
