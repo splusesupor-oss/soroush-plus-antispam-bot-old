@@ -34,8 +34,6 @@ async def main():
     assert await ModerationRouter(m).execute("ban") == "management"
     assert any("ROUTE background -> send_message" in row for row in log.rows)
     assert any("ROUTE management -> __call__" in row for row in log.rows)
-    m.observe_routes()
-    assert any("ROUTE primary -> receive dry_run=True" in row for row in log.rows)
     # A failed management client cannot use primary as a fallback.
     broken = ClientManager(primary, management_factory=lambda: Client("bad", True), background_factory=lambda: background, enabled=True)
     await broken.connect_workers()

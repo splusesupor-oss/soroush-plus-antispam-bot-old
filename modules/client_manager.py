@@ -54,12 +54,6 @@ class ClientManager:
             raise ClientRouteError(f"ROUTE {role} unavailable; no fallback")
         return client
 
-    def observe_routes(self) -> None:
-        """Emit no-RPC route telemetry for stage-two verification."""
-        self._log("ROUTE primary -> receive dry_run=True")
-        self._log("ROUTE management -> moderation dry_run=True")
-        self._log("ROUTE background -> reply/delete dry_run=True")
-
     async def connect_workers(self) -> bool:
         if not self.enabled:
             self._log("CLIENT MANAGER safe_single_client_mode enabled")

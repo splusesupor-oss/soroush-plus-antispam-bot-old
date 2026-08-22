@@ -494,8 +494,6 @@ class SoroushAntiSpamBot:
             f"management_session={bool(management_session)} "
             f"background_session={bool(background_session)}"
         )
-        if os.getenv("BOT_MULTI_CLIENT_ROUTE_OBSERVE", "0").strip() in {"1", "true", "yes", "on"}:
-            self.client_manager.observe_routes()
         return self.client_manager
 
     async def initialize_client(self):
