@@ -17,4 +17,4 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
-exec python3 watchdog.py
+exec python3 watchdog.py --replace

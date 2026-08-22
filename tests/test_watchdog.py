@@ -131,6 +131,12 @@ class WatchdogTests(unittest.TestCase):
             self.assertEqual(status["state"], "stale")
             self.assertIsNone(status["active_pid"])
 
+    def test_replace_wait_returns_when_previous_pid_is_already_dead(self):
+        with mock.patch.object(
+            watchdog.SingleInstance, "_pid_alive", return_value=False
+        ):
+            self.assertTrue(watchdog._stop_active_watchdog(999999999, 0.01))
+
     def test_clean_flock_close_removes_its_record(self):
         with tempfile.TemporaryDirectory() as directory:
             lock_file = Path(directory) / "watchdog.lock"

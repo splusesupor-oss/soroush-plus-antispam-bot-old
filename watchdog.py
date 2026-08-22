@@ -843,6 +843,24 @@ def _parse_command(remainder: Sequence[str]) -> List[str]:
     return command or [sys.executable, "-u", "main.py"]
 
 
+def _stop_active_watchdog(pid: Optional[int], timeout_seconds: float = 15.0) -> bool:
+    """Ask a verified existing watchdog to stop, then wait for its lock to die."""
+    if pid is None or not SingleInstance._pid_alive(pid):
+        return True
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        if not SingleInstance._pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return not SingleInstance._pid_alive(pid)
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Permanent crash-only supervisor for the Soroush Plus bot",
@@ -856,6 +874,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--no-owner-report",
         action="store_true",
         help="disable owner delivery; intended only for local tests",
+    )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="stop a verified active watchdog, then start this one",
     )
     parser.add_argument(
         "command",
@@ -890,16 +913,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except WatchdogAlreadyRunning as error:
         status = SingleInstance.status(error.path)
         pid = status.get("pid") or "unknown"
-        print(
-            "Watchdog فعال است؛ اجرای دوم انجام نشد "
-            f"(pid={pid}, lock={error.path}, status={status.get('state')})",
-            file=sys.stderr,
-        )
-        logger.info(
-            "WATCHDOG ALREADY ACTIVE pid=%s lock=%s cmdline_match=%s",
-            status.get("pid"), error.path, status.get("cmdline_match"),
-        )
-        return 2
+        if not args.replace:
+            print(
+                "Watchdog فعال است؛ اجرای دوم انجام نشد "
+                f"(pid={pid}, lock={error.path}, status={status.get('state')})",
+                file=sys.stderr,
+            )
+            logger.info(
+                "WATCHDOG ALREADY ACTIVE pid=%s lock=%s cmdline_match=%s",
+                status.get("pid"), error.path, status.get("cmdline_match"),
+            )
+            return 2
+        print(f"Watchdog فعال قبلی متوقف می‌شود (pid={pid})...", file=sys.stderr)
+        if not _stop_active_watchdog(error.pid):
+            print(f"Watchdog قبلی متوقف نشد (pid={pid})", file=sys.stderr)
+            return 2
+        instance = SingleInstance(LOCK_FILE)
+        try:
+            instance.acquire()
+        except (WatchdogAlreadyRunning, WatchdogLockError) as retry_error:
+            print(f"Watchdog جایگزین اجرا نشد: {retry_error}", file=sys.stderr)
+            return 2
     except WatchdogLockError as error:
         # Do not misreport filesystem/permission problems as a duplicate.
         print(f"Watchdog lock error: {error}", file=sys.stderr)
