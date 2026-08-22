@@ -108,6 +108,7 @@ class OwnerSourceTests(unittest.TestCase):
                 logger,
                 cooldown_seconds=0,
                 global_min_interval_seconds=0,
+                owner_notify_threshold_ms=150,
                 state_path=state_file,
             )
             monitor.start()

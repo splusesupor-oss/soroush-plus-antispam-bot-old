@@ -6,12 +6,25 @@ import asyncio
 import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# The production dependency is optional in offline tests.  Owner-peer
+# resolution only needs these two tiny peer containers here.
+if "splusthon" not in sys.modules:
+    splusthon = types.ModuleType("splusthon")
+    class _PeerUser:
+        def __init__(self, user_id): self.user_id = user_id
+    class _InputPeerUser:
+        def __init__(self, user_id, access_hash):
+            self.user_id, self.access_hash = user_id, access_hash
+    splusthon.types = types.SimpleNamespace(PeerUser=_PeerUser, InputPeerUser=_InputPeerUser)
+    sys.modules["splusthon"] = splusthon
 
 from modules import owner_private as private_owner
 from modules import performance_monitor as monitoring
@@ -62,6 +75,7 @@ class FakeClient:
         self.get_me_calls = []
         self.resolved = []
         self.sent = []
+        self._sender = None
 
     async def get_me(self, input_peer=False):
         self.get_me_calls.append(input_peer)
@@ -95,6 +109,51 @@ class SlowProcessMonitorTests(unittest.TestCase):
     def tearDown(self):
         private_owner.get_owner = self.original_get_owner
 
+
+    def test_routine_slow_events_are_local_only_by_default(self):
+        async def scenario(state_file):
+            logger = Logger()
+            client = FakeClient(self.owner_id)
+            monitor = monitoring.SlowProcessMonitor(client, logger, state_path=state_file)
+            self.assertFalse(monitor.record(
+                total_ms=950,
+                chat_id=77,
+                message_id=3,
+                handler="routine_slow_handler",
+            ))
+            await asyncio.sleep(0)
+            await monitor.close()
+            return logger, client
+
+        with tempfile.TemporaryDirectory() as directory:
+            logger, client = asyncio.run(scenario(Path(directory) / "state.json"))
+        self.assertEqual(client.sent, [])
+        self.assertTrue(any("total_ms=950.0" in row for row in logger.infos))
+
+    def test_owner_report_is_skipped_under_transport_pressure(self):
+        async def scenario(state_file):
+            logger = Logger()
+            client = FakeClient(self.owner_id)
+            client._sender = type("Sender", (), {"_pending_state": list(range(8))})()
+            monitor = monitoring.SlowProcessMonitor(
+                client, logger, state_path=state_file,
+                owner_notify_threshold_ms=150, rpc_pressure_limit=8,
+                cooldown_seconds=0, global_min_interval_seconds=0,
+            )
+            monitor.start()
+            self.assertTrue(monitor.record(
+                total_ms=2500, chat_id=77, message_id=4,
+                handler="congested_handler",
+            ))
+            await monitor.queue.join()
+            await monitor.close()
+            return logger, client
+
+        with tempfile.TemporaryDirectory() as directory:
+            logger, client = asyncio.run(scenario(Path(directory) / "state.json"))
+        self.assertEqual(client.sent, [])
+        self.assertTrue(any("OWNER REPORT SKIPPED RPC_PRESSURE" in row for row in logger.infos))
+
     def test_at_or_below_150ms_never_logs_or_sends(self):
         async def scenario(state_file):
             logger = Logger()
@@ -103,6 +162,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                 client,
                 logger,
                 cooldown_seconds=0,
+                owner_notify_threshold_ms=150,
                 global_min_interval_seconds=0,
                 state_path=state_file,
             )
@@ -138,6 +198,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                 client,
                 logger,
                 cooldown_seconds=600,
+                owner_notify_threshold_ms=150,
                 global_min_interval_seconds=0,
                 state_path=state_file,
             )
@@ -191,6 +252,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                 client,
                 logger,
                 cooldown_seconds=600,
+                owner_notify_threshold_ms=150,
                 global_min_interval_seconds=0,
                 state_path=state_file,
             )
@@ -241,6 +303,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                 first_client,
                 Logger(),
                 cooldown_seconds=600,
+                owner_notify_threshold_ms=150,
                 global_min_interval_seconds=0,
                 state_path=state_file,
             )
@@ -260,6 +323,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                 second_client,
                 Logger(),
                 cooldown_seconds=600,
+                owner_notify_threshold_ms=150,
                 global_min_interval_seconds=0,
                 state_path=state_file,
             )
@@ -293,6 +357,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                 client,
                 logger,
                 cooldown_seconds=0,
+                owner_notify_threshold_ms=150,
                 global_min_interval_seconds=0,
                 state_path=state_file,
             )
@@ -348,6 +413,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                     client,
                     logger,
                     cooldown_seconds=0,
+                    owner_notify_threshold_ms=150,
                     global_min_interval_seconds=0,
                     state_path=state_file,
                 )
@@ -394,6 +460,7 @@ class SlowProcessMonitorTests(unittest.TestCase):
                 client,
                 logger,
                 cooldown_seconds=0,
+                owner_notify_threshold_ms=150,
                 global_min_interval_seconds=0,
                 state_path=state_file,
             )

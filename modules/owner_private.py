@@ -216,7 +216,7 @@ def _persisted_owner_peer(owner_id: int) -> Any:
         access_hash = int(data["access_hash"])
         _PERSISTED_ACCESS_HASH[int(owner_id)] = access_hash
         return types.InputPeerUser(int(owner_id), access_hash)
-    except (OSError, KeyError, TypeError, ValueError):
+    except (ImportError, OSError, KeyError, TypeError, ValueError):
         return None
 
 

@@ -23,8 +23,12 @@ from modules.time_utils import now_local
 STATE_FILE = runtime_config_file("performance_monitor_state.json", migrate=False)
 MIN_THRESHOLD_MS = 150.0
 DEFAULT_COOLDOWN_SECONDS = 10 * 60.0
-DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS = 30.0
-DEFAULT_QUEUE_SIZE = 32
+DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS = 5 * 60.0
+# Owner delivery is intentionally much stricter than local slow-event logs.
+# A 150ms event is useful diagnostics, but it must never create an RPC.
+DEFAULT_OWNER_NOTIFY_THRESHOLD_MS = 2000.0
+DEFAULT_RPC_PRESSURE_LIMIT = 8
+DEFAULT_QUEUE_SIZE = 8
 _STATE_RETENTION_SECONDS = 24 * 60 * 60
 
 
@@ -123,6 +127,8 @@ class SlowProcessMonitor:
         *,
         cooldown_seconds: Optional[float] = None,
         global_min_interval_seconds: Optional[float] = None,
+        owner_notify_threshold_ms: Optional[float] = None,
+        rpc_pressure_limit: Optional[int] = None,
         queue_size: Optional[int] = None,
         state_path: Optional[os.PathLike] = None,
         send_timeout: float = 60.0,
@@ -145,6 +151,20 @@ class SlowProcessMonitor:
             )
             if global_min_interval_seconds is None
             else max(0.0, float(global_min_interval_seconds))
+        )
+        self.owner_notify_threshold_ms = (
+            _env_float(
+                "WATCHDOG_SLOW_OWNER_NOTIFY_THRESHOLD_MS",
+                DEFAULT_OWNER_NOTIFY_THRESHOLD_MS,
+                minimum=MIN_THRESHOLD_MS,
+            )
+            if owner_notify_threshold_ms is None
+            else max(MIN_THRESHOLD_MS, float(owner_notify_threshold_ms))
+        )
+        self.rpc_pressure_limit = (
+            _env_int("WATCHDOG_SLOW_RPC_PRESSURE_LIMIT", DEFAULT_RPC_PRESSURE_LIMIT)
+            if rpc_pressure_limit is None
+            else max(1, int(rpc_pressure_limit))
         )
         selected_queue_size = (
             _env_int("WATCHDOG_SLOW_QUEUE_SIZE", DEFAULT_QUEUE_SIZE)
@@ -185,7 +205,9 @@ class SlowProcessMonitor:
             "SLOW PROCESS MONITOR STARTED "
             f"threshold_ms={self.threshold_ms:.1f} "
             f"cooldown_s={self.cooldown_seconds:.1f} "
-            f"global_min_interval_s={self.global_min_interval_seconds:.1f}"
+            f"global_min_interval_s={self.global_min_interval_seconds:.1f} "
+            f"owner_notify_threshold_ms={self.owner_notify_threshold_ms:.1f} "
+            f"rpc_pressure_limit={self.rpc_pressure_limit}"
         )
         return True
 
@@ -232,6 +254,12 @@ class SlowProcessMonitor:
         # suppressed by cooldown.
         self._log_info(line)
 
+        # Local logging is cheap and intentionally covers every >150ms event.
+        # Private reports are diagnostics only, so never turn routine latency
+        # into another competing send_message RPC.
+        if elapsed < self.owner_notify_threshold_ms:
+            return False
+
         if self._closed:
             return False
         if self._worker_task is None or self._worker_task.done():
@@ -275,6 +303,24 @@ class SlowProcessMonitor:
         self._last_report[key] = now
         self._last_global = now
         return True
+
+    @staticmethod
+    def _size_of(value: Any) -> int:
+        try:
+            return len(value)
+        except (TypeError, AttributeError):
+            return 0
+
+    def _rpc_pressure(self) -> int:
+        """Best-effort count of pending transport requests; no RPC is made."""
+        sender = getattr(self.client, "_sender", None)
+        if sender is None:
+            return 0
+        return max(
+            self._size_of(getattr(sender, "_pending_state", None)),
+            self._size_of(getattr(sender, "_pending", None)),
+            self._size_of(getattr(sender, "_send_queue", None)),
+        )
 
     async def _private_owner_target(self) -> Any:
         return await resolve_private_owner_peer(
@@ -334,6 +380,14 @@ class SlowProcessMonitor:
             event = await self.queue.get()
             key = event["key"]
             try:
+                pressure = self._rpc_pressure()
+                if pressure >= self.rpc_pressure_limit:
+                    self._log_info(
+                        "SLOW_PROCESS OWNER REPORT SKIPPED RPC_PRESSURE "
+                        f"handler={event['handler']} chat_id={event['chat_id']} "
+                        f"pending_rpc={pressure} limit={self.rpc_pressure_limit}"
+                    )
+                    continue
                 target = await self._private_owner_target()
                 result = self.client.send_message(target, self.format_report(event))
                 if inspect.isawaitable(result):
