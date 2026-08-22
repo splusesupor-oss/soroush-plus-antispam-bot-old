@@ -313,9 +313,10 @@ class RpcGovernor:
             shadow=_env_bool("BOT_RPC_GOVERNOR_SHADOW", False),
             logger=logger,
             wait_log_ms=_env_float("BOT_RPC_WAIT_LOG_MS", 20.0),
-            # Fast mode: do not retain queued cosmetic sends behind an active
-            # connection. A send either starts now or is intentionally dropped.
-            max_send_waiters=0,
+            # A zero-length send queue drops every reply whenever one delete,
+            # read or moderation RPC is active. Keep this bounded, but allow
+            # public commands and help replies to wait for the shared session.
+            max_send_waiters=max(8, _env_int("BOT_RPC_MAX_SEND_WAITERS", 32)), 
         )
 
     @property
