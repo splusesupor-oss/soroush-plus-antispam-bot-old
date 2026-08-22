@@ -4943,7 +4943,10 @@ async def handle_new_message(bot, event):
                 "برای آشنایی با امکانات و خدمات بیشتر، کلمه «راهنما» را ارسال کنید."
             )
             return
-        if re.match(r"^(?:روباه|ربات)(?:[،,]\s*|\s+).+", clean_text):
+        if clean_text.startswith((
+            "روباه ", "روباه،", "روباه,",
+            "ربات ", "ربات،", "ربات,",
+        )):
             await event.reply("🦊 جانم، بگو.")
             return
 
