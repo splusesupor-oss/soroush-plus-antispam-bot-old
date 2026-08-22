@@ -55,6 +55,7 @@ from handlers.photo_download_handler import handle as handle_photo_download
 # ⏳ تاریخ انقضای گروه — قابلیتی کاملاً مستقل با مسیر پردازش جدا.
 from handlers.group_expiry_handler import (
     EXPIRED_NOTICE as GROUP_EXPIRED_NOTICE,
+    blocks_message as group_expiry_blocks,
     handle as handle_group_expiry,
 )
 from modules.expiry_report import build_group_list
@@ -3415,11 +3416,10 @@ async def handle_new_message(bot, event):
                 bot, event, chat_id, sender, clean_text, bot.logger
             ):
                 return
-            # انقضای ثبت گروه نباید مسیر پیام، پاسخ‌های عمومی یا مدیریت را
-            # خاموش کند. پیش‌تر این return باعث می‌شد در گروه‌های منقضی فقط
-            # بعضی مسیرهای زودهنگام (مثل moderation خودکار) اجرا شوند ولی
-            # صدا زدن ربات و دستورهای عادی بی‌پاسخ بمانند.
-            # اعلان/تمدید همچنان در handle_group_expiry پردازش می‌شود.
+            # گروه منقضی: همهٔ قابلیت‌ها متوقف می‌شوند تا مالک اصلی دوباره
+            # یکی از سه دستور را بفرستد.
+            if group_expiry_blocks(chat_id, sender):
+                return
 
         # ------------------------------------------------------------------
         # 🔎 جستجوی گوگل گروه — فقط مدیریت ادمین یا reply مجاز به پیام ربات.
