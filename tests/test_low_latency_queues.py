@@ -144,6 +144,38 @@ def test_moderation_per_chat_cap_is_strict():
     assert sorted(started) == [0, 1, 2, 3]
 
 
+
+def test_manual_mute_jumps_a_queued_automatic_ban():
+    async def scenario():
+        queue = ModerationQueue(Logger(), per_chat_limit=1)
+        first_started, release = asyncio.Event(), asyncio.Event()
+        order = []
+
+        async def first_ban():
+            order.append("first_ban")
+            first_started.set()
+            await release.wait()
+            return True
+
+        async def automatic_ban():
+            order.append("automatic_ban")
+            return True
+
+        async def manual_mute():
+            order.append("manual_mute")
+            return True
+
+        queue.enqueue(1, "ban", first_ban, user_id=1)
+        await asyncio.wait_for(first_started.wait(), timeout=0.1)
+        queue.enqueue(1, "ban", automatic_ban, user_id=2)
+        queue.enqueue(1, "mute", manual_mute, user_id=3)
+        release.set()
+        await _wait_until(lambda: queue._completed == 3)
+        await queue.close()
+        return order
+
+    assert asyncio.run(scenario()) == ["first_ban", "manual_mute", "automatic_ban"]
+
 def test_two_normal_sends_use_existing_slots_and_notices_stay_independent():
     async def scenario():
         logger = Logger()

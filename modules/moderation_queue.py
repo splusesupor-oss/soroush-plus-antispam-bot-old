@@ -160,8 +160,11 @@ class ModerationQueue:
             on_success=on_success,
             on_failure=on_failure,
         )
-        # Punish/ban jobs must pass ordinary moderation work for this chat.
-        priority = 0 if action in {"punish", "ban"} else 1
+        # Manual commands use ``mute``/``unmute``/lock actions and must jump
+        # ahead of automatic spam punishments already queued for this chat.
+        # An RPC already in flight is never cancelled, but no new automatic
+        # ban may start before the administrator's urgent action.
+        priority = 0 if action in {"mute", "unmute", "lock", "unlock"} else 1
         self._sequence += 1
         queue.put_nowait((priority, self._sequence, job))
         workers = self._workers.get(k)
