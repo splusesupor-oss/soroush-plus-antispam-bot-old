@@ -357,7 +357,9 @@ class OutgoingSender:
                     raise
                 except Exception as e:
                     self.stats["failed"] += 1
-                    if self.logger:
+                    # Governor rejection is intentional backpressure, not an
+                    # operational error worth flooding the terminal with.
+                    if self.logger and e.__class__.__name__ != "RpcOverloadError":
                         self.logger.log_error(f"OUTGOING SEND FAILED chat_id={chat_id} error={e!r}")
                 finally:
                     queue.task_done()

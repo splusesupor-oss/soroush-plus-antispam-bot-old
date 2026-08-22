@@ -103,6 +103,10 @@ class _Waiter:
     admitted: bool = False
 
 
+class RpcOverloadError(RuntimeError):
+    """A disposable low-priority RPC was rejected before it could backlog."""
+
+
 class RpcPermit:
     """One governor admission. ``release`` is idempotent."""
 
@@ -260,6 +264,7 @@ class RpcGovernor:
         shadow=False,
         logger=None,
         wait_log_ms=20.0,
+        max_send_waiters=4,
     ):
         self.total_limit = max(1, int(total_limit))
         self.noncritical_limit = max(
@@ -274,6 +279,7 @@ class RpcGovernor:
         self.shadow = bool(shadow)
         self.logger = logger
         self.wait_log_ms = max(0.0, float(wait_log_ms))
+        self.max_send_waiters = max(0, int(max_send_waiters))
 
         self._active_total = 0
         self._active_noncritical = 0
@@ -307,6 +313,7 @@ class RpcGovernor:
             shadow=_env_bool("BOT_RPC_GOVERNOR_SHADOW", False),
             logger=logger,
             wait_log_ms=_env_float("BOT_RPC_WAIT_LOG_MS", 20.0),
+            max_send_waiters=min(4, _env_int("BOT_RPC_MAX_SEND_WAITERS", 4)),
         )
 
     @property
@@ -404,6 +411,11 @@ class RpcGovernor:
         """Wait for admission, or only observe limits in shadow mode."""
         if not isinstance(admission, RpcAdmission):
             raise TypeError("admission must be RpcAdmission")
+        # Sending a cosmetic/game response after it sat behind five RPCs is
+        # worse than dropping it: it prolongs the backlog and delays mute/ban.
+        if (not self.shadow and admission.bucket == "send"
+                and self._waiting >= self.max_send_waiters):
+            raise RpcOverloadError("outgoing send backlog is full")
 
         if not self.enabled and not self.shadow:
             # Wrapper normally bypasses this mode. Keep direct use harmless.
