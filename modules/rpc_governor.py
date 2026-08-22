@@ -265,6 +265,7 @@ class RpcGovernor:
         logger=None,
         wait_log_ms=20.0,
         max_send_waiters=4,
+        role="primary",
     ):
         self.total_limit = max(1, int(total_limit))
         self.noncritical_limit = max(
@@ -280,6 +281,7 @@ class RpcGovernor:
         self.logger = logger
         self.wait_log_ms = max(0.0, float(wait_log_ms))
         self.max_send_waiters = max(0, int(max_send_waiters))
+        self.role = str(role or "primary")
 
         self._active_total = 0
         self._active_noncritical = 0
@@ -299,7 +301,7 @@ class RpcGovernor:
         }
 
     @classmethod
-    def from_environment(cls, logger=None):
+    def from_environment(cls, logger=None, role="primary"):
         """Build conservative fixed limits after the project's .env is loaded."""
         return cls(
             # A single Soroush connection becomes unstable above these caps;
@@ -316,6 +318,7 @@ class RpcGovernor:
             # Fast mode: do not retain queued cosmetic sends behind an active
             # connection. A send either starts now or is intentionally dropped.
             max_send_waiters=0,
+            role=role,
         )
 
     @property
@@ -466,7 +469,7 @@ class RpcGovernor:
             if self.logger is not None:
                 self.logger.log_info(
                     "RPC GOVERNOR WAIT "
-                    f"request={admission.request_name} "
+                    f"role={self.role} request={admission.request_name} "
                     f"priority={_PRIORITY_LABELS[admission.priority]} "
                     f"bucket={admission.bucket} chat={admission.chat_key} "
                     f"wait_ms={wait_ms:.1f} active={self._active_total} "

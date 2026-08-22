@@ -643,7 +643,9 @@ def install(client, bot, logger=None):
     effective_logger = logger or getattr(bot, "logger", None)
     governor = getattr(bot, "rpc_governor", None)
     if governor is None:
-        governor = RpcGovernor.from_environment(effective_logger)
+        governor = RpcGovernor.from_environment(
+            effective_logger, role=getattr(bot, "client_role", "primary")
+        )
         try:
             bot.rpc_governor = governor
         except Exception:
@@ -651,7 +653,7 @@ def install(client, bot, logger=None):
         if effective_logger:
             effective_logger.log_info(
                 "RPC GOVERNOR READY "
-                f"mode={governor.mode_label()} total={governor.total_limit} "
+                f"role={governor.role} mode={governor.mode_label()} total={governor.total_limit} "
                 f"noncritical={governor.noncritical_limit} "
                 f"delete={governor.class_limits['delete']} "
                 f"send={governor.class_limits['send']} "
