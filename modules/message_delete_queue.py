@@ -127,8 +127,10 @@ class MessageDeleteQueue:
     chats keep deleting/replying in parallel.
     """
     def __init__(self, client, logger, *, batch_size=15, max_concurrent=None,
-                 inter_batch_delay=0.0, peer_cache=None):
+                 inter_batch_delay=0.0, peer_cache=None, delete_router=None):
         self.client = client
+        # Stage-two preparation only. Not used until core enables multi-client.
+        self.delete_router = delete_router
         self.logger = logger
         self.batch_size = batch_size
         self.inter_batch_delay = inter_batch_delay

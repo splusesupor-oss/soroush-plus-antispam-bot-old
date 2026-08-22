@@ -285,6 +285,7 @@ def _log(logger: Any, level: str, message: str) -> None:
 async def deliver_pending_reports(
     client: Any,
     *,
+    background_client: Any = None,
     status: str = "ربات دوباره راه‌اندازی شد",
     logger: Any = None,
     state_path: Optional[os.PathLike] = None,
@@ -300,7 +301,9 @@ async def deliver_pending_reports(
     if not state["pending"]:
         return 0
 
-    target = await _resolve_private_owner(client, logger)
+    # Explicit worker injection only; never silently falls back between roles.
+    report_client = background_client if background_client is not None else client
+    target = await _resolve_private_owner(report_client, logger)
     owner_id = peer_user_id(target)
     delivered = 0
 
@@ -322,7 +325,7 @@ async def deliver_pending_reports(
 
         try:
             for index in range(next_chunk, len(chunks)):
-                result = client.send_message(target, chunks[index])
+                result = report_client.send_message(target, chunks[index])
                 if inspect.isawaitable(result):
                     await asyncio.wait_for(result, timeout=send_timeout)
                 incident["next_chunk"] = index + 1

@@ -37,6 +37,9 @@ from modules.group_storage import activate_group, deactivate_group, is_active, u
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
 from modules.client_manager import ClientManager
+from modules.reply_router import ReplyRouter
+from modules.delete_router import DeleteRouter
+from modules.moderation_router import ModerationRouter
 # 💰 تسویهٔ روزانه از راه API اقتصاد جدید.
 from economy import flush as flush_economy, settle_previous_days
 from economy import upgrade_migration
@@ -488,6 +491,11 @@ class SoroushAntiSpamBot:
             background_factory=(worker_factory(background_session) if background_session else None),
             logger=self.logger,
         )
+        # Routers are instantiated for dry-run verification only. No queue or
+        # handler receives them while BOT_MULTI_CLIENT_ENABLED remains false.
+        self.reply_router = ReplyRouter(self.client_manager)
+        self.delete_router = DeleteRouter(self.client_manager)
+        self.moderation_router = ModerationRouter(self.client_manager)
         self.logger.log_info(
             "CLIENT MANAGER READY "
             f"multi_enabled={self.client_manager.enabled} "

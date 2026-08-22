@@ -50,3 +50,9 @@ async def main():
 
 asyncio.run(main())
 print("client manager tests OK")
+
+# Preparation interfaces do not alter legacy client selection.
+from modules.message_delete_queue import MessageDeleteQueue
+legacy_manager = ClientManager(Client('legacy'), enabled=False)
+queue = MessageDeleteQueue(Client('legacy'), Log(), delete_router=DeleteRouter(legacy_manager))
+assert queue.delete_router.manager is legacy_manager
