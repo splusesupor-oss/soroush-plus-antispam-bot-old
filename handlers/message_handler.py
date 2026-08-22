@@ -4933,12 +4933,16 @@ async def handle_new_message(bot, event):
             await event.reply(get_joke(chat_id))
             return
 
-        # پاسخ معرفی ربات
+        # پاسخ معرفی و فراخوانی مستقیم ربات. فراخوانی‌هایی مانند «روباه خوبی؟»
+        # هم باید پاسخ بگیرند، نه فقط متن دقیق «روباه».
         if clean_text.strip() in ["ربات", "روباه"]:
             await event.reply(
                 "🦊 سلام، من روباه هستم 🤖\n\n"
                 "برای آشنایی با امکانات و خدمات بیشتر، کلمه «راهنما» را ارسال کنید."
             )
+            return
+        if re.match(r"^(?:روباه|ربات)(?:[،,]\s*|\s+).+", clean_text):
+            await event.reply("🦊 جانم، بگو.")
             return
 
 

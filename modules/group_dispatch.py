@@ -176,6 +176,9 @@ def classify_priority(text, event=None):
         return PRIORITY_ADMIN, LANE_ADMIN
     if raw in _COMMAND_EXACT:
         return PRIORITY_COMMAND, LANE_COMMAND
+    # فراخوانی مستقیم روباه نباید پشت موج پیام‌های عادی بماند.
+    if raw.startswith(("روباه ", "روباه،", "روباه,", "ربات ", "ربات،", "ربات,")):
+        return PRIORITY_COMMAND, LANE_COMMAND
     if raw.startswith(_COMMAND_PREFIXES):
         return PRIORITY_COMMAND, LANE_COMMAND
     return PRIORITY_NORMAL, LANE_NORMAL
