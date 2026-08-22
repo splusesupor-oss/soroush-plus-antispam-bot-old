@@ -329,10 +329,16 @@ class AdminActions:
             gate = self._warning_gate = {}
         user_key = getattr(user, "id", None) if user is not None else None
         gate_key = (str(chat_id), str(user_key if user_key is not None else username))
+        group_gate_key = ("group", str(chat_id))
         now_mono = _time.monotonic()
-        if now_mono - gate.get(gate_key, -999.0) < 20.0:
+        # One warning per user remains available, but a spam wave with many
+        # users must not turn warnings into a P0 flood that starves deletes
+        # and real owner commands on the single Soroush connection.
+        if (now_mono - gate.get(gate_key, -999.0) < 20.0
+                or now_mono - gate.get(group_gate_key, -999.0) < 3.0):
             return
         gate[gate_key] = now_mono
+        gate[group_gate_key] = now_mono
         if len(gate) > 2000:
             cutoff = now_mono - 60.0
             for stale in [k for k, v in gate.items() if v < cutoff]:
@@ -377,9 +383,9 @@ class AdminActions:
                     cl = getattr(self, "notice_cleanup", None)
                     if cl is not None and sent is not None:
                         cl.schedule(chat_id, sent)
-                # Need to bypass dispatch check since we are already in a background task, not dispatch worker
-                # Call the original send via sender's queue directly (priority 0 for warnings)
-                sender.enqueue(chat_id, lambda: self.client.send_message(chat_id, msg, reply_to=reply_to, formatting_entities=entities), priority=0, on_done=_on_done_warn)
+                # Warnings are cosmetic background notices. They must never
+                # occupy the critical lane ahead of delete/ban/owner commands.
+                sender.enqueue(chat_id, lambda: self.client.send_message(chat_id, msg, reply_to=reply_to, formatting_entities=entities), priority=1, on_done=_on_done_warn)
             else:
                 sent = await self.client.send_message(
                     chat_id, msg, reply_to=reply_to, formatting_entities=entities)
