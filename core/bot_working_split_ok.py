@@ -718,8 +718,11 @@ class SoroushAntiSpamBot:
         asyncio.create_task(process_delete(self))
         # Automatic deletions have their own per-group workers and never run
         # synchronously in the incoming-message handler.
+        # Soroush routinely times out a 100-message DeleteMessagesRequest.
+        # Small bounded batches complete reliably and allow command replies to
+        # interleave with a spam-wave cleanup.
         self.message_delete_queue = MessageDeleteQueue(
-            self.client, self.logger, batch_size=100, max_concurrent=4,
+            self.client, self.logger, batch_size=15, max_concurrent=4,
             inter_batch_delay=0,
             peer_cache=self.reply_input_peer_cache,
         )
