@@ -521,7 +521,6 @@ class SoroushAntiSpamBot:
         # Independent runtime object gives the background session its own
         # outgoing sender and RpcGovernor without replacing primary's objects.
         runtime = SimpleNamespace(
-            client_role="background",
             logger=self.logger,
             reply_input_peer_cache=self.reply_input_peer_cache,
             rpc_governor=None,
