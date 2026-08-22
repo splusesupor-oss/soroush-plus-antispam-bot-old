@@ -1,114 +1,107 @@
 #!/usr/bin/env python3
-"""Create two independent SPlusthon StringSessions for one Soroush account.
+"""Create ONE independent worker session safely.
 
-Run on the Termux device that can receive the account's verification code:
-    python tools/create_worker_sessions.py
+Stop the bot first, then run one role at a time:
+  python3 tools/create_worker_sessions.py management
+  python3 tools/create_worker_sessions.py background
 
-It never changes SOROUSH_SESSION_STRING.  It creates and stores only:
-    SOROUSH_MANAGEMENT_SESSION_STRING
-    SOROUSH_BACKGROUND_SESSION_STRING
+Each command needs one verification code for the same Soroush account.  The
+primary session is never read, copied, or overwritten.
 """
 from __future__ import annotations
-
 import asyncio
 import os
+import sys
 import tempfile
 from pathlib import Path
 
-def _load_env_file(path: Path) -> None:
-    """Minimal .env loader; avoids requiring python-dotenv on Termux."""
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if key and key not in os.environ:
-            os.environ[key] = value.strip().strip('"').strip("'")
-
-
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env"
-_load_env_file(ENV_FILE)
-
-try:
-    from splusthon import SoroushClient
-    from splusthon.sessions import StringSession
-except ImportError as error:
-    raise SystemExit("splusthon نصب نیست: pip install splusthon") from error
+ROLES = {
+    "management": "SOROUSH_MANAGEMENT_SESSION_STRING",
+    "background": "SOROUSH_BACKGROUND_SESSION_STRING",
+}
 
 
-def _save_env_value(key: str, value: str) -> None:
-    """Replace one .env entry atomically without printing the secret."""
-    lines = []
-    if ENV_FILE.exists():
-        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
-    prefix = f"{key}="
-    replaced = False
+def load_env() -> None:
+    try:
+        rows = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for row in rows:
+        if not row.strip() or row.lstrip().startswith("#") or "=" not in row:
+            continue
+        key, value = row.split("=", 1)
+        if key.strip() and key.strip() not in os.environ:
+            os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+
+def save_env(key: str, value: str) -> None:
+    rows = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    prefix = key + "="
+    found = False
     output = []
-    for line in lines:
-        if line.startswith(prefix):
+    for row in rows:
+        if row.startswith(prefix):
             output.append(prefix + value)
-            replaced = True
+            found = True
         else:
-            output.append(line)
-    if not replaced:
+            output.append(row)
+    if not found:
         output.append(prefix + value)
-    fd, temporary = tempfile.mkstemp(prefix=".env.sessions.", dir=str(ROOT))
+    fd, temporary = tempfile.mkstemp(prefix=".env.worker.", dir=str(ROOT))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write("\n".join(output) + "\n")
         os.replace(temporary, ENV_FILE)
-        try:
-            ENV_FILE.chmod(0o600)
-        except OSError:
-            pass
+        try: ENV_FILE.chmod(0o600)
+        except OSError: pass
     except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
+        try: os.unlink(temporary)
+        except OSError: pass
         raise
 
 
-def _new_client():
-    api_id = os.getenv("API_ID")
-    api_hash = os.getenv("API_HASH")
-    session = StringSession()  # Always creates a new auth session.
-    if api_id and api_hash:
-        return SoroushClient(session, int(api_id), api_hash)
-    return SoroushClient(session)
-
-
-async def _create(label: str, key: str) -> None:
-    print(f"\nساخت session مستقل «{label}»")
-    print("کد تأیید همان اکانت را فقط در همین ترمینال وارد کنید.")
-    client = _new_client()
+async def main(role: str) -> None:
+    load_env()
     try:
-        await client.start()
-        me = await client.get_me()
-        session_string = client.session.save()
-        if not session_string:
+        from splusthon import SoroushClient
+        from splusthon.sessions import StringSession
+    except ImportError as error:
+        raise SystemExit("این ابزار را با python3 همان محیط ربات اجرا کنید.") from error
+
+    api_id, api_hash = os.getenv("API_ID"), os.getenv("API_HASH")
+    session = StringSession()
+    client = SoroushClient(session, int(api_id), api_hash) if api_id and api_hash else SoroushClient(session)
+    try:
+        print(f"ساخت session مستقل {role}. session اصلی تغییر نمی‌کند.")
+        await client.connect()
+        authorized = await client.is_user_authorized()
+        if not authorized:
+            phone = input("شماره تلفن اکانت را با +98 وارد کنید: ").strip()
+            await client.send_code_request(phone)
+            code = input("کد تأیید سروش: ").strip()
+            try:
+                await client.sign_in(phone, code)
+            except Exception as error:
+                if "password" not in type(error).__name__.lower():
+                    raise
+                password = input("رمز دومرحله‌ای: ")
+                await client.sign_in(password=password)
+        value = client.session.save()
+        if not value:
             raise RuntimeError("session string خالی است")
-        _save_env_value(key, session_string)
-        print(f"✅ session «{label}» برای حساب {getattr(me, 'id', '?')} ذخیره شد.")
+        save_env(ROLES[role], value)
+        print(f"✅ session {role} ذخیره شد. آن را در چت یا ترمینال چاپ نکنید.")
     finally:
-        await client.disconnect()
-
-
-async def main() -> None:
-    if not (os.getenv("SOROUSH_SESSION_STRING") or os.getenv("SESSION_STRING")):
-        raise SystemExit("ابتدا session اصلی را در .env نگه دارید؛ حذفش نکنید.")
-    print("session اصلی دست‌نخورده می‌ماند.")
-    await _create("مدیریت", "SOROUSH_MANAGEMENT_SESSION_STRING")
-    await _create("پس‌زمینه", "SOROUSH_BACKGROUND_SESSION_STRING")
-    print("\n✅ هر دو session جدا ذخیره شدند. هیچ‌کدام را در ترمینال یا چت منتشر نکنید.")
-    print("حالا برای فعال‌سازی معماری سه‌کلاینت، به ربات برگردید.")
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    role = sys.argv[1].strip().lower() if len(sys.argv) == 2 else ""
+    if role not in ROLES:
+        raise SystemExit("استفاده: python3 tools/create_worker_sessions.py management|background")
+    asyncio.run(main(role))
