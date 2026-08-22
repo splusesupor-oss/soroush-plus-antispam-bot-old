@@ -2115,7 +2115,7 @@ async def handle_fast_owner_command(bot, event, text=None):
     return False
 
 
-FAST_MODERATION_COMMANDS = frozenset({"سکوت"})
+FAST_MODERATION_COMMANDS = frozenset({"سکوت", "قفل", "باز"})
 
 
 def is_fast_moderation_command(text):
@@ -2161,6 +2161,30 @@ async def handle_fast_moderation_command(
         bot, chat_id, user_id, sender_username
     ):
         return False
+
+    if clean_text in {"قفل", "باز"}:
+        action = "lock" if clean_text == "قفل" else "unlock"
+        async def group_action_succeeded(_result):
+            admin_tools.log_action(
+                chat_id, sender,
+                "قفل کردن گروه" if action == "lock" else "باز کردن گروه",
+            )
+            await event.reply("🔒 گروه قفل شد" if action == "lock" else "🔓 گروه باز شد")
+
+        async def group_action_failed(_error):
+            await event.reply("❌ انجام قفل گروه ناموفق بود" if action == "lock" else "❌ انجام باز کردن گروه ناموفق بود")
+
+        bot.moderation_queue.enqueue(
+            chat_id, action, user_id=f"group:{chat_id}", timeout_seconds=20,
+            operation=(
+                (lambda: bot.group_actions.lock_group(chat_id))
+                if action == "lock" else
+                (lambda: bot.group_actions.unlock_group(chat_id))
+            ),
+            on_success=group_action_succeeded,
+            on_failure=group_action_failed,
+        )
+        return True
 
     if not getattr(event, "reply_to", None):
         _schedule_reply(bot, event, "❌ باید روی پیام کاربر ریپلای کنید")

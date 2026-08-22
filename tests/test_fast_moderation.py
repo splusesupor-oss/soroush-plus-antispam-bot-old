@@ -162,6 +162,8 @@ class FastModerationTests(unittest.TestCase):
         self.assertIn("is_fast_moderation_command(text)", source)
         self.assertIn("await handle_fast_moderation_command(", source)
         self.assertTrue(mh.is_fast_moderation_command("سکوت"))
+        self.assertTrue(mh.is_fast_moderation_command("قفل"))
+        self.assertTrue(mh.is_fast_moderation_command("باز"))
         self.assertFalse(mh.is_fast_moderation_command("سلام"))
 
     def test_unregistered_sender_falls_back_to_compatibility_path(self):
