@@ -497,12 +497,6 @@ class SoroushAntiSpamBot:
             return None
 
     async def initialize_worker_clients(self):
-        # Multi-client routing is opt-in until every outgoing/admin path has
-        # been migrated. A partial worker route can leave command replies on a
-        # different client and make a running bot appear unresponsive.
-        if os.getenv("BOT_MULTI_CLIENT_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-            self.logger.log_info("WORKER ROUTING DISABLED safe_single_client_mode")
-            return False
         self.management_client = await self._connect_worker_client(
             "management", "SOROUSH_MANAGEMENT_SESSION_STRING"
         )
