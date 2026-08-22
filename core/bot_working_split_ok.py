@@ -888,6 +888,7 @@ class SoroushAntiSpamBot:
         asyncio.create_task(settle_daily_coins())
 
         async def reminder_loop():
+            first_flush = True
             while True:
                 for reminder in due_reminders():
                     try:
@@ -914,6 +915,12 @@ class SoroushAntiSpamBot:
                 # می‌شود؛ فایل سنگین کمتر، تا سهم آن از زمان حلقه ناچیز
                 # بماند. داده از دست نمی‌رود چون در حافظه نگه داشته
                 # می‌شود و در نهایت نوشته خواهد شد.
+                # Do not serialize several large runtime files while the
+                # client is connecting and processing its initial updates.
+                # That startup flush was the 10s stall visible in production.
+                if first_flush:
+                    first_flush = False
+                    await asyncio.sleep(60)
                 started = time.perf_counter()
                 self.debug_message_log("FLUSH START")
                 try:
@@ -929,10 +936,10 @@ class SoroushAntiSpamBot:
                     self.debug_message_log(f"FLUSH END ms={cost * 1000:.0f}")
                     self.logger.log_error(f"خطا در ذخیرهٔ دوره‌ای: {error}")
 
-                # فاصله هرگز کمتر از ۱۵ ثانیه نمی‌شود؛ اگر ذخیره‌سازی گران
+                # فاصله هرگز کمتر از پنج دقیقه نمی‌شود؛ اگر ذخیره‌سازی گران
                 # باشد فاصله بیشتر می‌شود تا سهم آن زیر ۰٫۲٪ بماند.
-                delay = max(15.0, min(300.0, cost * 500))
-                if delay > 15.0:
+                delay = max(300.0, min(900.0, cost * 500))
+                if delay > 300.0:
                     self.logger.log_info(
                         "PERIODIC FLUSH SLOW "
                         f"cost_ms={cost * 1000:.0f} next_in_s={delay:.0f}"

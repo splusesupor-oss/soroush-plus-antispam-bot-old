@@ -157,6 +157,35 @@ def test_worker_deletes_only_that_group():
     check("B still waiting", len(left_b) == 1, f"-> {left_b}")
 
 
+def test_persisted_short_group_id_is_restored_before_delete_rpc():
+    print("\n### شناسهٔ کوتاه ذخیره‌شده به -100 برای RPC برمی‌گردد")
+    class _Queue:
+        def __init__(self): self.calls = []
+        def enqueue(self, chat_id, ids, *, priority=1, rpc_peer=None):
+            self.calls.append((chat_id, list(ids), priority))
+            future = asyncio.get_running_loop().create_future()
+            future.set_result((len(ids), []))
+            return future
+
+    async def run():
+        handle, path = tempfile.mkstemp(suffix=".json")
+        os.close(handle)
+        try:
+            with open(path, "w", encoding="utf-8") as stream:
+                json.dump({"9429374": [{"message_id": 9, "expires_at": 0, "chat_id": 9429374}]}, stream)
+            queue = _Queue()
+            cleaner = NoticeCleanup(path, ttl_seconds=1, delete_queue=queue)
+            cleaner.start()
+            await asyncio.sleep(0.05)
+            cleaner.stop()
+            return queue.calls
+        finally:
+            if os.path.isfile(path): os.unlink(path)
+
+    calls = asyncio.run(run())
+    check("RPC chat is -100 form", calls and calls[0][0] == -1000009429374, f"-> {calls}")
+
+
 if __name__ == "__main__":
     test_schedule_is_per_group_and_not_due_yet()
     test_new_notice_waits_its_own_ttl()
@@ -164,5 +193,6 @@ if __name__ == "__main__":
     test_extract_sent_id_from_splus_shapes()
     test_capture_sent_uses_message_id()
     test_worker_deletes_only_that_group()
+    test_persisted_short_group_id_is_restored_before_delete_rpc()
     print(f"\n{PASSED} passed, {FAILED} failed")
     raise SystemExit(1 if FAILED else 0)

@@ -59,11 +59,22 @@ def _chat_key(chat_id):
         return "0" 
 
 
-def _chat_id_for_rpc(key):
+def _chat_id_for_rpc(value):
+    """Turn persisted short channel IDs back into SPlusthon's -100 form."""
     try:
-        return int(key)
+        chat_id = int(value)
     except (TypeError, ValueError):
-        return key
+        return value
+    # notice cleanup is only used for group notices.  A positive persisted key
+    # is the normalized channel ID, not a private-user ID; passing it directly
+    # makes SPlusthon issue GetUsersRequest and retry a doomed delete.
+    if chat_id > 0:
+        try:
+            from modules.group_id import CHANNEL_ID_OFFSET
+            return -(CHANNEL_ID_OFFSET + chat_id)
+        except Exception:
+            return -1_000_000_000_000 - chat_id
+    return chat_id
 
 
 def extract_sent_id(sent):
@@ -316,7 +327,7 @@ class NoticeCleanup:
             # با ChannelPrivateError یا حذفِ هیچ، شکست می‌خورد. خروجی
             # Future صف حذف هم برگردانده می‌شود تا نتیجهٔ واقعی
             # (deleted, remaining) لاگ شود، نه deleted=0 همیشگی.
-            target = rpc_chat if rpc_chat is not None else _chat_id_for_rpc(chat_id)
+            target = _chat_id_for_rpc(rpc_chat if rpc_chat is not None else chat_id)
             peer = self._rpc_peers.get(_chat_key(chat_id))
             try:
                 return queue.enqueue(
