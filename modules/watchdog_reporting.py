@@ -286,6 +286,7 @@ async def deliver_pending_reports(
     client: Any,
     *,
     background_client: Any = None,
+    background_ready: Any = None,
     status: str = "ربات دوباره راه‌اندازی شد",
     logger: Any = None,
     state_path: Optional[os.PathLike] = None,
@@ -300,6 +301,17 @@ async def deliver_pending_reports(
     state = load_state(state_path)
     if not state["pending"]:
         return 0
+
+    # Reports are cosmetic during a delete storm. Keep them durable and defer
+    # them instead of adding a GetUsers/send RPC to the background backlog.
+    if background_client is not None and callable(background_ready):
+        try:
+            if not background_ready():
+                _log(logger, "info", "ROUTE background -> watchdog deferred busy=True")
+                return 0
+        except Exception:
+            _log(logger, "info", "ROUTE background -> watchdog deferred readiness_error=True")
+            return 0
 
     # Explicit worker injection only; never silently falls back between roles.
     report_client = background_client if background_client is not None else client

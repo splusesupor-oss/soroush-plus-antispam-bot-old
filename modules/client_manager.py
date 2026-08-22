@@ -126,6 +126,17 @@ class ClientManager:
         result = target(*args, **kwargs)
         return await result if inspect.isawaitable(result) else result
 
+    def background_idle(self) -> bool:
+        """True only when the dedicated background governor has no backlog."""
+        client = self.background_client
+        if client is None:
+            return False
+        runtime = getattr(client, "_outgoing_sender_bot", None)
+        governor = getattr(runtime, "rpc_governor", None)
+        if governor is None:
+            return False
+        return not bool(getattr(governor, "active", 0) or getattr(governor, "waiting", 0))
+
     async def send_primary(self, *args, **kwargs):
         return await self._call("primary", "send_message", *args, **kwargs)
 
