@@ -57,7 +57,7 @@ def test_three_independent_users_start_without_per_chat_serial_wait():
         before = time.perf_counter()
         for user_id in (1, 2, 3):
             assert queue.enqueue(
-                -1000021055171, "ban", operation(user_id),
+                -1000021055171, "mute", operation(user_id),
                 user_id=user_id,
             )
         await _wait_until(lambda: len(started) == 3, timeout=0.15)
@@ -130,7 +130,7 @@ def test_moderation_per_chat_cap_is_strict():
             return run
 
         for user_id in range(4):
-            queue.enqueue(77, "ban", operation(user_id), user_id=user_id)
+            queue.enqueue(77, "mute", operation(user_id), user_id=user_id)
         await _wait_until(lambda: len(started) == 3)
         await asyncio.sleep(0.03)
         assert len(started) == 3

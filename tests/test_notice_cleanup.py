@@ -83,11 +83,8 @@ def test_persist_survives_restart():
         first._persist()
         second = NoticeCleanup(path, ttl_seconds=60)
         pending = second.pending(-5)
-        check("reloaded one row", len(pending) == 1, f"-> {pending}")
-        check("same id", pending[0]["message_id"] == 77)
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        check("file keyed by chat", "-5" in data)
+        check("stale rows are not replayed", pending == [], f"-> {pending}")
+        check("stale persistence removed", not os.path.exists(path))
     finally:
         if os.path.isfile(path):
             os.unlink(path)
@@ -171,13 +168,10 @@ def test_persisted_short_group_id_is_restored_before_delete_rpc():
         handle, path = tempfile.mkstemp(suffix=".json")
         os.close(handle)
         try:
-            with open(path, "w", encoding="utf-8") as stream:
-                json.dump({"9429374": [{"message_id": 9, "expires_at": 0, "chat_id": 9429374}]}, stream)
             queue = _Queue()
             cleaner = NoticeCleanup(path, ttl_seconds=1, delete_queue=queue)
-            cleaner.start()
-            await asyncio.sleep(0.05)
-            cleaner.stop()
+            cleaner._enqueue_delete(9429374, [9], rpc_chat=9429374)
+            await asyncio.sleep(0)
             return queue.calls
         finally:
             if os.path.isfile(path): os.unlink(path)

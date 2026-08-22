@@ -506,48 +506,21 @@ class NoticeCleanup:
                 self._persist()
 
     def _load(self):
+        """Discard previous-run notice deletes instead of replaying stale RPCs.
+
+        Notice TTL is cosmetic.  Replaying a persisted delete after reconnect
+        caused a startup storm across old chats (often invalid IDs), which
+        delayed real moderation and commands. New notices remain tracked for
+        the lifetime of the current healthy process.
+        """
         path = self.persist_path
+        self._items = {}
         if not path or not os.path.isfile(path):
             return
         try:
-            with open(path, "r", encoding="utf-8") as handle:
-                raw = json.load(handle) or {}
-        except Exception as error:
-            if self.logger is not None:
-                self.logger.log_error(f"NOTICE CLEANUP LOAD FAILED error={error!r}")
-            return
-        items = {}
-        if isinstance(raw, dict):
-            for key, rows in raw.items():
-                cleaned = []
-                if not isinstance(rows, list):
-                    continue
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    message_id = row.get("message_id")
-                    expires_at = row.get("expires_at")
-                    if not isinstance(message_id, int) or message_id <= 0:
-                        continue
-                    try:
-                        expires_at = float(expires_at)
-                    except (TypeError, ValueError):
-                        continue
-                    try:
-                        attempts = max(0, int(row.get("attempts", 0)))
-                    except (TypeError, ValueError):
-                        attempts = 0
-                    item = {
-                        "message_id": message_id,
-                        "expires_at": expires_at,
-                        "attempts": attempts,
-                    }
-                    if row.get("chat_id") is not None:
-                        item["chat_id"] = row.get("chat_id")
-                    cleaned.append(item)
-                if cleaned:
-                    items[_chat_key(key)] = cleaned
-        self._items = items
+            os.unlink(path)
+        except OSError:
+            pass
 
     def _persist(self):
         path = self.persist_path

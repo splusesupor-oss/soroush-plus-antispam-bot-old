@@ -109,6 +109,10 @@ class ModerationQueue:
         self._workers = {}
         self._user_locks = {}
         self._pending_keys = set()
+        # Automatic spam bans are low-value background work compared with a
+        # human admin's mute. Serialise them globally so many noisy groups
+        # cannot saturate the one shared Soroush connection.
+        self._automatic_actions = asyncio.Semaphore(1)
         self._closed = False
         self._sequence = 0
         self._completed = 0
@@ -258,7 +262,11 @@ class ModerationQueue:
                 f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
                 f"queue_wait_ms={queue_wait_ms:.2f} rpc_started_at={started_wall:.3f}"
             )
-            value = await self._run_job(chat_id, job)
+            if job.action in {"ban", "punish", "kick"}:
+                async with self._automatic_actions:
+                    value = await self._run_job(chat_id, job)
+            else:
+                value = await self._run_job(chat_id, job)
             if value is False:
                 raise RuntimeError("moderation operation returned False")
             result = "success"
