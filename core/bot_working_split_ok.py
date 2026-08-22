@@ -36,7 +36,6 @@ from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active, update_group_title
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
-from modules.client_manager import ClientManager
 # 💰 تسویهٔ روزانه از راه API اقتصاد جدید.
 from economy import flush as flush_economy, settle_previous_days
 from economy import upgrade_migration
@@ -469,33 +468,6 @@ class SoroushAntiSpamBot:
             client = SoroushClient(session)
         return client
 
-    def initialize_client_manager(self):
-        """Build stage-one routing infrastructure without changing handlers."""
-        management_session = (os.getenv("SOROUSH_MANAGEMENT_SESSION_STRING") or "").strip()
-        background_session = (os.getenv("SOROUSH_BACKGROUND_SESSION_STRING") or "").strip()
-
-        def worker_factory(session_value):
-            def build():
-                api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
-                api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
-                session = StringSession(session_value)
-                return SoroushClient(session, api_id, api_hash) if api_id and api_hash else SoroushClient(session)
-            return build
-
-        self.client_manager = ClientManager(
-            self.client,
-            management_factory=(worker_factory(management_session) if management_session else None),
-            background_factory=(worker_factory(background_session) if background_session else None),
-            logger=self.logger,
-        )
-        self.logger.log_info(
-            "CLIENT MANAGER READY "
-            f"multi_enabled={self.client_manager.enabled} "
-            f"management_session={bool(management_session)} "
-            f"background_session={bool(background_session)}"
-        )
-        return self.client_manager
-
     async def initialize_client(self):
         """ساخت کلاینت سروش"""
         if not SPLUSTHON_AVAILABLE:
@@ -727,7 +699,6 @@ class SoroushAntiSpamBot:
             f"backups_removed={len(maintenance.get('backups_removed', []))}"
         )
         await self.initialize_client()
-        self.initialize_client_manager()
 
         await self.client.connect()
         try:
