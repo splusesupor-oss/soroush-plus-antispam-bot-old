@@ -15,11 +15,25 @@ import os
 import tempfile
 from pathlib import Path
 
-from dotenv import load_dotenv
+def _load_env_file(path: Path) -> None:
+    """Minimal .env loader; avoids requiring python-dotenv on Termux."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env"
-load_dotenv(ENV_FILE)
+_load_env_file(ENV_FILE)
 
 try:
     from splusthon import SoroushClient
