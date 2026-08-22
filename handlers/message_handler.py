@@ -538,7 +538,7 @@ async def _send_moderation_notification_once(
             # Capture after real send completes, still via sender's worker
             def _on_done1(sent):
                 capture_sent(bot, chat_id, sent)
-            sender.enqueue(chat_id, _factory1, priority=0, on_done=_on_done1)
+            sender.enqueue(chat_id, _factory1, priority=1, on_done=_on_done1)
             return True
         sent = await bot.client.send_message(
             chat_id, text, formatting_entities=formatting_entities

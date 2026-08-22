@@ -920,7 +920,7 @@ class SoroushAntiSpamBot:
                 # That startup flush was the 10s stall visible in production.
                 if first_flush:
                     first_flush = False
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(300)
                 started = time.perf_counter()
                 self.debug_message_log("FLUSH START")
                 try:

@@ -178,14 +178,14 @@ class OutgoingSender:
         self.max_per_chat = int(max_per_chat)
         if normal_concurrency is None:
             normal_concurrency = os.getenv(
-                "BOT_SEND_NORMAL_WORKERS_PER_CHAT", "2"
+                "BOT_SEND_NORMAL_WORKERS_PER_CHAT", "1"
             )
         try:
             self.normal_concurrency = min(
-                2, max(1, int(normal_concurrency))
+                1, max(1, int(normal_concurrency))
             )
         except (TypeError, ValueError):
-            self.normal_concurrency = 2
+            self.normal_concurrency = 1
         # Urgent notifications and normal replies remain separate. Normal
         # sends use both slots already allowed by the low-level per-chat gate;
         # the former single worker left the second safe slot idle.
