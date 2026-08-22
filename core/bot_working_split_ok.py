@@ -528,7 +528,6 @@ class SoroushAntiSpamBot:
         )
         install_outgoing_sender(background, runtime, self.logger)
         self.background_runtime = runtime
-        self.logger.log_info("BACKGROUND ISOLATION READY sender=True governor=True")
         self.message_delete_queue.delete_router = self.delete_router
         self.performance_monitor.update_client(background)
         self._watchdog_report_client = background
@@ -814,10 +813,6 @@ class SoroushAntiSpamBot:
                 delivered = await deliver_pending_reports(
                     self.client,
                     background_client=self._watchdog_report_client,
-                    background_ready=(
-                        self.client_manager.background_idle
-                        if self._watchdog_report_client is not None else None
-                    ),
                     status="ربات دوباره راه‌اندازی شد",
                     logger=self.logger,
                 )
