@@ -528,7 +528,6 @@ class SoroushAntiSpamBot:
         )
         install_outgoing_sender(background, runtime, self.logger)
         self.background_runtime = runtime
-        self.background_ready_at = time.monotonic()
         self.logger.log_info("BACKGROUND ISOLATION READY sender=True governor=True")
         self.message_delete_queue.delete_router = self.delete_router
         self.performance_monitor.update_client(background)
@@ -536,14 +535,6 @@ class SoroushAntiSpamBot:
         self.logger.log_info("ROUTE background -> delete real")
         self.logger.log_info("ROUTE background -> watchdog real")
         return True
-
-    def background_report_ready(self):
-        """Avoid watchdog GetUsers/send during a fresh worker's connect churn."""
-        if self._watchdog_report_client is None or self.client_manager is None:
-            return False
-        if time.monotonic() - self.background_ready_at < 30.0:
-            return False
-        return self.client_manager.background_idle()
 
     async def initialize_client(self):
         """ساخت کلاینت سروش"""
@@ -824,7 +815,7 @@ class SoroushAntiSpamBot:
                     self.client,
                     background_client=self._watchdog_report_client,
                     background_ready=(
-                        self.background_report_ready
+                        self.client_manager.background_idle
                         if self._watchdog_report_client is not None else None
                     ),
                     status="ربات دوباره راه‌اندازی شد",
