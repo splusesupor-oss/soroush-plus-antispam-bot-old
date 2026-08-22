@@ -218,13 +218,9 @@ def classify_request(request, *, urgent_send=False, critical_context=False):
         # to turn a long deletion wave into P0 would defeat the reserved slots.
         priority, bucket = P1_DELETE, "delete"
     elif name_set.intersection(_SEND_REQUESTS):
-        # A direct user/admin command reply is explicitly marked by the
-        # command handler.  It must run ahead of cosmetic/automatic notices;
-        # otherwise a delete burst makes «راهنما» appear to be ignored.
-        if urgent_send:
-            priority, bucket = P0_CRITICAL, "critical"
-        else:
-            priority, bucket = P2_SEND, "send"
+        # A delayed notice is preferable to starving EditBanned/connection
+        # synchronization.  Even an admin reply is a send, never a P0 RPC.
+        priority, bucket = P2_SEND, "send"
     # Reads are never promoted by a command's dispatch context.  A native
     # admin lookup (GetParticipants/GetFullChannel) is expensive and was
     # filling every P0 slot ahead of the actual mute/ban RPC.
@@ -320,7 +316,7 @@ class RpcGovernor:
             # A zero-length send queue drops every reply whenever one delete,
             # read or moderation RPC is active. Keep this bounded, but allow
             # public commands and help replies to wait for the shared session.
-            max_send_waiters=max(2, _env_int("BOT_RPC_MAX_SEND_WAITERS", 4)),
+            max_send_waiters=max(8, _env_int("BOT_RPC_MAX_SEND_WAITERS", 32)), 
         )
 
     @property
