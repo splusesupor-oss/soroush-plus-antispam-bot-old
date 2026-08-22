@@ -480,7 +480,7 @@ def _handle_forwarded_group_message(
 
                 bot.moderation_queue.enqueue(
                     chat_id,
-                    "mute",
+                    "auto_mute",
                     user_id=user_id,
                     timeout_seconds=15,
                     operation=lambda: bot.admin_actions.mute_user(
@@ -3053,9 +3053,7 @@ async def handle_new_message(bot, event):
                 f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
             )
             _queue_message_deletes(bot, chat_id, [event.message.id])
-            bot.logger.log_info(
-                f"SPAM LOCK DROP QUEUED chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
-            )
+            _debug_log(bot, f"SPAM LOCK DROP QUEUED chat_id={chat_id} user_id={user_id} message_id={event.message.id}")
             locked_ids = message_tracker.spam_snapshot(
                 chat_id, user_id, getattr(event.message, "id", None)
             )
@@ -3070,10 +3068,8 @@ async def handle_new_message(bot, event):
                 f"message_id={_trace_msg_id} stage=CLEANUP_QUEUED "
                 f"requested={len(locked_ids)}"
             )
-            bot.logger.log_info(
-                "EARLY RETURN DEBUG reason=spam_lock "
-                f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
-            )
+            _debug_log(bot, "EARLY RETURN DEBUG reason=spam_lock "
+                f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}")
             return
         profiler.mark("RECEIVE")
         # Independent advertising-name guard: runs before text moderation and
@@ -3689,7 +3685,7 @@ async def handle_new_message(bot, event):
 
                     bot.moderation_queue.enqueue(
                         chat_id,
-                        "mute",
+                        "auto_mute",
                         user_id=user_id,
                         timeout_seconds=15,
                         operation=lambda: bot.admin_actions.mute_user(

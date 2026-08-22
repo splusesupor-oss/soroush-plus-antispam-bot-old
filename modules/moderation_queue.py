@@ -262,7 +262,7 @@ class ModerationQueue:
                 f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
                 f"queue_wait_ms={queue_wait_ms:.2f} rpc_started_at={started_wall:.3f}"
             )
-            if job.action in {"ban", "punish", "kick"}:
+            if job.action in {"ban", "punish", "kick", "auto_mute"}:
                 async with self._automatic_actions:
                     value = await self._run_job(chat_id, job)
             else:
@@ -317,7 +317,7 @@ class ModerationQueue:
                 # Ban/mute RPCs often contain entity resolution plus two
                 # permission calls; the old 20s outer deadline cancelled a
                 # still-running punishment and left only the warning.
-                deadline = max(job.timeout_seconds, 45.0) if job.action in {"punish", "ban", "mute"} else job.timeout_seconds
+                deadline = max(job.timeout_seconds, 45.0) if job.action in {"punish", "ban", "mute", "auto_mute"} else job.timeout_seconds
                 # This worker is created from a command dispatcher task and
                 # inherits its contextvars.  Never let that inheritance turn
                 # entity/admin reads into P0 critical RPCs; only the TL
