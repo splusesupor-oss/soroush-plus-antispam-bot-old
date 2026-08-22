@@ -1,6 +1,7 @@
 import asyncio as _asyncio
 from collections import Counter, deque
 from datetime import date
+import os
 import time
 
 from modules.fill_blank import check_fill, get_token as get_fill_token
@@ -3272,19 +3273,14 @@ async def handle_new_message(bot, event):
         # ------------------------------------------------------------------
         if not event.is_private:
             if bot_detector.is_disabled(chat_id):
-                # این گروه به دلیلِ فعال بودنِ یک رباتِ دیگر غیرفعال شده است.
-                # روباه در این گروه کاری انجام نمی‌دهد؛ فقط مالک/ادمین می‌تواند
-                # با «فعال کردن روباه» آن را دوباره فعال کند.
-                if (clean_text == bot_detector.REENABLE_COMMAND
-                        and admin_tools.has_admin_permission(
-                            chat_id, user_id, sender_username)):
-                    if bot_detector.reenable(chat_id):
-                        await event.reply(
-                            "🦊 روباه در این گروه دوباره فعال شد ✅")
-                    else:
-                        await event.reply(
-                            "🦊 روباه در این گروه از قبل فعال است ✅")
-                return
+                # خاموش‌کردن دائمی گروه پس از دیدن یک ربات دیگر، مسیر عمومی
+                # را می‌بست درحالی‌که moderation زودتر از این بخش اجرا می‌شد.
+                # وضعیت کهنه را پاک کن و ادامه بده؛ حضور ربات دیگر نباید
+                # روباه را برای کاربران خاموش کند.
+                bot_detector.reenable(chat_id)
+                bot.logger.log_info(
+                    f"BOT DISABLED STATE CLEARED chat_id={chat_id}"
+                )
             # آیا فرستندهٔ این پیام یک رباتِ دیگر است؟ تشخیص فقط بر اساسِ فیلدِ
             # مستقیمِ API (User.bot). entity ناقص (bot=None) روی مسیر داغ
             # get_entity نمی‌زند تا سندر مشترک قفل نشود.
@@ -3307,7 +3303,13 @@ async def handle_new_message(bot, event):
             if not skip_bot_probe:
                 is_other_bot = await bot_detector.resolve_is_bot(
                     bot.client, sender, user_id)
-            if is_other_bot and not is_global_owner(user_id):
+            # خاموش‌سازی خودکار فقط با فعال‌سازی صریح تنظیم اجرا می‌شود؛
+            # مقدار پیش‌فرض خاموش است تا یک ربات دیگر کل گروه را بی‌پاسخ نکند.
+            auto_disable_for_other_bot = os.getenv(
+                "BOT_DISABLE_FOR_OTHER_BOTS", "0"
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if (is_other_bot and not is_global_owner(user_id)
+                    and auto_disable_for_other_bot):
                 title = getattr(event_chat, "title", "") or ""
                 bot_id = getattr(sender, "id", None)
                 bot_name = bot_detector.display(sender)
