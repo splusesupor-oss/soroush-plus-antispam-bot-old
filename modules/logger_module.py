@@ -49,6 +49,17 @@ _NOISY_PREFIXES = (
     "NOTICE CLEANUP QUEUED",
     "NOTICE CLEANUP DELETED",
     "SPAM HISTORY SWEEP SKIPPED",
+    "FILTER WORD DETECTED",
+    "SPAM DETECTED",
+    "SPAM DETECT TIME",
+    "SPAM CLEANUP QUEUED",
+    "🗑️ حذف شد",
+    "NOTICE CLEANUP START",
+    "DELETE QUEUE SIZE",
+    "OUTGOING SEND QUEUE_WAIT",
+    "OWNER PRIVATE PEER CAPTURED",
+    "FAST MODERATION QUEUED",
+    "HANDLER CALLED",
 )
 
 
@@ -84,13 +95,29 @@ class _LogRuntime:
         self.listener = QueueListener(
             self.queue, console, file_handler, respect_handler_level=True
         )
+        # Deletion audit JSON used to write synchronously from the incoming
+        # message worker.  Keep the audit trail, but move its filesystem I/O
+        # to a second bounded listener so spam bursts cannot block receipt.
+        self.deleted_queue = queue.Queue(maxsize=10_000)
+        deleted_handler = RotatingFileHandler(
+            runtime_log_file("deleted_messages.log"),
+            maxBytes=max(1024 * 1024, _MAX_LOG_BYTES),
+            backupCount=max(1, _LOG_BACKUPS), encoding="utf-8",
+        )
+        deleted_handler.setFormatter(logging.Formatter("%(message)s"))
+        self.deleted_listener = QueueListener(
+            self.deleted_queue, deleted_handler, respect_handler_level=True
+        )
         self.listener.start()
+        self.deleted_listener.start()
 
     def stop(self):
-        try:
-            self.listener.stop()
-        except Exception:
-            pass
+        for listener in (getattr(self, "listener", None), getattr(self, "deleted_listener", None)):
+            try:
+                if listener is not None:
+                    listener.stop()
+            except Exception:
+                pass
 
 
 _RUNTIME = None
@@ -140,9 +167,12 @@ class BotLogger:
                    for h in self.logger.handlers):
             self.logger.handlers.clear()
             self.logger.addHandler(_DroppingQueueHandler(runtime.queue))
-        self._deleted_logger = _build_json_logger(
-            "SoroushAntiSpam.deleted", Path(self.log_file).name
-        )
+        self._deleted_logger = logging.getLogger("SoroushAntiSpam.deleted")
+        self._deleted_logger.setLevel(logging.INFO)
+        self._deleted_logger.propagate = False
+        if not any(isinstance(h, _DroppingQueueHandler) for h in self._deleted_logger.handlers):
+            self._deleted_logger.handlers.clear()
+            self._deleted_logger.addHandler(_DroppingQueueHandler(runtime.deleted_queue))
         self._actions_logger = _build_json_logger(
             "SoroushAntiSpam.actions", "actions.log"
         )
@@ -166,10 +196,11 @@ class BotLogger:
         self._deleted_logger.info(
             json.dumps(log_entry, ensure_ascii=False, separators=(",", ":"))
         )
-        self.logger.info(
-            "🗑️ حذف شد | گروه: %s(%s) | کاربر: %s(%s) | دلیل: %s",
-            group_title, group_id, username, user_id, reason,
-        )
+        if _VERBOSE:
+            self.logger.info(
+                "🗑️ حذف شد | گروه: %s(%s) | کاربر: %s(%s) | دلیل: %s",
+                group_title, group_id, username, user_id, reason,
+            )
 
     def log_action(self, action: str, user_id: int, group_id: int,
                    details: str = ""):
