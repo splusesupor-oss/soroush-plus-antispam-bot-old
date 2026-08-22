@@ -415,7 +415,11 @@ class RpcGovernor:
             raise TypeError("admission must be RpcAdmission")
         # Sending a cosmetic/game response after it sat behind five RPCs is
         # worse than dropping it: it prolongs the backlog and delays mute/ban.
+        # Only shed ordinary/background sends. Command and moderation replies
+        # are P0 and must remain deliverable even while normal notifications
+        # have already filled the send backlog.
         if (not self.shadow and admission.bucket == "send"
+                and admission.priority != P0_CRITICAL
                 and self._waiting >= self.max_send_waiters):
             raise RpcOverloadError("outgoing send backlog is full")
 
