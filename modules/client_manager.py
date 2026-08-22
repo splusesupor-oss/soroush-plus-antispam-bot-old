@@ -84,6 +84,26 @@ class ClientManager:
                 ready = False
         return ready
 
+    async def connect_role(self, role: str) -> bool:
+        """Connect exactly one worker; never affects any other role."""
+        if role not in {"management", "background"}:
+            raise ClientRouteError(f"invalid worker role={role}")
+        factory = self._factories[role]
+        if not callable(factory):
+            self._log(f"CLIENT {role} unavailable: factory missing", error=True)
+            return False
+        try:
+            client = factory()
+            result = client.connect()
+            if inspect.isawaitable(result):
+                await result
+            setattr(self, f"{role}_client", client)
+            self._log(f"CLIENT READY role={role}")
+            return True
+        except Exception as error:
+            self._log(f"CLIENT FAILED role={role} error={error!r}", error=True)
+            return False
+
     async def disconnect_role(self, role: str) -> None:
         if role == "primary":
             raise ClientRouteError("primary is owned by the receiver")

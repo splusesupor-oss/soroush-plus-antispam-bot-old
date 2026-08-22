@@ -243,10 +243,12 @@ class MessageDeleteQueue:
             for attempt in range(1, 2):
                 started = time.perf_counter()
                 try:
-                    await asyncio.wait_for(
-                        self.client.delete_messages(chat_id, batch),
-                        timeout=_DELETE_RPC_TIMEOUT_SECONDS,
+                    delete_call = (
+                        self.delete_router.delete_background(chat_id, batch)
+                        if self.delete_router is not None
+                        else self.client.delete_messages(chat_id, batch)
                     )
+                    await asyncio.wait_for(delete_call, timeout=_DELETE_RPC_TIMEOUT_SECONDS)
                     deleted += len(batch)
                     succeeded = True
                     self.logger.log_info(
@@ -313,10 +315,12 @@ class MessageDeleteQueue:
                 # errors were already retried at batch level.
                 started = time.perf_counter()
                 try:
-                    await asyncio.wait_for(
-                        self.client.delete_messages(chat_id, [message_id]),
-                        timeout=_DELETE_RPC_TIMEOUT_SECONDS,
+                    delete_call = (
+                        self.delete_router.delete_background(chat_id, [message_id])
+                        if self.delete_router is not None
+                        else self.client.delete_messages(chat_id, [message_id])
                     )
+                    await asyncio.wait_for(delete_call, timeout=_DELETE_RPC_TIMEOUT_SECONDS)
                     deleted += 1
                     item_ok = True
                     self.logger.log_info(

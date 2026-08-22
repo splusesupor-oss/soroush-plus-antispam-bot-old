@@ -81,6 +81,7 @@ from modules.broadcast_state import (
 )
 from handlers.admin_handler import handle_admin_commands
 import random
+from types import SimpleNamespace
 """
 ربات مدیریت گروه سروش پلاس - ضد هرزنامه
 اجرا روی حساب کاربری شما با SPlusthon (فورک Telethon برای سروش)
@@ -506,6 +507,34 @@ class SoroushAntiSpamBot:
             self.client_manager.observe_routes()
         return self.client_manager
 
+    async def activate_background_routes(self):
+        """Feature-flagged stage-three delete/watchdog isolation only."""
+        enabled = os.getenv("BOT_BACKGROUND_ROUTE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            self.logger.log_info("BACKGROUND ROUTING DISABLED feature_flag=False")
+            return False
+        manager = self.client_manager
+        if manager is None or not await manager.connect_role("background"):
+            self.logger.log_error("BACKGROUND ROUTING UNAVAILABLE no_fallback=True")
+            return False
+        background = manager.background_client
+        # Independent runtime object gives the background session its own
+        # outgoing sender and RpcGovernor without replacing primary's objects.
+        runtime = SimpleNamespace(
+            logger=self.logger,
+            reply_input_peer_cache=self.reply_input_peer_cache,
+            rpc_governor=None,
+            outgoing_sender=None,
+        )
+        install_outgoing_sender(background, runtime, self.logger)
+        self.background_runtime = runtime
+        self.message_delete_queue.delete_router = self.delete_router
+        self.performance_monitor.update_client(background)
+        self._watchdog_report_client = background
+        self.logger.log_info("ROUTE background -> delete real")
+        self.logger.log_info("ROUTE background -> watchdog real")
+        return True
+
     async def initialize_client(self):
         """ساخت کلاینت سروش"""
         if not SPLUSTHON_AVAILABLE:
@@ -771,6 +800,8 @@ class SoroushAntiSpamBot:
             self.client, self.logger
         )
         self.performance_monitor.start()
+        self._watchdog_report_client = None
+        await self.activate_background_routes()
 
         # Watchdog reports are handed to the normal, already-connected bot
         # client.  This runs once at startup (never per message), targets only
@@ -781,6 +812,7 @@ class SoroushAntiSpamBot:
             try:
                 delivered = await deliver_pending_reports(
                     self.client,
+                    background_client=self._watchdog_report_client,
                     status="ربات دوباره راه‌اندازی شد",
                     logger=self.logger,
                 )
