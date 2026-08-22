@@ -303,6 +303,8 @@ async def deliver_pending_reports(
 
     # Explicit worker injection only; never silently falls back between roles.
     report_client = background_client if background_client is not None else client
+    if background_client is not None:
+        _log(logger, "info", "ROUTE background -> watchdog real")
     target = await _resolve_private_owner(report_client, logger)
     owner_id = peer_user_id(target)
     delivered = 0
