@@ -1,0 +1,1970 @@
+diff --git a/core/bot_working_split_ok.py b/core/bot_working_split_ok.py
+index 2610e72..4bf471f 100644
+--- a/core/bot_working_split_ok.py
++++ b/core/bot_working_split_ok.py
+@@ -2100,15 +2100,16 @@ class SoroushAntiSpamBot:
+                 await handle_new_message(self, event)
+                 elapsed = time.perf_counter() - started
+                 if elapsed >= 0.25:
++                    # ``started`` از time.perf_counter می‌آمد که یک ساعتِ
++                    # monotonic دلخواه است (مثلاً ثانیه‌های از بوت) و در لاگ
++                    # به‌صورت «receive=363650» گمراه‌کننده دیده می‌شد. فقط
++                    # مدتِ واقعی پردازش و شناسهٔ پیام گزارش می‌شود.
+                     self.logger.log_info(
+                         "MESSAGE PROCESS TIME "
+-                        f"receive={started:.6f} total={elapsed:.4f}s "
++                        f"total={elapsed:.4f}s "
++                        f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
+                         f"chat_id={event.chat_id} text={text!r}"
+                     )
+-                    self.logger.log_info(
+-                        "MESSAGE RESPONSE TIME "
+-                        f"chat_id={event.chat_id} total_ms={elapsed * 1000:.2f}"
+-                    )
+             except Exception as handler_error:
+                 import traceback as _tb
+                 self.logger.log_error(
+diff --git a/handlers/message_handler.py b/handlers/message_handler.py
+index 6e30419..99c2362 100644
+--- a/handlers/message_handler.py
++++ b/handlers/message_handler.py
+@@ -4031,10 +4031,6 @@ async def handle_new_message(bot, event):
+                         bot.punished_users.discard(punish_key)
+                         bot.spam_burst_users.discard((chat_id, user_id))
+ 
+-                    bot.logger.log_info(
+-                        "PUNISHMENT TRIGGERED user="
+-                        f"{user_id} action=ban"
+-                    )
+                     bot.moderation_queue.enqueue(
+                         chat_id,
+                         "ban",
+diff --git a/modules/admin_actions.py b/modules/admin_actions.py
+index 538488e..091a360 100644
+--- a/modules/admin_actions.py
++++ b/modules/admin_actions.py
+@@ -148,7 +148,8 @@ class AdminActions:
+                 "MUTE",
+                 user_id,
+                 chat_id,
+-                f"به مدت {duration_seconds} ثانیه"
++                "سکوت دائم" if duration_seconds is None
++                else f"به مدت {duration_seconds} ثانیه"
+             )
+ 
+             return True
+diff --git a/modules/outgoing_profiler.py b/modules/outgoing_profiler.py
+index 36eb782..4458ff1 100644
+--- a/modules/outgoing_profiler.py
++++ b/modules/outgoing_profiler.py
+@@ -114,6 +114,19 @@ def _chat_id(owner, args, kwargs):
+         return getattr(chat, "id", chat)
+     if args and isinstance(args[0], int):
+         return args[0]
++    # ``delete_messages(InputPeerChannel(...), ids)`` آرگومان اولش یک شیء
++    # peer است نه عدد؛ قبلاً اینجا None برمی‌گشت و در لاگِ
++    # «OUTGOING RPC WARNING … delete_message» به‌صورت chat_id=None دیده
++    # می‌شد. شناسهٔ عددی را از خود peer استخراج می‌کنیم.
++    if args:
++        first = args[0]
++        for attr in ("channel_id", "chat_id", "user_id", "id"):
++            try:
++                value = getattr(first, attr, None)
++            except Exception:
++                value = None
++            if isinstance(value, int):
++                return value
+     return getattr(owner, "chat_id", None)
+ 
+ 
+@@ -274,6 +287,24 @@ def _ensure_reconnect_hooks(client, logger):
+ 
+     def ping_factory(original):
+         def hooked(rnd_id):
++            # 🧟 پیش‌گیری از «سیل PingRequest»: پینگ‌های keepalive از مسیر
++            # client._call عبور نمی‌کنند، پس مهر زمانِ ردیفِ ۶۰ثانیه‌ای
++            # هرگز روی آن‌ها نمی‌خورد و در صورت از دست رفتن Pong برای
++            # همیشه در _pending_state می‌ماندند (در لاگ: sender_pending=63
++            # و سیل «pending msg … PingRequest»). پیش از ارسال هر پینگِ
++            # تازه، همهٔ ورودی‌های تکمیل‌شده و زامبی‌های قدیمی‌تر از ۱۸۰
++            # ثانیه را پاک می‌کنیم تا انباشت غیرممکن شود.
++            try:
++                from modules.connection_guard import (
++                    drop_completed_pending,
++                    drop_stale_pending,
++                    note_pending,
++                )
++                drop_completed_pending(sender)
++                note_pending(sender)
++                drop_stale_pending(sender, time.monotonic() - 180)
++            except Exception:
++                pass
+             outstanding = getattr(sender, "_ping", None)
+             snapshot = pending_rpc_snapshot(sender)
+             if outstanding is None:
+diff --git a/tests/test_watchdog.py b/tests/test_watchdog.py
+new file mode 100644
+index 0000000..7731c37
+--- /dev/null
++++ b/tests/test_watchdog.py
+@@ -0,0 +1,164 @@
++# -*- coding: utf-8 -*-
++"""تست‌های Watchdog — بدون نیاز به اتصال به سروش.
++
++اجرا:
++    python3 -m unittest tests.test_watchdog
++یا مستقیم:
++    python3 tests/test_watchdog.py
++"""
++import sys
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
++
++import watchdog  # noqa: E402
++from watchdog import (  # noqa: E402
++    build_report,
++    classify_exit,
++    extract_traceback,
++    Watchdog,
++)
++from modules.owner_check import get_owner  # noqa: E402
++
++
++SAMPLE_TRACEBACK = """\
++Traceback (most recent call last):
++  File "/app/main.py", line 7, in <module>
++    asyncio.run(main())
++  File "/usr/lib/python3.11/asyncio/runners.py", line 190, in run
++    return runner.run(main)
++  File "/app/core/bot_working_split_ok.py", line 2104, in run
++    await handle_new_message(self, event)
++RuntimeError: connection lost
++"""
++
++
++class ExtractTracebackTests(unittest.TestCase):
++    def test_extracts_file_line_type_summary(self):
++        info = extract_traceback(SAMPLE_TRACEBACK)
++        self.assertIsNotNone(info)
++        self.assertEqual(info["error_type"], "RuntimeError")
++        self.assertEqual(info["file"], "/app/core/bot_working_split_ok.py")
++        self.assertEqual(info["line"], "2104")
++        self.assertEqual(info["summary"], "connection lost")
++        self.assertIn("Traceback (most recent call last):", info["traceback"])
++
++    def test_error_without_message(self):
++        info = extract_traceback(
++            "Traceback (most recent call last):\n"
++            '  File "a.py", line 3, in f\n'
++            "KeyboardInterrupt\n"
++        )
++        self.assertIsNotNone(info)
++        self.assertEqual(info["error_type"], "KeyboardInterrupt")
++
++    def test_no_traceback_returns_none(self):
++        self.assertIsNone(extract_traceback(""))
++        self.assertIsNone(extract_traceback("just some log lines\nno crash here\n"))
++
++    def test_chained_traceback_uses_last(self):
++        text = (
++            "Traceback (most recent call last):\n"
++            '  File "x.py", line 1, in a\n'
++            "ValueError: first\n"
++            "\n"
++            "The above exception was the direct cause of:\n"
++            "\n"
++            "Traceback (most recent call last):\n"
++            '  File "y.py", line 9, in b\n'
++            "RuntimeError: final cause\n"
++        )
++        info = extract_traceback(text)
++        self.assertEqual(info["error_type"], "RuntimeError")
++        self.assertEqual(info["file"], "y.py")
++        self.assertEqual(info["line"], "9")
++
++
++class ClassifyExitTests(unittest.TestCase):
++    def test_crash_reports(self):
++        result = classify_exit(1, SAMPLE_TRACEBACK, uptime_s=120, shutdown_requested=False)
++        self.assertTrue(result["report"])
++        self.assertEqual(result["kind"], "crash")
++        self.assertEqual(result["info"]["error_type"], "RuntimeError")
++
++    def test_abnormal_stop_reports(self):
++        result = classify_exit(137, "no traceback", uptime_s=120, shutdown_requested=False)
++        self.assertTrue(result["report"])
++        self.assertEqual(result["kind"], "abnormal_stop")
++
++    def test_normal_stop_no_report(self):
++        result = classify_exit(0, "bye", uptime_s=1000, shutdown_requested=False)
++        self.assertFalse(result["report"])
++        self.assertEqual(result["kind"], "normal_stop")
++
++    def test_early_stop_reports(self):
++        result = classify_exit(0, "", uptime_s=5, shutdown_requested=False)
++        self.assertTrue(result["report"])
++        self.assertEqual(result["kind"], "early_stop")
++
++    def test_shutdown_no_report(self):
++        result = classify_exit(1, SAMPLE_TRACEBACK, uptime_s=5, shutdown_requested=True)
++        self.assertFalse(result["report"])
++        self.assertEqual(result["kind"], "shutdown")
++
++
++class ReportFormatTests(unittest.TestCase):
++    def test_template_fields(self):
++        text = build_report(
++            {
++                "error_type": "RuntimeError",
++                "file": "core/bot.py",
++                "line": "42",
++                "summary": "boom",
++            },
++            "ربات دوباره راه‌اندازی شد",
++            timestamp="2026-08-21 16:20:00",
++        )
++        for expected in (
++            "🚨 خطای ربات",
++            "زمان:", "2026-08-21 16:20:00",
++            "نوع خطا:", "RuntimeError",
++            "فایل:", "core/bot.py",
++            "خط:", "42",
++            "جزئیات:", "boom",
++            "وضعیت:", "ربات دوباره راه‌اندازی شد",
++        ):
++            self.assertIn(expected, text)
++
++    def test_needs_investigation_status(self):
++        text = build_report(
++            {"error_type": "ExitCode(1)", "file": "نامشخص", "line": "—",
++             "summary": "x"},
++            "نیاز به بررسی دارد",
++        )
++        self.assertIn("نیاز به بررسی دارد", text)
++
++
++class OwnerOnlyReportTests(unittest.TestCase):
++    def test_report_goes_only_to_owner(self):
++        received = []
++
++        def fake_notifier(owner_id, text):
++            received.append((owner_id, text))
++            return True
++
++        crash_cmd = [
++            sys.executable, "-c",
++            "raise RuntimeError('watchdog owner-only test')",
++        ]
++        summary = Watchdog(crash_cmd, notifier=fake_notifier).run_once()
++        owner_id = int(get_owner()["user_id"])
++
++        self.assertTrue(summary["report_worthy"])
++        self.assertEqual(summary["recipient"], owner_id)
++        self.assertEqual(len(received), 1)
++        self.assertEqual(received[0][0], owner_id)
++        self.assertIn("🚨 خطای ربات", received[0][1])
++        self.assertIn("RuntimeError", received[0][1])
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)
+diff --git a/watchdog-529094a.patch b/watchdog-529094a.patch
+new file mode 100644
+index 0000000..1db5c33
+--- /dev/null
++++ b/watchdog-529094a.patch
+@@ -0,0 +1,946 @@
++From 529094a95617725d489671de62f2c6dfba0eaaba Mon Sep 17 00:00:00 2001
++From: splusesupor-oss <297420272+splusesupor-oss@users.noreply.github.com>
++Date: Fri, 21 Aug 2026 16:27:28 +0000
++Subject: [PATCH] Add permanent watchdog supervisor for the bot
++
++watchdog.py runs main.py as a supervised subprocess and only acts on
++crash / important exception / abnormal stop:
++
++- captures the full traceback and extracts file, line, error type and
++  summary,
++- saves the report under logs/crash_reports and logs/watchdog_reports.jsonl,
++- sends the compact report ONLY to the owner's private chat (owner resolved
++  via the existing modules.owner_check, no hardcoded ids),
++- restarts the bot with exponential backoff and a report cooldown so a
++  crash loop cannot spam the owner,
++- treats clean/graceful stops and normal operation as no-report.
++
++Also adds tests/test_watchdog.py (12 offline tests) plus a
++"python3 watchdog.py --self-test" mode that verifies the owner is the
++only report recipient.
++
++Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
++---
++ tests/test_watchdog.py | 164 +++++++++
++ watchdog.py            | 738 +++++++++++++++++++++++++++++++++++++++++
++ 2 files changed, 902 insertions(+)
++ create mode 100644 tests/test_watchdog.py
++ create mode 100644 watchdog.py
++
++diff --git a/tests/test_watchdog.py b/tests/test_watchdog.py
++new file mode 100644
++index 0000000..7731c37
++--- /dev/null
+++++ b/tests/test_watchdog.py
++@@ -0,0 +1,164 @@
+++# -*- coding: utf-8 -*-
+++"""تست‌های Watchdog — بدون نیاز به اتصال به سروش.
+++
+++اجرا:
+++    python3 -m unittest tests.test_watchdog
+++یا مستقیم:
+++    python3 tests/test_watchdog.py
+++"""
+++import sys
+++import unittest
+++from pathlib import Path
+++
+++ROOT = Path(__file__).resolve().parents[1]
+++if str(ROOT) not in sys.path:
+++    sys.path.insert(0, str(ROOT))
+++
+++import watchdog  # noqa: E402
+++from watchdog import (  # noqa: E402
+++    build_report,
+++    classify_exit,
+++    extract_traceback,
+++    Watchdog,
+++)
+++from modules.owner_check import get_owner  # noqa: E402
+++
+++
+++SAMPLE_TRACEBACK = """\
+++Traceback (most recent call last):
+++  File "/app/main.py", line 7, in <module>
+++    asyncio.run(main())
+++  File "/usr/lib/python3.11/asyncio/runners.py", line 190, in run
+++    return runner.run(main)
+++  File "/app/core/bot_working_split_ok.py", line 2104, in run
+++    await handle_new_message(self, event)
+++RuntimeError: connection lost
+++"""
+++
+++
+++class ExtractTracebackTests(unittest.TestCase):
+++    def test_extracts_file_line_type_summary(self):
+++        info = extract_traceback(SAMPLE_TRACEBACK)
+++        self.assertIsNotNone(info)
+++        self.assertEqual(info["error_type"], "RuntimeError")
+++        self.assertEqual(info["file"], "/app/core/bot_working_split_ok.py")
+++        self.assertEqual(info["line"], "2104")
+++        self.assertEqual(info["summary"], "connection lost")
+++        self.assertIn("Traceback (most recent call last):", info["traceback"])
+++
+++    def test_error_without_message(self):
+++        info = extract_traceback(
+++            "Traceback (most recent call last):\n"
+++            '  File "a.py", line 3, in f\n'
+++            "KeyboardInterrupt\n"
+++        )
+++        self.assertIsNotNone(info)
+++        self.assertEqual(info["error_type"], "KeyboardInterrupt")
+++
+++    def test_no_traceback_returns_none(self):
+++        self.assertIsNone(extract_traceback(""))
+++        self.assertIsNone(extract_traceback("just some log lines\nno crash here\n"))
+++
+++    def test_chained_traceback_uses_last(self):
+++        text = (
+++            "Traceback (most recent call last):\n"
+++            '  File "x.py", line 1, in a\n'
+++            "ValueError: first\n"
+++            "\n"
+++            "The above exception was the direct cause of:\n"
+++            "\n"
+++            "Traceback (most recent call last):\n"
+++            '  File "y.py", line 9, in b\n'
+++            "RuntimeError: final cause\n"
+++        )
+++        info = extract_traceback(text)
+++        self.assertEqual(info["error_type"], "RuntimeError")
+++        self.assertEqual(info["file"], "y.py")
+++        self.assertEqual(info["line"], "9")
+++
+++
+++class ClassifyExitTests(unittest.TestCase):
+++    def test_crash_reports(self):
+++        result = classify_exit(1, SAMPLE_TRACEBACK, uptime_s=120, shutdown_requested=False)
+++        self.assertTrue(result["report"])
+++        self.assertEqual(result["kind"], "crash")
+++        self.assertEqual(result["info"]["error_type"], "RuntimeError")
+++
+++    def test_abnormal_stop_reports(self):
+++        result = classify_exit(137, "no traceback", uptime_s=120, shutdown_requested=False)
+++        self.assertTrue(result["report"])
+++        self.assertEqual(result["kind"], "abnormal_stop")
+++
+++    def test_normal_stop_no_report(self):
+++        result = classify_exit(0, "bye", uptime_s=1000, shutdown_requested=False)
+++        self.assertFalse(result["report"])
+++        self.assertEqual(result["kind"], "normal_stop")
+++
+++    def test_early_stop_reports(self):
+++        result = classify_exit(0, "", uptime_s=5, shutdown_requested=False)
+++        self.assertTrue(result["report"])
+++        self.assertEqual(result["kind"], "early_stop")
+++
+++    def test_shutdown_no_report(self):
+++        result = classify_exit(1, SAMPLE_TRACEBACK, uptime_s=5, shutdown_requested=True)
+++        self.assertFalse(result["report"])
+++        self.assertEqual(result["kind"], "shutdown")
+++
+++
+++class ReportFormatTests(unittest.TestCase):
+++    def test_template_fields(self):
+++        text = build_report(
+++            {
+++                "error_type": "RuntimeError",
+++                "file": "core/bot.py",
+++                "line": "42",
+++                "summary": "boom",
+++            },
+++            "ربات دوباره راه‌اندازی شد",
+++            timestamp="2026-08-21 16:20:00",
+++        )
+++        for expected in (
+++            "🚨 خطای ربات",
+++            "زمان:", "2026-08-21 16:20:00",
+++            "نوع خطا:", "RuntimeError",
+++            "فایل:", "core/bot.py",
+++            "خط:", "42",
+++            "جزئیات:", "boom",
+++            "وضعیت:", "ربات دوباره راه‌اندازی شد",
+++        ):
+++            self.assertIn(expected, text)
+++
+++    def test_needs_investigation_status(self):
+++        text = build_report(
+++            {"error_type": "ExitCode(1)", "file": "نامشخص", "line": "—",
+++             "summary": "x"},
+++            "نیاز به بررسی دارد",
+++        )
+++        self.assertIn("نیاز به بررسی دارد", text)
+++
+++
+++class OwnerOnlyReportTests(unittest.TestCase):
+++    def test_report_goes_only_to_owner(self):
+++        received = []
+++
+++        def fake_notifier(owner_id, text):
+++            received.append((owner_id, text))
+++            return True
+++
+++        crash_cmd = [
+++            sys.executable, "-c",
+++            "raise RuntimeError('watchdog owner-only test')",
+++        ]
+++        summary = Watchdog(crash_cmd, notifier=fake_notifier).run_once()
+++        owner_id = int(get_owner()["user_id"])
+++
+++        self.assertTrue(summary["report_worthy"])
+++        self.assertEqual(summary["recipient"], owner_id)
+++        self.assertEqual(len(received), 1)
+++        self.assertEqual(received[0][0], owner_id)
+++        self.assertIn("🚨 خطای ربات", received[0][1])
+++        self.assertIn("RuntimeError", received[0][1])
+++
+++
+++if __name__ == "__main__":
+++    unittest.main(verbosity=2)
++diff --git a/watchdog.py b/watchdog.py
++new file mode 100644
++index 0000000..c978bfa
++--- /dev/null
+++++ b/watchdog.py
++@@ -0,0 +1,738 @@
+++#!/usr/bin/env python3
+++# -*- coding: utf-8 -*-
+++"""ناظر دائمی (Watchdog) ربات ضد هرزنامه سروش پلاس.
+++
+++این فایل یک ناظرِ جداگانه و مستقل از ربات است که ``python3 main.py`` را
+++به‌عنوان یک زیرفرایند اجرا می‌کند و فقط در شرایط زیر وارد عمل می‌شود:
+++
+++  * Crash (پایانِ فرایند همراه با Traceback)،
+++  * Exception مهم (همان Traceback بالا)،
+++  * توقف غیرعادی (خروج با کد خطا یا خروج زودهنگامِ بی‌دلیل).
+++
+++هیچ‌کاری با اجرای عادی ربات یا پیام‌های گروه ندارد؛ بنابراین اسپمِ
+++گزارش تولید نمی‌شود.
+++
+++در صورت خرابی:
+++  ۱) Traceback کامل از خروجیِ فرایند جمع‌آوری می‌شود،
+++  ۲) نام فایل، شمارهٔ خط، نوع خطا و خلاصهٔ مشکل استخراج می‌شود،
+++  ۳) گزارش کامل داخل ``logs/crash_reports`` و ``logs/watchdog_reports.jsonl``
+++     ذخیره می‌شود،
+++  ۴) خلاصهٔ گزارش فقط به **پیویِ مالک اصلی ربات** ارسال می‌شود
+++     (مالک از همان سیستم موجود یعنی ``modules.owner_check`` خوانده می‌شود و
+++     هیچ شناسهٔ دستی و جدیدی اینجا نوشته نمی‌شود)،
+++  ۵) سپس ربات دوباره راه‌اندازی می‌شود.
+++
+++این فایل جایگزین حلقهٔ ``while true`` در ``run_bot.sh`` است؛ یعنی به‌جای
+++اجرای ``run_bot.sh`` فقط کافی است ``python3 watchdog.py`` اجرا شود.
+++
+++استفاده:
+++    python3 watchdog.py                # اجرای python3 main.py و نظارت دائمی
+++    python3 watchdog.py --self-test    # تست آفلاین (بدون اتصال به سروش)
+++
+++تنظیمات از متغیرهای محیطی (اختیاری):
+++    WATCHDOG_REPORT_COOLDOWN   فاصلهٔ حداقلی دو گزارش به مالک (ثانیه، ۹۰۰)
+++    WATCHDOG_MAX_CRASHES       سقف خرابی پشت‌سرهم قبل از «نیاز به بررسی» (۳)
+++    WATCHDOG_RESTART_DELAY     تأخیر پایهٔ راه‌اندازی مجدد (ثانیه، ۵)
+++    WATCHDOG_BACKOFF_MAX       بیشینهٔ تأخیر backoff (ثانیه، ۳۰۰)
+++"""
+++
+++from __future__ import annotations
+++
+++import argparse
+++import asyncio
+++import json
+++import os
+++import re
+++import signal
+++import subprocess
+++import sys
+++import threading
+++import time
+++from collections import deque
+++from datetime import datetime
+++from pathlib import Path
+++
+++# ---------------------------------------------------------------------------
+++# مسیر و بارگذاری محیط — هماهنگ با ساختار فعلی پروژه
+++# ---------------------------------------------------------------------------
+++_PROJECT_ROOT = Path(__file__).resolve().parent
+++if str(_PROJECT_ROOT) not in sys.path:
+++    sys.path.insert(0, str(_PROJECT_ROOT))
+++
+++_ENV_FILE = _PROJECT_ROOT / ".env"
+++
+++
+++def _load_env(path: Path) -> None:
+++    """بارگذاری .env؛ ابتدا dotenv (همان‌طور که ربات استفاده می‌کند)، و در
+++    نبودِ آن یک پارسر ساده و بدون وابستگی."""
+++    try:
+++        from dotenv import load_dotenv
+++        load_dotenv(dotenv_path=path, override=False)
+++        return
+++    except Exception:
+++        pass
+++    try:
+++        if not path.exists():
+++            return
+++        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+++            line = raw.strip()
+++            if not line or line.startswith("#") or "=" not in line:
+++                continue
+++            key, _, value = line.partition("=")
+++            key = key.strip()
+++            value = value.strip().strip("\"'")
+++            if key and key not in os.environ:
+++                os.environ[key] = value
+++    except OSError:
+++        pass
+++
+++
+++_load_env(_ENV_FILE)
+++
+++# «modules.*» فقط بعد از قرارگرفتن ریشهٔ پروژه در sys.path و بارگذاری .env
+++# import می‌شود تا تنظیماتِ مسیرِ داده و مالک درست خوانده شوند.
+++from modules.owner_check import get_owner  # noqa: E402
+++from modules.runtime_paths import LOG_DIR, runtime_log_file  # noqa: E402
+++
+++# ---------------------------------------------------------------------------
+++# تنظیمات
+++# ---------------------------------------------------------------------------
+++_MIN_UPTIME_NORMAL = float(os.environ.get("WATCHDOG_MIN_UPTIME", "60"))
+++_STABLE_UPTIME = float(os.environ.get("WATCHDOG_STABLE_UPTIME", "300"))
+++_REPORT_COOLDOWN = float(os.environ.get("WATCHDOG_REPORT_COOLDOWN", "900"))
+++_MAX_CRASHES = int(os.environ.get("WATCHDOG_MAX_CRASHES", "3"))
+++_RESTART_DELAY = float(os.environ.get("WATCHDOG_RESTART_DELAY", "5"))
+++_BACKOFF_MAX = float(os.environ.get("WATCHDOG_BACKOFF_MAX", "300"))
+++_OUTPUT_LINES = int(os.environ.get("WATCHDOG_OUTPUT_LINES", "3000"))
+++_SEND_TIMEOUT = float(os.environ.get("WATCHDOG_SEND_TIMEOUT", "30"))
+++_CRASH_REPORT_KEEP = int(os.environ.get("WATCHDOG_CRASH_REPORT_KEEP", "100"))
+++
+++
+++# ---------------------------------------------------------------------------
+++# ابزارهای کوچک
+++# ---------------------------------------------------------------------------
+++class _RingBuffer:
+++    """بافرِ حلقویِ خطوطِ خروجی فرایند (برای استخراج Traceback بدون رشد بی‌نهایت)."""
+++
+++    def __init__(self, max_lines: int):
+++        self._lines = deque(maxlen=max(100, int(max_lines)))
+++
+++    def append(self, line: str) -> None:
+++        self._lines.append(line)
+++
+++    def text(self) -> str:
+++        return "".join(self._lines)
+++
+++
+++class _RotatingLog:
+++    """نوشتنِ محدود (rotating) روی دیسک برای خروجیِ خام فرایند و لاگ ناظر.
+++
+++    هر write فایل را باز/بسته می‌کند تا هیچ file handle ای باز نماند؛
+++    حجم ناظر کم است و این ساده‌ترین راهِ بدون نشت است.
+++    """
+++
+++    def __init__(self, path: Path, max_bytes: int = 2 * 1024 * 1024, backups: int = 2):
+++        self.path = Path(path)
+++        self.max_bytes = max_bytes
+++        self.backups = backups
+++        self.path.parent.mkdir(parents=True, exist_ok=True)
+++
+++    def write(self, text: str) -> None:
+++        if not text:
+++            return
+++        try:
+++            with open(self.path, "a", encoding="utf-8", errors="replace") as fh:
+++                fh.write(text)
+++                fh.flush()
+++        except OSError:
+++            return
+++        self._maybe_rotate()
+++
+++    def _maybe_rotate(self) -> None:
+++        try:
+++            if self.path.stat().st_size <= self.max_bytes:
+++                return
+++        except OSError:
+++            return
+++        for index in range(self.backups - 1, 0, -1):
+++            src = self.path.with_name(f"{self.path.name}.{index}")
+++            dst = self.path.with_name(f"{self.path.name}.{index + 1}")
+++            if src.exists():
+++                try:
+++                    src.replace(dst)
+++                except OSError:
+++                    pass
+++        backup = self.path.with_name(f"{self.path.name}.1")
+++        if self.path.exists():
+++            try:
+++                self.path.replace(backup)
+++            except OSError:
+++                pass
+++
+++    def close(self) -> None:
+++        # فایل فقط هنگام write باز می‌شود؛ چیزی برای بستنِ دائمی نیست.
+++        pass
+++
+++
+++def _now_text() -> str:
+++    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+++
+++
+++# ---------------------------------------------------------------------------
+++# استخراج Traceback
+++# ---------------------------------------------------------------------------
+++_FILE_LINE_RE = re.compile(r'^\s*File "([^"]+)", line (\d+), in (.+?)\s*$')
+++_ERROR_LINE_RE = re.compile(
+++    r'^([A-Za-z_][A-Za-z0-9_.]*(?:\.[A-Za-z_][A-Za-z0-9_.]*)*)(?::\s*(.*))?$'
+++)
+++
+++
+++def extract_traceback(output_text: str):
+++    """استخراج آخرین Traceback از خروجی فرایند.
+++
+++    برمی‌گرداند dict شامل ``error_type``، ``file``، ``line``، ``function``،
+++    ``summary`` و ``traceback`` (متن کامل)؛ یا ``None`` اگر Traceback نبود.
+++    """
+++    if not output_text:
+++        return None
+++    lines = output_text.splitlines()
+++    start = None
+++    for index in range(len(lines) - 1, -1, -1):
+++        if lines[index].lstrip().startswith("Traceback (most recent call last):"):
+++            start = index
+++            break
+++    if start is None:
+++        return None
+++
+++    tb_lines = lines[start:]
+++    file_name = line_no = func_name = None
+++    error_type = summary = ""
+++    for line in tb_lines[1:]:
+++        file_match = _FILE_LINE_RE.match(line)
+++        if file_match:
+++            file_name = file_match.group(1)
+++            line_no = file_match.group(2)
+++            func_name = file_match.group(3)
+++            continue
+++        if file_name is None:
+++            # خطای بدون «File …» (مثل خطای خود asyncio) — نوع را از هر
+++            # خطِ غیرتورفته‌ای که شبیه «Error: …» است می‌خوانیم.
+++            error_match = _ERROR_LINE_RE.match(line.strip())
+++            if error_match and error_match.group(1).endswith("Error"):
+++                error_type = error_match.group(1)
+++                summary = (error_match.group(2) or "").strip()
+++            continue
+++        error_match = _ERROR_LINE_RE.match(line)
+++        if error_match and not line.startswith((" ", "\t")):
+++            error_type = error_match.group(1)
+++            summary = (error_match.group(2) or "").strip()
+++            break
+++
+++    if not error_type:
+++        return None
+++
+++    return {
+++        "error_type": error_type,
+++        "file": file_name or "نامشخص",
+++        "line": line_no or "—",
+++        "function": func_name or "نامشخص",
+++        "summary": summary,
+++        "traceback": "\n".join(tb_lines),
+++    }
+++
+++
+++def _signal_name(code: int) -> str:
+++    if code >= 0:
+++        return str(code)
+++    try:
+++        return f"{signal.Signals(-code).name} ({code})"
+++    except (ValueError, AttributeError):
+++        return str(code)
+++
+++
+++def classify_exit(code: int, output_text: str, uptime_s: float,
+++                  shutdown_requested: bool) -> dict:
+++    """تشخیص اینکه پایانِ فرایند یک Crash / توقف غیرعادی / توقف عادی است.
+++
+++    فقط مواردِ قابل‌گزارش ``report=True`` می‌شوند؛ توقفِ عادی و خاموشیِ
+++    عمدی گزارش نمی‌شوند تا مالک اسپم نگیرد.
+++    """
+++    if shutdown_requested:
+++        return {"kind": "shutdown", "report": False, "info": {}}
+++
+++    traceback_info = extract_traceback(output_text)
+++    if traceback_info is not None:
+++        return {
+++            "kind": "crash",
+++            "report": True,
+++            "info": traceback_info,
+++        }
+++
+++    if code != 0:
+++        return {
+++            "kind": "abnormal_stop",
+++            "report": True,
+++            "info": {
+++                "error_type": f"ExitCode({_signal_name(code)})",
+++                "file": "نامشخص",
+++                "line": "—",
+++                "function": "نامشخص",
+++                "summary": (
+++                    "فرایند ربات بدون Traceback و با کد خطا متوقف شد "
+++                    f"(کد {code})."
+++                ),
+++                "traceback": "",
+++            },
+++        }
+++
+++    # خروجِ تمیز (کد ۰) ولی خیلی زودتر از حد انتظار — توقفِ غیرعادی است.
+++    if uptime_s < _MIN_UPTIME_NORMAL:
+++        return {
+++            "kind": "early_stop",
+++            "report": True,
+++            "info": {
+++                "error_type": "NormalExit(early)",
+++                "file": "نامشخص",
+++                "line": "—",
+++                "function": "نامشخص",
+++                "summary": (
+++                    f"ربات بدون خطا ولی تنها پس از {uptime_s:.0f} ثانیه "
+++                    "متوقف شد (توقف زودهنگام)."
+++                ),
+++                "traceback": "",
+++            },
+++        }
+++
+++    return {"kind": "normal_stop", "report": False, "info": {}}
+++
+++
+++# ---------------------------------------------------------------------------
+++# قالب گزارش
+++# ---------------------------------------------------------------------------
+++def build_report(info: dict, status: str, timestamp: str | None = None) -> str:
+++    """ساخت متن گزارش مطابق قالب تعیین‌شده برای پیوی مالک."""
+++    when = timestamp or _now_text()
+++    lines = [
+++        "🚨 خطای ربات",
+++        "",
+++        "زمان:",
+++        when,
+++        "",
+++        "نوع خطا:",
+++        str(info.get("error_type") or "نامشخص"),
+++        "",
+++        "فایل:",
+++        str(info.get("file") or "نامشخص"),
+++        "",
+++        "خط:",
+++        str(info.get("line") or "—"),
+++        "",
+++        "جزئیات:",
+++        str(info.get("summary") or "بدون جزئیات"),
+++        "",
+++        "وضعیت:",
+++        status,
+++    ]
+++    return "\n".join(lines)
+++
+++
+++# ---------------------------------------------------------------------------
+++# ارسال گزارش فقط به مالک
+++# ---------------------------------------------------------------------------
+++async def _send_via_splusthon(owner_id: int, text: str,
+++                              timeout: float = _SEND_TIMEOUT):
+++    """ارسال پیام خصوصی به مالک با همان کتابخانهٔ ربات (SPlusthon).
+++
+++    هدف فقط ``owner_id`` (شناسهٔ کاربری مالک) است؛ هیچ گروه یا کاربر
+++    دیگری در کار نیست. از همان ``SOROUSH_SESSION_STRING`` و تنظیمات ``.env``
+++    استفاده می‌شود.
+++    """
+++    try:
+++        from splusthon import SoroushClient
+++        from splusthon.sessions import StringSession
+++    except Exception as error:  # pragma: no cover - بستگی به محیط نصب دارد
+++        return False, f"splusthon import failed: {error!r}"
+++
+++    session_str = os.getenv("SOROUSH_SESSION_STRING", "").strip()
+++    if not session_str:
+++        return False, "SOROUSH_SESSION_STRING not set"
+++
+++    client = None
+++    try:
+++        api_id = os.getenv("API_ID", "").strip()
+++        api_hash = os.getenv("API_HASH", "").strip()
+++        session = StringSession(session_str)
+++        if api_id and api_hash:
+++            client = SoroushClient(session, int(api_id), api_hash)
+++        else:
+++            client = SoroushClient(session)
+++
+++        await asyncio.wait_for(client.connect(), timeout=timeout)
+++        # پیوی مالک = ارسال به شناسهٔ عددیِ کاربرِ مالک.
+++        await asyncio.wait_for(
+++            client.send_message(int(owner_id), text), timeout=timeout
+++        )
+++        return True, ""
+++    except Exception as error:
+++        return False, repr(error)
+++    finally:
+++        if client is not None:
+++            try:
+++                await asyncio.wait_for(client.disconnect(), timeout=5)
+++            except Exception:
+++                pass
+++
+++
+++def default_notifier(owner_id: int, text: str) -> bool:
+++    """نسخهٔ همگامِ ارسال برای حلقهٔ ناظر (یک event loop جدا در هر ارسال)."""
+++    ok, reason = asyncio.run(_send_via_splusthon(owner_id, text))
+++    if not ok:
+++        print(f"[watchdog] owner report NOT sent: {reason}")
+++    return ok
+++
+++
+++# ---------------------------------------------------------------------------
+++# ذخیرهٔ گزارش داخل logs
+++# ---------------------------------------------------------------------------
+++def write_crash_report(report_text: str, info: dict, output_text: str) -> Path:
+++    """ذخیرهٔ گزارش کامل (قالب + Traceback) و ثبتِ JSONL، با هرسِ قدیمی‌ها."""
+++    reports_dir = Path(LOG_DIR) / "crash_reports"
+++    reports_dir.mkdir(parents=True, exist_ok=True)
+++    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+++    report_path = reports_dir / f"crash_{stamp}.log"
+++    payload = report_text
+++    if info.get("traceback"):
+++        payload += "\n\n--- Traceback کامل ---\n" + info["traceback"]
+++    elif output_text:
+++        tail = "\n".join(output_text.splitlines()[-60:])
+++        payload += "\n\n--- انتهای خروجی فرایند ---\n" + tail
+++    try:
+++        report_path.write_text(payload, encoding="utf-8")
+++    except OSError:
+++        pass
+++
+++    jsonl_path = Path(LOG_DIR) / "watchdog_reports.jsonl"
+++    record = {
+++        "timestamp": _now_text(),
+++        "error_type": info.get("error_type"),
+++        "file": info.get("file"),
+++        "line": info.get("line"),
+++        "summary": info.get("summary"),
+++    }
+++    try:
+++        with jsonl_path.open("a", encoding="utf-8") as stream:
+++            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+++    except OSError:
+++        pass
+++
+++    _prune_crash_reports(reports_dir)
+++    return report_path
+++
+++
+++def _prune_crash_reports(reports_dir: Path, keep: int = _CRASH_REPORT_KEEP) -> None:
+++    try:
+++        files = sorted(
+++            reports_dir.glob("crash_*.log"),
+++            key=lambda path: path.stat().st_mtime,
+++        )
+++    except OSError:
+++        return
+++    for old in files[:-max(1, keep)]:
+++        try:
+++            old.unlink()
+++        except OSError:
+++            pass
+++
+++
+++# ---------------------------------------------------------------------------
+++# ناظر اصلی
+++# ---------------------------------------------------------------------------
+++class Watchdog:
+++    """اجرا و نظارتِ دائمی روی فرایند ربات."""
+++
+++    def __init__(self, cmd, *, notifier=None):
+++        self.cmd = list(cmd)
+++        self.notifier = notifier or default_notifier
+++        self._stop_requested = False
+++        self._current_proc = None
+++        self._consecutive = 0
+++        self._last_report_at = None
+++        self._child_log = _RotatingLog(runtime_log_file("watchdog_child.log"))
+++        self._own_log = _RotatingLog(runtime_log_file("watchdog.log"))
+++
+++    # -- لاگ ناظر ----------------------------------------------------------
+++    def _log(self, message: str) -> None:
+++        line = f"[{_now_text()}] {message}\n"
+++        print(line.rstrip("\n"))
+++        self._own_log.write(line)
+++
+++    # -- مدیریت سیگنال‌ها ---------------------------------------------------
+++    def _install_signals(self) -> None:
+++        def _handler(_signum, _frame):
+++            self._stop_requested = True
+++            self._log("WATCHDOG stop signal received")
+++            self._terminate_current()
+++
+++        for signame in ("SIGINT", "SIGTERM"):
+++            try:
+++                signal.signal(getattr(signal, signame), _handler)
+++            except (ValueError, OSError, AttributeError):
+++                pass
+++
+++    def _terminate_current(self) -> None:
+++        proc = self._current_proc
+++        if proc is None or proc.poll() is not None:
+++            return
+++        try:
+++            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+++        except (ProcessLookupError, PermissionError, OSError):
+++            try:
+++                proc.terminate()
+++            except OSError:
+++                pass
+++
+++    # -- اجرای یک چرخهٔ نظارت ----------------------------------------------
+++    def _spawn(self):
+++        env = os.environ.copy()
+++        env.setdefault("PYTHONUNBUFFERED", "1")
+++        return subprocess.Popen(
+++            self.cmd,
+++            stdout=subprocess.PIPE,
+++            stderr=subprocess.STDOUT,
+++            text=True,
+++            encoding="utf-8",
+++            errors="replace",
+++            bufsize=1,
+++            cwd=str(_PROJECT_ROOT),
+++            env=env,
+++            start_new_session=True,
+++        )
+++
+++    @staticmethod
+++    def _pump(proc, ring: _RingBuffer, writer: _RotatingLog) -> None:
+++        try:
+++            stream = proc.stdout
+++            if stream is None:
+++                return
+++            for line in stream:
+++                ring.append(line)
+++                writer.write(line)
+++        except Exception:
+++            pass
+++
+++    def run_once(self) -> dict:
+++        """یک چرخهٔ کامل: اجرا → انتظار → تشخیص → گزارش → آماده‌سازی ری‌استارت."""
+++        started = time.monotonic()
+++        self._log(f"WATCHDOG start child: {' '.join(self.cmd)}")
+++        try:
+++            proc = self._spawn()
+++        except Exception as error:
+++            self._log(f"WATCHDOG spawn failed: {error!r}")
+++            return {
+++                "kind": "spawn_failed", "report_worthy": False,
+++                "report_sent": False, "recipient": None,
+++                "report_text": None, "status": None, "info": {},
+++                "delay": _RESTART_DELAY, "consecutive": self._consecutive,
+++            }
+++        self._current_proc = proc
+++
+++        ring = _RingBuffer(_OUTPUT_LINES)
+++        reader = threading.Thread(
+++            target=self._pump, args=(proc, ring, self._child_log), daemon=True
+++        )
+++        reader.start()
+++
+++        code = proc.wait()
+++        reader.join(timeout=5)
+++        self._current_proc = None
+++
+++        uptime = time.monotonic() - started
+++        output = ring.text()
+++        result = classify_exit(code, output, uptime, self._stop_requested)
+++        kind = result["kind"]
+++        info = result["info"]
+++        report_worthy = bool(result["report"])
+++
+++        summary = {
+++            "kind": kind,
+++            "report_worthy": report_worthy,
+++            "report_sent": False,
+++            "recipient": None,
+++            "report_text": None,
+++            "status": None,
+++            "info": info,
+++            "delay": _RESTART_DELAY,
+++            "consecutive": self._consecutive,
+++        }
+++
+++        if self._stop_requested or kind == "shutdown":
+++            self._log("WATCHDOG shutdown (no report, no restart)")
+++            return summary
+++
+++        # اگر ربات مدتِ خوبی سالم کار کرده، خرابیِ بعدی را از نو بشمار.
+++        if uptime >= _STABLE_UPTIME:
+++            self._consecutive = 0
+++
+++        if report_worthy:
+++            # شمارندهٔ خرابی‌های پشت‌سرهم؛ اگر ربات به‌قدر کافی پایدار کار
+++            # کرده بود، شمارنده از قبل صفر شده است.
+++            self._consecutive += 1
+++            summary["consecutive"] = self._consecutive
+++            in_crash_loop = self._consecutive >= _MAX_CRASHES
+++            status = (
+++                "نیاز به بررسی دارد" if in_crash_loop
+++                else "ربات دوباره راه‌اندازی شد"
+++            )
+++            summary["status"] = status
+++            report_text = build_report(info, status)
+++            summary["report_text"] = report_text
+++
+++            write_crash_report(report_text, info, output)
+++
+++            owner = get_owner()
+++            owner_id = int(owner.get("user_id", 0))
+++            summary["recipient"] = owner_id
+++            now = time.monotonic()
+++            if (
+++                self._last_report_at is None
+++                or now - self._last_report_at >= _REPORT_COOLDOWN
+++            ):
+++                try:
+++                    summary["report_sent"] = bool(self.notifier(owner_id, report_text))
+++                except Exception as error:
+++                    self._log(f"WATCHDOG notifier failed: {error!r}")
+++                self._last_report_at = now
+++            else:
+++                self._log(
+++                    "WATCHDOG report cooldown active; report saved to logs only"
+++                )
+++            self._log(
+++                f"WATCHDOG {kind} file={info.get('file')} "
+++                f"line={info.get('line')} error={info.get('error_type')} "
+++                f"status={status} consecutive={self._consecutive}"
+++            )
+++
+++            # تأخیرِ نمایی برای جلوگیری از حلقهٔ crash و اسپم.
+++            backoff = min(
+++                _RESTART_DELAY * (2 ** min(self._consecutive, 6)),
+++                _BACKOFF_MAX,
+++            )
+++            summary["delay"] = backoff
+++        else:
+++            self._consecutive = 0
+++            summary["consecutive"] = 0
+++            summary["delay"] = _RESTART_DELAY
+++            self._log(f"WATCHDOG {kind} (uptime={uptime:.0f}s) — no report")
+++
+++        return summary
+++
+++    def _sleep_interruptible(self, seconds: float) -> None:
+++        deadline = time.monotonic() + seconds
+++        while not self._stop_requested:
+++            remaining = deadline - time.monotonic()
+++            if remaining <= 0:
+++                return
+++            time.sleep(min(1.0, remaining))
+++
+++    def run(self) -> int:
+++        self._install_signals()
+++        self._log(
+++            f"WATCHDOG ready owner_id={get_owner().get('user_id')} "
+++            f"cooldown={_REPORT_COOLDOWN:.0f}s max_crashes={_MAX_CRASHES}"
+++        )
+++        try:
+++            while True:
+++                summary = self.run_once()
+++                if self._stop_requested or summary["kind"] == "shutdown":
+++                    break
+++                self._sleep_interruptible(summary.get("delay", _RESTART_DELAY))
+++        except KeyboardInterrupt:
+++            self._stop_requested = True
+++            self._terminate_current()
+++        finally:
+++            self._child_log.close()
+++            self._own_log.close()
+++            self._log("WATCHDOG stopped")
+++        return 0
+++
+++
+++# ---------------------------------------------------------------------------
+++# حالت تست آفلاین
+++# ---------------------------------------------------------------------------
+++def _self_test() -> int:
+++    """اجرای یک Crash آزمایشی و تأیید اینکه فقط مالک اصلی گزارش می‌گیرد."""
+++    received = []
+++
+++    def fake_notifier(owner_id, text):
+++        received.append((owner_id, text))
+++        return True
+++
+++    crash_cmd = [
+++        sys.executable, "-c",
+++        "def boom():\n"
+++        "    raise RuntimeError('watchdog self-test failure')\n"
+++        "boom()",
+++    ]
+++    watchdog = Watchdog(crash_cmd, notifier=fake_notifier)
+++    summary = watchdog.run_once()
+++    owner_id = int(get_owner().get("user_id", 0))
+++
+++    problems = []
+++    if not summary["report_worthy"]:
+++        problems.append("crash تشخیص داده نشد")
+++    if summary["kind"] != "crash":
+++        problems.append(f"kind={summary['kind']} به‌جای crash")
+++    if summary["recipient"] != owner_id:
+++        problems.append(
+++            f"گیرنده {summary['recipient']} != مالک {owner_id}"
+++        )
+++    if len(received) != 1:
+++        problems.append(f"تعداد ارسال‌ها {len(received)} به‌جای ۱")
+++    else:
+++        recipient, text = received[0]
+++        if recipient != owner_id:
+++            problems.append(f"ارسال به {recipient} به‌جای مالک {owner_id}")
+++        for expected in (
+++            "🚨 خطای ربات", "نوع خطا:", "RuntimeError",
+++            "فایل:", "خط:", "watchdog self-test failure",
+++        ):
+++            if expected not in text:
+++                problems.append(f"گزارش شامل «{expected}» نیست")
+++        if text.rstrip().splitlines()[-1] != "ربات دوباره راه‌اندازی شد":
+++            problems.append("خط آخر وضعیت درست نیست")
+++
+++    print("owner_id =", owner_id)
+++    print("report =\n" + (received[0][1] if received else "(هیچ)"))
+++    if problems:
+++        for problem in problems:
+++            print("FAIL:", problem)
+++        return 1
+++    print("SELF-TEST OK: فقط مالک اصلی گزارش دریافت کرد")
+++    return 0
+++
+++
+++def _main(argv=None) -> int:
+++    parser = argparse.ArgumentParser(
+++        description="Watchdog دائمی ربات ضد هرزنامه سروش پلاس"
+++    )
+++    parser.add_argument(
+++        "--self-test", action="store_true",
+++        help="اجرای تست آفلاین (بدون اتصال به سروش)",
+++    )
+++    parser.add_argument(
+++        "--cmd", nargs=argparse.REMAINDER,
+++        default=None,
+++        help="دستور جایگزین برای اجرا (پیش‌فرض: python3 main.py)",
+++    )
+++    args = parser.parse_args(argv)
+++
+++    if args.self_test:
+++        return _self_test()
+++
+++    cmd = args.cmd if args.cmd else [sys.executable, "main.py"]
+++    watchdog = Watchdog(cmd)
+++    return watchdog.run()
+++
+++
+++if __name__ == "__main__":
+++    raise SystemExit(_main())
++-- 
++2.39.5
++
+diff --git a/watchdog.py b/watchdog.py
+new file mode 100644
+index 0000000..c978bfa
+--- /dev/null
++++ b/watchdog.py
+@@ -0,0 +1,738 @@
++#!/usr/bin/env python3
++# -*- coding: utf-8 -*-
++"""ناظر دائمی (Watchdog) ربات ضد هرزنامه سروش پلاس.
++
++این فایل یک ناظرِ جداگانه و مستقل از ربات است که ``python3 main.py`` را
++به‌عنوان یک زیرفرایند اجرا می‌کند و فقط در شرایط زیر وارد عمل می‌شود:
++
++  * Crash (پایانِ فرایند همراه با Traceback)،
++  * Exception مهم (همان Traceback بالا)،
++  * توقف غیرعادی (خروج با کد خطا یا خروج زودهنگامِ بی‌دلیل).
++
++هیچ‌کاری با اجرای عادی ربات یا پیام‌های گروه ندارد؛ بنابراین اسپمِ
++گزارش تولید نمی‌شود.
++
++در صورت خرابی:
++  ۱) Traceback کامل از خروجیِ فرایند جمع‌آوری می‌شود،
++  ۲) نام فایل، شمارهٔ خط، نوع خطا و خلاصهٔ مشکل استخراج می‌شود،
++  ۳) گزارش کامل داخل ``logs/crash_reports`` و ``logs/watchdog_reports.jsonl``
++     ذخیره می‌شود،
++  ۴) خلاصهٔ گزارش فقط به **پیویِ مالک اصلی ربات** ارسال می‌شود
++     (مالک از همان سیستم موجود یعنی ``modules.owner_check`` خوانده می‌شود و
++     هیچ شناسهٔ دستی و جدیدی اینجا نوشته نمی‌شود)،
++  ۵) سپس ربات دوباره راه‌اندازی می‌شود.
++
++این فایل جایگزین حلقهٔ ``while true`` در ``run_bot.sh`` است؛ یعنی به‌جای
++اجرای ``run_bot.sh`` فقط کافی است ``python3 watchdog.py`` اجرا شود.
++
++استفاده:
++    python3 watchdog.py                # اجرای python3 main.py و نظارت دائمی
++    python3 watchdog.py --self-test    # تست آفلاین (بدون اتصال به سروش)
++
++تنظیمات از متغیرهای محیطی (اختیاری):
++    WATCHDOG_REPORT_COOLDOWN   فاصلهٔ حداقلی دو گزارش به مالک (ثانیه، ۹۰۰)
++    WATCHDOG_MAX_CRASHES       سقف خرابی پشت‌سرهم قبل از «نیاز به بررسی» (۳)
++    WATCHDOG_RESTART_DELAY     تأخیر پایهٔ راه‌اندازی مجدد (ثانیه، ۵)
++    WATCHDOG_BACKOFF_MAX       بیشینهٔ تأخیر backoff (ثانیه، ۳۰۰)
++"""
++
++from __future__ import annotations
++
++import argparse
++import asyncio
++import json
++import os
++import re
++import signal
++import subprocess
++import sys
++import threading
++import time
++from collections import deque
++from datetime import datetime
++from pathlib import Path
++
++# ---------------------------------------------------------------------------
++# مسیر و بارگذاری محیط — هماهنگ با ساختار فعلی پروژه
++# ---------------------------------------------------------------------------
++_PROJECT_ROOT = Path(__file__).resolve().parent
++if str(_PROJECT_ROOT) not in sys.path:
++    sys.path.insert(0, str(_PROJECT_ROOT))
++
++_ENV_FILE = _PROJECT_ROOT / ".env"
++
++
++def _load_env(path: Path) -> None:
++    """بارگذاری .env؛ ابتدا dotenv (همان‌طور که ربات استفاده می‌کند)، و در
++    نبودِ آن یک پارسر ساده و بدون وابستگی."""
++    try:
++        from dotenv import load_dotenv
++        load_dotenv(dotenv_path=path, override=False)
++        return
++    except Exception:
++        pass
++    try:
++        if not path.exists():
++            return
++        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
++            line = raw.strip()
++            if not line or line.startswith("#") or "=" not in line:
++                continue
++            key, _, value = line.partition("=")
++            key = key.strip()
++            value = value.strip().strip("\"'")
++            if key and key not in os.environ:
++                os.environ[key] = value
++    except OSError:
++        pass
++
++
++_load_env(_ENV_FILE)
++
++# «modules.*» فقط بعد از قرارگرفتن ریشهٔ پروژه در sys.path و بارگذاری .env
++# import می‌شود تا تنظیماتِ مسیرِ داده و مالک درست خوانده شوند.
++from modules.owner_check import get_owner  # noqa: E402
++from modules.runtime_paths import LOG_DIR, runtime_log_file  # noqa: E402
++
++# ---------------------------------------------------------------------------
++# تنظیمات
++# ---------------------------------------------------------------------------
++_MIN_UPTIME_NORMAL = float(os.environ.get("WATCHDOG_MIN_UPTIME", "60"))
++_STABLE_UPTIME = float(os.environ.get("WATCHDOG_STABLE_UPTIME", "300"))
++_REPORT_COOLDOWN = float(os.environ.get("WATCHDOG_REPORT_COOLDOWN", "900"))
++_MAX_CRASHES = int(os.environ.get("WATCHDOG_MAX_CRASHES", "3"))
++_RESTART_DELAY = float(os.environ.get("WATCHDOG_RESTART_DELAY", "5"))
++_BACKOFF_MAX = float(os.environ.get("WATCHDOG_BACKOFF_MAX", "300"))
++_OUTPUT_LINES = int(os.environ.get("WATCHDOG_OUTPUT_LINES", "3000"))
++_SEND_TIMEOUT = float(os.environ.get("WATCHDOG_SEND_TIMEOUT", "30"))
++_CRASH_REPORT_KEEP = int(os.environ.get("WATCHDOG_CRASH_REPORT_KEEP", "100"))
++
++
++# ---------------------------------------------------------------------------
++# ابزارهای کوچک
++# ---------------------------------------------------------------------------
++class _RingBuffer:
++    """بافرِ حلقویِ خطوطِ خروجی فرایند (برای استخراج Traceback بدون رشد بی‌نهایت)."""
++
++    def __init__(self, max_lines: int):
++        self._lines = deque(maxlen=max(100, int(max_lines)))
++
++    def append(self, line: str) -> None:
++        self._lines.append(line)
++
++    def text(self) -> str:
++        return "".join(self._lines)
++
++
++class _RotatingLog:
++    """نوشتنِ محدود (rotating) روی دیسک برای خروجیِ خام فرایند و لاگ ناظر.
++
++    هر write فایل را باز/بسته می‌کند تا هیچ file handle ای باز نماند؛
++    حجم ناظر کم است و این ساده‌ترین راهِ بدون نشت است.
++    """
++
++    def __init__(self, path: Path, max_bytes: int = 2 * 1024 * 1024, backups: int = 2):
++        self.path = Path(path)
++        self.max_bytes = max_bytes
++        self.backups = backups
++        self.path.parent.mkdir(parents=True, exist_ok=True)
++
++    def write(self, text: str) -> None:
++        if not text:
++            return
++        try:
++            with open(self.path, "a", encoding="utf-8", errors="replace") as fh:
++                fh.write(text)
++                fh.flush()
++        except OSError:
++            return
++        self._maybe_rotate()
++
++    def _maybe_rotate(self) -> None:
++        try:
++            if self.path.stat().st_size <= self.max_bytes:
++                return
++        except OSError:
++            return
++        for index in range(self.backups - 1, 0, -1):
++            src = self.path.with_name(f"{self.path.name}.{index}")
++            dst = self.path.with_name(f"{self.path.name}.{index + 1}")
++            if src.exists():
++                try:
++                    src.replace(dst)
++                except OSError:
++                    pass
++        backup = self.path.with_name(f"{self.path.name}.1")
++        if self.path.exists():
++            try:
++                self.path.replace(backup)
++            except OSError:
++                pass
++
++    def close(self) -> None:
++        # فایل فقط هنگام write باز می‌شود؛ چیزی برای بستنِ دائمی نیست.
++        pass
++
++
++def _now_text() -> str:
++    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
++
++
++# ---------------------------------------------------------------------------
++# استخراج Traceback
++# ---------------------------------------------------------------------------
++_FILE_LINE_RE = re.compile(r'^\s*File "([^"]+)", line (\d+), in (.+?)\s*$')
++_ERROR_LINE_RE = re.compile(
++    r'^([A-Za-z_][A-Za-z0-9_.]*(?:\.[A-Za-z_][A-Za-z0-9_.]*)*)(?::\s*(.*))?$'
++)
++
++
++def extract_traceback(output_text: str):
++    """استخراج آخرین Traceback از خروجی فرایند.
++
++    برمی‌گرداند dict شامل ``error_type``، ``file``، ``line``، ``function``،
++    ``summary`` و ``traceback`` (متن کامل)؛ یا ``None`` اگر Traceback نبود.
++    """
++    if not output_text:
++        return None
++    lines = output_text.splitlines()
++    start = None
++    for index in range(len(lines) - 1, -1, -1):
++        if lines[index].lstrip().startswith("Traceback (most recent call last):"):
++            start = index
++            break
++    if start is None:
++        return None
++
++    tb_lines = lines[start:]
++    file_name = line_no = func_name = None
++    error_type = summary = ""
++    for line in tb_lines[1:]:
++        file_match = _FILE_LINE_RE.match(line)
++        if file_match:
++            file_name = file_match.group(1)
++            line_no = file_match.group(2)
++            func_name = file_match.group(3)
++            continue
++        if file_name is None:
++            # خطای بدون «File …» (مثل خطای خود asyncio) — نوع را از هر
++            # خطِ غیرتورفته‌ای که شبیه «Error: …» است می‌خوانیم.
++            error_match = _ERROR_LINE_RE.match(line.strip())
++            if error_match and error_match.group(1).endswith("Error"):
++                error_type = error_match.group(1)
++                summary = (error_match.group(2) or "").strip()
++            continue
++        error_match = _ERROR_LINE_RE.match(line)
++        if error_match and not line.startswith((" ", "\t")):
++            error_type = error_match.group(1)
++            summary = (error_match.group(2) or "").strip()
++            break
++
++    if not error_type:
++        return None
++
++    return {
++        "error_type": error_type,
++        "file": file_name or "نامشخص",
++        "line": line_no or "—",
++        "function": func_name or "نامشخص",
++        "summary": summary,
++        "traceback": "\n".join(tb_lines),
++    }
++
++
++def _signal_name(code: int) -> str:
++    if code >= 0:
++        return str(code)
++    try:
++        return f"{signal.Signals(-code).name} ({code})"
++    except (ValueError, AttributeError):
++        return str(code)
++
++
++def classify_exit(code: int, output_text: str, uptime_s: float,
++                  shutdown_requested: bool) -> dict:
++    """تشخیص اینکه پایانِ فرایند یک Crash / توقف غیرعادی / توقف عادی است.
++
++    فقط مواردِ قابل‌گزارش ``report=True`` می‌شوند؛ توقفِ عادی و خاموشیِ
++    عمدی گزارش نمی‌شوند تا مالک اسپم نگیرد.
++    """
++    if shutdown_requested:
++        return {"kind": "shutdown", "report": False, "info": {}}
++
++    traceback_info = extract_traceback(output_text)
++    if traceback_info is not None:
++        return {
++            "kind": "crash",
++            "report": True,
++            "info": traceback_info,
++        }
++
++    if code != 0:
++        return {
++            "kind": "abnormal_stop",
++            "report": True,
++            "info": {
++                "error_type": f"ExitCode({_signal_name(code)})",
++                "file": "نامشخص",
++                "line": "—",
++                "function": "نامشخص",
++                "summary": (
++                    "فرایند ربات بدون Traceback و با کد خطا متوقف شد "
++                    f"(کد {code})."
++                ),
++                "traceback": "",
++            },
++        }
++
++    # خروجِ تمیز (کد ۰) ولی خیلی زودتر از حد انتظار — توقفِ غیرعادی است.
++    if uptime_s < _MIN_UPTIME_NORMAL:
++        return {
++            "kind": "early_stop",
++            "report": True,
++            "info": {
++                "error_type": "NormalExit(early)",
++                "file": "نامشخص",
++                "line": "—",
++                "function": "نامشخص",
++                "summary": (
++                    f"ربات بدون خطا ولی تنها پس از {uptime_s:.0f} ثانیه "
++                    "متوقف شد (توقف زودهنگام)."
++                ),
++                "traceback": "",
++            },
++        }
++
++    return {"kind": "normal_stop", "report": False, "info": {}}
++
++
++# ---------------------------------------------------------------------------
++# قالب گزارش
++# ---------------------------------------------------------------------------
++def build_report(info: dict, status: str, timestamp: str | None = None) -> str:
++    """ساخت متن گزارش مطابق قالب تعیین‌شده برای پیوی مالک."""
++    when = timestamp or _now_text()
++    lines = [
++        "🚨 خطای ربات",
++        "",
++        "زمان:",
++        when,
++        "",
++        "نوع خطا:",
++        str(info.get("error_type") or "نامشخص"),
++        "",
++        "فایل:",
++        str(info.get("file") or "نامشخص"),
++        "",
++        "خط:",
++        str(info.get("line") or "—"),
++        "",
++        "جزئیات:",
++        str(info.get("summary") or "بدون جزئیات"),
++        "",
++        "وضعیت:",
++        status,
++    ]
++    return "\n".join(lines)
++
++
++# ---------------------------------------------------------------------------
++# ارسال گزارش فقط به مالک
++# ---------------------------------------------------------------------------
++async def _send_via_splusthon(owner_id: int, text: str,
++                              timeout: float = _SEND_TIMEOUT):
++    """ارسال پیام خصوصی به مالک با همان کتابخانهٔ ربات (SPlusthon).
++
++    هدف فقط ``owner_id`` (شناسهٔ کاربری مالک) است؛ هیچ گروه یا کاربر
++    دیگری در کار نیست. از همان ``SOROUSH_SESSION_STRING`` و تنظیمات ``.env``
++    استفاده می‌شود.
++    """
++    try:
++        from splusthon import SoroushClient
++        from splusthon.sessions import StringSession
++    except Exception as error:  # pragma: no cover - بستگی به محیط نصب دارد
++        return False, f"splusthon import failed: {error!r}"
++
++    session_str = os.getenv("SOROUSH_SESSION_STRING", "").strip()
++    if not session_str:
++        return False, "SOROUSH_SESSION_STRING not set"
++
++    client = None
++    try:
++        api_id = os.getenv("API_ID", "").strip()
++        api_hash = os.getenv("API_HASH", "").strip()
++        session = StringSession(session_str)
++        if api_id and api_hash:
++            client = SoroushClient(session, int(api_id), api_hash)
++        else:
++            client = SoroushClient(session)
++
++        await asyncio.wait_for(client.connect(), timeout=timeout)
++        # پیوی مالک = ارسال به شناسهٔ عددیِ کاربرِ مالک.
++        await asyncio.wait_for(
++            client.send_message(int(owner_id), text), timeout=timeout
++        )
++        return True, ""
++    except Exception as error:
++        return False, repr(error)
++    finally:
++        if client is not None:
++            try:
++                await asyncio.wait_for(client.disconnect(), timeout=5)
++            except Exception:
++                pass
++
++
++def default_notifier(owner_id: int, text: str) -> bool:
++    """نسخهٔ همگامِ ارسال برای حلقهٔ ناظر (یک event loop جدا در هر ارسال)."""
++    ok, reason = asyncio.run(_send_via_splusthon(owner_id, text))
++    if not ok:
++        print(f"[watchdog] owner report NOT sent: {reason}")
++    return ok
++
++
++# ---------------------------------------------------------------------------
++# ذخیرهٔ گزارش داخل logs
++# ---------------------------------------------------------------------------
++def write_crash_report(report_text: str, info: dict, output_text: str) -> Path:
++    """ذخیرهٔ گزارش کامل (قالب + Traceback) و ثبتِ JSONL، با هرسِ قدیمی‌ها."""
++    reports_dir = Path(LOG_DIR) / "crash_reports"
++    reports_dir.mkdir(parents=True, exist_ok=True)
++    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
++    report_path = reports_dir / f"crash_{stamp}.log"
++    payload = report_text
++    if info.get("traceback"):
++        payload += "\n\n--- Traceback کامل ---\n" + info["traceback"]
++    elif output_text:
++        tail = "\n".join(output_text.splitlines()[-60:])
++        payload += "\n\n--- انتهای خروجی فرایند ---\n" + tail
++    try:
++        report_path.write_text(payload, encoding="utf-8")
++    except OSError:
++        pass
++
++    jsonl_path = Path(LOG_DIR) / "watchdog_reports.jsonl"
++    record = {
++        "timestamp": _now_text(),
++        "error_type": info.get("error_type"),
++        "file": info.get("file"),
++        "line": info.get("line"),
++        "summary": info.get("summary"),
++    }
++    try:
++        with jsonl_path.open("a", encoding="utf-8") as stream:
++            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
++    except OSError:
++        pass
++
++    _prune_crash_reports(reports_dir)
++    return report_path
++
++
++def _prune_crash_reports(reports_dir: Path, keep: int = _CRASH_REPORT_KEEP) -> None:
++    try:
++        files = sorted(
++            reports_dir.glob("crash_*.log"),
++            key=lambda path: path.stat().st_mtime,
++        )
++    except OSError:
++        return
++    for old in files[:-max(1, keep)]:
++        try:
++            old.unlink()
++        except OSError:
++            pass
++
++
++# ---------------------------------------------------------------------------
++# ناظر اصلی
++# ---------------------------------------------------------------------------
++class Watchdog:
++    """اجرا و نظارتِ دائمی روی فرایند ربات."""
++
++    def __init__(self, cmd, *, notifier=None):
++        self.cmd = list(cmd)
++        self.notifier = notifier or default_notifier
++        self._stop_requested = False
++        self._current_proc = None
++        self._consecutive = 0
++        self._last_report_at = None
++        self._child_log = _RotatingLog(runtime_log_file("watchdog_child.log"))
++        self._own_log = _RotatingLog(runtime_log_file("watchdog.log"))
++
++    # -- لاگ ناظر ----------------------------------------------------------
++    def _log(self, message: str) -> None:
++        line = f"[{_now_text()}] {message}\n"
++        print(line.rstrip("\n"))
++        self._own_log.write(line)
++
++    # -- مدیریت سیگنال‌ها ---------------------------------------------------
++    def _install_signals(self) -> None:
++        def _handler(_signum, _frame):
++            self._stop_requested = True
++            self._log("WATCHDOG stop signal received")
++            self._terminate_current()
++
++        for signame in ("SIGINT", "SIGTERM"):
++            try:
++                signal.signal(getattr(signal, signame), _handler)
++            except (ValueError, OSError, AttributeError):
++                pass
++
++    def _terminate_current(self) -> None:
++        proc = self._current_proc
++        if proc is None or proc.poll() is not None:
++            return
++        try:
++            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
++        except (ProcessLookupError, PermissionError, OSError):
++            try:
++                proc.terminate()
++            except OSError:
++                pass
++
++    # -- اجرای یک چرخهٔ نظارت ----------------------------------------------
++    def _spawn(self):
++        env = os.environ.copy()
++        env.setdefault("PYTHONUNBUFFERED", "1")
++        return subprocess.Popen(
++            self.cmd,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.STDOUT,
++            text=True,
++            encoding="utf-8",
++            errors="replace",
++            bufsize=1,
++            cwd=str(_PROJECT_ROOT),
++            env=env,
++            start_new_session=True,
++        )
++
++    @staticmethod
++    def _pump(proc, ring: _RingBuffer, writer: _RotatingLog) -> None:
++        try:
++            stream = proc.stdout
++            if stream is None:
++                return
++            for line in stream:
++                ring.append(line)
++                writer.write(line)
++        except Exception:
++            pass
++
++    def run_once(self) -> dict:
++        """یک چرخهٔ کامل: اجرا → انتظار → تشخیص → گزارش → آماده‌سازی ری‌استارت."""
++        started = time.monotonic()
++        self._log(f"WATCHDOG start child: {' '.join(self.cmd)}")
++        try:
++            proc = self._spawn()
++        except Exception as error:
++            self._log(f"WATCHDOG spawn failed: {error!r}")
++            return {
++                "kind": "spawn_failed", "report_worthy": False,
++                "report_sent": False, "recipient": None,
++                "report_text": None, "status": None, "info": {},
++                "delay": _RESTART_DELAY, "consecutive": self._consecutive,
++            }
++        self._current_proc = proc
++
++        ring = _RingBuffer(_OUTPUT_LINES)
++        reader = threading.Thread(
++            target=self._pump, args=(proc, ring, self._child_log), daemon=True
++        )
++        reader.start()
++
++        code = proc.wait()
++        reader.join(timeout=5)
++        self._current_proc = None
++
++        uptime = time.monotonic() - started
++        output = ring.text()
++        result = classify_exit(code, output, uptime, self._stop_requested)
++        kind = result["kind"]
++        info = result["info"]
++        report_worthy = bool(result["report"])
++
++        summary = {
++            "kind": kind,
++            "report_worthy": report_worthy,
++            "report_sent": False,
++            "recipient": None,
++            "report_text": None,
++            "status": None,
++            "info": info,
++            "delay": _RESTART_DELAY,
++            "consecutive": self._consecutive,
++        }
++
++        if self._stop_requested or kind == "shutdown":
++            self._log("WATCHDOG shutdown (no report, no restart)")
++            return summary
++
++        # اگر ربات مدتِ خوبی سالم کار کرده، خرابیِ بعدی را از نو بشمار.
++        if uptime >= _STABLE_UPTIME:
++            self._consecutive = 0
++
++        if report_worthy:
++            # شمارندهٔ خرابی‌های پشت‌سرهم؛ اگر ربات به‌قدر کافی پایدار کار
++            # کرده بود، شمارنده از قبل صفر شده است.
++            self._consecutive += 1
++            summary["consecutive"] = self._consecutive
++            in_crash_loop = self._consecutive >= _MAX_CRASHES
++            status = (
++                "نیاز به بررسی دارد" if in_crash_loop
++                else "ربات دوباره راه‌اندازی شد"
++            )
++            summary["status"] = status
++            report_text = build_report(info, status)
++            summary["report_text"] = report_text
++
++            write_crash_report(report_text, info, output)
++
++            owner = get_owner()
++            owner_id = int(owner.get("user_id", 0))
++            summary["recipient"] = owner_id
++            now = time.monotonic()
++            if (
++                self._last_report_at is None
++                or now - self._last_report_at >= _REPORT_COOLDOWN
++            ):
++                try:
++                    summary["report_sent"] = bool(self.notifier(owner_id, report_text))
++                except Exception as error:
++                    self._log(f"WATCHDOG notifier failed: {error!r}")
++                self._last_report_at = now
++            else:
++                self._log(
++                    "WATCHDOG report cooldown active; report saved to logs only"
++                )
++            self._log(
++                f"WATCHDOG {kind} file={info.get('file')} "
++                f"line={info.get('line')} error={info.get('error_type')} "
++                f"status={status} consecutive={self._consecutive}"
++            )
++
++            # تأخیرِ نمایی برای جلوگیری از حلقهٔ crash و اسپم.
++            backoff = min(
++                _RESTART_DELAY * (2 ** min(self._consecutive, 6)),
++                _BACKOFF_MAX,
++            )
++            summary["delay"] = backoff
++        else:
++            self._consecutive = 0
++            summary["consecutive"] = 0
++            summary["delay"] = _RESTART_DELAY
++            self._log(f"WATCHDOG {kind} (uptime={uptime:.0f}s) — no report")
++
++        return summary
++
++    def _sleep_interruptible(self, seconds: float) -> None:
++        deadline = time.monotonic() + seconds
++        while not self._stop_requested:
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                return
++            time.sleep(min(1.0, remaining))
++
++    def run(self) -> int:
++        self._install_signals()
++        self._log(
++            f"WATCHDOG ready owner_id={get_owner().get('user_id')} "
++            f"cooldown={_REPORT_COOLDOWN:.0f}s max_crashes={_MAX_CRASHES}"
++        )
++        try:
++            while True:
++                summary = self.run_once()
++                if self._stop_requested or summary["kind"] == "shutdown":
++                    break
++                self._sleep_interruptible(summary.get("delay", _RESTART_DELAY))
++        except KeyboardInterrupt:
++            self._stop_requested = True
++            self._terminate_current()
++        finally:
++            self._child_log.close()
++            self._own_log.close()
++            self._log("WATCHDOG stopped")
++        return 0
++
++
++# ---------------------------------------------------------------------------
++# حالت تست آفلاین
++# ---------------------------------------------------------------------------
++def _self_test() -> int:
++    """اجرای یک Crash آزمایشی و تأیید اینکه فقط مالک اصلی گزارش می‌گیرد."""
++    received = []
++
++    def fake_notifier(owner_id, text):
++        received.append((owner_id, text))
++        return True
++
++    crash_cmd = [
++        sys.executable, "-c",
++        "def boom():\n"
++        "    raise RuntimeError('watchdog self-test failure')\n"
++        "boom()",
++    ]
++    watchdog = Watchdog(crash_cmd, notifier=fake_notifier)
++    summary = watchdog.run_once()
++    owner_id = int(get_owner().get("user_id", 0))
++
++    problems = []
++    if not summary["report_worthy"]:
++        problems.append("crash تشخیص داده نشد")
++    if summary["kind"] != "crash":
++        problems.append(f"kind={summary['kind']} به‌جای crash")
++    if summary["recipient"] != owner_id:
++        problems.append(
++            f"گیرنده {summary['recipient']} != مالک {owner_id}"
++        )
++    if len(received) != 1:
++        problems.append(f"تعداد ارسال‌ها {len(received)} به‌جای ۱")
++    else:
++        recipient, text = received[0]
++        if recipient != owner_id:
++            problems.append(f"ارسال به {recipient} به‌جای مالک {owner_id}")
++        for expected in (
++            "🚨 خطای ربات", "نوع خطا:", "RuntimeError",
++            "فایل:", "خط:", "watchdog self-test failure",
++        ):
++            if expected not in text:
++                problems.append(f"گزارش شامل «{expected}» نیست")
++        if text.rstrip().splitlines()[-1] != "ربات دوباره راه‌اندازی شد":
++            problems.append("خط آخر وضعیت درست نیست")
++
++    print("owner_id =", owner_id)
++    print("report =\n" + (received[0][1] if received else "(هیچ)"))
++    if problems:
++        for problem in problems:
++            print("FAIL:", problem)
++        return 1
++    print("SELF-TEST OK: فقط مالک اصلی گزارش دریافت کرد")
++    return 0
++
++
++def _main(argv=None) -> int:
++    parser = argparse.ArgumentParser(
++        description="Watchdog دائمی ربات ضد هرزنامه سروش پلاس"
++    )
++    parser.add_argument(
++        "--self-test", action="store_true",
++        help="اجرای تست آفلاین (بدون اتصال به سروش)",
++    )
++    parser.add_argument(
++        "--cmd", nargs=argparse.REMAINDER,
++        default=None,
++        help="دستور جایگزین برای اجرا (پیش‌فرض: python3 main.py)",
++    )
++    args = parser.parse_args(argv)
++
++    if args.self_test:
++        return _self_test()
++
++    cmd = args.cmd if args.cmd else [sys.executable, "main.py"]
++    watchdog = Watchdog(cmd)
++    return watchdog.run()
++
++
++if __name__ == "__main__":
++    raise SystemExit(_main())
