@@ -49,6 +49,9 @@ def _chat_key(chat_id):
 
 import time
 
+# Automatic cleanup must never hold the shared Soroush connection for a minute.
+_DELETE_RPC_TIMEOUT_SECONDS = 8.0
+
 
 def _error_name(error):
     return error.__class__.__name__.lower()
@@ -218,10 +221,15 @@ class MessageDeleteQueue:
             )
             succeeded = False
             last_error = None
-            for attempt in range(1, 4):
+            # A failed automatic delete is disposable; retrying it for tens of
+            # seconds blocks every command behind the shared sender.
+            for attempt in range(1, 2):
                 started = time.perf_counter()
                 try:
-                    await self.client.delete_messages(chat_id, batch)
+                    await asyncio.wait_for(
+                        self.client.delete_messages(chat_id, batch),
+                        timeout=_DELETE_RPC_TIMEOUT_SECONDS,
+                    )
                     deleted += len(batch)
                     succeeded = True
                     self.logger.log_info(
@@ -250,12 +258,11 @@ class MessageDeleteQueue:
                         break
                     flood_wait = _flood_wait_seconds(error)
                     if flood_wait is not None:
-                        if attempt < 3 and flood_wait <= 30:
-                            await asyncio.sleep(flood_wait)
-                            continue
+                        # FloodWait on automatic cleanup must not park this
+                        # worker or keep the global RPC slot occupied.
                         break
-                    if attempt < 3:
-                        await asyncio.sleep(0.2 * attempt)
+                    # Never retry generic/server failures in the hot cleanup queue.
+                    break
             if succeeded:
                 self.logger.log_info(
                     f"BATCH DELETE FINISHED chat_id={chat_id} count={len(batch)}"
@@ -285,7 +292,10 @@ class MessageDeleteQueue:
                 # errors were already retried at batch level.
                 started = time.perf_counter()
                 try:
-                    await self.client.delete_messages(chat_id, [message_id])
+                    await asyncio.wait_for(
+                        self.client.delete_messages(chat_id, [message_id]),
+                        timeout=_DELETE_RPC_TIMEOUT_SECONDS,
+                    )
                     deleted += 1
                     item_ok = True
                     self.logger.log_info(

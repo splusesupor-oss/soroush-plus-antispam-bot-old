@@ -317,7 +317,14 @@ class ModerationQueue:
                 # Ban/mute RPCs often contain entity resolution plus two
                 # permission calls; the old 20s outer deadline cancelled a
                 # still-running punishment and left only the warning.
-                deadline = max(job.timeout_seconds, 45.0) if job.action in {"punish", "ban", "mute", "auto_mute"} else job.timeout_seconds
+                if job.action in {"mute", "auto_mute"}:
+                    # A manual mute needs a bounded answer, not a 45-second
+                    # hung RPC that blocks the administrator's next command.
+                    deadline = min(15.0, max(5.0, job.timeout_seconds))
+                elif job.action in {"punish", "ban"}:
+                    deadline = max(job.timeout_seconds, 20.0)
+                else:
+                    deadline = job.timeout_seconds
                 # This worker is created from a command dispatcher task and
                 # inherits its contextvars.  Never let that inheritance turn
                 # entity/admin reads into P0 critical RPCs; only the TL
