@@ -2866,10 +2866,20 @@ async def handle_new_message(bot, event):
         _capture_big_spam_message(
             bot, chat_id, user_id, getattr(event.message, "id", None)
         )
-        # Never feed messages sent by this account into tracking or moderation.
-        # This is intentionally before tracker, spam, repeat and flood checks.
+        # پیام‌های معمولیِ اکانت سشن نباید وارد moderation شوند، اما همین
+        # اکانت در سروش نقش رابط ربات را هم دارد و مالک با آن «راهنما» و
+        # «روباه» را می‌فرستد. بازگرداندنِ همهٔ event.out ها باعث می‌شد فقط
+        # مسیرهای مدیریتیِ زودهنگام کار کنند و فرمان‌های عمومی بی‌صدا شوند.
+        # فقط فرمان‌های شناخته‌شدهٔ خود اکانت اجازهٔ عبور دارند؛ پاسخ‌های
+        # تولیدشدهٔ ربات و چت عادی همچنان برای جلوگیری از حلقه رد می‌شوند.
         if user_id and user_id == getattr(bot, "bot_account_id", None):
-            return
+            own_text = normalize_command(message_text)
+            _own_priority, own_kind = classify_priority(own_text, event)
+            if own_kind not in {"admin", "command"}:
+                return
+            bot.logger.log_info(
+                f"SELF COMMAND ALLOWED chat_id={chat_id} command={own_text!r}"
+            )
 
         # A captionless ordinary media message has no text to inspect.  Return
         # before the tracker and every text-only route (commands, word filters,
