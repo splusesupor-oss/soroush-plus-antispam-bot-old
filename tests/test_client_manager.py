@@ -65,5 +65,7 @@ async def watchdog_busy_test():
     with tempfile.TemporaryDirectory() as directory:
         state = Path(directory) / 'watchdog.json'
         state.write_text('{"version":1,"pending":[{"id":"x"}],"sent":{},"suppressed":{}}', encoding='utf-8')
-        assert await deliver_pending_reports(Client('background'), background_client=Client('background'), background_ready=lambda: False, state_path=state) == 0
+        log = Log()
+        assert await deliver_pending_reports(Client('background'), background_client=Client('background'), background_ready=lambda: False, logger=log, state_path=state) == 0
+        assert "WATCHDOG REPORT DEFERRED reason=background_busy" in log.rows
 asyncio.run(watchdog_busy_test())

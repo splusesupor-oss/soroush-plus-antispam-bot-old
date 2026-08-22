@@ -307,10 +307,10 @@ async def deliver_pending_reports(
     if background_client is not None and callable(background_ready):
         try:
             if not background_ready():
-                _log(logger, "info", "ROUTE background -> watchdog deferred busy=True")
+                _log(logger, "info", "WATCHDOG REPORT DEFERRED reason=background_busy")
                 return 0
         except Exception:
-            _log(logger, "info", "ROUTE background -> watchdog deferred readiness_error=True")
+            _log(logger, "info", "WATCHDOG REPORT DEFERRED reason=background_busy")
             return 0
 
     # Explicit worker injection only; never silently falls back between roles.
