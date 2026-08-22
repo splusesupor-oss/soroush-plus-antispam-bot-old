@@ -2257,33 +2257,37 @@ class SoroushAntiSpamBot:
             except Exception:
                 raw_text = ""
             chat_id = getattr(event, "chat_id", None)
+            priority, kind = classify_priority(raw_text, event)
+
+            # فرمان‌های کاربر در نسخهٔ اولیه مستقیماً از همان کلاینت اصلی
+            # اجرا می‌شدند. عبور آن‌ها از ingest → GroupDispatcher → صف
+            # ارسال باعث شد در عمل بعضی updateهای userbot فقط moderation را
+            # اجرا کنند ولی به «راهنما» و بازی‌ها نرسند. فرمان را دوباره روی
+            # مسیر مستقیم و تک‌کلاینتی اجرا کن؛ این مسیر reply را هم مستقیم
+            # با همان self.client می‌فرستد.
+            if kind in {"admin", "command"}:
+                await process_priority_command(event)
+                return
+
             try:
                 decision = ingest_event(self, event)
             except Exception:
                 decision = None
             if decision is not None and decision.skip_heavy:
                 return
-            priority, kind = classify_priority(raw_text, event)
-            # Patch event.reply to be non-blocking inside dispatcher worker
-            # (outgoing_sender will handle the actual RPC via its own per-chat queue)
+            # فقط ترافیک عادی/ضداسپم در صف جدا می‌ماند تا موج اسپم event
+            # loop را اشغال نکند.
             try:
                 if getattr(self, "outgoing_sender", None) is not None:
                     install_event_wrapper(event, self.outgoing_sender)
             except Exception:
                 pass
-            if kind in {"admin", "command"}:
-                factory = lambda ev=event: process_priority_command(ev)
-            else:
-                factory = lambda ev=event: process_incoming_message(ev)
             self.group_dispatcher.submit(
                 chat_id,
-                factory,
+                lambda ev=event: process_incoming_message(ev),
                 priority=priority,
                 kind=kind,
-                on_overflow=(
-                    None if kind != "normal"
-                    else lambda ev=event: self._overflow_message(ev)
-                ),
+                on_overflow=lambda ev=event: self._overflow_message(ev),
             )
 
         # ⛑️ حلقهٔ اصلی: مالکِ بازسازی، supervisor است (با client_factory
