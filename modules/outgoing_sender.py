@@ -171,11 +171,17 @@ def _release_chat_gate(chat_id, gate):
 class OutgoingSender:
     """Per-chat queue for outgoing sends. Separate from delete queues."""
 
-    def __init__(self, client, logger, *, max_per_chat=800,
+    def __init__(self, client, logger, *, max_per_chat=30,
                  normal_concurrency=None):
         self.client = client
         self.logger = logger
-        self.max_per_chat = int(max_per_chat)
+        self.max_per_chat = max(1, min(30, int(max_per_chat)))
+        try:
+            self.max_normal_pending = max(
+                1, min(40, int(os.getenv("BOT_SEND_GLOBAL_NORMAL_PENDING", "40")))
+            )
+        except (TypeError, ValueError):
+            self.max_normal_pending = 40
         if normal_concurrency is None:
             normal_concurrency = os.getenv(
                 "BOT_SEND_NORMAL_WORKERS_PER_CHAT", "1"
@@ -204,6 +210,10 @@ class OutgoingSender:
     def _queue_key(self, chat_id, priority):
         kind = "notif" if int(priority) == 0 else "normal"
         return (_chat_key(chat_id), kind)
+
+    def _normal_pending(self):
+        return sum(queue.qsize() for (_chat, kind), queue in self._queues.items()
+                   if kind == "normal")
 
     def _queue_for(self, chat_id, priority=1):
         key = self._queue_key(chat_id, priority)
@@ -241,6 +251,9 @@ class OutgoingSender:
         except Exception:
             pri = 1
         qkey = self._queue_key(chat_id, pri)
+        if pri > 0 and self._normal_pending() >= self.max_normal_pending:
+            self.stats["dropped"] += 1
+            return False
         q = self._queue_for(chat_id, pri)
         if q.qsize() >= self.max_per_chat:
             self.stats["dropped"] += 1
@@ -444,8 +457,9 @@ def _wrap_send_message(client, sender):
             # The real send will happen in background and capture will be handled via on_done if provided.
             enqueued = sender.enqueue(chat_id, factory, priority=priority, on_done=on_done)
             if not enqueued:
-                # Fallback to direct if dropped (should not happen)
-                return await orig(*args, **kwargs)
+                # Backpressure is intentional: never turn a full background
+                # queue into a direct RPC on the dispatcher hot path.
+                return None
             # Return a dummy sent that looks like a message id? Many callers ignore the return.
             # For those that do `sent = await ...; capture_sent(..., sent)`, capture will get None
             # and thus not schedule cleanup. To handle that, we need to make those callers use on_done.
@@ -504,7 +518,7 @@ def install_event_wrapper(event, sender):
             # text looks like a moderation notice? For now, we just enqueue.
             enqueued = sender.enqueue(chat_id, factory, priority=priority, on_done=on_done)
             if not enqueued:
-                return await orig(*args, **kwargs)
+                return None
             return None
         else:
             return await orig(*args, **kwargs)

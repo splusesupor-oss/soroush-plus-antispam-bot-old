@@ -366,7 +366,9 @@ class ModerationQueue:
         # context; clear it so those sends are P2, never P0 beside manual mute.
         try:
             from modules.outgoing_sender import DISPATCH_ACTIVE_VAR, _SEND_PRIORITY
-            dispatch_token = DISPATCH_ACTIVE_VAR.set(False)
+            # Let patched event.reply enqueue this callback's cosmetic output
+            # as a normal P2 job; it must not issue a direct RPC here.
+            dispatch_token = DISPATCH_ACTIVE_VAR.set(2)
             send_token = _SEND_PRIORITY.set(1)
         except Exception:
             DISPATCH_ACTIVE_VAR = _SEND_PRIORITY = None
