@@ -364,19 +364,34 @@ class SingleInstance:
             # PID was reused by a newer, unrelated process.
             return None
 
-        # Records written by this implementation are trustworthy when their
-        # process start time still matches.  For old PID-only records, verify
-        # cmdline so an unrelated process that reused the PID cannot block boot.
-        if record.get("kind") == "soroush-watchdog" and recorded_start:
-            return pid
+        # Even a structured record may point at an unrelated live process
+        # after a copied lock file or PID reuse.  When /proc is available,
+        # require watchdog.py in cmdline; only Android's unreadable /proc uses
+        # the matching start-ticks record as the conservative fallback.
         cmdline_match = cls._watchdog_cmdline(pid)
         if cmdline_match is True:
             return pid
-        if cmdline_match is None and record.get("kind") == "soroush-watchdog":
-            # Android may restrict /proc; a matching live structured record is
-            # safer to treat as active than to start a duplicate supervisor.
+        if cmdline_match is None and record.get("kind") == "soroush-watchdog" and recorded_start:
             return pid
         return None
+
+    @classmethod
+    def status(cls, path: Path) -> Dict[str, Any]:
+        """Return a human-readable lock status without acquiring it."""
+        record = cls._read_record(path)
+        try:
+            pid = int(record.get("pid"))
+        except (TypeError, ValueError):
+            pid = None
+        alive = cls._pid_alive(pid) if pid is not None else False
+        cmdline = cls._watchdog_cmdline(pid) if alive and pid is not None else None
+        active_pid = cls._active_watchdog_pid(record)
+        return {
+            "path": str(path), "record": record, "pid": pid,
+            "alive": alive, "cmdline_match": cmdline,
+            "active_pid": active_pid,
+            "state": "active" if active_pid is not None else "stale",
+        }
 
     def _record(self) -> Dict[str, Any]:
         return {
@@ -559,12 +574,23 @@ class SingleInstance:
             if before is not None and record.get("token") == self.token:
                 self._remove_same_inode(before)
         else:
+            # A flock file itself is harmless after a crash, but removing our
+            # own record on clean shutdown prevents Android/FUSE fallback from
+            # ever inheriting an obsolete PID file.
+            try:
+                before = os.fstat(self.stream.fileno())
+                record = self._read_record(self.path)
+            except OSError:
+                before = None
+                record = {}
             try:
                 if self._fcntl is not None:
                     self._fcntl.flock(self.stream.fileno(), self._fcntl.LOCK_UN)
             except OSError:
                 pass
             self._close_stream()
+            if before is not None and record.get("token") == self.token:
+                self._remove_same_inode(before)
         self.mode = None
 
 
@@ -862,11 +888,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         instance.acquire()
     except WatchdogAlreadyRunning as error:
-        print(f"Watchdog اجرا نشد: {error}", file=sys.stderr)
-        logger.error(
-            "WATCHDOG DUPLICATE INSTANCE pid=%s lock=%s",
-            error.pid,
-            error.path,
+        status = SingleInstance.status(error.path)
+        pid = status.get("pid") or "unknown"
+        print(
+            "Watchdog فعال است؛ اجرای دوم انجام نشد "
+            f"(pid={pid}, lock={error.path}, status={status.get('state')})",
+            file=sys.stderr,
+        )
+        logger.info(
+            "WATCHDOG ALREADY ACTIVE pid=%s lock=%s cmdline_match=%s",
+            status.get("pid"), error.path, status.get("cmdline_match"),
         )
         return 2
     except WatchdogLockError as error:

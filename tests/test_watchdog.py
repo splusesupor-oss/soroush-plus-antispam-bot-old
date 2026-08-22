@@ -96,15 +96,20 @@ class WatchdogTests(unittest.TestCase):
     def test_second_instance_is_rejected_only_while_first_is_live(self):
         with tempfile.TemporaryDirectory() as directory:
             lock_file = Path(directory) / "watchdog.lock"
-            first = watchdog.SingleInstance(lock_file)
-            first.acquire()
-            try:
-                second = watchdog.SingleInstance(lock_file)
-                with self.assertRaises(watchdog.WatchdogAlreadyRunning) as raised:
-                    second.acquire()
-                self.assertEqual(raised.exception.pid, os.getpid())
-            finally:
-                first.close()
+            # The test runner itself is not named watchdog.py; emulate the
+            # command-line identity a real watchdog process has.
+            with mock.patch.object(
+                watchdog.SingleInstance, "_watchdog_cmdline", return_value=True
+            ):
+                first = watchdog.SingleInstance(lock_file)
+                first.acquire()
+                try:
+                    second = watchdog.SingleInstance(lock_file)
+                    with self.assertRaises(watchdog.WatchdogAlreadyRunning) as raised:
+                        second.acquire()
+                    self.assertEqual(raised.exception.pid, os.getpid())
+                finally:
+                    first.close()
 
             # The on-disk record may remain after flock close.  It must not
             # block a new instance because no kernel lock is alive anymore.
@@ -112,12 +117,36 @@ class WatchdogTests(unittest.TestCase):
             third.acquire()
             third.close()
 
+    def test_live_non_watchdog_pid_is_stale_even_with_structured_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_file = Path(directory) / "watchdog.lock"
+            lock_file.write_text(json.dumps({
+                "kind": "soroush-watchdog", "pid": os.getpid(),
+                "start_ticks": watchdog.SingleInstance._process_start_ticks(os.getpid()),
+            }), encoding="utf-8")
+            with mock.patch.object(
+                watchdog.SingleInstance, "_watchdog_cmdline", return_value=False
+            ):
+                status = watchdog.SingleInstance.status(lock_file)
+            self.assertEqual(status["state"], "stale")
+            self.assertIsNone(status["active_pid"])
+
+    def test_clean_flock_close_removes_its_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_file = Path(directory) / "watchdog.lock"
+            instance = watchdog.SingleInstance(lock_file)
+            instance.acquire()
+            instance.close()
+            self.assertFalse(lock_file.exists())
+
     def test_android_unsupported_flock_uses_stale_aware_pid_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             lock_file = Path(directory) / "watchdog.lock"
             lock_file.write_text("999999999\n", encoding="utf-8")
             unsupported = OSError(errno.EOPNOTSUPP, "flock unsupported")
-            with mock.patch("fcntl.flock", side_effect=unsupported):
+            with mock.patch("fcntl.flock", side_effect=unsupported), mock.patch.object(
+                watchdog.SingleInstance, "_watchdog_cmdline", return_value=True
+            ):
                 instance = watchdog.SingleInstance(lock_file)
                 instance.acquire()
                 self.assertEqual(instance.mode, "pidfile")
