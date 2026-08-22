@@ -36,6 +36,7 @@ from modules.group_banned_words_control import enable, disable
 from modules.group_storage import activate_group, deactivate_group, is_active, update_group_title
 from modules.group_storage_migration import migrate_all_group_storage
 from modules.group_actions import GroupActions
+from modules.routed_admin_actions import RoutedAdminActions
 # 💰 تسویهٔ روزانه از راه API اقتصاد جدید.
 from economy import flush as flush_economy, settle_previous_days
 from economy import upgrade_migration
@@ -468,6 +469,64 @@ class SoroushAntiSpamBot:
             client = SoroushClient(session)
         return client
 
+    def _make_session_client(self, session_value):
+        """Build a client from an independent, authenticated worker session."""
+        api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
+        api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
+        session = StringSession(session_value)
+        return SoroushClient(session, api_id, api_hash) if api_id and api_hash else SoroushClient(session)
+
+    async def _connect_worker_client(self, label, env_name):
+        value = (os.getenv(env_name) or "").strip()
+        if not value:
+            return None
+        try:
+            client = self._make_session_client(value)
+            # GroupActions can reuse access-hash peers collected by receiver.
+            client._outgoing_sender_bot = self
+            await asyncio.wait_for(client.connect(), timeout=30)
+            await asyncio.wait_for(client.get_me(), timeout=15)
+            self.logger.log_info(f"WORKER CLIENT READY role={label}")
+            return client
+        except Exception as error:
+            self.logger.log_error(f"WORKER CLIENT DISABLED role={label} error={error!r}")
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            return None
+
+    async def initialize_worker_clients(self):
+        self.management_client = await self._connect_worker_client(
+            "management", "SOROUSH_MANAGEMENT_SESSION_STRING"
+        )
+        self.background_client = await self._connect_worker_client(
+            "background", "SOROUSH_BACKGROUND_SESSION_STRING"
+        )
+        if self.management_client is None and self.background_client is None:
+            return False
+        management_client = self.management_client or self.client
+        background_client = self.background_client or self.client
+        self.management_actions = AdminActions(
+            management_client, self.logger, self.config_manager,
+            peer_cache=self.reply_input_peer_cache, bot_account_id=self.bot_account_id,
+        )
+        self.background_actions = AdminActions(
+            background_client, self.logger, self.config_manager,
+            peer_cache=self.reply_input_peer_cache, bot_account_id=self.bot_account_id,
+        )
+        self.admin_actions = RoutedAdminActions(
+            self.management_actions, self.background_actions, self.admin_actions
+        )
+        self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
+        self.group_actions = GroupActions(management_client, self.logger)
+        self.logger.log_info(
+            "WORKER ROUTING ENABLED "
+            f"management={self.management_client is not None} "
+            f"background={self.background_client is not None}"
+        )
+        return True
+
     async def initialize_client(self):
         """ساخت کلاینت سروش"""
         if not SPLUSTHON_AVAILABLE:
@@ -575,9 +634,16 @@ class SoroushAntiSpamBot:
                 bot_account_id=self.bot_account_id,
             )
             self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
+            if self.management_actions is not None or self.background_actions is not None:
+                self.admin_actions = RoutedAdminActions(
+                    self.management_actions, self.background_actions, self.admin_actions
+                )
+                self.admin_actions.notice_cleanup = getattr(self, "notice_cleanup", None)
             if getattr(self, "notice_cleanup", None) is not None:
                 self.notice_cleanup.client = new_client
-            self.group_actions = GroupActions(new_client, self.logger)
+            self.group_actions = GroupActions(
+                self.management_client or new_client, self.logger
+            )
 
             self.logger.log_info("CLIENT REBUILD new client connected")
             return new_client
@@ -711,6 +777,7 @@ class SoroushAntiSpamBot:
                 peer_cache=self.reply_input_peer_cache,
                 bot_account_id=self.bot_account_id,
             )
+        await self.initialize_worker_clients()
         asyncio.create_task(process_delete(self))
         # Automatic deletions have their own per-group workers and never run
         # synchronously in the incoming-message handler.

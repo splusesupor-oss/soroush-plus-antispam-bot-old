@@ -55,6 +55,8 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
+from modules.moderation_context import CURRENT_ACTION
+
 
 _DEFAULT_TIMEOUT_SECONDS = 20
 _MAX_FLOOD_WAIT_RETRIES = 1
@@ -335,9 +337,11 @@ class ModerationQueue:
                 except Exception:
                     DISPATCH_ACTIVE_VAR = None
                     token = None
+                action_token = CURRENT_ACTION.set(job.action)
                 try:
                     return await asyncio.wait_for(job.operation(), timeout=deadline)
                 finally:
+                    CURRENT_ACTION.reset(action_token)
                     if DISPATCH_ACTIVE_VAR is not None:
                         DISPATCH_ACTIVE_VAR.reset(token)
             except asyncio.CancelledError:
