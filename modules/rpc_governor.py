@@ -214,10 +214,9 @@ def classify_request(request, *, urgent_send=False, critical_context=False):
         # to turn a long deletion wave into P0 would defeat the reserved slots.
         priority, bucket = P1_DELETE, "delete"
     elif name_set.intersection(_SEND_REQUESTS):
-        if urgent_send or critical_context:
-            priority, bucket = P0_CRITICAL, "critical"
-        else:
-            priority, bucket = P2_SEND, "send"
+        # A delayed notice is preferable to starving EditBanned/connection
+        # synchronization.  Even an admin reply is a send, never a P0 RPC.
+        priority, bucket = P2_SEND, "send"
     # Reads are never promoted by a command's dispatch context.  A native
     # admin lookup (GetParticipants/GetFullChannel) is expensive and was
     # filling every P0 slot ahead of the actual mute/ban RPC.
