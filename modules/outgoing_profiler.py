@@ -585,7 +585,7 @@ def _wrap_call(client, logger):
                 or _RPC_DEBUG
                 or _operation_from_request(request) in _TRACED_OPS
             )
-            if should_log:
+            if should_log and "RpcOverloadError" not in result:
                 _log_trace(logger, record)
 
     measured._outgoing_profiled = True
@@ -652,7 +652,7 @@ def _wrap(owner, attribute, operation, logger):
                 _RESPONSE_RPC_MS.set(_RESPONSE_RPC_MS.get() + elapsed_ms)
             _OP_STATE.reset(op_token)
             _RPC_DEPTH.reset(depth_token)
-            if operation in _TRACED_OPS:
+            if operation in _TRACED_OPS and "RpcOverloadError" not in result:
                 _log_trace(logger, {
                     "request_id": request_id,
                     "operation": operation,

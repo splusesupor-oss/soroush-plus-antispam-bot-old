@@ -313,7 +313,9 @@ class RpcGovernor:
             shadow=_env_bool("BOT_RPC_GOVERNOR_SHADOW", False),
             logger=logger,
             wait_log_ms=_env_float("BOT_RPC_WAIT_LOG_MS", 20.0),
-            max_send_waiters=min(4, _env_int("BOT_RPC_MAX_SEND_WAITERS", 4)),
+            # Fast mode: do not retain queued cosmetic sends behind an active
+            # connection. A send either starts now or is intentionally dropped.
+            max_send_waiters=0,
         )
 
     @property
