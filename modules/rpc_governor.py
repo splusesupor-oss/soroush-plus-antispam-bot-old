@@ -218,12 +218,15 @@ def classify_request(request, *, urgent_send=False, critical_context=False):
             priority, bucket = P0_CRITICAL, "critical"
         else:
             priority, bucket = P2_SEND, "send"
-    elif critical_context:
-        priority, bucket = P0_CRITICAL, "critical"
+    # Reads are never promoted by a command's dispatch context.  A native
+    # admin lookup (GetParticipants/GetFullChannel) is expensive and was
+    # filling every P0 slot ahead of the actual mute/ban RPC.
     elif name_set.intersection(_HEAVY_REQUESTS) or any(
         name.startswith(("Get", "Search")) for name in names
     ):
         priority, bucket = P3_HEAVY, "heavy"
+    elif critical_context:
+        priority, bucket = P0_CRITICAL, "critical"
     else:
         # Unknown application calls are limited by the combined noncritical
         # budget, but do not inherit the strict heavy-read cap.

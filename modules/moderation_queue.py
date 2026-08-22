@@ -310,7 +310,21 @@ class ModerationQueue:
                 # permission calls; the old 20s outer deadline cancelled a
                 # still-running punishment and left only the warning.
                 deadline = max(job.timeout_seconds, 45.0) if job.action in {"punish", "ban", "mute"} else job.timeout_seconds
-                return await asyncio.wait_for(job.operation(), timeout=deadline)
+                # This worker is created from a command dispatcher task and
+                # inherits its contextvars.  Never let that inheritance turn
+                # entity/admin reads into P0 critical RPCs; only the TL
+                # EditBanned request itself is intrinsically critical.
+                try:
+                    from modules.outgoing_sender import DISPATCH_ACTIVE_VAR
+                    token = DISPATCH_ACTIVE_VAR.set(False)
+                except Exception:
+                    DISPATCH_ACTIVE_VAR = None
+                    token = None
+                try:
+                    return await asyncio.wait_for(job.operation(), timeout=deadline)
+                finally:
+                    if DISPATCH_ACTIVE_VAR is not None:
+                        DISPATCH_ACTIVE_VAR.reset(token)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
