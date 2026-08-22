@@ -1268,7 +1268,7 @@ class SoroushAntiSpamBot:
                 # debug همان آستانهٔ قبلی ۵۰ms را نگه می‌دارد.
                 _timing_threshold_ms = (
                     50 if self.config_manager.get(
-                        "debug_message_pipeline", False) else 1000
+                        "debug_message_pipeline", False) else float("inf")
                 )
                 if elapsed_ms >= _timing_threshold_ms:
                     self.logger.log_info(
@@ -2189,7 +2189,7 @@ class SoroushAntiSpamBot:
                     )
                 await handle_new_message(self, event)
                 elapsed = time.perf_counter() - started
-                if elapsed >= 0.25:
+                if self.config_manager.get("debug_message_pipeline", False) and elapsed >= 0.25:
                     # ``started`` از time.perf_counter می‌آمد که یک ساعتِ
                     # monotonic دلخواه است (مثلاً ثانیه‌های از بوت) و در لاگ
                     # به‌صورت «receive=363650» گمراه‌کننده دیده می‌شد. فقط

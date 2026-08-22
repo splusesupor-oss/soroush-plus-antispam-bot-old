@@ -1,35 +1,26 @@
-"""Non-blocking owner-only monitoring for slow message handlers.
+"""Low-overhead, owner-only monitoring for slow message handlers.
 
-Crash delivery remains in ``watchdog_reporting.py``.  This module handles only
-live-process performance events and never writes to the crash queue.
+The hot path only updates small in-memory aggregates.  It never logs each slow
+message, writes state, resolves peers, or makes an RPC.  This is deliberate:
+monitoring must not become the source of the latency it observes.
 """
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
-import json
 import os
-import tempfile
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from modules.owner_private import resolve_private_owner_peer
-from modules.runtime_paths import runtime_config_file
 from modules.time_utils import now_local
 
-
-STATE_FILE = runtime_config_file("performance_monitor_state.json", migrate=False)
 MIN_THRESHOLD_MS = 150.0
-DEFAULT_COOLDOWN_SECONDS = 10 * 60.0
-DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS = 5 * 60.0
-# Owner delivery is intentionally much stricter than local slow-event logs.
-# A 150ms event is useful diagnostics, but it must never create an RPC.
-DEFAULT_OWNER_NOTIFY_THRESHOLD_MS = 2000.0
+DEFAULT_ALERT_THRESHOLD_MS = 1000.0
+DEFAULT_ALERT_INTERVAL_SECONDS = 30.0
+DEFAULT_BATCH_INTERVAL_SECONDS = 5 * 60.0
 DEFAULT_RPC_PRESSURE_LIMIT = 8
-DEFAULT_QUEUE_SIZE = 8
-_STATE_RETENTION_SECONDS = 24 * 60 * 60
+DEFAULT_QUEUE_SIZE = 2
 
 
 def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
@@ -51,120 +42,56 @@ def _safe_handler(value: Any) -> str:
     return text[:120] or "unknown_handler"
 
 
-def _message_id(event: Any) -> Any:
-    message = getattr(event, "message", None)
-    return getattr(message, "id", None) if message is not None else None
-
-
-def _atomic_json_write(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
-            stream.flush()
-            try:
-                os.fsync(stream.fileno())
-            except OSError:
-                pass
-        os.replace(temporary, path)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
-
-
-def _load_state(path: Path, now: Optional[float] = None) -> Dict[str, Any]:
-    timestamp = time.time() if now is None else float(now)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    raw_last = data.get("last_report", {})
-    last_report: Dict[str, float] = {}
-    if isinstance(raw_last, dict):
-        for key, value in raw_last.items():
-            try:
-                recorded = float(value)
-            except (TypeError, ValueError):
-                continue
-            if timestamp - recorded <= _STATE_RETENTION_SECONDS:
-                last_report[str(key)] = recorded
-    try:
-        last_global = float(data.get("last_global", 0.0))
-    except (TypeError, ValueError):
-        last_global = 0.0
-    if timestamp - last_global > _STATE_RETENTION_SECONDS:
-        last_global = 0.0
-    return {
-        "version": 1,
-        "last_report": last_report,
-        "last_global": last_global,
-    }
-
-
 class SlowProcessMonitor:
-    """Record every >150ms handler and privately notify the owner in background."""
+    """Aggregate slow events; alert severe events at most once per 30 seconds."""
 
     def __init__(
         self,
         client: Any,
         logger: Any,
         *,
-        cooldown_seconds: Optional[float] = None,
-        global_min_interval_seconds: Optional[float] = None,
-        owner_notify_threshold_ms: Optional[float] = None,
+        alert_threshold_ms: Optional[float] = None,
+        alert_interval_seconds: Optional[float] = None,
+        batch_interval_seconds: Optional[float] = None,
         rpc_pressure_limit: Optional[int] = None,
         queue_size: Optional[int] = None,
         state_path: Optional[os.PathLike] = None,
-        send_timeout: float = 60.0,
+        send_timeout: float = 30.0,
+        # Compatibility-only names from the previous monitor API.
+        cooldown_seconds: Optional[float] = None,
+        global_min_interval_seconds: Optional[float] = None,
+        owner_notify_threshold_ms: Optional[float] = None,
     ):
-        # Product rule: every handler above 150ms is slow, and values at or
-        # below 150ms must never notify the owner.  Keep this boundary fixed so
-        # deployment configuration cannot accidentally weaken the guarantee.
+        del state_path, cooldown_seconds, global_min_interval_seconds
         self.threshold_ms = MIN_THRESHOLD_MS
-        self.cooldown_seconds = (
-            _env_float(
-                "WATCHDOG_SLOW_COOLDOWN_SECONDS",
-                DEFAULT_COOLDOWN_SECONDS,
-            )
-            if cooldown_seconds is None else max(0.0, float(cooldown_seconds))
+        requested_alert = (
+            owner_notify_threshold_ms
+            if alert_threshold_ms is None and owner_notify_threshold_ms is not None
+            else alert_threshold_ms
         )
-        self.global_min_interval_seconds = (
+        self.alert_threshold_ms = (
             _env_float(
-                "WATCHDOG_SLOW_GLOBAL_MIN_INTERVAL_SECONDS",
-                DEFAULT_GLOBAL_MIN_INTERVAL_SECONDS,
-            )
-            if global_min_interval_seconds is None
-            else max(0.0, float(global_min_interval_seconds))
+                "WATCHDOG_SLOW_ALERT_THRESHOLD_MS",
+                DEFAULT_ALERT_THRESHOLD_MS,
+                MIN_THRESHOLD_MS,
+            ) if requested_alert is None else max(MIN_THRESHOLD_MS, float(requested_alert))
         )
-        self.owner_notify_threshold_ms = (
+        self.alert_interval_seconds = (
             _env_float(
-                "WATCHDOG_SLOW_OWNER_NOTIFY_THRESHOLD_MS",
-                DEFAULT_OWNER_NOTIFY_THRESHOLD_MS,
-                minimum=MIN_THRESHOLD_MS,
-            )
-            if owner_notify_threshold_ms is None
-            else max(MIN_THRESHOLD_MS, float(owner_notify_threshold_ms))
+                "WATCHDOG_SLOW_ALERT_INTERVAL_SECONDS",
+                DEFAULT_ALERT_INTERVAL_SECONDS,
+            ) if alert_interval_seconds is None else max(0.0, float(alert_interval_seconds))
+        )
+        self.batch_interval_seconds = (
+            _env_float(
+                "WATCHDOG_SLOW_BATCH_INTERVAL_SECONDS",
+                DEFAULT_BATCH_INTERVAL_SECONDS,
+                minimum=1.0,
+            ) if batch_interval_seconds is None else max(0.01, float(batch_interval_seconds))
         )
         self.rpc_pressure_limit = (
             _env_int("WATCHDOG_SLOW_RPC_PRESSURE_LIMIT", DEFAULT_RPC_PRESSURE_LIMIT)
-            if rpc_pressure_limit is None
-            else max(1, int(rpc_pressure_limit))
+            if rpc_pressure_limit is None else max(1, int(rpc_pressure_limit))
         )
         selected_queue_size = (
             _env_int("WATCHDOG_SLOW_QUEUE_SIZE", DEFAULT_QUEUE_SIZE)
@@ -172,21 +99,15 @@ class SlowProcessMonitor:
         )
         self.client = client
         self.logger = logger
-        self.state_path = Path(state_path) if state_path is not None else STATE_FILE
         self.send_timeout = max(1.0, float(send_timeout))
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=selected_queue_size)
-        self._worker_task: Optional[asyncio.Task] = None
+        self._alert_task: Optional[asyncio.Task] = None
+        self._batch_task: Optional[asyncio.Task] = None
         self._closed = False
-        self._pending = set()
-        self._suppressed: Dict[str, int] = {}
-        state = _load_state(self.state_path)
-        self._last_report: Dict[str, float] = state["last_report"]
-        self._last_global = float(state["last_global"])
-
-    def _log_info(self, message: str) -> None:
-        method = getattr(self.logger, "log_info", None)
-        if callable(method):
-            method(message)
+        self._last_alert = 0.0
+        # key -> count/max/latest event. Aggregating prevents a busy group from
+        # retaining an unbounded list in memory while preserving all slow paths.
+        self._batch: Dict[str, Dict[str, Any]] = {}
 
     def _log_error(self, message: str) -> None:
         method = getattr(self.logger, "log_error", None)
@@ -196,27 +117,22 @@ class SlowProcessMonitor:
     def start(self) -> bool:
         if self._closed:
             return False
-        if self._worker_task is not None and not self._worker_task.done():
-            return True
-        self._worker_task = asyncio.create_task(
-            self._worker(), name="slow-process-owner-reporter"
-        )
-        self._log_info(
-            "SLOW PROCESS MONITOR STARTED "
-            f"threshold_ms={self.threshold_ms:.1f} "
-            f"cooldown_s={self.cooldown_seconds:.1f} "
-            f"global_min_interval_s={self.global_min_interval_seconds:.1f} "
-            f"owner_notify_threshold_ms={self.owner_notify_threshold_ms:.1f} "
-            f"rpc_pressure_limit={self.rpc_pressure_limit}"
-        )
+        if self._alert_task is None or self._alert_task.done():
+            self._alert_task = asyncio.create_task(
+                self._alert_worker(), name="slow-process-severe-reporter"
+            )
+        if self._batch_task is None or self._batch_task.done():
+            self._batch_task = asyncio.create_task(
+                self._batch_worker(), name="slow-process-summary-reporter"
+            )
         return True
 
     def update_client(self, client: Any) -> None:
         self.client = client
 
-    def _dedup_key(self, handler: str, chat_id: Any) -> str:
-        raw = f"{handler}|{chat_id}"
-        return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
+    @staticmethod
+    def _key(handler: str, chat_id: Any) -> str:
+        return f"{handler}|{chat_id}"
 
     def record(
         self,
@@ -228,80 +144,44 @@ class SlowProcessMonitor:
         timestamp: Optional[str] = None,
         now_epoch: Optional[float] = None,
     ) -> bool:
-        """Log a slow event and enqueue at most one deduplicated owner report.
-
-        This method performs no await and no disk/network I/O.  It is safe to
-        call from the message hot path.
-        """
+        """Record in memory only; return True only when a severe alert queued."""
         try:
             elapsed = float(total_ms)
         except (TypeError, ValueError):
             return False
-        if elapsed <= self.threshold_ms:
+        if elapsed <= self.threshold_ms or self._closed:
             return False
-
-        handler_name = _safe_handler(handler)
-        event_timestamp = timestamp or now_local().isoformat()
-        line = (
-            "SLOW_PROCESS "
-            f"total_ms={elapsed:.1f} "
-            f"chat_id={chat_id} "
-            f"message_id={message_id} "
-            f"handler={handler_name} "
-            f"timestamp={event_timestamp}"
-        )
-        # Every slow event is retained locally, even when owner delivery is
-        # suppressed by cooldown.
-        self._log_info(line)
-
-        # Local logging is cheap and intentionally covers every >150ms event.
-        # Private reports are diagnostics only, so never turn routine latency
-        # into another competing send_message RPC.
-        if elapsed < self.owner_notify_threshold_ms:
-            return False
-
-        if self._closed:
-            return False
-        if self._worker_task is None or self._worker_task.done():
+        if self._alert_task is None or self._alert_task.done():
             try:
                 self.start()
-            except RuntimeError as error:
-                self._log_error(f"SLOW_PROCESS MONITOR START FAILED error={error!r}")
+            except RuntimeError:
                 return False
 
-        now = time.time() if now_epoch is None else float(now_epoch)
-        key = self._dedup_key(handler_name, chat_id)
-        last_for_key = float(self._last_report.get(key, 0.0))
-        if key in self._pending or now - last_for_key < self.cooldown_seconds:
-            self._suppressed[key] = int(self._suppressed.get(key, 0)) + 1
-            return False
-        if now - self._last_global < self.global_min_interval_seconds:
-            self._suppressed[key] = int(self._suppressed.get(key, 0)) + 1
-            return False
-
         event = {
-            "type": "SLOW_PROCESS",
             "total_ms": round(elapsed, 3),
             "chat_id": chat_id,
             "message_id": message_id,
-            "handler": handler_name,
-            "timestamp": event_timestamp,
-            "key": key,
-            "suppressed": int(self._suppressed.pop(key, 0)),
+            "handler": _safe_handler(handler),
+            "timestamp": timestamp or now_local().isoformat(),
         }
+        key = self._key(event["handler"], chat_id)
+        aggregate = self._batch.get(key)
+        if aggregate is None:
+            self._batch[key] = {**event, "count": 1, "max_ms": event["total_ms"]}
+        else:
+            aggregate["count"] += 1
+            aggregate["max_ms"] = max(float(aggregate["max_ms"]), event["total_ms"])
+            aggregate.update(event)
+
+        now = time.time() if now_epoch is None else float(now_epoch)
+        if elapsed < self.alert_threshold_ms or now - self._last_alert < self.alert_interval_seconds:
+            return False
         try:
             self.queue.put_nowait(event)
         except asyncio.QueueFull:
-            self._log_error(
-                "SLOW_PROCESS OWNER QUEUE FULL "
-                f"handler={handler_name} chat_id={chat_id}"
-            )
             return False
-        self._pending.add(key)
-        # Reserve cooldown before network I/O.  A broken connection therefore
-        # cannot create a task/report storm on every incoming message.
-        self._last_report[key] = now
-        self._last_global = now
+        # Reserve before the network task so bursts cannot enqueue multiple RPCs.
+        self._last_alert = now
         return True
 
     @staticmethod
@@ -312,7 +192,6 @@ class SlowProcessMonitor:
             return 0
 
     def _rpc_pressure(self) -> int:
-        """Best-effort count of pending transport requests; no RPC is made."""
         sender = getattr(self.client, "_sender", None)
         if sender is None:
             return 0
@@ -322,100 +201,76 @@ class SlowProcessMonitor:
             self._size_of(getattr(sender, "_send_queue", None)),
         )
 
-    async def _private_owner_target(self) -> Any:
-        return await resolve_private_owner_peer(
-            self.client,
-            logger=self.logger,
-            context="SLOW_PROCESS",
-        )
+    async def _send(self, text: str, context: str) -> bool:
+        if self._rpc_pressure() >= self.rpc_pressure_limit:
+            return False
+        try:
+            target = await resolve_private_owner_peer(
+                self.client, logger=None, context=context
+            )
+            result = self.client.send_message(target, text)
+            if inspect.isawaitable(result):
+                await asyncio.wait_for(result, timeout=self.send_timeout)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._log_error(f"SLOW_PROCESS {context} FAILED error={error!r}")
+            return False
 
     @staticmethod
-    def format_report(event: Dict[str, Any]) -> str:
-        summary = (
-            "SLOW_PROCESS "
-            f"total_ms={float(event['total_ms']):.1f} "
-            f"chat_id={event.get('chat_id')} "
-            f"message_id={event.get('message_id')} "
-            f"handler={event.get('handler')} "
-            f"timestamp={event.get('timestamp')}"
-        )
-        suppressed = int(event.get("suppressed", 0) or 0)
-        if suppressed:
-            summary += f"\nsuppressed_since_last={suppressed}"
+    def format_alert(event: Dict[str, Any]) -> str:
         return (
-            "⚠️ گزارش کندی ربات\n\n"
-            "نوع: SLOW_PROCESS\n"
+            "⚠️ گزارش کندی شدید ربات\n\n"
             f"زمان کل پردازش: {float(event['total_ms']):.1f} ms\n"
             f"chat_id: {event.get('chat_id')}\n"
             f"message_id: {event.get('message_id')}\n"
             f"handler: {event.get('handler')}\n"
-            f"timestamp: {event.get('timestamp')}\n\n"
-            f"{summary}"
+            f"timestamp: {event.get('timestamp')}"
         )
 
-    def _state_payload(self) -> Dict[str, Any]:
-        cutoff = time.time() - _STATE_RETENTION_SECONDS
-        self._last_report = {
-            key: value
-            for key, value in self._last_report.items()
-            if value >= cutoff
-        }
-        return {
-            "version": 1,
-            "last_report": dict(self._last_report),
-            "last_global": self._last_global,
-        }
-
-    async def _persist_state(self) -> None:
-        payload = self._state_payload()
-        try:
-            await asyncio.to_thread(_atomic_json_write, self.state_path, payload)
-        except Exception as error:
-            self._log_error(
-                f"SLOW_PROCESS STATE WRITE FAILED error={error!r}"
+    @staticmethod
+    def format_batch(events: list[Dict[str, Any]]) -> str:
+        lines = ["📊 گزارش تجمیعی کندی ربات", "", f"تعداد مسیرهای کند: {len(events)}", ""]
+        for event in events:
+            lines.append(
+                f"• {event['handler']} | chat={event['chat_id']} | "
+                f"تعداد={event['count']} | آخرین={float(event['total_ms']):.1f}ms | "
+                f"بیشینه={float(event['max_ms']):.1f}ms | msg={event['message_id']}"
             )
+        return "\n".join(lines[:250])
 
-    async def _worker(self) -> None:
+    async def flush_batch(self) -> bool:
+        if not self._batch or self._rpc_pressure() >= self.rpc_pressure_limit:
+            return False
+        snapshot = list(self._batch.values())
+        # Keep entries until the send succeeds, so a reconnect cannot lose them.
+        if await self._send(self.format_batch(snapshot), "SLOW_PROCESS_BATCH"):
+            for event in snapshot:
+                key = self._key(event["handler"], event["chat_id"])
+                if self._batch.get(key) is event:
+                    self._batch.pop(key, None)
+            return True
+        return False
+
+    async def _alert_worker(self) -> None:
         while True:
             event = await self.queue.get()
-            key = event["key"]
             try:
-                pressure = self._rpc_pressure()
-                if pressure >= self.rpc_pressure_limit:
-                    self._log_info(
-                        "SLOW_PROCESS OWNER REPORT SKIPPED RPC_PRESSURE "
-                        f"handler={event['handler']} chat_id={event['chat_id']} "
-                        f"pending_rpc={pressure} limit={self.rpc_pressure_limit}"
-                    )
-                    continue
-                target = await self._private_owner_target()
-                result = self.client.send_message(target, self.format_report(event))
-                if inspect.isawaitable(result):
-                    await asyncio.wait_for(result, timeout=self.send_timeout)
-                self._log_info(
-                    "SLOW_PROCESS OWNER REPORT SENT "
-                    f"handler={event['handler']} chat_id={event['chat_id']} "
-                    f"message_id={event['message_id']}"
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                self._log_error(
-                    "SLOW_PROCESS OWNER REPORT FAILED "
-                    f"handler={event['handler']} chat_id={event['chat_id']} "
-                    f"error={error!r}"
-                )
+                await self._send(self.format_alert(event), "SLOW_PROCESS_ALERT")
             finally:
-                self._pending.discard(key)
-                # Persist before task_done so queue.join() also guarantees the
-                # cross-restart cooldown state reached disk.
-                await self._persist_state()
                 self.queue.task_done()
+
+    async def _batch_worker(self) -> None:
+        while True:
+            await asyncio.sleep(self.batch_interval_seconds)
+            await self.flush_batch()
 
     async def close(self) -> None:
         self._closed = True
-        task = self._worker_task
-        if task is not None and not task.done():
+        tasks = [task for task in (self._alert_task, self._batch_task) if task and not task.done()]
+        for task in tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        self._worker_task = None
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._alert_task = self._batch_task = None
