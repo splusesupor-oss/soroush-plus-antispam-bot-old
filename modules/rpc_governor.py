@@ -257,19 +257,25 @@ class RpcGovernor:
         *,
         total_limit=2,
         noncritical_limit=1,
-        delete_limit=1,
-        send_limit=1,
-        heavy_limit=1,
+        delete_limit=None,
+        send_limit=None,
+        heavy_limit=None,
         enabled=True,
         shadow=False,
         logger=None,
         wait_log_ms=20.0,
-        max_send_waiters=4,
+        max_send_waiters=32,
     ):
         self.total_limit = max(1, int(total_limit))
         self.noncritical_limit = max(
             1, min(int(noncritical_limit), self.total_limit)
         )
+        if delete_limit is None:
+            delete_limit = max(1, self.noncritical_limit // 2)
+        if send_limit is None:
+            send_limit = max(1, (self.noncritical_limit // 2) - 1) if self.noncritical_limit > 3 else 1
+        if heavy_limit is None:
+            heavy_limit = 1
         self.class_limits = {
             "delete": max(1, int(delete_limit)),
             "send": max(1, int(send_limit)),
@@ -301,22 +307,26 @@ class RpcGovernor:
     @classmethod
     def from_environment(cls, logger=None):
         """Build conservative fixed limits after the project's .env is loaded."""
+        total_limit = min(3, max(2, _env_int("BOT_RPC_TOTAL_LIMIT", 2)))
+        noncritical_limit = min(
+            total_limit - 1,
+            max(1, _env_int("BOT_RPC_NONCRITICAL_LIMIT", 1))
+        )
         return cls(
             # A single Soroush connection becomes unstable above these caps;
-            # retain env configurability only for making limits stricter.
-            total_limit=min(2, _env_int("BOT_RPC_TOTAL_LIMIT", 2)),
-            noncritical_limit=min(1, _env_int("BOT_RPC_NONCRITICAL_LIMIT", 1)),
-            delete_limit=min(1, _env_int("BOT_RPC_DELETE_LIMIT", 1)),
-            send_limit=min(1, _env_int("BOT_RPC_SEND_LIMIT", 1)),
-            heavy_limit=_env_int("BOT_RPC_HEAVY_LIMIT", 1),
+            # retain env configurability while guaranteeing reserved critical slots.
+            total_limit=total_limit,
+            noncritical_limit=noncritical_limit,
+            delete_limit=min(2, max(1, _env_int("BOT_RPC_DELETE_LIMIT", 1))),
+            send_limit=min(2, max(1, _env_int("BOT_RPC_SEND_LIMIT", 1))),
+            heavy_limit=min(1, max(1, _env_int("BOT_RPC_HEAVY_LIMIT", 1))),
             enabled=_env_bool("BOT_RPC_GOVERNOR_ENABLED", True),
             shadow=_env_bool("BOT_RPC_GOVERNOR_SHADOW", False),
             logger=logger,
             wait_log_ms=_env_float("BOT_RPC_WAIT_LOG_MS", 20.0),
-            # A zero-length send queue drops every reply whenever one delete,
-            # read or moderation RPC is active. Keep this bounded, but allow
-            # public commands and help replies to wait for the shared session.
-            max_send_waiters=max(8, _env_int("BOT_RPC_MAX_SEND_WAITERS", 32)), 
+            # Bounded send queue allows public commands and help replies to wait
+            # without letting cosmetic/game flooding starve moderation.
+            max_send_waiters=max(8, _env_int("BOT_RPC_MAX_SEND_WAITERS", 32)),
         )
 
     @property

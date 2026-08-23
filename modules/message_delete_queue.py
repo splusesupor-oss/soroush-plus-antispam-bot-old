@@ -127,11 +127,12 @@ class MessageDeleteQueue:
     chats keep deleting/replying in parallel.
     """
     def __init__(self, client, logger, *, batch_size=15, max_concurrent=None,
-                 inter_batch_delay=0.0, peer_cache=None):
+                 inter_batch_delay=0.0, micro_buffer_seconds=0.06, peer_cache=None):
         self.client = client
         self.logger = logger
         self.batch_size = batch_size
         self.inter_batch_delay = inter_batch_delay
+        self.micro_buffer_seconds = float(micro_buffer_seconds)
         # Shared bot cache of resolved Soroush InputPeers. Keeping the stable
         # numeric chat ID as the queue key still isolates groups, while the RPC
         # uses the access-hash-bearing peer and skips implicit GetUsers lookup.
@@ -226,6 +227,17 @@ class MessageDeleteQueue:
     async def _delete_ids(self, chat_id, ids):
         deleted = 0
         remaining = []
+        try:
+            from modules.cache_manager import PermissionCircuitBreaker
+            cb = getattr(self, "circuit_breaker", None) or PermissionCircuitBreaker.get_default(self.logger)
+        except Exception:
+            cb = None
+
+        if cb is not None and not cb.can_execute(chat_id, "delete"):
+            if self.logger:
+                self.logger.log_info(f"DELETE SKIPPED circuit breaker open for chat_id={chat_id}")
+            return 0, list(ids)
+
         for start in range(0, len(ids), self.batch_size):
             batch = ids[start:start + self.batch_size]
             # Yield so a pending admin reply can take the shared sender
@@ -247,6 +259,8 @@ class MessageDeleteQueue:
                     )
                     deleted += len(batch)
                     succeeded = True
+                    if cb is not None:
+                        cb.record_success(chat_id)
                     self.logger.log_info(
                         "DELETE MESSAGE RPC TIME "
                         f"chat_id={chat_id} count={len(batch)} attempt={attempt} "
@@ -257,6 +271,10 @@ class MessageDeleteQueue:
                     raise
                 except Exception as error:
                     last_error = error
+                    err_name = error.__class__.__name__.lower()
+                    if "admin" in err_name or "permission" in err_name:
+                        if cb is not None:
+                            cb.record_failure(chat_id, error)
                     self._automatic_pause_until = max(
                         self._automatic_pause_until,
                         time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
@@ -361,6 +379,12 @@ class MessageDeleteQueue:
                 item = await queue.get()
                 jobs = [_unpack(item)]
                 merged = len(jobs[0][1])
+
+                # Micro-buffering window (50ms - 80ms) for automatic spam deletes (priority > 0).
+                # Priority 0 (admin manual deletes) bypasses this to execute immediately with 0 delay.
+                if jobs[0][0] > 0 and self.micro_buffer_seconds > 0:
+                    await asyncio.sleep(self.micro_buffer_seconds)
+
                 # ادغام کارهای حذفِ همین گروه که الان در صف منتظرند:
                 # قبلاً هر کارِ تک‌پیامی یک RPC جدا (~۲۰۰-۴۰۰ms) می‌خورد و
                 # با سیل کارهای ids=1، صفِ حذفِ گروه ده‌ها ثانیه عقب

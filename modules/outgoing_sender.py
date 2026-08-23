@@ -208,12 +208,21 @@ class OutgoingSender:
             )
 
     def _queue_key(self, chat_id, priority):
-        kind = "notif" if int(priority) == 0 else "normal"
+        try:
+            pri = int(priority)
+        except Exception:
+            pri = 1
+        if pri <= 0:
+            kind = "notif"
+        elif pri == 1:
+            kind = "command"
+        else:
+            kind = "normal"
         return (_chat_key(chat_id), kind)
 
     def _normal_pending(self):
         return sum(queue.qsize() for (_chat, kind), queue in self._queues.items()
-                   if kind == "normal")
+                   if kind in ("command", "normal"))
 
     def _queue_for(self, chat_id, priority=1):
         key = self._queue_key(chat_id, priority)
@@ -224,7 +233,7 @@ class OutgoingSender:
         return q
 
     def _worker_limit(self, qkey):
-        return 1 if qkey[1] == "notif" else self.normal_concurrency
+        return 1 if qkey[1] in ("notif", "command") else self.normal_concurrency
 
     def _start_worker_if_needed(self, qkey, chat_id, queue):
         workers = self._workers.get(qkey)
@@ -245,20 +254,23 @@ class OutgoingSender:
             return False
         if chat_id is None:
             chat_id = 0
-        # Normalize priority: 0 urgent/admin, 1 normal
+        # Normalize priority: 0 urgent/admin, 1 command, 2 normal/game
         try:
             pri = int(priority)
         except Exception:
             pri = 1
         qkey = self._queue_key(chat_id, pri)
-        if pri > 0 and self._normal_pending() >= self.max_normal_pending:
+        # Background/game sends (pri >= 2) are shed when normal backlog is saturated
+        if pri >= 2 and self._normal_pending() >= self.max_normal_pending:
             self.stats["dropped"] += 1
+            if self.logger:
+                self.logger.log_info(f"OUTGOING SEND SHED chat_id={chat_id} pri={pri} pending={self._normal_pending()}")
             return False
         q = self._queue_for(chat_id, pri)
         if q.qsize() >= self.max_per_chat:
             self.stats["dropped"] += 1
             if self.logger:
-                self.logger.log_info(f"OUTGOING SEND DROP chat_id={chat_id} qsize={q.qsize()} kind={'notif' if pri==0 else 'normal'}")
+                self.logger.log_info(f"OUTGOING SEND DROP chat_id={chat_id} qsize={q.qsize()} kind={qkey[1]}")
             return False
         self._seq += 1
         q.put_nowait((pri, self._seq, chat_id, coro_factory, on_done, time.perf_counter()))
@@ -426,13 +438,14 @@ def _wrap_send_message(client, sender):
                     chat_id = first
                 else:
                     chat_id = getattr(first, "id", first)
-            # Map dispatch priority to send priority: admin(0)->0, command(1)->0, normal(2)->1
-            # So command/moderation replies are highest priority
+            # Map dispatch priority to send priority: admin(0)->0, command(1)->1, normal(2)->2
             if isinstance(dispatch_prio, int):
-                if dispatch_prio <= 1:  # admin or command
+                if dispatch_prio <= 0:
                     default_prio = 0
-                else:
+                elif dispatch_prio == 1:
                     default_prio = 1
+                else:
+                    default_prio = 2
             else:
                 default_prio = 1
             priority = kwargs.pop("priority", default_prio)
@@ -497,10 +510,12 @@ def install_event_wrapper(event, sender):
         if dispatch_prio is not False and dispatch_prio is not None:
             chat_id = getattr(event, "chat_id", None)
             if isinstance(dispatch_prio, int):
-                if dispatch_prio <= 1:
+                if dispatch_prio <= 0:
                     default_prio = 0
-                else:
+                elif dispatch_prio == 1:
                     default_prio = 1
+                else:
+                    default_prio = 2
             else:
                 default_prio = 1
             priority = kwargs.pop("priority", default_prio)

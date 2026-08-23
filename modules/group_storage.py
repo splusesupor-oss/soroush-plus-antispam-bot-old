@@ -64,6 +64,11 @@ def activate_group(group_id, title):
     data[key] = group
 
     save_groups(data)
+    try:
+        from modules.cache_manager import PermissionCircuitBreaker
+        PermissionCircuitBreaker.get_default().reset(group_id)
+    except Exception:
+        pass
 
 
 def deactivate_group(group_id, title):

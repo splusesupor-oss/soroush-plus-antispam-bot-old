@@ -5,6 +5,7 @@ import asyncio
 import re
 from modules.group_stats import add_deleted
 from modules.group_id import normalize_group_id
+from modules.cache_manager import PermissionCircuitBreaker, TtlCache
 from datetime import timedelta
 
 try:
@@ -22,12 +23,14 @@ def _is_flood_wait(error):
 
 class AdminActions:
     def __init__(self, client, logger, config_manager, *, peer_cache=None,
-                 bot_account_id=None):
+                 bot_account_id=None, circuit_breaker=None):
         self.client = client
         self.logger = logger
         self.config = config_manager
         self.peer_cache = peer_cache
         self.bot_account_id = bot_account_id
+        self.circuit_breaker = circuit_breaker or PermissionCircuitBreaker.get_default(self.logger)
+        self.entity_cache = TtlCache(default_ttl=300.0, max_size=3000)
 
     def bind_runtime_context(self, *, peer_cache=None, bot_account_id=None):
         if peer_cache is not None:
@@ -49,12 +52,22 @@ class AdminActions:
         return None
 
     async def _input_entity(self, value):
+        if value is None:
+            return None
+        if hasattr(value, "access_hash") or hasattr(value, "channel_id") or hasattr(value, "user_id"):
+            return value
+        cache_key = str(value)
+        cached = self.entity_cache.get(cache_key)
+        if cached is not None:
+            return cached
         resolver = getattr(self.client, "get_input_entity", None)
         if callable(resolver):
-            return await resolver(value)
-        # Compatibility for lightweight clients/tests; active SPlusthon uses
-        # get_input_entity and therefore keeps the no-extra-full-entity path.
-        return await self.client.get_entity(value)
+            resolved = await resolver(value)
+        else:
+            resolved = await self.client.get_entity(value)
+        if resolved is not None:
+            self.entity_cache.set(cache_key, resolved)
+        return resolved
 
     async def _run_moderation_with_timeout(self, action, user_id, timeout_seconds, operation):
         """حد بالای عملیات؛ FloodWait را برای worker نگه می‌دارد."""
@@ -73,9 +86,12 @@ class AdminActions:
 
     async def delete_message(self, chat_id, message_id=None, event=None) -> bool:
         """حذف پیام"""
+        if not self.circuit_breaker.can_execute(chat_id, "delete"):
+            return False
         try:
             if event and hasattr(event, 'delete'):
                 await event.delete()
+                self.circuit_breaker.record_success(chat_id)
                 return True
             elif message_id:
                 await self.client.delete_messages(chat_id, message_id)
@@ -85,11 +101,16 @@ class AdminActions:
                 except Exception:
                     pass
 
+                self.circuit_breaker.record_success(chat_id)
                 return True
-        except ChatAdminRequiredError:
-            self.logger.log_error(f"❌ دسترسی ادمین برای حذف پیام در {chat_id} ندارید")
+        except (ChatAdminRequiredError, UserAdminInvalidError) as e:
+            self.circuit_breaker.record_failure(chat_id, e)
+            self.logger.log_error(f"❌ دسترسی ادمین برای حذف پیام در {chat_id} ندارید: {e}")
             return False
         except Exception as e:
+            err_name = e.__class__.__name__.lower()
+            if "admin" in err_name or "permission" in err_name:
+                self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در حذف پیام {message_id} در {chat_id}: {e}")
             return False
         return False
@@ -105,6 +126,8 @@ class AdminActions:
 
     async def _mute_user_rpc(self, chat_id, user_id, duration_seconds=None, *,
                              user=None, chat=None):
+        if not self.circuit_breaker.can_execute(chat_id, "mute"):
+            return False
         try:
             from datetime import datetime, timedelta, timezone
             from splusthon import types
@@ -143,6 +166,7 @@ class AdminActions:
                 participant=user,
                 banned_rights=rights
             ))
+            self.circuit_breaker.record_success(chat_id)
 
             self.logger.log_action(
                 "MUTE",
@@ -154,9 +178,16 @@ class AdminActions:
 
             return True
 
+        except (ChatAdminRequiredError, UserAdminInvalidError) as e:
+            self.circuit_breaker.record_failure(chat_id, e)
+            self.logger.log_error(f"خطا در سکوت کاربر (عدم دسترسی ادمین): {e}")
+            return False
         except Exception as e:
             if _is_flood_wait(e):
                 raise
+            err_name = e.__class__.__name__.lower()
+            if "admin" in err_name or "permission" in err_name:
+                self.circuit_breaker.record_failure(chat_id, e)
             print("MUTE ERROR:", repr(e))
             self.logger.log_error(f"خطا در سکوت کاربر: {e}")
             return False
@@ -172,6 +203,8 @@ class AdminActions:
 
     async def _unmute_user_rpc(self, chat_id, user_id, *, user=None,
                                chat=None) -> bool:
+        if not self.circuit_breaker.can_execute(chat_id, "unmute"):
+            return False
         try:
             user_peer = await self._input_entity(
                 user if user is not None else user_id
@@ -195,13 +228,21 @@ class AdminActions:
                 send_polls=True,
                 until_date=None
             )
+            self.circuit_breaker.record_success(chat_id)
 
             self.logger.log_action("UNMUTE", user_id, chat_id)
             return True
 
+        except (ChatAdminRequiredError, UserAdminInvalidError) as e:
+            self.circuit_breaker.record_failure(chat_id, e)
+            self.logger.log_error(f"خطا در unmute {user_id} (عدم دسترسی ادمین): {e}")
+            return False
         except Exception as e:
             if _is_flood_wait(e):
                 raise
+            err_name = e.__class__.__name__.lower()
+            if "admin" in err_name or "permission" in err_name:
+                self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در unmute {user_id}: {e}")
             return False
 
@@ -239,6 +280,8 @@ class AdminActions:
                             reason="حذف دائمی به دلیل اسپم", *, user=None,
                             chat=None) -> bool:
         """بن دائمی و ثبت پایدار کاربر برای جلوگیری از بازگشت."""
+        if not self.circuit_breaker.can_execute(chat_id, "ban"):
+            return False
         try:
             # Startup already resolved the bot identity. Repeating get_me for
             # every ban added an avoidable Soroush request to the hot path.
@@ -274,6 +317,7 @@ class AdminActions:
                 until_date=None,
                 view_messages=False,
             )
+            self.circuit_breaker.record_success(chat_id)
 
             try:
                 from modules.banned_storage import add_banned
@@ -306,9 +350,16 @@ class AdminActions:
 
             return True
 
+        except (ChatAdminRequiredError, UserAdminInvalidError) as e:
+            self.circuit_breaker.record_failure(chat_id, e)
+            self.logger.log_error(f"خطا در بن دائمی {user_id} (عدم دسترسی ادمین): {e}")
+            return False
         except Exception as e:
             if _is_flood_wait(e):
                 raise
+            err_name = e.__class__.__name__.lower()
+            if "admin" in err_name or "permission" in err_name:
+                self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در بن دائمی {user_id}: {e}")
             return False
 
@@ -404,6 +455,18 @@ class AdminActions:
         action = self.config.get("action_on_threshold", "mute")
         duration = self.config.get("action_duration_seconds", 3600)
 
+        # Gate announcement to prevent duplicate announcement spam in waves
+        import time as _time
+        punish_gate = getattr(self, "_punish_gate", None)
+        if punish_gate is None:
+            punish_gate = self._punish_gate = {}
+        punish_key = (str(chat_id), str(user_id))
+        now_mono = _time.monotonic()
+        if now_mono - punish_gate.get(punish_key, -999.0) < 10.0:
+            announce = False
+        else:
+            punish_gate[punish_key] = now_mono
+
         if action == "mute":
             success = await self.mute_user(
                 chat_id, user_id, duration, user=user, chat=chat,
@@ -464,6 +527,8 @@ class AdminActions:
         )
 
     async def _unban_user_rpc(self, chat_id, user_id, username=None):
+        if not self.circuit_breaker.can_execute(chat_id, "unban"):
+            return False
         try:
             from modules.banned_storage import (
                 is_banned,
@@ -496,6 +561,7 @@ class AdminActions:
                     )
                 )
             )
+            self.circuit_breaker.record_success(chat_id)
 
             display_name = " ".join(
                 part for part in (
@@ -536,8 +602,15 @@ class AdminActions:
 
             return True
 
+        except (ChatAdminRequiredError, UserAdminInvalidError) as e:
+            self.circuit_breaker.record_failure(chat_id, e)
+            self.logger.log_error(f"خطا در unban {user_id} (عدم دسترسی ادمین): {e}")
+            return False
         except Exception as e:
             if _is_flood_wait(e):
                 raise
+            err_name = e.__class__.__name__.lower()
+            if "admin" in err_name or "permission" in err_name:
+                self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در unban {user_id}: {e}")
             return False
