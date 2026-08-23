@@ -9,7 +9,17 @@
 from economy import award_game as economy_award_game
 from economy import rewards as economy_rewards
 from economy import spend as economy_spend
-from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+try:
+    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+except ImportError:
+    class MessageEntityBlockquote:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
+    class MessageEntityBold:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
 from modules.fox_games import (
     battle,
     best_answer,

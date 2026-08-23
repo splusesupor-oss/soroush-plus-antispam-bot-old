@@ -141,12 +141,29 @@ class MessageDeleteQueue:
         self._workers = {}
         self._pending_ids = set()
         # A failing Soroush delete endpoint can retain calls for tens of
-        # seconds. Pause only automatic cleanup after that; manual priority-0
-        # deletes remain available to administrators.
-        self._automatic_pause_until = 0.0
+        # seconds. Pause only automatic cleanup after that for the failing chat;
+        # other chats continue normally, and manual priority-0 deletes remain
+        # available to administrators.
+        self._automatic_pause_until = {}
         # Kept only so older callers that pass max_concurrent still construct.
         self._rpc_slots = None
         self._seq = 0
+
+    def cleanup_expired(self, now=None):
+        now = time.monotonic() if now is None else now
+        self._automatic_pause_until = {
+            k: v for k, v in self._automatic_pause_until.items() if v > now
+        }
+
+    async def close(self):
+        workers = [w for w in self._workers.values() if w is not None and not w.done()]
+        for worker in workers:
+            worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        self._workers.clear()
+        self._queues.clear()
+        self._pending_ids.clear()
 
     def _cached_rpc_peer(self, chat_id):
         cache = self.peer_cache
@@ -182,7 +199,9 @@ class MessageDeleteQueue:
         requested_ids = [message_id for message_id in message_ids
                          if isinstance(message_id, int) and message_id > 0]
         loop = asyncio.get_running_loop()
-        if priority > 0 and time.monotonic() < self._automatic_pause_until:
+        k_chat = _chat_key(chat_id)
+        pause_until = self._automatic_pause_until.get(k_chat, 0.0)
+        if priority > 0 and time.monotonic() < pause_until:
             result = loop.create_future()
             result.set_result((0, requested_ids))
             return result
@@ -250,7 +269,7 @@ class MessageDeleteQueue:
             last_error = None
             # A failed automatic delete is disposable; retrying it for tens of
             # seconds blocks every command behind the shared sender.
-            for attempt in range(1, 2):
+            for attempt in range(1, 3):
                 started = time.perf_counter()
                 try:
                     await asyncio.wait_for(
@@ -259,6 +278,8 @@ class MessageDeleteQueue:
                     )
                     deleted += len(batch)
                     succeeded = True
+                    k_chat = _chat_key(chat_id)
+                    self._automatic_pause_until.pop(k_chat, None)
                     if cb is not None:
                         cb.record_success(chat_id)
                     self.logger.log_info(
@@ -272,13 +293,15 @@ class MessageDeleteQueue:
                 except Exception as error:
                     last_error = error
                     err_name = error.__class__.__name__.lower()
-                    if "admin" in err_name or "permission" in err_name:
+                    from modules.cache_manager import is_permission_error
+                    if is_permission_error(error) or "admin" in err_name or "permission" in err_name:
                         if cb is not None:
                             cb.record_failure(chat_id, error)
-                    self._automatic_pause_until = max(
-                        self._automatic_pause_until,
-                        time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
-                    )
+                        k_chat = _chat_key(chat_id)
+                        self._automatic_pause_until[k_chat] = max(
+                            self._automatic_pause_until.get(k_chat, 0.0),
+                            time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
+                        )
                     self.logger.log_error(
                         "DELETE MESSAGE RPC FAILED "
                         f"chat_id={chat_id} count={len(batch)} attempt={attempt} "
@@ -288,6 +311,11 @@ class MessageDeleteQueue:
                     # Retrying the batch and then every ID turned one IndexError
                     # into hundreds of useless requests under a spam wave.
                     if _entity_resolution_error(error):
+                        k_chat = _chat_key(chat_id)
+                        self._automatic_pause_until[k_chat] = max(
+                            self._automatic_pause_until.get(k_chat, 0.0),
+                            time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
+                        )
                         break
                     # Retrying the unchanged batch cannot repair one invalid
                     # message ID; go directly to the one-pass isolation below.
@@ -295,10 +323,13 @@ class MessageDeleteQueue:
                         break
                     flood_wait = _flood_wait_seconds(error)
                     if flood_wait is not None:
-                        # FloodWait on automatic cleanup must not park this
-                        # worker or keep the global RPC slot occupied.
+                        if flood_wait <= 3.0 and attempt == 1:
+                            await asyncio.sleep(flood_wait)
+                            continue
                         break
-                    # Never retry generic/server failures in the hot cleanup queue.
+                    if isinstance(error, (TimeoutError, asyncio.TimeoutError, ConnectionError)) and attempt == 1:
+                        await asyncio.sleep(0.05)
+                        continue
                     break
             if succeeded:
                 self.logger.log_info(
@@ -309,6 +340,13 @@ class MessageDeleteQueue:
                 else:
                     await asyncio.sleep(0)
                 continue
+
+            # When a batch fails completely across all retry attempts, pause automatic cleanup for this chat
+            k_chat = _chat_key(chat_id)
+            self._automatic_pause_until[k_chat] = max(
+                self._automatic_pause_until.get(k_chat, 0.0),
+                time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
+            )
 
             # Only an ID-specific server error justifies splitting a failed
             # batch. Connection/entity/flood errors would fail every item and
@@ -344,8 +382,9 @@ class MessageDeleteQueue:
                     raise
                 except Exception as error:
                     item_error = error
-                    self._automatic_pause_until = max(
-                        self._automatic_pause_until,
+                    k_chat = _chat_key(chat_id)
+                    self._automatic_pause_until[k_chat] = max(
+                        self._automatic_pause_until.get(k_chat, 0.0),
                         time.monotonic() + _AUTOMATIC_DELETE_COOLDOWN_SECONDS,
                     )
                 if not item_ok:
@@ -457,7 +496,20 @@ class MessageDeleteQueue:
                     return
         finally:
             k = _chat_key(chat_id)
-            if self._workers.get(k) is asyncio.current_task():
+            try:
+                cur_task = asyncio.current_task()
+            except RuntimeError:
+                cur_task = None
+            if cur_task is not None and self._workers.get(k) is cur_task:
                 self._workers.pop(k, None)
-            if queue.empty():
+            if not queue.empty():
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop.is_running():
+                        self._workers[k] = loop.create_task(
+                            self._worker(chat_id, queue)
+                        )
+                except RuntimeError:
+                    pass
+            else:
                 self._queues.pop(k, None)

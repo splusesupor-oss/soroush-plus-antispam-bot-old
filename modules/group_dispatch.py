@@ -221,9 +221,11 @@ class GroupDispatcher:
     # yield only added queue_wait after Soroush had already answered.
     HIGHER_LANE_WAIT_SECONDS = 0.0
 
-    def __init__(self, *, max_pending_normal=40, logger=None,
+    def __init__(self, *, max_pending_normal=None, logger=None,
                  normal_concurrency=None, debug_timing=False):
-        self.max_pending_normal = int(max_pending_normal)
+        if max_pending_normal is None:
+            max_pending_normal = os.getenv("BOT_MAX_PENDING_NORMAL", "120")
+        self.max_pending_normal = max(20, min(500, int(max_pending_normal)))
         if normal_concurrency is None:
             normal_concurrency = os.getenv(
                 "BOT_NORMAL_WORKERS_PER_CHAT", "6"
@@ -480,9 +482,14 @@ class GroupDispatcher:
             lst = self._workers.get(key)
             if lst is not None:
                 try:
-                    lst.remove(asyncio.current_task())
-                except ValueError:
-                    pass
+                    cur_task = asyncio.current_task()
+                except RuntimeError:
+                    cur_task = None
+                if cur_task is not None:
+                    try:
+                        lst.remove(cur_task)
+                    except ValueError:
+                        pass
                 if not lst:
                     self._workers.pop(key, None)
                     # Only pop queue if truly empty (another worker may have just enqueued)
@@ -490,6 +497,16 @@ class GroupDispatcher:
                         self._queues.pop(key, None)
                         if lane == LANE_NORMAL:
                             self._normal_pending.pop(_chat_key(chat_id), None)
+                    elif not self._closed:
+                        # Queue still has items: respawn worker immediately
+                        try:
+                            loop = asyncio.get_running_loop()
+                            if loop.is_running():
+                                self._workers[key] = [loop.create_task(
+                                    self._worker(chat_id, lane, queue)
+                                )]
+                        except RuntimeError:
+                            pass
             self._busy.discard(key)
             self._busy_counts.pop(key, None)
 

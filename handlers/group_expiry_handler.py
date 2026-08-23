@@ -7,7 +7,17 @@
 ``startswith`` عمومی‌ای نمی‌تواند این سه دستور را با چیز دیگری اشتباه
 بگیرد.
 """
-from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+try:
+    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+except ImportError:
+    class MessageEntityBlockquote:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
+    class MessageEntityBold:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
 
 from modules.group_expiry import (
     EXPIRED_MESSAGE,

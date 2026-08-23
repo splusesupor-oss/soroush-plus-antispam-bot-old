@@ -126,6 +126,41 @@ STATE_OPEN = "OPEN"          # Tripped: bot lacks admin rights; block RPCs
 STATE_HALF_OPEN = "HALF_OPEN"  # Testing: allow 1 probe operation
 
 
+def is_permission_error(error) -> bool:
+    """Return True only for genuine admin / permission denial errors from MTProto.
+
+    Entity resolution failures, invalid peer IDs, network timeouts, TypeError,
+    KeyError, and unsupported requests MUST NOT be classified as permission errors.
+    """
+    if error is None:
+        return False
+    if isinstance(error, (ValueError, KeyError, IndexError, TypeError, AttributeError)):
+        return False
+    name = error.__class__.__name__.lower()
+    text = str(error).lower()
+
+    # Exclude entity / peer lookup errors and network timeouts
+    if any(marker in name or marker in text for marker in (
+        "peeridinvalid", "channelinvalid", "entity", "notfound",
+        "chatidinvalid", "cannot find", "could not find", "user_id_invalid",
+        "peer_id_invalid", "notsupported", "not_supported", "timeout",
+    )):
+        return False
+
+    # Genuine MTProto permission errors
+    if any(marker in name for marker in (
+        "chatadminrequired", "useradmininvalid", "adminrankinvalid",
+        "rightforbidden", "chatadminrightsneeded",
+    )):
+        return True
+
+    # Checked string indicators in RPC error message
+    if "admin_required" in text or "admin required" in text or "chat_admin_required" in text:
+        return True
+
+    return False
+
+
 @dataclass
 class BreakerRecord:
     state: str = STATE_CLOSED
@@ -217,7 +252,15 @@ class PermissionCircuitBreaker:
     def record_failure(
         self, chat_id, error=None, cooldown: Optional[float] = None
     ) -> None:
-        """Trip circuit breaker to OPEN upon permission failure."""
+        """Trip circuit breaker to OPEN upon genuine permission failure only."""
+        if error is not None and not is_permission_error(error):
+            if self.logger:
+                self.logger.log_info(
+                    f"CIRCUIT BREAKER IGNORE NON-PERMISSION ERROR chat_id={_safe_chat_key(chat_id)} "
+                    f"error={error!r}"
+                )
+            return
+
         key = _safe_chat_key(chat_id)
         record = self._breakers.get(key)
         now = time.monotonic()

@@ -629,7 +629,7 @@ class SoroushAntiSpamBot:
             return False
 
     def _overflow_message(self, event):
-        """Cheap per-group overflow path: delete locked/link spam only.
+        """Cheap per-group overflow path: delete locked/link/spam messages only.
 
         Called when a chat's ordinary queue is already full.  Must not await
         and must not touch other groups.
@@ -655,7 +655,16 @@ class SoroushAntiSpamBot:
                 user_id is not None
                 and self.is_spam_locked((chat_id, user_id))
             )
-            if not locked and not looks_like_link(text):
+            is_link = looks_like_link(text)
+            detector = getattr(self, "spam_detector", None)
+            is_spam = False
+            if not locked and not is_link and detector is not None and text:
+                try:
+                    is_spam, _ = detector.is_spam(text, chat_id)
+                except Exception:
+                    is_spam = False
+
+            if not locked and not is_link and not is_spam:
                 return
             queue = getattr(self, "message_delete_queue", None)
             if queue is not None:
@@ -678,7 +687,7 @@ class SoroushAntiSpamBot:
                 )
             self.logger.log_info(
                 "GROUP DISPATCH OVERFLOW DELETE "
-                f"chat_id={chat_id} message_id={message_id} locked={locked}"
+                f"chat_id={chat_id} message_id={message_id} locked={locked} spam={is_spam}"
             )
         except Exception as error:
             self.logger.log_error(f"GROUP DISPATCH OVERFLOW FAILED {error!r}")
@@ -780,6 +789,11 @@ class SoroushAntiSpamBot:
             while True:
                 try:
                     self.cleanup_temporary_state()
+                    if getattr(self, "message_delete_queue", None) is not None:
+                        try:
+                            self.message_delete_queue.cleanup_expired()
+                        except Exception:
+                            pass
                     # Tracker retention is independent from moderation state.
                     from modules import message_tracker
                     message_tracker.cleanup_expired()

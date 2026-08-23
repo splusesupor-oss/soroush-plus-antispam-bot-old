@@ -8,7 +8,17 @@
 هیچ قابلیتی دستور جداگانه ندارد. این فایل هیچ بازی‌ای را import نمی‌کند
 و هرگز مستقیماً به دیتابیس اقتصاد دست نمی‌زند؛ همه چیز از راه API.
 """
-from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+try:
+    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+except ImportError:
+    class MessageEntityBlockquote:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
+    class MessageEntityBold:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
 
 import contextvars
 import time

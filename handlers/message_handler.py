@@ -148,9 +148,24 @@ from modules import big_spam
 from modules import search_access
 from modules import web_search, wiki_search_service
 from modules.notice_cleanup import capture_sent
-from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
-from splusthon.tl import functions
-from splusthon import Button, types
+try:
+    from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
+    from splusthon.tl import functions
+    from splusthon import Button, types
+except ImportError:
+    class MessageEntityBold:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
+    class MessageEntityBlockquote:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
+    class Button:
+        pass
+    from types import SimpleNamespace
+    types = SimpleNamespace()
+    functions = SimpleNamespace()
 
 
 def _resolved_event_peer(event):
@@ -6809,6 +6824,7 @@ async def handle_new_message(bot, event):
                     timeout_seconds=15,
                     operation=lambda: bot.admin_actions.mute_user(
                         chat_id, target_user.id, user=target_user,
+                        chat=resolved_permission_chat,
                     ),
                     on_success=mute_succeeded,
                     on_failure=mute_failed,
@@ -6884,6 +6900,7 @@ async def handle_new_message(bot, event):
                     timeout_seconds=15,
                     operation=lambda: bot.admin_actions.unmute_user(
                         chat_id, target_user.id, user=target_user,
+                        chat=resolved_permission_chat,
                     ),
                     on_success=unmute_succeeded,
                     on_failure=unmute_failed,

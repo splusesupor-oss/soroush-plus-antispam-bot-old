@@ -10,10 +10,29 @@ from datetime import timedelta
 
 try:
     from splusthon.errors import ChatAdminRequiredError, UserAdminInvalidError
+    from splusthon import types
+    from splusthon.tl import functions
 except ImportError:
     # برای زمانی که کتابخانه نصب نیست، کلاس‌های ساختگی
     class ChatAdminRequiredError(Exception): pass
     class UserAdminInvalidError(Exception): pass
+    class _ChatBannedRights:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+    class _EditBannedRequest:
+        def __init__(self, channel=None, participant=None, banned_rights=None):
+            self.channel = channel
+            self.participant = participant
+            self.banned_rights = banned_rights
+    class _ChannelsModule:
+        EditBannedRequest = _EditBannedRequest
+    class _Functions:
+        channels = _ChannelsModule()
+    class _Types:
+        ChatBannedRights = _ChatBannedRights
+    types = _Types()
+    functions = _Functions()
 
 
 def _is_flood_wait(error):
@@ -54,20 +73,60 @@ class AdminActions:
     async def _input_entity(self, value):
         if value is None:
             return None
-        if hasattr(value, "access_hash") or hasattr(value, "channel_id") or hasattr(value, "user_id"):
+        name = type(value).__name__
+        if (
+            name.startswith("InputPeer")
+            or name.startswith("InputUser")
+            or name.startswith("InputChannel")
+            or name.startswith("InputChat")
+            or "InputPeer" in name
+            or "InputUser" in name
+            or "InputChannel" in name
+            or "InputChat" in name
+        ):
             return value
+        # Check cached chat peer from peer_cache if value is chat_id
+        if isinstance(value, (int, str)):
+            cached_peer = self._cached_chat_peer(value)
+            if cached_peer is not None:
+                return cached_peer
+
         cache_key = str(value)
         cached = self.entity_cache.get(cache_key)
         if cached is not None:
             return cached
+
         resolver = getattr(self.client, "get_input_entity", None)
+        resolved = None
         if callable(resolver):
-            resolved = await resolver(value)
+            try:
+                resolved = await resolver(value)
+            except Exception:
+                # If a positive integer group ID failed with GetUsers / ValueError / KeyError,
+                # try the channel format (-1000000000000 - int(value))
+                if isinstance(value, int) and value > 0:
+                    try:
+                        resolved = await resolver(-1000000000000 - value)
+                    except Exception:
+                        pass
+                if resolved is None:
+                    get_ent = getattr(self.client, "get_entity", None)
+                    if callable(get_ent):
+                        try:
+                            resolved = await get_ent(value)
+                        except Exception:
+                            pass
         else:
-            resolved = await self.client.get_entity(value)
+            get_ent = getattr(self.client, "get_entity", None)
+            if callable(get_ent):
+                try:
+                    resolved = await get_ent(value)
+                except Exception:
+                    pass
+
         if resolved is not None:
             self.entity_cache.set(cache_key, resolved)
-        return resolved
+        return resolved or value
 
     async def _run_moderation_with_timeout(self, action, user_id, timeout_seconds, operation):
         """حد بالای عملیات؛ FloodWait را برای worker نگه می‌دارد."""
@@ -108,8 +167,8 @@ class AdminActions:
             self.logger.log_error(f"❌ دسترسی ادمین برای حذف پیام در {chat_id} ندارید: {e}")
             return False
         except Exception as e:
-            err_name = e.__class__.__name__.lower()
-            if "admin" in err_name or "permission" in err_name:
+            from modules.cache_manager import is_permission_error
+            if is_permission_error(e):
                 self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در حذف پیام {message_id} در {chat_id}: {e}")
             return False
@@ -130,42 +189,66 @@ class AdminActions:
             return False
         try:
             from datetime import datetime, timedelta, timezone
-            from splusthon import types
-            from splusthon.tl import functions
 
-            user = await self._input_entity(
+            user_peer = await self._input_entity(
                 user if user is not None else user_id
             )
             cached_chat = self._cached_chat_peer(chat_id)
-            chat = await self._input_entity(
+            chat_peer = await self._input_entity(
                 chat if chat is not None else (
                     cached_chat if cached_chat is not None else chat_id
                 )
             )
 
-            until_date = None if duration_seconds is None else datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
-
-            rights = types.ChatBannedRights(
-                until_date=until_date,
-                view_messages=False,
-                send_messages=True,
-                send_media=True,
-                send_stickers=True,
-                send_gifs=True,
-                send_games=True,
-                send_inline=True,
-                embed_links=True,
-                send_polls=True,
-                change_info=False,
-                invite_users=False,
-                pin_messages=False
+            until_date = (
+                None if duration_seconds is None
+                else datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
             )
 
-            await self.client(functions.channels.EditBannedRequest(
-                channel=chat,
-                participant=user,
-                banned_rights=rights
-            ))
+            chat_peer_name = type(chat_peer).__name__
+            is_channel = (
+                chat_peer_name in {"InputPeerChannel", "InputChannel"}
+                or "Channel" in chat_peer_name
+                or getattr(chat_peer, "channel_id", None) is not None
+            )
+
+            if is_channel and functions is not None and types is not None:
+                rights = types.ChatBannedRights(
+                    until_date=until_date,
+                    view_messages=False,
+                    send_messages=True,
+                    send_media=True,
+                    send_stickers=True,
+                    send_gifs=True,
+                    send_games=True,
+                    send_inline=True,
+                    embed_links=True,
+                    send_polls=True,
+                    change_info=False,
+                    invite_users=False,
+                    pin_messages=False
+                )
+                await self.client(functions.channels.EditBannedRequest(
+                    channel=chat_peer,
+                    participant=user_peer,
+                    banned_rights=rights
+                ))
+            else:
+                # Basic chat or high-level client wrapper
+                await self.client.edit_permissions(
+                    chat_peer,
+                    user_peer,
+                    send_messages=False,
+                    send_media=False,
+                    send_stickers=False,
+                    send_gifs=False,
+                    send_games=False,
+                    send_inline=False,
+                    embed_links=False,
+                    send_polls=False,
+                    until_date=until_date,
+                )
+
             self.circuit_breaker.record_success(chat_id)
 
             self.logger.log_action(
@@ -185,8 +268,8 @@ class AdminActions:
         except Exception as e:
             if _is_flood_wait(e):
                 raise
-            err_name = e.__class__.__name__.lower()
-            if "admin" in err_name or "permission" in err_name:
+            from modules.cache_manager import is_permission_error
+            if is_permission_error(e):
                 self.circuit_breaker.record_failure(chat_id, e)
             print("MUTE ERROR:", repr(e))
             self.logger.log_error(f"خطا در سکوت کاربر: {e}")
@@ -240,8 +323,8 @@ class AdminActions:
         except Exception as e:
             if _is_flood_wait(e):
                 raise
-            err_name = e.__class__.__name__.lower()
-            if "admin" in err_name or "permission" in err_name:
+            from modules.cache_manager import is_permission_error
+            if is_permission_error(e):
                 self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در unmute {user_id}: {e}")
             return False
@@ -357,8 +440,8 @@ class AdminActions:
         except Exception as e:
             if _is_flood_wait(e):
                 raise
-            err_name = e.__class__.__name__.lower()
-            if "admin" in err_name or "permission" in err_name:
+            from modules.cache_manager import is_permission_error
+            if is_permission_error(e):
                 self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در بن دائمی {user_id}: {e}")
             return False
@@ -616,8 +699,8 @@ class AdminActions:
         except Exception as e:
             if _is_flood_wait(e):
                 raise
-            err_name = e.__class__.__name__.lower()
-            if "admin" in err_name or "permission" in err_name:
+            from modules.cache_manager import is_permission_error
+            if is_permission_error(e):
                 self.circuit_breaker.record_failure(chat_id, e)
             self.logger.log_error(f"خطا در unban {user_id}: {e}")
             return False

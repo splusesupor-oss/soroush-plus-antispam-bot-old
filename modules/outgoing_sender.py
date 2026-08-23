@@ -184,14 +184,14 @@ class OutgoingSender:
             self.max_normal_pending = 40
         if normal_concurrency is None:
             normal_concurrency = os.getenv(
-                "BOT_SEND_NORMAL_WORKERS_PER_CHAT", "1"
+                "BOT_SEND_NORMAL_WORKERS_PER_CHAT", "2"
             )
         try:
             self.normal_concurrency = min(
-                1, max(1, int(normal_concurrency))
+                4, max(1, int(normal_concurrency))
             )
         except (TypeError, ValueError):
-            self.normal_concurrency = 1
+            self.normal_concurrency = 2
         # Urgent notifications and normal replies remain separate. Normal
         # sends use both slots already allowed by the low-level per-chat gate;
         # the former single worker left the second safe slot idle.
@@ -233,7 +233,7 @@ class OutgoingSender:
         return q
 
     def _worker_limit(self, qkey):
-        return 1 if qkey[1] in ("notif", "command") else self.normal_concurrency
+        return 1 if qkey[1] == "notif" else self.normal_concurrency
 
     def _start_worker_if_needed(self, qkey, chat_id, queue):
         workers = self._workers.get(qkey)
