@@ -16,7 +16,7 @@ import time
 
 DEFAULT_TTL_SECONDS = 60
 MAX_PER_CHAT = 500
-DEFAULT_MAX_RETRIES = 0
+DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY_SECONDS = 2
 
 
@@ -257,6 +257,14 @@ class NoticeCleanup:
             event.set()
         if self.logger is not None:
             self.logger.log_info(
+                f"AUTO_NOTICE_CREATED chat_id={chat_id} message_id={message_id} "
+                f"ttl_seconds={ttl_s:g} expires_at={expires_at:.2f}"
+            )
+            self.logger.log_info(
+                f"AUTO_NOTICE_TIMER_STARTED chat_id={chat_id} message_id={message_id} "
+                f"expires_at={expires_at:.2f} delay_seconds={ttl_s:g}"
+            )
+            self.logger.log_info(
                 "NOTICE CLEANUP QUEUED "
                 f"chat_id={chat_id} message_id={message_id} "
                 f"expires_in_s={ttl_s:g} pending={len(rows)}"
@@ -314,18 +322,23 @@ class NoticeCleanup:
 
     def _enqueue_delete(self, chat_id, message_ids, rpc_chat=None):
         queue = self.delete_queue
-        if queue is None or not message_ids:
+        target = _chat_id_for_rpc(rpc_chat if rpc_chat is not None else chat_id)
+        if queue is None:
+            client = getattr(self, "client", None)
+            if client is not None and hasattr(client, "delete_messages") and message_ids:
+                async def _direct_delete():
+                    try:
+                        await client.delete_messages(target, list(message_ids))
+                        return len(message_ids), []
+                    except Exception as e:
+                        if self.logger is not None:
+                            self.logger.log_error(f"DIRECT NOTICE DELETE FAILED chat_id={chat_id} error={e!r}")
+                        return 0, list(message_ids)
+                return _direct_delete()
+            return None
+        if not message_ids:
             return None
         try:
-            # Expired bot notices are cosmetic. Keep them behind manual deletes
-            # and inside the automatic-delete circuit breaker during outages.
-            #
-            # ⚠️ برای RPC حذف باید chat_id «اصلی» رویداد استفاده شود
-            # (مثلاً ‎-1000022790753‎)؛ آی‌دی نرمال‌شدهٔ خام (22790753)
-            # با ChannelPrivateError یا حذفِ هیچ، شکست می‌خورد. خروجی
-            # Future صف حذف هم برگردانده می‌شود تا نتیجهٔ واقعی
-            # (deleted, remaining) لاگ شود، نه deleted=0 همیشگی.
-            target = _chat_id_for_rpc(rpc_chat if rpc_chat is not None else chat_id)
             peer = self._rpc_peers.get(_chat_key(chat_id))
             try:
                 return queue.enqueue(
@@ -435,6 +448,9 @@ class NoticeCleanup:
                 if due:
                     if self.logger is not None:
                         self.logger.log_info(
+                            f"AUTO_NOTICE_DELETE_TRIGGERED chat_id={chat_id} message_ids={due!r}"
+                        )
+                        self.logger.log_info(
                             "NOTICE CLEANUP DUE "
                             f"chat_id={chat_id} message_ids={due!r}"
                         )
@@ -455,6 +471,10 @@ class NoticeCleanup:
                             )
                     else:
                         if self.logger is not None:
+                            self.logger.log_info(
+                                f"AUTO_NOTICE_DELETE_RESULT chat_id={chat_id} message_ids={due!r} "
+                                f"deleted={deleted} remaining={len(remaining or ())}"
+                            )
                             self.logger.log_info(
                                 "NOTICE CLEANUP DELETED "
                                 f"chat_id={chat_id} message_ids={due!r} "
@@ -482,6 +502,11 @@ class NoticeCleanup:
                 if next_at is None:
                     continue
                 delay = max(0.01, next_at - now)
+                if self.logger is not None:
+                    self.logger.log_info(
+                        f"AUTO_NOTICE_TIMER_STARTED chat_id={chat_id} "
+                        f"expires_at={next_at:.2f} delay_seconds={delay:.2f}"
+                    )
                 event.clear()
                 try:
                     await asyncio.wait_for(event.wait(), timeout=delay)

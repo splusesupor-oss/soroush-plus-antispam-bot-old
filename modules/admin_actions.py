@@ -395,7 +395,11 @@ class AdminActions:
             for stale in [k for k, v in gate.items() if v < cutoff]:
                 gate.pop(stale, None)
         try:
-            from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+            try:
+                from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+                has_entities = True
+            except ImportError:
+                has_entities = False
 
             from modules.user_display import format_user
             # A complete entity is preferred; legacy callers may only provide
@@ -420,10 +424,13 @@ class AdminActions:
             # Keep one completely empty line between the reason and warning count.
             msg = prefix + body + "\n" + warning_label + suffix
             u16 = lambda value: len(value.encode("utf-16-le")) // 2
-            entities = [
-                MessageEntityBlockquote(offset=0, length=u16(prefix)),
-                MessageEntityBold(offset=u16(prefix + body), length=u16(warning_label)),
-            ]
+            if has_entities:
+                entities = [
+                    MessageEntityBlockquote(offset=0, length=u16(prefix)),
+                    MessageEntityBold(offset=u16(prefix + body), length=u16(warning_label)),
+                ]
+            else:
+                entities = None
             # Use outgoing sender queue if available so this warning does not block the caller's worker
             sender = getattr(self.client, "_outgoing_sender", None)
             if sender is not None:
@@ -441,7 +448,7 @@ class AdminActions:
                 sent = await self.client.send_message(
                     chat_id, msg, reply_to=reply_to, formatting_entities=entities)
                 cleanup = getattr(self, "notice_cleanup", None)
-                if cleanup is not None:
+                if cleanup is not None and sent is not None:
                     cleanup.schedule(chat_id, sent)
         except Exception as e:
             print("WARNING ERROR:", repr(e))

@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from modules.runtime_paths import runtime_config_file
@@ -10,6 +11,7 @@ FILE = runtime_config_file("group_words.json")
 
 _cache = None
 _cache_mtime = None
+
 
 def _file_mtime():
     try:
@@ -87,17 +89,17 @@ def normalize_filter_text(value):
 
 
 def find_matching_filter_word(text, words):
-    """Return the first group filter occurring anywhere in the message.
-
-    This intentionally preserves the original strict group-filter behavior:
-    a stored «پی» also matches «پیر».  Global forbidden words remain on their
-    separate whole-word path in SpamDetector and are not changed here.
-    """
+    """Return the first group filter occurring as a whole word or phrase in the message."""
     haystack = normalize_filter_text(text)
     if not haystack:
         return None
     for word in words or ():
         needle = normalize_filter_text(word)
-        if needle and needle in haystack:
+        if not needle:
+            continue
+        pattern = re.compile(
+            r"(?<!\w)" + re.escape(needle) + r"(?!\w)"
+        )
+        if pattern.search(haystack):
             return word
     return None
