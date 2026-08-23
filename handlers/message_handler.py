@@ -1185,6 +1185,17 @@ async def _bot_status_text(bot):
         )
     else:
         governor_display = "نصب نشده"
+    cb_display = "سالم"
+    try:
+        from modules.cache_manager import PermissionCircuitBreaker, STATE_OPEN
+        cb_inst = PermissionCircuitBreaker.get_default()
+        if cb_inst:
+            open_count = sum(1 for r in getattr(cb_inst, "_breakers", {}).values() if r.state == STATE_OPEN)
+            total_cb = len(getattr(cb_inst, "_breakers", {}))
+            cb_display = f"قطع: {open_count} | کل: {total_cb}" if open_count > 0 else f"سالم ({total_cb} گروه)"
+    except Exception:
+        pass
+
     return (
         "🩺 وضعیت ربات\n\n"
         f"⏳ مدت اجرا: {up_h} ساعت و {up_m} دقیقه\n"
@@ -1193,6 +1204,7 @@ async def _bot_status_text(bot):
         f"🌐 پاسخ سرور (RPC تست): {rpc_display}\n"
         f"📡 صف معلق اتصال: {sender_pending}\n"
         f"🚦 بودجه RPC: {governor_display}\n"
+        f"🔌 مدارشکن (Circuit Breaker): {cb_display}\n"
         f"👷 ورکرها: {workers} | پردازش: {stats.get('processed', 0)} | "
         f"خطا: {stats.get('failed', 0)} | حذف از صف: {stats.get('dropped', 0)}\n"
         f"🗑 صف حذف: {delete_pending} پیام\n"

@@ -200,6 +200,9 @@ class SoroushAntiSpamBot:
         )
         # ⏱️ زمان شروع برای دستور تشخیصی «وضعیت ربات».
         self.started_at = time.time()
+        from modules.observability import MetricsCollector, PeriodicHealthMonitor
+        self.metrics_collector = MetricsCollector.get_instance(self.logger)
+        self.health_monitor = PeriodicHealthMonitor(self, self.logger, interval_seconds=600.0)
         self.outgoing_sender = None
         self.performance_monitor = None
         self.notice_cleanup = NoticeCleanup(
@@ -779,6 +782,8 @@ class SoroushAntiSpamBot:
         if getattr(self, "admin_actions", None) is not None:
             self.admin_actions.notice_cleanup = self.notice_cleanup
         self.notice_cleanup.start()
+        if hasattr(self, "health_monitor") and self.health_monitor is not None:
+            self.health_monitor.start()
         self.logger.log_info(
             "NOTICE CLEANUP STARTED "
             f"ttl_s={self.notice_cleanup.ttl_seconds:g} "

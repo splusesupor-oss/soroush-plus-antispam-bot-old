@@ -441,6 +441,11 @@ class MessageDeleteQueue:
 
                 oldest = min(job[3] for job in jobs)
                 queue_wait_ms = (time.perf_counter() - oldest) * 1000
+                try:
+                    from modules.observability import MetricsCollector
+                    MetricsCollector.get_instance().record_queue_wait("delete_queue", queue_wait_ms)
+                except Exception:
+                    pass
                 if queue_wait_ms >= 50:
                     self.logger.log_info(
                         "QUEUE WAIT TIME "

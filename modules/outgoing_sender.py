@@ -263,12 +263,22 @@ class OutgoingSender:
         # Background/game sends (pri >= 2) are shed when normal backlog is saturated
         if pri >= 2 and self._normal_pending() >= self.max_normal_pending:
             self.stats["dropped"] += 1
+            try:
+                from modules.observability import MetricsCollector
+                MetricsCollector.get_instance().record_overflow("outgoing_sender_shed", chat_id)
+            except Exception:
+                pass
             if self.logger:
                 self.logger.log_info(f"OUTGOING SEND SHED chat_id={chat_id} pri={pri} pending={self._normal_pending()}")
             return False
         q = self._queue_for(chat_id, pri)
         if q.qsize() >= self.max_per_chat:
             self.stats["dropped"] += 1
+            try:
+                from modules.observability import MetricsCollector
+                MetricsCollector.get_instance().record_overflow("outgoing_sender_drop", chat_id)
+            except Exception:
+                pass
             if self.logger:
                 self.logger.log_info(f"OUTGOING SEND DROP chat_id={chat_id} qsize={q.qsize()} kind={qkey[1]}")
             return False
@@ -328,6 +338,11 @@ class OutgoingSender:
                 except asyncio.CancelledError:
                     raise
                 queue_wait_ms = (time.perf_counter() - enqueued_at) * 1000
+                try:
+                    from modules.observability import MetricsCollector
+                    MetricsCollector.get_instance().record_queue_wait("outgoing_sender", queue_wait_ms)
+                except Exception:
+                    pass
                 if queue_wait_ms >= 50 and self.logger:
                     self.logger.log_info(f"OUTGOING SEND QUEUE_WAIT chat_id={chat_id} queue_wait_ms={queue_wait_ms:.1f} priority={priority}")
                 started = time.perf_counter()
@@ -609,6 +624,8 @@ def _wrap_call_with_gate(client, logger, governor=None):
         gate = None
         gate_acquired = False
         permit = None
+        t_call_start = time.perf_counter()
+        call_error = False
 
         try:
             if is_low:
@@ -630,13 +647,24 @@ def _wrap_call_with_gate(client, logger, governor=None):
                 )
                 permit = await governor.acquire(admission)
 
-            return await orig(
-                sender,
-                request,
-                ordered=ordered,
-                flood_sleep_threshold=flood_sleep_threshold,
-            )
+            try:
+                return await orig(
+                    sender,
+                    request,
+                    ordered=ordered,
+                    flood_sleep_threshold=flood_sleep_threshold,
+                )
+            except Exception:
+                call_error = True
+                raise
         finally:
+            call_elapsed_ms = (time.perf_counter() - t_call_start) * 1000
+            try:
+                from modules.observability import MetricsCollector
+                cat_name = "low_send" if is_low else name
+                MetricsCollector.get_instance().record_rpc(cat_name, call_elapsed_ms, is_error=call_error)
+            except Exception:
+                pass
             if permit is not None:
                 permit.release()
             if is_low and gate is not None and gate_acquired:

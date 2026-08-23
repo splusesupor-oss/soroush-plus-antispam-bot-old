@@ -302,6 +302,11 @@ class GroupDispatcher:
         if lane == LANE_NORMAL:
             if self._normal_pending.get(_chat_key(chat_id), 0) >= self.max_pending_normal:
                 self.stats["dropped"] += 1
+                try:
+                    from modules.observability import MetricsCollector
+                    MetricsCollector.get_instance().record_overflow("group_dispatcher", chat_id)
+                except Exception:
+                    pass
                 if self.logger is not None:
                     self.logger.log_info(
                         "GROUP DISPATCH OVERFLOW "
@@ -399,6 +404,11 @@ class GroupDispatcher:
                 yield_ms = await self._yield_to_higher_lanes(chat_id, lane)
                 started = time.perf_counter()
                 queue_wait_ms = (started - enqueued_at) * 1000
+                try:
+                    from modules.observability import MetricsCollector
+                    MetricsCollector.get_instance().record_queue_wait(f"dispatcher_{lane}", queue_wait_ms)
+                except Exception:
+                    pass
                 # Track busy counts for accurate _lane_busy with concurrency
                 self._busy.add(key)
                 self._busy_counts[key] = self._busy_counts.get(key, 0) + 1

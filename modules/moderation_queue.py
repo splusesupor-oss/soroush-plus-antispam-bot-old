@@ -254,6 +254,11 @@ class ModerationQueue:
     async def _execute_job(self, chat_id, job):
         rpc_started_at = time.perf_counter()
         queue_wait_ms = (rpc_started_at - job.enqueued_at) * 1000
+        try:
+            from modules.observability import MetricsCollector
+            MetricsCollector.get_instance().record_queue_wait("moderation_queue", queue_wait_ms)
+        except Exception:
+            pass
         started_wall = time.time()
         result = "failed"
         try:

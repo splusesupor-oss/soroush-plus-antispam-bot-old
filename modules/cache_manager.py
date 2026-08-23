@@ -150,12 +150,17 @@ def is_permission_error(error) -> bool:
     # Genuine MTProto permission errors
     if any(marker in name for marker in (
         "chatadminrequired", "useradmininvalid", "adminrankinvalid",
-        "rightforbidden", "chatadminrightsneeded",
+        "rightforbidden", "chatadminrightsneeded", "permission",
     )):
         return True
 
     # Checked string indicators in RPC error message
-    if "admin_required" in text or "admin required" in text or "chat_admin_required" in text:
+    if (
+        "admin_required" in text
+        or "admin required" in text
+        or "chat_admin_required" in text
+        or "chatadminrequired" in text
+    ):
         return True
 
     return False
