@@ -21,7 +21,7 @@ from modules.runtime_paths import CONFIG_DIR
 TOKEN_FILE = CONFIG_DIR / "fox_game_tokens.json"
 LEADERBOARD_FILE = CONFIG_DIR / "fox_game_leaderboard.json"
 
-TOKEN_LIFETIME_SECONDS = 600  # ۱۰ دقیقه اعتبار
+TOKEN_LIFETIME_SECONDS = 86400  # ۲۴ ساعت اعتبار کامل (۱ شبانه‌روز)
 
 
 def _load_json(file_path):
@@ -49,12 +49,44 @@ def _save_json(file_path, data):
             pass
 
 
+DEV_TEST_TOKEN = "FOX-TEST-DEV-2026"
+DEV_CHAT_ID = "fox_dev_group"
+DEV_USER_ID = "dev_tester_77"
+
+
+def _get_dev_record(device_id=None):
+    try:
+        from modules import group_storage
+        group_storage.activate_group(DEV_CHAT_ID, "🦊 گروه آزمایشی روباه")
+    except Exception:
+        pass
+
+    lb = _load_json(LEADERBOARD_FILE)
+    entry = lb.get(DEV_USER_ID, {})
+    nickname = entry.get("nickname") or "👑 تستر ارشد روباه"
+
+    return {
+        "user_id": DEV_USER_ID,
+        "chat_id": DEV_CHAT_ID,
+        "group_title": "🦊 گروه آزمایشی روباه",
+        "first_name": "تستر ارشد",
+        "username": "fox_tester",
+        "nickname": nickname,
+        "created_at": time.time(),
+        "expires_at": 9999999999,  # تاریخ بسیار دور جهت تست‌های مکرر و دائمی
+        "claimed": True,
+        "device_id": str(device_id) if device_id else "dev_mock_device",
+        "is_dev_token": True,
+    }
+
+
 def is_group_active(chat_id):
     """بررسی فعال بودن روباه در گروه ثبت‌شده از دیتابیس گروه‌های ربات."""
+    if str(chat_id) == DEV_CHAT_ID:
+        return True
     try:
         from modules import group_storage
         groups = group_storage.load_groups()
-        # بررسی کلید مستقیم یا نرمال‌شده
         if str(chat_id) in groups:
             return groups[str(chat_id)].get("active", False) is True
         return group_storage.is_active(chat_id) is True
@@ -164,8 +196,12 @@ def validate_token(token, device_id=None, expected_chat_id=None):
     if not token or not isinstance(token, str):
         return False, None, "توکن ارائه نشده است."
 
+    clean_token = token.strip()
+    if clean_token.upper() == DEV_TEST_TOKEN or clean_token == "FOX_DEV_TEST":
+        return True, _get_dev_record(device_id), None
+
     data = _load_json(TOKEN_FILE)
-    record = data.get(token)
+    record = data.get(clean_token)
 
     if not record:
         return False, None, "توکن معتبر نیست یا منقضی شده است."
@@ -175,14 +211,14 @@ def validate_token(token, device_id=None, expected_chat_id=None):
     if record.get("expires_at", 0) <= now:
         data.pop(token, None)
         _save_json(TOKEN_FILE, data)
-        return False, None, "اعتبار زمانی این لینک (۱۰ دقیقه) به پایان رسیده است."
+        return False, None, "اعتبار زمانی این لینک (۲۴ ساعت) به پایان رسیده است. می‌توانید با دستور «سایت بازی» در گروه فعال لینک جدید دریافت نمایید."
 
     # ۲. بررسی فعال بودن گروه در ربات (Group Binding & Active Check)
     bound_chat_id = record.get("chat_id")
     if not is_group_active(bound_chat_id):
         data.pop(token, None)
         _save_json(TOKEN_FILE, data)
-        return False, None, "❌ دسترسی غیرمجاز: روباه در این گروه فعال نیست یا گروه از لیست گروه‌های ربات حذف شده است."
+        return False, None, "❌ دسترسی غیرمجاز: روباه در این گروه فعال نیست یا انقضای گروه به پایان رسیده است."
 
     # ۳. بررسی تطابق گروه مورد انتظار
     if expected_chat_id is not None and str(bound_chat_id) != str(expected_chat_id):

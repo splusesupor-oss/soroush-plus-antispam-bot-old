@@ -4417,7 +4417,7 @@ async def handle_new_message(bot, event):
                 await event.reply("❌ خطا در کسر سکه، لطفاً مجدداً امتحان کنید.")
                 return
 
-            # ۳. ساخت توکن امن، یکتا و ۱۰ دقیقه‌ای
+            # ۳. ساخت توکن امن، یکتا و ۲۴ ساعته متصل به حساب و گروه
             sender_name = getattr(sender, "first_name", "") or ""
             sender_user = getattr(sender, "username", "") or ""
             token = fox_game_tokens.create_token(chat_id, user_id, sender_name, sender_user)
@@ -4432,8 +4432,8 @@ async def handle_new_message(bot, event):
             msg = (
                 "🎮 وارد سایت شوید:\n"
                 f"{game_url}\n\n"
-                "⏱ اعتبار لینک: ۱۰ دقیقه\n"
-                "🔒 این لینک اختصاصی شماست و برای شخص دیگری کار نخواهد کرد."
+                "⏱ اعتبار لینک: ۲۴ ساعت (تا زمان فعال بودن روباه در گروه)\n"
+                "🔒 این لینک اختصاصی شماست و اطلاعات، سکه‌ها و رتبه‌بندی شما همیشه حفظ خواهد شد."
             )
             await event.reply(msg)
             return

@@ -188,13 +188,58 @@ def test_bot_command_site_successful_deduction_and_link():
         reply = event.replies[0]
         assert "وارد سایت شوید" in reply
         assert "token=" in reply
-        assert "۱۰ دقیقه" in reply
+        assert "۲۴ ساعت" in reply
 
         # Check balance after deduction
         b = economy.get_balance(chat_id, user_id)
         assert b.get(economy.BRONZE, 0) == 20  # 50 - 30 = 20
 
     asyncio.run(scenario())
+
+
+def test_user_data_and_leaderboard_persistence_across_new_tokens():
+    """Verify that user progress, nickname, wins, and coins persist when new tokens are generated or after group reactivation."""
+    unique_suffix = str(int(time.time() * 1000))
+    chat_id = f"test_chat_persist_{unique_suffix}"
+    user_id = f"user_permanent_{unique_suffix}"
+    device_id = f"dev_persist_{unique_suffix}"
+
+    group_storage.activate_group(chat_id, "گروه پایداری داده")
+
+    # 1. Create first token & play
+    token1 = fox_game_tokens.create_token(chat_id, user_id, "کاربر تستی")
+    fox_game_tokens.update_nickname(token1, "قهرمان همیشگی روباه", device_id)
+    fox_game_tokens.record_win(token1, "رمز مخفی", bronze_won=100, silver_won=10, gold_won=5, device_id=device_id)
+
+    # 2. Group gets deactivated (e.g. expired or bot removed) -> Token 1 is revoked
+    group_storage.deactivate_group(chat_id, "گروه پایداری داده")
+    valid_old, _, _ = fox_game_tokens.validate_token(token1, device_id)
+    assert valid_old is False
+
+    # 3. Leaderboard data is STILL preserved
+    lb = fox_game_tokens.get_real_leaderboard()
+    player = next((p for p in lb if p["user_id"] == user_id), None)
+    assert player is not None
+    assert player["nickname"] == "قهرمان همیشگی روباه"
+    assert player["wins"] == 1
+    assert player["gold_won"] == 5
+
+    # 4. Group is reactivated -> User gets a brand new token
+    group_storage.activate_group(chat_id, "گروه پایداری داده")
+    token2 = fox_game_tokens.create_token(chat_id, user_id, "نام جدید از تلگرام")
+
+    # 5. Token 2 must automatically preserve previous custom nickname and stats
+    valid_new, record_new, _ = fox_game_tokens.validate_token(token2, device_id)
+    assert valid_new is True
+    assert record_new["nickname"] == "قهرمان همیشگی روباه"
+
+    # 6. Additional wins increment existing stats seamlessly
+    fox_game_tokens.record_win(token2, "تک‌تیرانداز روباه", bronze_won=2, silver_won=0, gold_won=0, device_id=device_id)
+    lb_after = fox_game_tokens.get_real_leaderboard()
+    player_after = next((p for p in lb_after if p["user_id"] == user_id), None)
+    assert player_after["wins"] == 2
+    assert player_after["bronze_won"] == 102
+    assert player_after["gold_won"] == 5
 
 
 def test_nickname_update_and_real_leaderboard():
