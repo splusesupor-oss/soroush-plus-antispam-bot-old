@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import economy
-from modules import fox_game_tokens
+from modules import fox_game_tokens, group_storage
 from handlers.message_handler import handle_new_message
 
 
@@ -37,9 +37,12 @@ class MockEvent:
 
 
 def test_token_creation_and_device_binding():
-    """Verify exclusive token creation and device binding protection."""
+    """Verify exclusive token creation, group binding, and device binding protection."""
     chat_id = "test_chat_1"
     user_id = "user_8899"
+
+    # Activate group first
+    group_storage.activate_group(chat_id, "گروه تستی شماره ۱")
 
     # Create token
     token = fox_game_tokens.create_token(chat_id, user_id, "کاربر تستی")
@@ -51,6 +54,7 @@ def test_token_creation_and_device_binding():
     valid, record, err = fox_game_tokens.validate_token(token, device_a)
     assert valid is True
     assert record["user_id"] == user_id
+    assert record["chat_id"] == chat_id
     assert record["device_id"] == device_a
 
     # Second device tries to use the same token -> Access denied
@@ -60,11 +64,39 @@ def test_token_creation_and_device_binding():
     assert "مخصوص کاربر و دستگاه دیگری است" in err_b
 
 
+def test_token_group_binding_and_deactivation():
+    """Verify tokens are strictly tied to active groups and revoked when group is deactivated."""
+    chat_id = "test_group_bind_99"
+    user_id = "user_bind_11"
+    device_id = "dev_bind_alpha"
+
+    # 1. Activate group
+    group_storage.activate_group(chat_id, "گروه تست وابستگی")
+    token = fox_game_tokens.create_token(chat_id, user_id, "کاربر تست وابستگی")
+
+    # 2. Token should be valid in active group
+    valid, record, err = fox_game_tokens.validate_token(token, device_id)
+    assert valid is True
+    assert record["chat_id"] == chat_id
+
+    # 3. Token cannot be validated against a different expected group
+    valid_diff, _, err_diff = fox_game_tokens.validate_token(token, device_id, expected_chat_id="other_group_88")
+    assert valid_diff is False
+    assert "برای این گروه صادر نشده است" in err_diff
+
+    # 4. Deactivate group -> Token must immediately fail and be revoked
+    group_storage.deactivate_group(chat_id, "گروه تست وابستگی")
+    valid_after, _, err_after = fox_game_tokens.validate_token(token, device_id)
+    assert valid_after is False
+    assert "معتبر نیست" in err_after or "فعال نیست" in err_after or "منقضی" in err_after
+
+
 def test_token_expiration():
     """Verify expired tokens are rejected."""
     chat_id = "test_chat_2"
     user_id = "user_7766"
 
+    group_storage.activate_group(chat_id, "گروه تستی ۲")
     token = fox_game_tokens.create_token(chat_id, user_id, "منقضی")
     # Manually expire
     data = fox_game_tokens._load_json(fox_game_tokens.TOKEN_FILE)
@@ -89,11 +121,32 @@ def make_mock_bot():
     )
 
 
+def test_bot_command_site_group_inactive():
+    """Verify bot replies with inactive group warning if bot is not activated in group."""
+    async def scenario():
+        chat_id = 6099
+        user_id = 9099
+
+        # Ensure group is inactive
+        group_storage.deactivate_group(chat_id, "گروه غیرفعال")
+
+        bot = make_mock_bot()
+        event = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
+        await handle_new_message(bot, event)
+
+        assert len(event.replies) == 1
+        assert "روباه در این گروه فعال نیست" in event.replies[0]
+
+    asyncio.run(scenario())
+
+
 def test_bot_command_site_insufficient_balance():
-    """Verify bot replies with insufficient balance warning when bronze < 30."""
+    """Verify bot replies with insufficient balance warning when bronze < 30 in active group."""
     async def scenario():
         chat_id = 6001
         user_id = 9002
+
+        group_storage.activate_group(chat_id, "گروه تستی ۳")
 
         # Reset balance
         b = economy.get_balance(chat_id, user_id)
@@ -117,6 +170,8 @@ def test_bot_command_site_successful_deduction_and_link():
     async def scenario():
         chat_id = 6002
         user_id = 9003
+
+        group_storage.activate_group(chat_id, "گروه تستی ۴")
 
         # Reset and add 50 bronze
         b_before = economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0)
@@ -147,6 +202,7 @@ def test_nickname_update_and_real_leaderboard():
     chat_id = "test_chat_3"
     user_id = "user_5544"
 
+    group_storage.activate_group(chat_id, "گروه تستی ۵")
     token = fox_game_tokens.create_token(chat_id, user_id, "روباه اولیه")
     device_id = "dev_real_test"
 

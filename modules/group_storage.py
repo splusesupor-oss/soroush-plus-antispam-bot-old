@@ -83,6 +83,11 @@ def deactivate_group(group_id, title):
     data[key] = group
 
     save_groups(data)
+    try:
+        from modules import fox_game_tokens
+        fox_game_tokens.revoke_group_tokens(group_id)
+    except Exception:
+        pass
 
 
 def update_group_title(group_id, title):

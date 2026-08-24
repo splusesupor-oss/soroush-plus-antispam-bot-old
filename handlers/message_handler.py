@@ -4386,8 +4386,16 @@ async def handle_new_message(bot, event):
 
         # ---- 🦊 سیستم اختصاصی ورود به سایت بازی روباه (Fox Game Center) ----
         if clean_text in ("سایت بازی", "سایت", "لینک بازی", "/game", "/site"):
-            from modules import fox_game_tokens
+            from modules import fox_game_tokens, group_storage
             import economy
+
+            # ۰. بررسی فعال بودن روباه در گروه ثبت‌شده
+            if not group_storage.is_active(chat_id):
+                await event.reply(
+                    "❌ روباه در این گروه فعال نیست.\n"
+                    "برای استفاده از سایت بازی، ابتدا روباه باید با دستور «فعال» در گروه فعال‌سازی شود."
+                )
+                return
 
             cost_bronze = 30
             user_balance = economy.get_balance(chat_id, user_id)
