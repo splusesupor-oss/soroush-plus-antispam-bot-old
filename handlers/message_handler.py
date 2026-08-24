@@ -140,6 +140,7 @@ from modules import user_history
 from modules import group_level
 from modules import bot_detector
 from modules import ad_name_detector
+from modules import access_profile_guard
 from modules import warning_threshold
 from modules import punishment_mode
 from modules.user_display import format_user
@@ -3112,6 +3113,29 @@ async def handle_new_message(bot, event):
         profiler.mark("RECEIVE")
         # Independent advertising-name guard: runs before text moderation and
         # never contributes a warning or banned-word record.
+        # 🔒 فیلتر دسترسی پروفایل کاربر (نام/بیوگرافی/یوزرنیم)
+        if sender and not is_global_owner(user_id):
+            profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None)
+            profile_reason = access_profile_guard.reason(sender, profile_bio)
+            if profile_reason:
+                was_blocked = access_profile_guard.is_blocked(user_id)
+                block_changed = access_profile_guard.block(user_id, profile_reason)
+                if block_changed or not was_blocked:
+                    bot.logger.log_info(
+                        f"PROFILE ACCESS RESTRICTION ACTIVE user_id={user_id} "
+                        f"name={format_user(sender)!r} reason={profile_reason!r}"
+                    )
+                    notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
+                    try:
+                        from splusthon.tl.types import MessageEntityBold as _ProfileBold
+                        await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
+                    except Exception:
+                        await event.reply(notice)
+                return
+            elif access_profile_guard.is_blocked(user_id):
+                access_profile_guard.unblock(user_id)
+                bot.logger.log_info(f"PROFILE ACCESS RESTORED user_id={user_id}")
+
         command_priority = normalize_command(message_text) in {
             "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
             "لیست ادمین", "لیست ادمینی", "لیست کاربران", "رتبه ها", "رتبه‌ها",

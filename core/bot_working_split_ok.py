@@ -1413,7 +1413,7 @@ class SoroushAntiSpamBot:
                     f"text={raw_text!r} normalized={command_priority_text!r} "
                     f"priority={command_priority}"
                 )
-                if (profile_user is not None and not command_priority
+                if (profile_user is not None
                         and not is_global_owner(getattr(profile_user, "id", None))):
                     profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None)
                     # SoroushClient does not expose get_full_user; use only

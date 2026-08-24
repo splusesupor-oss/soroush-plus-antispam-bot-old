@@ -8,17 +8,34 @@ from modules.runtime_paths import runtime_config_file
 
 FILE = runtime_config_file("profile_access_blocks.json")
 _CACHE = None
+
+PERSIAN_CHARS = r"a-zA-Z0-9\u0621-\u0628\u062a-\u063a\u0641-\u0642\u0644-\u0648\u064e-\u065f\u067e\u0686\u0698\u06a9\u06af\u06cc\u0629\u0649\u064a\u0622\u0623\u0625\u0671"
+
 BLOCKED_TERMS = (
-    "فرزند ایران", "جان فدای میهن", "فرزند ایران و جانفدای میهن",
-    "آمریکا", "پرچم آمریکا", "پهلوی", "شاهزاده",
+    "پهلوی",
+    "شاهزاده",
+    "شاه زاده",
+    "دلباخته پهلوی",
+    "رضا شاه",
+    "رضاشاه",
+    "محمدرضا شاه",
+    "محمدرضاشاه",
+    "جان فدای میهن",
+    "جانفدای میهن",
+    "فرزند ایران",
+    "پرچم آمریکا",
+    "آمریکا",
+    "شاه",
 )
 
 
 def _norm(value):
-    value = str(value or "").lower()
-    value = value.replace("ي", "ی").replace("ك", "ک")
-    value = re.sub(r"[#\u200c\u200d\u200f\u200e]", " ", value)
-    return " ".join(value.split())
+    if not value:
+        return ""
+    t = re.sub(r"[\u0640\u064b-\u065f]", "", str(value))
+    t = re.sub(r"[\u200c\u200d\u200e\u200f\ufeff\u00a0\-_.,/\\;:!؟،؛|()\[\]{}<>+=*&^%$#@~\"\'`«»…]+", " ", t)
+    t = t.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("آ", "ا").replace("أ", "ا").replace("إ", "ا")
+    return " ".join(t.lower().split())
 
 
 def _load():
@@ -41,7 +58,7 @@ def _save(data):
     fd, temp_name = tempfile.mkstemp(dir=str(FILE.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, ensure_ascii=False, separators=(",", ":"))
+            json.dump(data, stream, ensure_ascii=False, indent=2)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp_name, FILE)
@@ -62,12 +79,23 @@ def _bio(user):
 
 
 def reason(user, bio=None):
-    text = _norm(" ".join(filter(None, [getattr(user, "first_name", ""),
-                                           getattr(user, "last_name", ""),
-                                           getattr(user, "username", ""),
-                                           bio if bio is not None else _bio(user)])))
+    if user is None:
+        return None
+    first = getattr(user, "first_name", "") or ""
+    last = getattr(user, "last_name", "") or ""
+    username = getattr(user, "username", "") or ""
+    user_bio = bio if bio is not None else _bio(user)
+
+    text = _norm(f"{first} {last} {username} {user_bio}".strip())
+    if not text:
+        return None
+
     for term in BLOCKED_TERMS:
-        if _norm(term) in text:
+        norm_term = _norm(term)
+        if not norm_term:
+            continue
+        pattern = re.compile(rf"(?<![{PERSIAN_CHARS}]){re.escape(norm_term)}(?![{PERSIAN_CHARS}])")
+        if pattern.search(text):
             return term
     return None
 
