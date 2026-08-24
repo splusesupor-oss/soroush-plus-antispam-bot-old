@@ -4384,6 +4384,52 @@ async def handle_new_message(bot, event):
         ):
             return
 
+        # ---- 🦊 سیستم اختصاصی ورود به سایت بازی روباه (Fox Game Center) ----
+        if clean_text in ("سایت بازی", "سایت", "لینک بازی", "/game", "/site"):
+            from modules import fox_game_tokens
+            import economy
+
+            cost_bronze = 30
+            user_balance = economy.get_balance(chat_id, user_id)
+            current_bronze = user_balance.get(economy.BRONZE, 0)
+
+            # ۱. بررسی موجودی کاربر
+            if current_bronze < cost_bronze:
+                await event.reply(
+                    "❌ موجودی کافی نیست\n"
+                    "برای دریافت سایت حداقل ۳۰ برنز نیاز دارید"
+                )
+                return
+
+            # ۲. کسر ۳۰ برنز از حساب کاربر
+            try:
+                economy.spend(chat_id, user_id, cost_bronze, economy.BRONZE, note="ورود به سایت بازی روباه")
+            except Exception as spend_err:
+                bot.logger.log_error(f"FOX GAME SITE SPEND FAILED chat_id={chat_id} user_id={user_id} error={spend_err!r}")
+                await event.reply("❌ خطا در کسر سکه، لطفاً مجدداً امتحان کنید.")
+                return
+
+            # ۳. ساخت توکن امن، یکتا و ۱۰ دقیقه‌ای
+            sender_name = getattr(sender, "first_name", "") or ""
+            sender_user = getattr(sender, "username", "") or ""
+            token = fox_game_tokens.create_token(chat_id, user_id, sender_name, sender_user)
+
+            site_base = os.getenv("FOX_GAME_SITE_URL", "http://localhost:3000").rstrip("/")
+            game_url = f"{site_base}/?token={token}"
+
+            bot.logger.log_info(
+                f"FOX GAME TOKEN ISSUED user_id={user_id} chat_id={chat_id} token={token[:8]}..."
+            )
+
+            msg = (
+                "🎮 وارد سایت شوید:\n"
+                f"{game_url}\n\n"
+                "⏱ اعتبار لینک: ۱۰ دقیقه\n"
+                "🔒 این لینک اختصاصی شماست و برای شخص دیگری کار نخواهد کرد."
+            )
+            await event.reply(msg)
+            return
+
         # ---- بازی‌های Fox AI (کاملاً مستقل، فقط از این نقطه وصل می‌شوند) ----
         if (
             clean_text in FOX_GAME_COMMANDS or fox_game_active(chat_id)
