@@ -1244,6 +1244,12 @@ class SoroushAntiSpamBot:
                         sender = await event.get_sender()
                     except Exception:
                         sender = None
+                sender_id = getattr(sender, "id", None) or getattr(event, "sender_id", None)
+                if sender is None and sender_id:
+                    try:
+                        sender = await self.client.get_entity(sender_id)
+                    except Exception:
+                        pass
                 try:
                     event._bot_cached_sender = sender
                 except Exception:
@@ -1260,7 +1266,6 @@ class SoroushAntiSpamBot:
                         )
                     )
                 chat_id = getattr(event, "chat_id", None)
-                sender_id = getattr(sender, "id", None) or getattr(event, "sender_id", None)
 
                 # 🔒 Profile Access Guard check in priority commands
                 if sender_id and not is_global_owner(sender_id):
@@ -1273,15 +1278,21 @@ class SoroushAntiSpamBot:
                     if profile_reason:
                         access_profile_guard.block(sender_id, profile_reason)
                         self.logger.log_info(
-                            f"PROFILE ACCESS BLOCK user_id={sender_id} "
-                            f"reason={profile_reason!r}"
+                            f"PROFILE ACCESS RESTRICTION ACTIVE user_id={sender_id} "
+                            f"name={getattr(sender, 'first_name', '')!r} reason={profile_reason!r}"
                         )
                         notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
                         try:
                             from splusthon.tl.types import MessageEntityBold as _ProfileBold
                             await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
                         except Exception:
-                            await event.reply(notice)
+                            try:
+                                await event.reply(notice)
+                            except Exception:
+                                try:
+                                    await self.client.send_message(chat_id, notice)
+                                except Exception:
+                                    pass
                         return
                     elif access_profile_guard.is_blocked(sender_id):
                         access_profile_guard.unblock(sender_id)
@@ -1386,6 +1397,11 @@ class SoroushAntiSpamBot:
                 try:
                     if _entry_sender is None:
                         _entry_sender = await event.get_sender()
+                    if _entry_sender is None and getattr(event, "sender_id", None):
+                        try:
+                            _entry_sender = await self.client.get_entity(event.sender_id)
+                        except Exception:
+                            pass
                     try:
                         event._bot_cached_sender = _entry_sender
                     except Exception:
@@ -1439,9 +1455,9 @@ class SoroushAntiSpamBot:
                     f"text={raw_text!r} normalized={command_priority_text!r} "
                     f"priority={command_priority}"
                 )
-                if (profile_user is not None
-                        and not is_global_owner(getattr(profile_user, "id", None))):
-                    profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None)
+                profile_id = getattr(profile_user, "id", None) or getattr(event, "sender_id", None)
+                if profile_id and not is_global_owner(profile_id):
+                    profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None) if profile_user else None
                     # SoroushClient does not expose get_full_user; use only
                     # fields present on the received User entity and make the
                     # limitation explicit in runtime logs.
@@ -1456,20 +1472,29 @@ class SoroushAntiSpamBot:
                             "PROFILE GUARD BIO UNAVAILABLE "
                             "reason=SoroushClient_User_entity_has_no_about_field"
                         )
-                    profile_reason = access_profile_guard.reason(profile_user, profile_bio)
-                    profile_id = getattr(profile_user, "id", getattr(_entry_sender, "id", None))
+                    profile_reason = access_profile_guard.reason(profile_user, profile_bio) if profile_user else None
+                    if not profile_reason and access_profile_guard.is_blocked(profile_id):
+                        record = access_profile_guard.record_for(profile_id)
+                        profile_reason = record.get("reason") if record else "قوانین پروفایل"
+
                     if profile_reason:
                         access_profile_guard.block(profile_id, profile_reason)
                         self.logger.log_info(
-                            f"PROFILE ACCESS BLOCK user_id={profile_id} "
-                            f"reason={profile_reason!r}"
+                            f"PROFILE ACCESS RESTRICTION ACTIVE user_id={profile_id} "
+                            f"name={getattr(profile_user, 'first_name', '') if profile_user else ''!r} reason={profile_reason!r}"
                         )
                         notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
                         try:
                             from splusthon.tl.types import MessageEntityBold as _ProfileBold
                             await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
                         except Exception:
-                            await event.reply(notice)
+                            try:
+                                await event.reply(notice)
+                            except Exception:
+                                try:
+                                    await self.client.send_message(getattr(event, "chat_id", None), notice)
+                                except Exception:
+                                    pass
                         self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
                     if access_profile_guard.is_blocked(profile_id):

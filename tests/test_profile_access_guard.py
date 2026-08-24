@@ -38,6 +38,8 @@ def test_profile_terms_detection():
     """Verify exact and combined/root detection of prohibited terms in first/last name, username, and bio."""
     terms_to_test = [
         ("پهلوی", True),
+        ("👑پهلوی👑", True),
+        ("🦅پهلوی🦅", True),
         ("پهلوی بوی", True),
         ("پهلویبوی", True),
         ("دلباخته پهلوی", True),
@@ -45,17 +47,26 @@ def test_profile_terms_detection():
         ("پهلوی123", True),
         ("عاشق پهلوی", True),
         ("پهلوی_بوی", True),
+        ("Pahlavi", True),
+        ("pahlavi_boy", True),
         ("شاهزاده", True),
         ("شاه زاده", True),
+        ("shahzadeh", True),
+        ("shahzade", True),
         ("شاهزاده پهلوی", True),
         ("پرچم آمریکا", True),
         ("آمریکا", True),
         ("شاه", True),
+        ("shah", True),
         ("رضا شاه", True),
         ("رضاشاه", True),
+        ("rezashah", True),
+        ("reza shah", True),
         ("محمدرضا شاه", True),
+        ("محمدرضاشاه", True),
         ("جان فدای میهن", True),
         ("فرزند ایران", True),
+        ("farzande iran", True),
     ]
     for text, expected in terms_to_test:
         user = SimpleNamespace(first_name=text, last_name=None, username=None)
@@ -93,7 +104,7 @@ def test_user_with_pahlavi_saying_roobah_or_robot():
             is_spam_locked=lambda k: False,
         )
 
-        event = MockEvent("ربات", user_id=user_id, first_name="پهلوی")
+        event = MockEvent("ربات", user_id=user_id, first_name="👑پهلوی👑")
         await handle_new_message(bot, event)
 
         assert access_profile_guard.is_blocked(user_id) is True
@@ -102,6 +113,46 @@ def test_user_with_pahlavi_saying_roobah_or_robot():
         assert "جانم" not in event.replies[0]  # Must NOT have sent the normal bot reply!
 
         # Cleanup
+        access_profile_guard.unblock(user_id)
+
+    asyncio.run(scenario())
+
+
+def test_fallback_get_entity_when_sender_none():
+    """Verify fallback fetching via client.get_entity when event.get_sender() returns None."""
+    async def scenario():
+        user_id = 7771234
+        access_profile_guard.unblock(user_id)
+
+        user_entity = SimpleNamespace(
+            id=user_id,
+            first_name="پهلوی",
+            last_name=None,
+            username=None,
+        )
+
+        mock_client = SimpleNamespace(
+            get_entity=AsyncMock(return_value=user_entity),
+        )
+
+        bot = SimpleNamespace(
+            client=mock_client,
+            logger=MagicMock(),
+            tracker=MagicMock(get_count=lambda c, u: 0),
+            punished_users=set(),
+            is_spam_locked=lambda k: False,
+        )
+
+        event = MockEvent("سلام", user_id=user_id, first_name=None)
+        event.sender = None
+        event.get_sender = AsyncMock(return_value=None)
+
+        await handle_new_message(bot, event)
+
+        assert access_profile_guard.is_blocked(user_id) is True
+        assert len(event.replies) == 1
+        assert "دسترسی شما از ربات حذف شد" in event.replies[0]
+
         access_profile_guard.unblock(user_id)
 
     asyncio.run(scenario())

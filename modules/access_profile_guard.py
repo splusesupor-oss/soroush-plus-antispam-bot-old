@@ -13,29 +13,39 @@ PERSIAN_WORD_CHARS = r"a-zA-Z0-9_\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFC"
 
 BLOCKED_TERMS = (
     "پهلوی",
+    "pahlavi",
     "شاهزاده",
     "شاه زاده",
+    "shahzadeh",
+    "shahzade",
     "دلباخته پهلوی",
     "رضا شاه",
     "رضاشاه",
+    "rezashah",
+    "reza shah",
     "محمدرضا شاه",
     "محمدرضاشاه",
     "جان فدای میهن",
     "جانفدای میهن",
     "فرزند ایران",
+    "farzand iran",
+    "farzande iran",
     "پرچم آمریکا",
     "آمریکا",
+    "usa",
     "شاه",
+    "shah",
 )
 
 
 def _norm(value):
     if not value:
         return ""
-    t = re.sub(r"[\u0640\u064b-\u065f]", "", str(value))
-    t = re.sub(r"[\u200c\u200d\u200e\u200f\ufeff\u00a0\-_.,/\\;:!؟،؛|()\[\]{}<>+=*&^%$#@~\"\'`«»…]+", " ", t)
+    t = str(value).lower()
     t = t.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("آ", "ا").replace("أ", "ا").replace("إ", "ا")
-    return " ".join(t.lower().split())
+    t = re.sub(r"[\u0640\u064b-\u065f]", "", t)
+    t = re.sub(r"[^\w\s]", " ", t)
+    return " ".join(t.split())
 
 
 def _load():
@@ -103,8 +113,8 @@ def reason(user, bio=None):
         compact_term = norm_term.replace(" ", "")
         if not norm_term:
             continue
-        if term == "شاه":
-            pattern = re.compile(rf"(?<![{PERSIAN_WORD_CHARS}])شاه(?![{PERSIAN_WORD_CHARS}])")
+        if term in ("شاه", "shah"):
+            pattern = re.compile(rf"(?<![{PERSIAN_WORD_CHARS}]){re.escape(norm_term)}(?![{PERSIAN_WORD_CHARS}])")
             if pattern.search(norm_text):
                 return term
         else:
@@ -140,3 +150,4 @@ def unblock(user_id):
 
 def record_for(user_id):
     return _load().get(str(user_id))
+

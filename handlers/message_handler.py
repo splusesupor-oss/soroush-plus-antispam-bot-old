@@ -2890,13 +2890,22 @@ async def handle_new_message(bot, event):
         sender = (getattr(event, "_bot_cached_sender", None)
                   or getattr(event, "sender", None))
         if sender is None:
-            sender = await event.get_sender()
+            try:
+                sender = await event.get_sender()
+            except Exception:
+                sender = None
         user_id = sender.id if sender else (getattr(event, "sender_id", None) or 0)
+        if sender is None and user_id:
+            try:
+                sender = await bot.client.get_entity(user_id)
+                event._bot_cached_sender = sender
+            except Exception:
+                pass
 
         # 🔒 فیلتر دسترسی پروفایل کاربر (نام/بیوگرافی/یوزرنیم) - در بالاترین نقطه ممکن
-        if sender and not is_global_owner(user_id):
-            profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None)
-            profile_reason = access_profile_guard.reason(sender, profile_bio)
+        if user_id and not is_global_owner(user_id):
+            profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None) if sender else None
+            profile_reason = access_profile_guard.reason(sender, profile_bio) if sender else None
             if not profile_reason and access_profile_guard.is_blocked(user_id):
                 record = access_profile_guard.record_for(user_id)
                 profile_reason = record.get("reason") if record else "قوانین پروفایل"
@@ -2912,7 +2921,13 @@ async def handle_new_message(bot, event):
                     from splusthon.tl.types import MessageEntityBold as _ProfileBold
                     await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
                 except Exception:
-                    await event.reply(notice)
+                    try:
+                        await event.reply(notice)
+                    except Exception:
+                        try:
+                            await bot.client.send_message(chat_id, notice)
+                        except Exception:
+                            pass
                 return
             elif access_profile_guard.is_blocked(user_id):
                 access_profile_guard.unblock(user_id)
