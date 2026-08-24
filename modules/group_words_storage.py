@@ -9,6 +9,8 @@ from modules.group_id import normalize_group_id
 
 FILE = runtime_config_file("group_words.json")
 
+PERSIAN_WORD_CHARS = r"a-zA-Z0-9\u0621-\u0628\u062a-\u063a\u0641-\u0642\u0644-\u0648\u064e-\u065f\u067e\u0686\u0698\u06a9\u06af\u06cc\u0629\u0649\u064a\u0622\u0623\u0625\u0671"
+
 _cache = None
 _cache_mtime = None
 
@@ -80,12 +82,16 @@ def get_words(group_id):
 
 
 def normalize_filter_text(value):
-    """Fold ي/ك, ZWNJ and case for group-filter matching only."""
+    """Fold ي/ك, ZWNJ, punctuation, symbols, tatweel and diacritics for group-filter matching."""
     if not value:
         return ""
-    text = str(value).replace("\u200c", " ").replace("\u200f", "").replace("\u200e", "")
-    text = text.replace("ي", "ی").replace("ك", "ک").lower()
-    return " ".join(text.split())
+    # حذف «کشیده» (ـ tatweel) و علائم حرکات و اعراب
+    t = re.sub(r"[\u0640\u064b-\u065f]", "", str(value))
+    # تبدیل نیم‌فاصله، نشانه‌های جهت، فاصله‌های خاص، علائم نگارشی و نمادها به فاصله
+    t = re.sub(r"[\u200c\u200d\u200e\u200f\ufeff\u00a0\-_.,/\\;:!؟،؛|()\[\]{}<>+=*&^%$#@~\"\'`«»…]+", " ", t)
+    # یکسان‌سازی حروف مشابه فارسی/عربی
+    t = t.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("آ", "ا").replace("أ", "ا").replace("إ", "ا")
+    return " ".join(t.lower().split())
 
 
 def find_matching_filter_word(text, words):
@@ -98,7 +104,7 @@ def find_matching_filter_word(text, words):
         if not needle:
             continue
         pattern = re.compile(
-            r"(?<!\w)" + re.escape(needle) + r"(?!\w)"
+            rf"(?<![{PERSIAN_WORD_CHARS}]){re.escape(needle)}(?![{PERSIAN_WORD_CHARS}])"
         )
         if pattern.search(haystack):
             return word

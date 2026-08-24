@@ -5,28 +5,43 @@ from modules.user_display import format_user
 
 _TERMS = (
     r"بیو\s*چک", r"چک\s*بیو", r"بیوگرافی\s*چک", r"بیومو\s*(?:چک|ببینید|ببین)",
-    r"بیو.*(?:فیلم|لینک|چک|ببین)", r"(?:نود|پیوی)\s*رایگان",
-    r"پیوی\s*رایگان", r"خاله\s*نازنین",
-    # «رایگان» به‌تنهایی هم نام تبلیغاتی است و مستقیم بن می‌شود.
+    r"بیو.*(?:فیلم|لینک|چک|ببین)",
+    r"فیلم",
+    r"پی\s*وی",
+    r"پیوی",
+    r"\bpv\b",
+    r"خاله",
+    r"صیغه",
     r"رایگان",
+    r"سکس",
+    r"سکسی",
+    r"پورن",
+    r"نود",
+    r"فیلتر\s*شکن",
+    r"فیلترشکن",
+    r"\bvpn\b",
+    r"شارژ\s*رایگان",
+    r"کانال",
+    r"پکیج",
+    r"ارز\s*دیجیتال",
+    r"تتر",
 )
 _PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in _TERMS)
 
 
 def _norm(value):
-    value = str(value or "").lower().replace("ي", "ی").replace("ك", "ک").replace("_", " ")
-    # حذف «کشیده» (ـ tatweel): «بیـو چک» و «رایـــگان» → «بیو چک» و «رایگان»
-    value = value.replace("\u0640", "")
-    value = re.sub(r"[\u200c\u200d\u200f\u200e]", " ", value)
+    if not value:
+        return ""
+    value = str(value).lower().replace("ي", "ی").replace("ك", "ک").replace("_", " ")
+    # حذف «کشیده» (ـ tatweel) و علائم حرکات
+    value = re.sub(r"[\u0640\u064b-\u065f]", "", value)
+    # تبدیل نیم‌فاصله، نشانه‌های جهت، فاصله‌های خاص، ایموجی‌ها، علائم نگارشی و نمادها به فاصله
+    value = re.sub(r"[\u200c\u200d\u200f\u200e\ufeff\u00a0\-_.,/\\;:!؟،؛|()\[\]{}<>+=*&^%$#@~\"\'`«»…]+", " ", value)
     return " ".join(value.split())
 
 
 def _collapse(value):
-    """جمع کردن حروف تکراری: «بیوچکک» و «بییییو چک» → «بیوچک» و «بیو چک».
-
-    فقط به‌عنوان نسخهٔ دوم برای تطبیق استفاده می‌شود؛ متن اصلی هم جدا
-    بررسی می‌شود تا هیچ تشخیصِ قبلی از دست نرود.
-    """
+    """جمع کردن حروف تکراری: «بیوچکک» و «بییییو چک» → «بیوچک» و «بیو چک»."""
     return re.sub(r"(.)\1+", r"\1", value)
 
 
@@ -36,7 +51,9 @@ def display_name(user):
 
 def reason(user):
     username = _norm(getattr(user, "username", None))
-    name = _norm(" ".join(x for x in (getattr(user, "first_name", None), getattr(user, "last_name", None)) if x))
+    first = getattr(user, "first_name", None) or ""
+    last = getattr(user, "last_name", None) or ""
+    name = _norm(f"{first} {last}".strip())
     for value in (username, name):
         if not value:
             continue

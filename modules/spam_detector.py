@@ -53,19 +53,25 @@ class SpamDetector:
         version = getattr(self.config, "_banned_words_version", 0)
         if version == self._banned_words_version:
             return
+        persian_chars = r"a-zA-Z0-9\u0621-\u0628\u062a-\u063a\u0641-\u0642\u0644-\u0648\u064e-\u065f\u067e\u0686\u0698\u06a9\u06af\u06cc\u0629\u0649\u064a\u0622\u0623\u0625\u0671"
         patterns = []
         for raw_word in self.config.banned_words:
             word = self._normalize_banned_word(raw_word)
             if word:
                 patterns.append((word, re.compile(
-                    r"(?<![آ-یa-zA-Z0-9])" + re.escape(word) + r"(?![آ-یa-zA-Z0-9])"
+                    rf"(?<![{persian_chars}]){re.escape(word)}(?![{persian_chars}])"
                 )))
         self._banned_word_patterns = tuple(patterns)
         self._banned_words_version = version
 
     @staticmethod
     def _normalize_banned_word(value):
-        return str(value).strip().lower().replace("ي", "ی").replace("ك", "ک").replace("‌", " ")
+        if not value:
+            return ""
+        t = re.sub(r"[\u0640\u064b-\u065f]", "", str(value))
+        t = re.sub(r"[\u200c\u200d\u200e\u200f\ufeff\u00a0\-_.,/\\;:!؟،؛|()\[\]{}<>+=*&^%$#@~\"\'`«»…]+", " ", t)
+        t = t.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("آ", "ا").replace("أ", "ا").replace("إ", "ا")
+        return " ".join(t.lower().split())
 
     def check_links(self, text: str) -> Tuple[bool, Optional[str]]:
         if not self.config.get("check_links", True):
