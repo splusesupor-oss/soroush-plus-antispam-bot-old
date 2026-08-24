@@ -3118,19 +3118,17 @@ async def handle_new_message(bot, event):
             profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None)
             profile_reason = access_profile_guard.reason(sender, profile_bio)
             if profile_reason:
-                was_blocked = access_profile_guard.is_blocked(user_id)
-                block_changed = access_profile_guard.block(user_id, profile_reason)
-                if block_changed or not was_blocked:
-                    bot.logger.log_info(
-                        f"PROFILE ACCESS RESTRICTION ACTIVE user_id={user_id} "
-                        f"name={format_user(sender)!r} reason={profile_reason!r}"
-                    )
-                    notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
-                    try:
-                        from splusthon.tl.types import MessageEntityBold as _ProfileBold
-                        await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
-                    except Exception:
-                        await event.reply(notice)
+                access_profile_guard.block(user_id, profile_reason)
+                bot.logger.log_info(
+                    f"PROFILE ACCESS RESTRICTION ACTIVE user_id={user_id} "
+                    f"name={format_user(sender)!r} reason={profile_reason!r}"
+                )
+                notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
+                try:
+                    from splusthon.tl.types import MessageEntityBold as _ProfileBold
+                    await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
+                except Exception:
+                    await event.reply(notice)
                 return
             elif access_profile_guard.is_blocked(user_id):
                 access_profile_guard.unblock(user_id)

@@ -86,9 +86,11 @@ def reason(user, bio=None):
     username = getattr(user, "username", "") or ""
     user_bio = bio if bio is not None else _bio(user)
 
-    norm_text = _norm(f"{first} {last} {username} {user_bio}".strip())
-    if not norm_text:
+    raw_combined = f"{first} {last} {username} {user_bio}".strip()
+    if not raw_combined:
         return None
+
+    norm_text = _norm(raw_combined)
     compact_text = norm_text.replace(" ", "")
 
     for term in BLOCKED_TERMS:

@@ -1433,22 +1433,17 @@ class SoroushAntiSpamBot:
                     profile_reason = access_profile_guard.reason(profile_user, profile_bio)
                     profile_id = getattr(profile_user, "id", getattr(_entry_sender, "id", None))
                     if profile_reason:
-                        was_blocked = access_profile_guard.is_blocked(profile_id)
-                        block_changed = access_profile_guard.block(
-                            profile_id, profile_reason
+                        access_profile_guard.block(profile_id, profile_reason)
+                        self.logger.log_info(
+                            f"PROFILE ACCESS BLOCK user_id={profile_id} "
+                            f"reason={profile_reason!r}"
                         )
-                        if block_changed:
-                            self.logger.log_info(
-                                f"PROFILE ACCESS BLOCK user_id={profile_id} "
-                                f"reason={profile_reason!r}"
-                            )
-                        if not was_blocked:
-                            notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
-                            try:
-                                from splusthon.tl.types import MessageEntityBold as _ProfileBold
-                                await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
-                            except Exception:
-                                await event.reply(notice)
+                        notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
+                        try:
+                            from splusthon.tl.types import MessageEntityBold as _ProfileBold
+                            await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
+                        except Exception:
+                            await event.reply(notice)
                         self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
                     if access_profile_guard.is_blocked(profile_id):
