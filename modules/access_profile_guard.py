@@ -9,7 +9,7 @@ from modules.runtime_paths import runtime_config_file
 FILE = runtime_config_file("profile_access_blocks.json")
 _CACHE = None
 
-PERSIAN_CHARS = r"a-zA-Z0-9\u0621-\u0628\u062a-\u063a\u0641-\u0642\u0644-\u0648\u064e-\u065f\u067e\u0686\u0698\u06a9\u06af\u06cc\u0629\u0649\u064a\u0622\u0623\u0625\u0671"
+PERSIAN_WORD_CHARS = r"a-zA-Z0-9_\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFC"
 
 BLOCKED_TERMS = (
     "پهلوی",
@@ -86,17 +86,23 @@ def reason(user, bio=None):
     username = getattr(user, "username", "") or ""
     user_bio = bio if bio is not None else _bio(user)
 
-    text = _norm(f"{first} {last} {username} {user_bio}".strip())
-    if not text:
+    norm_text = _norm(f"{first} {last} {username} {user_bio}".strip())
+    if not norm_text:
         return None
+    compact_text = norm_text.replace(" ", "")
 
     for term in BLOCKED_TERMS:
         norm_term = _norm(term)
+        compact_term = norm_term.replace(" ", "")
         if not norm_term:
             continue
-        pattern = re.compile(rf"(?<![{PERSIAN_CHARS}]){re.escape(norm_term)}(?![{PERSIAN_CHARS}])")
-        if pattern.search(text):
-            return term
+        if term == "شاه":
+            pattern = re.compile(rf"(?<![{PERSIAN_WORD_CHARS}])شاه(?![{PERSIAN_WORD_CHARS}])")
+            if pattern.search(norm_text):
+                return term
+        else:
+            if norm_term in norm_text or compact_term in compact_text:
+                return term
     return None
 
 

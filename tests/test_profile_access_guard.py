@@ -8,12 +8,17 @@ from modules import access_profile_guard
 
 
 def test_profile_terms_detection():
-    """Verify exact detection of prohibited terms in first/last name, username, and bio."""
+    """Verify exact and combined/root detection of prohibited terms in first/last name, username, and bio."""
     terms_to_test = [
         ("پهلوی", True),
+        ("پهلوی بوی", True),
+        ("پهلویبوی", True),
         ("دلباخته پهلوی", True),
+        ("عاشق پهلوی", True),
+        ("پهلوی_بوی", True),
         ("شاهزاده", True),
         ("شاه زاده", True),
+        ("شاهزاده پهلوی", True),
         ("پرچم آمریکا", True),
         ("آمریکا", True),
         ("شاه", True),
@@ -26,7 +31,7 @@ def test_profile_terms_detection():
     for text, expected in terms_to_test:
         user = SimpleNamespace(first_name=text, last_name=None, username=None)
         res = access_profile_guard.reason(user)
-        assert res is not None, f"Expected block for term {text!r}"
+        assert res is not None, f"Expected block for profile name {text!r}"
 
 
 def test_profile_terms_no_false_positives():
@@ -53,7 +58,7 @@ def test_profile_guard_lifecycle():
     assert access_profile_guard.is_blocked(user_id) is False
 
     # 1. Prohibited user
-    bad_user = SimpleNamespace(id=user_id, first_name="رضا شاه", last_name=None, username=None)
+    bad_user = SimpleNamespace(id=user_id, first_name="پهلوی بوی", last_name=None, username=None)
     bad_reason = access_profile_guard.reason(bad_user)
     assert bad_reason is not None
 

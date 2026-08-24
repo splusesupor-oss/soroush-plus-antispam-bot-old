@@ -9,7 +9,7 @@ from modules.group_id import normalize_group_id
 
 FILE = runtime_config_file("group_words.json")
 
-PERSIAN_WORD_CHARS = r"a-zA-Z0-9\u0621-\u0628\u062a-\u063a\u0641-\u0642\u0644-\u0648\u064e-\u065f\u067e\u0686\u0698\u06a9\u06af\u06cc\u0629\u0649\u064a\u0622\u0623\u0625\u0671"
+PERSIAN_WORD_CHARS = r"a-zA-Z0-9_\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFC"
 
 _cache = None
 _cache_mtime = None

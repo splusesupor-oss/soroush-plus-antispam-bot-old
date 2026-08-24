@@ -24,13 +24,15 @@ def test_banned_words_joined_and_zwnj():
 
 
 def test_banned_words_no_false_positive_inside_other_words():
-    """Verify that substrings inside legitimate words (پیر, پیام, پیش) are NEVER detected."""
+    """Verify that substrings inside legitimate words (پیر, پیام, پیمان, پیش) are NEVER detected."""
     words = ["پی"]
     assert find_matching_filter_word("پیر", words) is None
     assert find_matching_filter_word("پیام", words) is None
+    assert find_matching_filter_word("پیمان", words) is None
     assert find_matching_filter_word("پیش", words) is None
     assert find_matching_filter_word("سپیدار", words) is None
     assert find_matching_filter_word("پیامبر", words) is None
+    assert find_matching_filter_word("این یک پیامبر است", words) is None
     assert find_matching_filter_word("پیشنهاد ویژه", words) is None
 
 
@@ -57,6 +59,9 @@ def test_spam_detector_banned_word_matching():
     assert is_banned is False
 
     is_banned, _ = detector.check_banned_words("پیام خود را بفرستید")
+    assert is_banned is False
+
+    is_banned, _ = detector.check_banned_words("پیمان ما پابرجاست")
     assert is_banned is False
 
     is_banned, _ = detector.check_banned_words("پیش از موعد")

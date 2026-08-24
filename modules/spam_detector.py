@@ -53,7 +53,7 @@ class SpamDetector:
         version = getattr(self.config, "_banned_words_version", 0)
         if version == self._banned_words_version:
             return
-        persian_chars = r"a-zA-Z0-9\u0621-\u0628\u062a-\u063a\u0641-\u0642\u0644-\u0648\u064e-\u065f\u067e\u0686\u0698\u06a9\u06af\u06cc\u0629\u0649\u064a\u0622\u0623\u0625\u0671"
+        persian_chars = r"a-zA-Z0-9_\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFC"
         patterns = []
         for raw_word in self.config.banned_words:
             word = self._normalize_banned_word(raw_word)
