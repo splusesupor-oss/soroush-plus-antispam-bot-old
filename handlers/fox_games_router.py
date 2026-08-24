@@ -59,20 +59,39 @@ FOX_GAME_COMMANDS = frozenset({
 })
 
 
+MAX_ACTIVE_GAMES_PER_CHAT = 2
+LIMIT_EXCEEDED_MESSAGE = "در حال حاضر دو بازی فعال است، بعد از پایان آن‌ها دوباره تلاش کنید"
+
+
 def any_active(chat_id):
     """آیا یکی از بازی‌های Fox در این چت فعال است."""
-    return (
-        laugh_or_lose.is_active(chat_id)
-        or survival.is_active(chat_id)
-        or lucky_box.is_active(chat_id)
-        or vampire.is_active(chat_id)
-        or best_answer.is_active(chat_id)
-        or battle.is_active(chat_id)
-        or maemma.is_active(chat_id)
-        or sentence_guess.is_active(chat_id)
-        or minesweeper.is_active(chat_id)
-        or karagah.is_active(chat_id)
-    )
+    return active_game_count(chat_id) > 0
+
+
+def active_game_count(chat_id):
+    """تعداد بازی‌های فعال Fox AI در یک چت به تفکیک گروه."""
+    count = 0
+    if laugh_or_lose.is_active(chat_id):
+        count += 1
+    if survival.is_active(chat_id):
+        count += 1
+    if lucky_box.is_active(chat_id):
+        count += 1
+    if vampire.is_active(chat_id):
+        count += 1
+    if best_answer.is_active(chat_id):
+        count += 1
+    if battle.is_active(chat_id):
+        count += 1
+    if maemma.is_active(chat_id):
+        count += 1
+    if sentence_guess.is_active(chat_id):
+        count += 1
+    if minesweeper.is_active(chat_id):
+        count += 1
+    if karagah.is_active(chat_id):
+        count += 1
+    return count
 
 
 def _coins(bot, chat_id, user_id, name, amount, logger=None,
@@ -1151,29 +1170,30 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     """پیام را به بازی مربوطه می‌سپارد. True یعنی پیام مصرف شد."""
     command = normalize_text(text)
 
-    if command == normalize_text("بخند یا بباز"):
-        return await _start_laugh(bot, event, chat_id, logger)
-    if command == normalize_text("بقا"):
-        return await _start_survival(bot, event, chat_id, logger)
-    if command == normalize_text("جعبه شانسی"):
-        return await _start_lucky_box(bot, event, chat_id, user_id, logger)
-    if command in {normalize_text("خون آشام"), normalize_text("خون‌آشام")}:
-        return await _start_vampire(bot, event, chat_id, logger)
-    if command == normalize_text("معما"):
-        return await _start_maemma(bot, event, chat_id, user_id, sender, logger)
-    if command in {normalize_text("حدس جمله"), normalize_text("ساخت جمله")}:
-        mode = "build" if normalize_text("ساخت جمله") == command else "guess"
-        return await _start_sentence_guess(bot, event, chat_id, user_id, sender, logger, mode=mode)
-    if command == normalize_text("مین یاب"):
-        return await _start_minesweeper(bot, event, chat_id, user_id, sender, logger)
-    if command == normalize_text("بهترین جواب"):
-        return await _start_best_answer(bot, event, chat_id, logger)
-    if command == normalize_text("نبرد"):
-        return await _start_battle(bot, event, chat_id, user_id, sender, logger)
-    if command == normalize_text("کارگاه"):
-        return await _start_karagah(bot, event, chat_id, logger)
+    start_games = {
+        normalize_text("بخند یا بباز"): (laugh_or_lose, _start_laugh),
+        normalize_text("بقا"): (survival, _start_survival),
+        normalize_text("جعبه شانسی"): (lucky_box, lambda b, e, c, l: _start_lucky_box(b, e, c, user_id, l)),
+        normalize_text("خون آشام"): (vampire, _start_vampire),
+        normalize_text("خون‌آشام"): (vampire, _start_vampire),
+        normalize_text("معما"): (maemma, lambda b, e, c, l: _start_maemma(b, e, c, user_id, sender, l)),
+        normalize_text("حدس جمله"): (sentence_guess, lambda b, e, c, l: _start_sentence_guess(b, e, c, user_id, sender, l, mode="guess")),
+        normalize_text("ساخت جمله"): (sentence_guess, lambda b, e, c, l: _start_sentence_guess(b, e, c, user_id, sender, l, mode="build")),
+        normalize_text("مین یاب"): (minesweeper, lambda b, e, c, l: _start_minesweeper(b, e, c, user_id, sender, l)),
+        normalize_text("بهترین جواب"): (best_answer, _start_best_answer),
+        normalize_text("نبرد"): (battle, lambda b, e, c, l: _start_battle(b, e, c, user_id, sender, l)),
+        normalize_text("کارگاه"): (karagah, _start_karagah),
+    }
 
-    # پیام‌های درون‌بازی — هر بازی فقط session خودش را می‌بیند.
+    if command in start_games:
+        game_module, starter = start_games[command]
+        if not game_module.is_active(chat_id):
+            if active_game_count(chat_id) >= MAX_ACTIVE_GAMES_PER_CHAT:
+                await event.reply(LIMIT_EXCEEDED_MESSAGE)
+                return True
+        return await starter(bot, event, chat_id, logger)
+
+    # پیام‌های درون‌بازی — هر بازی فقط session خودش را می‌بینند.
     for responder in (
         _laugh_message, _survival_message, _lucky_box_message, _vampire_message,
         _maemma_message, _sentence_guess_message, _minesweeper_message,
