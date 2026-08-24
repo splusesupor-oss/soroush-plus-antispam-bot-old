@@ -1260,8 +1260,34 @@ class SoroushAntiSpamBot:
                         )
                     )
                 chat_id = getattr(event, "chat_id", None)
+                sender_id = getattr(sender, "id", None) or getattr(event, "sender_id", None)
+
+                # 🔒 Profile Access Guard check in priority commands
+                if sender_id and not is_global_owner(sender_id):
+                    profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None) if sender else None
+                    profile_reason = access_profile_guard.reason(sender, profile_bio) if sender else None
+                    if not profile_reason and access_profile_guard.is_blocked(sender_id):
+                        record = access_profile_guard.record_for(sender_id)
+                        profile_reason = record.get("reason") if record else "قوانین پروفایل"
+
+                    if profile_reason:
+                        access_profile_guard.block(sender_id, profile_reason)
+                        self.logger.log_info(
+                            f"PROFILE ACCESS BLOCK user_id={sender_id} "
+                            f"reason={profile_reason!r}"
+                        )
+                        notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
+                        try:
+                            from splusthon.tl.types import MessageEntityBold as _ProfileBold
+                            await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
+                        except Exception:
+                            await event.reply(notice)
+                        return
+                    elif access_profile_guard.is_blocked(sender_id):
+                        access_profile_guard.unblock(sender_id)
+                        self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={sender_id}")
+
                 if chat_id is None or not is_active(chat_id):
-                    sender_id = getattr(sender, "id", None)
                     if (
                         expiry_command(text) is not None
                         and is_global_owner(sender_id)

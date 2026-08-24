@@ -70,26 +70,31 @@ def _save(data):
         raise
 
 
-def _bio(user):
-    for name in ("about", "bio", "biography"):
-        value = getattr(user, name, None)
-        if value:
-            return str(value)
-    return ""
+def _extract_user_strings(user, bio=None):
+    if user is None:
+        return []
+    parts = []
+    if isinstance(user, dict):
+        for k in ("first_name", "last_name", "username", "name", "title", "about", "bio", "biography"):
+            v = user.get(k)
+            if v:
+                parts.append(str(v))
+    else:
+        for k in ("first_name", "last_name", "username", "name", "title", "about", "bio", "biography"):
+            v = getattr(user, k, None)
+            if v:
+                parts.append(str(v))
+    if bio:
+        parts.append(str(bio))
+    return parts
 
 
 def reason(user, bio=None):
-    if user is None:
-        return None
-    first = getattr(user, "first_name", "") or ""
-    last = getattr(user, "last_name", "") or ""
-    username = getattr(user, "username", "") or ""
-    user_bio = bio if bio is not None else _bio(user)
-
-    raw_combined = f"{first} {last} {username} {user_bio}".strip()
-    if not raw_combined:
+    strings = _extract_user_strings(user, bio)
+    if not strings:
         return None
 
+    raw_combined = " ".join(strings).strip()
     norm_text = _norm(raw_combined)
     compact_text = norm_text.replace(" ", "")
 
