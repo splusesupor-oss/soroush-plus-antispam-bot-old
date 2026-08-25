@@ -52,12 +52,27 @@ def _save_json(file_path, data):
 
 
 def load_official_tokens():
-    data = _load_json(OFFICIAL_POOL_FILE)
-    if isinstance(data, list):
-        return [str(t).strip() for t in data if str(t).strip()]
-    if isinstance(data, dict):
-        return [str(t).strip() for t in data.get("tokens", []) if str(t).strip()]
-    return []
+    tokens = []
+    try:
+        from modules.fox_official_pool import OFFICIAL_TOKENS
+        tokens.extend(str(t).strip() for t in OFFICIAL_TOKENS if str(t).strip())
+    except Exception:
+        pass
+    for path in (
+        Path(__file__).resolve().parent / "fox_official_tokens.json",
+        Path(__file__).resolve().parent.parent / "config" / "fox_official_tokens.json",
+        OFFICIAL_POOL_FILE,
+    ):
+        data = _load_json(path)
+        extra = []
+        if isinstance(data, list):
+            extra = [str(t).strip() for t in data if str(t).strip()]
+        elif isinstance(data, dict):
+            extra = [str(t).strip() for t in data.get("tokens", []) if str(t).strip()]
+        for item in extra:
+            if item not in tokens:
+                tokens.append(item)
+    return tokens
 
 
 def official_token_set():
