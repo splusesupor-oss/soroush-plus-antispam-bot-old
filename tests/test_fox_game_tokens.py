@@ -186,8 +186,9 @@ def test_bot_command_site_successful_deduction_and_link():
 
         assert len(event.replies) == 1
         reply = event.replies[0]
-        assert "وارد سایت شوید" in reply
-        assert "token=" in reply
+        assert "توکن اختصاصی شما کپی کنید" in reply
+        assert "https://fox-game.pages.dev/" in reply
+        assert "گروه فعال شده" in reply
         assert "۲۴ ساعت" in reply
 
         # Check balance after deduction

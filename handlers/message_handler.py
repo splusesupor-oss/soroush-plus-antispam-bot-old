@@ -4429,11 +4429,23 @@ async def handle_new_message(bot, event):
                 f"FOX GAME TOKEN ISSUED user_id={user_id} chat_id={chat_id} token={token[:8]}..."
             )
 
+            group_title = f"گروه {chat_id}"
+            try:
+                g_info = group_storage.load_groups().get(str(chat_id), {})
+                if g_info.get("title"):
+                    group_title = g_info["title"]
+            except Exception:
+                pass
+
             msg = (
-                "🎮 وارد سایت شوید:\n"
-                f"{game_url}\n\n"
-                "⏱ اعتبار لینک: ۲۴ ساعت (تا زمان فعال بودن روباه در گروه)\n"
-                "🔒 این لینک اختصاصی شماست و اطلاعات، سکه‌ها و رتبه‌بندی شما همیشه حفظ خواهد شد."
+                "💭توکن اختصاصی شما کپی کنید حتما \n\n"
+                f"{token}\n\n"
+                "🖇لینک سایت بازی روباه\n"
+                "https://fox-game.pages.dev/\n\n"
+                f"🔘 گروه فعال شده {group_title}\n\n"
+                "                          ─━━━━━━⊱✿⊰━━━━━━─\n"
+                "این توکن هر ۲۴ ساعت منقضی می‌شود اطلاعات شما از بین نمی‌رود می‌توانید دوباره با دستور سایت بازی توکن ۲۴ ساعته دیگر دریافت کنید\n"
+                "                           ─━━━━━━⊱✿⊰━━━━━━─"
             )
             await event.reply(msg)
             return
