@@ -4483,7 +4483,7 @@ async def handle_new_message(bot, event):
                 "💭توکن اختصاصی شما کپی کنید حتما \n\n"
                 f"{token}\n\n"
                 "🖇لینک سایت بازی روباه\n"
-                "https://fox-game.pages.dev/\n\n"
+                "https://fox-game.aifox-chat.workers.dev/\n\n"
                 f"🔘 گروه فعال شده {group_title}\n\n"
                 "                          ─━━━━━━⊱✿⊰━━━━━━─\n"
                 "این توکن هر ۲۴ ساعت منقضی می‌شود اطلاعات شما از بین نمی‌رود می‌توانید دوباره با دستور سایت بازی توکن ۲۴ ساعته دیگر دریافت کنید\n"
