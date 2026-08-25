@@ -2606,6 +2606,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "تغییر اخطار", "تغییر مجازات",
     "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
     "وضعیت ربات", "پینگ ربات",
+    "سایت بازی", "سایت", "لینک بازی", "/game", "/site",
     "جعبه شانسی", "خون آشام", "خون‌آشام", "جرعت", "جرات", "جرئت",
     "حقیقت", "حقیقت بگو", "ربات", "روباه", "/help", "!help", "help",
 }) | frozenset(command for command, _handler in RESERVED_COMMANDS) | FOX_GAME_COMMANDS | EMOJI_RESET_COMMANDS
@@ -4397,36 +4398,77 @@ async def handle_new_message(bot, event):
                 )
                 return
 
+            site_user_id = user_id or getattr(event, "sender_id", None) or getattr(sender, "id", None)
             cost_bronze = 30
-            user_balance = economy.get_balance(chat_id, user_id)
-            current_bronze = user_balance.get(economy.BRONZE, 0)
+            user_balance = economy.get_balance(chat_id, site_user_id)
+            try:
+                current_bronze = int(user_balance.get(economy.BRONZE, 0) or 0)
+            except (TypeError, ValueError):
+                current_bronze = 0
 
-            # ۱. بررسی موجودی کاربر
-            if current_bronze < cost_bronze:
+            sender_name = getattr(sender, "first_name", "") or ""
+            sender_user = getattr(sender, "username", "") or ""
+
+            existing_token, _existing = fox_game_tokens.find_active_token(
+                chat_id, site_user_id
+            )
+            if existing_token:
+                token = existing_token
+                bot.logger.log_info(
+                    "FOX GAME TOKEN REUSED "
+                    f"user_id={site_user_id} chat_id={chat_id} "
+                    f"token={token[:8]}... bronze={current_bronze}"
+                )
+            elif current_bronze < cost_bronze:
+                bot.logger.log_info(
+                    "FOX GAME SITE INSUFFICIENT "
+                    f"user_id={site_user_id} chat_id={chat_id} "
+                    f"bronze={current_bronze} need={cost_bronze} "
+                    f"wallet={economy.resolve_user_key(chat_id, site_user_id)}"
+                )
                 await event.reply(
                     "❌ موجودی کافی نیست\n"
+                    f"موجودی فعلی شما: {current_bronze} برنز\n"
                     "برای دریافت سایت حداقل ۳۰ برنز نیاز دارید"
                 )
                 return
-
-            # ۲. کسر ۳۰ برنز از حساب کاربر
-            try:
-                economy.spend(chat_id, user_id, cost_bronze, economy.BRONZE, note="ورود به سایت بازی روباه")
-            except Exception as spend_err:
-                bot.logger.log_error(f"FOX GAME SITE SPEND FAILED chat_id={chat_id} user_id={user_id} error={spend_err!r}")
-                await event.reply("❌ خطا در کسر سکه، لطفاً مجدداً امتحان کنید.")
-                return
-
-            # ۳. ساخت توکن امن، یکتا و ۲۴ ساعته متصل به حساب و گروه
-            sender_name = getattr(sender, "first_name", "") or ""
-            sender_user = getattr(sender, "username", "") or ""
-            token = fox_game_tokens.create_token(chat_id, user_id, sender_name, sender_user)
+            else:
+                try:
+                    economy.spend(
+                        chat_id, site_user_id, cost_bronze, economy.BRONZE,
+                        note="ورود به سایت بازی روباه",
+                    )
+                except Exception as spend_err:
+                    bot.logger.log_error(
+                        "FOX GAME SITE SPEND FAILED "
+                        f"chat_id={chat_id} user_id={site_user_id} error={spend_err!r}"
+                    )
+                    await event.reply("❌ خطا در کسر سکه، لطفاً مجدداً امتحان کنید.")
+                    return
+                try:
+                    token = fox_game_tokens.create_token(
+                        chat_id, site_user_id, sender_name, sender_user
+                    )
+                except Exception as token_err:
+                    try:
+                        economy.add_bronze(
+                            chat_id, site_user_id, cost_bronze,
+                            note="بازگشت هزینه سایت بازی",
+                        )
+                    except Exception:
+                        pass
+                    bot.logger.log_error(
+                        "FOX GAME TOKEN CREATE FAILED "
+                        f"chat_id={chat_id} user_id={site_user_id} error={token_err!r}"
+                    )
+                    await event.reply("❌ صدور توکن انجام نشد، سکه برگردانده شد. دوباره تلاش کنید.")
+                    return
 
             site_base = os.getenv("FOX_GAME_SITE_URL", "http://localhost:3000").rstrip("/")
             game_url = f"{site_base}/?token={token}"
 
             bot.logger.log_info(
-                f"FOX GAME TOKEN ISSUED user_id={user_id} chat_id={chat_id} token={token[:8]}..."
+                f"FOX GAME TOKEN ISSUED user_id={site_user_id} chat_id={chat_id} token={token[:8]}..."
             )
 
             group_title = f"گروه {chat_id}"

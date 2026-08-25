@@ -60,9 +60,74 @@ def chat_key(chat_id):
     return str(value)
 
 
+def normalize_user_id(user_id):
+    """شناسه کاربر را برای کلید کیف‌پول یکسان می‌کند."""
+    try:
+        return str(int(user_id))
+    except (TypeError, ValueError):
+        return str(user_id)
+
+
+def chat_aliases(chat_id):
+    """املاهای تاریخی همان گروه که ممکن است در دیتابیس مانده باشد."""
+    aliases = []
+
+    def _add(value):
+        text = str(value)
+        if text and text not in aliases:
+            aliases.append(text)
+
+    _add(chat_key(chat_id))
+    _add(chat_id)
+    try:
+        value = int(chat_id)
+    except (TypeError, ValueError):
+        return aliases
+    _add(value)
+    _add(abs(value))
+    _add(-abs(value))
+    digits = str(abs(value))
+    if digits.startswith("100") and len(digits) > 6:
+        stripped = digits[3:].lstrip("0") or "0"
+        _add(digits[3:])
+        _add(stripped)
+        _add("-" + stripped)
+        _add("-100" + stripped)
+    else:
+        _add("100" + digits)
+        _add("-100" + digits)
+        _add(-(10_000_000_000 + abs(value)))
+    return aliases
+
+
+def candidate_user_keys(chat_id, user_id):
+    """کلیدهای محتمل کیف‌پول برای همین کاربر در همین گروه."""
+    user_ids = []
+    for raw in (user_id, normalize_user_id(user_id), str(user_id)):
+        text = str(raw)
+        if text and text not in user_ids:
+            user_ids.append(text)
+    keys = []
+    for group in chat_aliases(chat_id):
+        for uid in user_ids:
+            key = f"{group}:{uid}"
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
+def resolve_user_key(chat_id, user_id):
+    """کیف‌پول موجود را پیدا می‌کند؛ وگرنه کلید متعارف را برمی‌گرداند."""
+    canonical = f"{chat_key(chat_id)}:{normalize_user_id(user_id)}"
+    for key in candidate_user_keys(chat_id, user_id):
+        if storage.user_fields(key, (BRONZE,)) is not None:
+            return key
+    return canonical
+
+
 def user_key(chat_id, user_id):
     """کلید کیف پول: هر کاربر در هر گروه حساب جداگانه دارد."""
-    return f"{chat_key(chat_id)}:{user_id}"
+    return f"{chat_key(chat_id)}:{normalize_user_id(user_id)}"
 
 
 def split_key(key):
@@ -148,7 +213,7 @@ def is_owner_silver_group(chat_id, user_id):
 
 
 def _owner_balance(chat_id, user_id):
-    user = storage.user_fields(user_key(chat_id, user_id), COIN_TYPES) or {}
+    user = storage.user_fields(resolve_user_key(chat_id, user_id), COIN_TYPES) or {}
     balance = {coin: int(user.get(coin, 0) or 0) for coin in COIN_TYPES}
     balance[SILVER] = OWNER_SILVER
     balance["total_coin_value"] = compute_total_value({**user, SILVER: OWNER_SILVER})
@@ -184,7 +249,7 @@ def add(chat_id, user_id, coin_type, amount, *, kind=ledger.KIND_RECEIVE,
     _validate_amount(amount)
     if is_owner_silver_group(chat_id, user_id) and coin_type == SILVER:
         return _owner_balance(chat_id, user_id)
-    key = user_key(chat_id, user_id)
+    key = resolve_user_key(chat_id, user_id)
 
     with storage.transaction() as data:
         if ledger.is_duplicate(data, key, reference):
@@ -211,7 +276,7 @@ def remove(chat_id, user_id, coin_type, amount, *, kind=ledger.KIND_SPEND,
     _validate_amount(amount)
     if is_owner_silver_group(chat_id, user_id) and coin_type == SILVER:
         return _owner_balance(chat_id, user_id)
-    key = user_key(chat_id, user_id)
+    key = resolve_user_key(chat_id, user_id)
 
     with storage.transaction() as data:
         if ledger.is_duplicate(data, key, reference):
@@ -266,7 +331,7 @@ def _convert(chat_id, user_id, source, target, cost, gain, times, reference, not
         raise EconomyError("تعداد تبدیل باید عدد صحیح مثبت باشد.")
     total_cost = cost * times
     total_gain = gain * times
-    key = user_key(chat_id, user_id)
+    key = resolve_user_key(chat_id, user_id)
 
     with storage.transaction() as data:
         if ledger.is_duplicate(data, key, reference):
@@ -323,8 +388,8 @@ def transfer(chat_id, sender_id, receiver_id, coin_type, amount, *,
     """
     _validate_coin(coin_type)
     _validate_amount(amount)
-    sender = user_key(chat_id, sender_id)
-    receiver = user_key(chat_id, receiver_id)
+    sender = resolve_user_key(chat_id, sender_id)
+    receiver = resolve_user_key(chat_id, receiver_id)
     if sender == receiver:
         raise EconomyError("انتقال به خودتان ممکن نیست.")
 
@@ -380,7 +445,7 @@ def get_balance(chat_id, user_id):
         )
         return _owner_balance(chat_id, user_id)
     user = storage.user_fields(
-        user_key(chat_id, user_id), (*COIN_TYPES, "total_coin_value")
+        resolve_user_key(chat_id, user_id), (*COIN_TYPES, "total_coin_value")
     )
     if not user:
         return {BRONZE: 0, SILVER: 0, GOLD: 0, "total_coin_value": 0}
@@ -398,7 +463,7 @@ def calculate_total_value(chat_id, user_id):
 
 def recalculate(chat_id, user_id):
     """ارزش کل را بازمحاسبه و ذخیره می‌کند (پس از تغییر تنظیمات)."""
-    key = user_key(chat_id, user_id)
+    key = resolve_user_key(chat_id, user_id)
     with storage.transaction() as data:
         user = _user(data, key)
         return _refresh_total(data, user)
@@ -416,7 +481,7 @@ def set_name(chat_id, user_id, name):
     """نام نمایشی کاربر را نگه می‌دارد (برای جدول رتبه‌بندی)."""
     if not name:
         return None
-    key = user_key(chat_id, user_id)
+    key = resolve_user_key(chat_id, user_id)
     name = str(name)
     # Opening «موجودی» calls this on every request.  Avoid a full atomic JSON
     # rewrite/fsync when the display name has not changed.
@@ -431,7 +496,7 @@ def set_name(chat_id, user_id, name):
 
 def get_profile(chat_id, user_id):
     """پروفایل کامل: موجودی، ارزش کل، بردها و نام."""
-    key = user_key(chat_id, user_id)
+    key = resolve_user_key(chat_id, user_id)
     user = storage.user_fields(
         key, (*COIN_TYPES, "total_coin_value", "wins", "name")
     )

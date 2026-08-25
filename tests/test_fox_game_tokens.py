@@ -108,6 +108,18 @@ def test_token_expiration():
     assert "منقضی" in err or "پایان رسیده" in err
 
 
+def _reset_site_wallet(chat_id, user_id):
+    """Isolate site-command tests from leftover tokens and balances."""
+    fox_game_tokens.revoke_group_tokens(chat_id)
+    try:
+        fox_game_tokens.revoke_group_tokens(economy.chat_key(chat_id))
+    except Exception:
+        pass
+    current = economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0)
+    if current > 0:
+        economy.remove_bronze(chat_id, user_id, current)
+
+
 def make_mock_bot():
     return SimpleNamespace(
         client=MagicMock(),
@@ -147,11 +159,7 @@ def test_bot_command_site_insufficient_balance():
         user_id = 9002
 
         group_storage.activate_group(chat_id, "گروه تستی ۳")
-
-        # Reset balance
-        b = economy.get_balance(chat_id, user_id)
-        if b.get(economy.BRONZE, 0) > 0:
-            economy.remove_bronze(chat_id, user_id, b.get(economy.BRONZE, 0))
+        _reset_site_wallet(chat_id, user_id)
 
         bot = make_mock_bot()
 
@@ -165,18 +173,77 @@ def test_bot_command_site_insufficient_balance():
     asyncio.run(scenario())
 
 
+def test_bot_command_site_accepts_exact_thirty_bronze():
+    """Exactly 30 bronze must unlock the site, matching the user-facing threshold."""
+    async def scenario():
+        chat_id = 6310
+        user_id = 9310
+        group_storage.activate_group(chat_id, "گروه آستانه ۳۰")
+        _reset_site_wallet(chat_id, user_id)
+        economy.add_bronze(chat_id, user_id, 30, note="شارژ آستانه")
+
+        event = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
+        await handle_new_message(make_mock_bot(), event)
+        assert len(event.replies) == 1
+        assert "توکن اختصاصی شما کپی کنید" in event.replies[0]
+        assert economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0) == 0
+
+    asyncio.run(scenario())
+
+
+def test_bot_command_site_finds_wallet_across_chat_id_aliases():
+    """Coins stored under one Soroush chat-id spelling must still unlock the site."""
+    async def scenario():
+        stored_chat = 22770888
+        command_chat = -10022770888
+        user_id = 9411
+        group_storage.activate_group(command_chat, "گروه املای شناسه")
+        group_storage.activate_group(stored_chat, "گروه املای شناسه")
+        _reset_site_wallet(stored_chat, user_id)
+        _reset_site_wallet(command_chat, user_id)
+        economy.add_bronze(stored_chat, user_id, 31, note="شارژ املا")
+
+        assert economy.get_balance(command_chat, user_id).get(economy.BRONZE, 0) == 31
+
+        event = MockEvent("سایت بازی", chat_id=command_chat, user_id=str(user_id))
+        await handle_new_message(make_mock_bot(), event)
+        assert len(event.replies) == 1
+        assert "توکن اختصاصی شما کپی کنید" in event.replies[0]
+        assert economy.get_balance(stored_chat, user_id).get(economy.BRONZE, 0) == 1
+
+    asyncio.run(scenario())
+
+
+def test_bot_command_site_reuses_valid_token_without_second_charge():
+    """A still-valid 24h token must be resent without taking another 30 bronze."""
+    async def scenario():
+        chat_id = 6320
+        user_id = 9320
+        group_storage.activate_group(chat_id, "گروه توکن فعال")
+        _reset_site_wallet(chat_id, user_id)
+        economy.add_bronze(chat_id, user_id, 50, note="شارژ توکن")
+
+        bot = make_mock_bot()
+        first = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
+        await handle_new_message(bot, first)
+        second = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
+        await handle_new_message(bot, second)
+
+        assert "توکن اختصاصی شما کپی کنید" in first.replies[0]
+        assert "توکن اختصاصی شما کپی کنید" in second.replies[0]
+        assert economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0) == 20
+
+    asyncio.run(scenario())
+
+
 def test_bot_command_site_successful_deduction_and_link():
     """Verify bot deducts 30 bronze and returns exclusive token link when bronze >= 30."""
     async def scenario():
-        chat_id = 6002
-        user_id = 9003
+        chat_id = 6402
+        user_id = 9403
 
         group_storage.activate_group(chat_id, "گروه تستی ۴")
-
-        # Reset and add 50 bronze
-        b_before = economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0)
-        if b_before > 0:
-            economy.remove_bronze(chat_id, user_id, b_before)
+        _reset_site_wallet(chat_id, user_id)
         economy.add_bronze(chat_id, user_id, 50, note="شارژ تست")
 
         bot = make_mock_bot()

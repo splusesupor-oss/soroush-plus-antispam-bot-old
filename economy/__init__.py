@@ -44,9 +44,12 @@ from economy.coins.accounts import (
     calculate_total_value,
     convert_bronze,
     convert_silver,
+    chat_aliases,
     chat_key,
     get_balance,
     get_profile,
+    normalize_user_id,
+    resolve_user_key,
     split_key,
     user_key,
     recalculate,
@@ -71,7 +74,8 @@ __all__ = [
     # تبدیل و انتقال
     "convert_bronze", "convert_silver", "transfer",
     # ارزش و موجودی
-    "get_balance", "get_profile", "set_name", "chat_key", "split_key", "user_key",
+    "get_balance", "get_profile", "set_name", "chat_key", "chat_aliases",
+    "normalize_user_id", "resolve_user_key", "split_key", "user_key",
     "calculate_total_value", "recalculate", "recalculate_all",
     # فعالیت روزانه
     "record_message", "settle_previous_days", "daily_ranking", "activity",

@@ -149,6 +149,42 @@ def revoke_group_tokens(chat_id):
     return removed
 
 
+def _id_aliases(value):
+    aliases = {str(value)}
+    try:
+        aliases.add(str(int(value)))
+    except (TypeError, ValueError):
+        pass
+    try:
+        from economy.coins.accounts import chat_aliases
+        aliases.update(chat_aliases(value))
+    except Exception:
+        pass
+    return aliases
+
+
+def find_active_token(chat_id, user_id):
+    """توکن معتبر فعلی همین کاربر در همین گروه را برمی‌گرداند."""
+    cleanup_expired()
+    data = _load_json(TOKEN_FILE)
+    now = time.time()
+    user_aliases = _id_aliases(user_id)
+    chat_ids = _id_aliases(chat_id)
+    for token, record in data.items():
+        if not isinstance(record, dict):
+            continue
+        if float(record.get("expires_at", 0) or 0) <= now:
+            continue
+        if str(record.get("user_id")) not in user_aliases:
+            continue
+        if str(record.get("chat_id")) not in chat_ids:
+            continue
+        if not is_group_active(record.get("chat_id")):
+            continue
+        return token, record
+    return None, None
+
+
 def create_token(chat_id, user_id, first_name=None, username=None, check_active_group=False):
     """ایجاد توکن اختصاصی رمزنگاری‌شده متصل به شناسه گروه (chat_id) و کاربر (user_id)."""
     if check_active_group and not is_group_active(chat_id):
