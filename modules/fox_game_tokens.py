@@ -20,6 +20,7 @@ from modules.runtime_paths import CONFIG_DIR
 
 TOKEN_FILE = CONFIG_DIR / "fox_game_tokens.json"
 LEADERBOARD_FILE = CONFIG_DIR / "fox_game_leaderboard.json"
+OFFICIAL_POOL_FILE = CONFIG_DIR / "fox_official_tokens.json"
 
 TOKEN_LIFETIME_SECONDS = 86400  # ۲۴ ساعت اعتبار کامل (۱ شبانه‌روز)
 
@@ -47,6 +48,33 @@ def _save_json(file_path, data):
             os.unlink(temp_name)
         except OSError:
             pass
+
+
+
+def load_official_tokens():
+    data = _load_json(OFFICIAL_POOL_FILE)
+    if isinstance(data, list):
+        return [str(t).strip() for t in data if str(t).strip()]
+    if isinstance(data, dict):
+        return [str(t).strip() for t in data.get("tokens", []) if str(t).strip()]
+    return []
+
+
+def official_token_set():
+    return set(load_official_tokens())
+
+
+def is_official_token(token):
+    clean = str(token or "").strip()
+    return bool(clean) and clean in official_token_set()
+
+
+def _allocate_official_token(active_data):
+    used = set(active_data.keys())
+    for item in load_official_tokens():
+        if item not in used:
+            return item
+    raise ValueError("در حال حاضر توکن آزاد از فهرست ۱۲۰۰تایی موجود نیست.")
 
 
 DEV_TEST_TOKEN = "FOX-TEST-DEV-2026"
@@ -136,7 +164,7 @@ def create_token(chat_id, user_id, first_name=None, username=None, check_active_
             data.pop(t_key, None)
 
     # ایجاد امضای امن متصل به گروه و کاربر
-    raw_token = secrets.token_urlsafe(32)
+    raw_token = _allocate_official_token(data)
     display_name = first_name or (f"@{username}" if username else f"کاربر {user_id}")
 
     # دریافت عنوان گروه اگر ثبت شده باشد
@@ -197,8 +225,8 @@ def validate_token(token, device_id=None, expected_chat_id=None):
         return False, None, "توکن ارائه نشده است."
 
     clean_token = token.strip()
-    if clean_token.upper() == DEV_TEST_TOKEN or clean_token == "FOX_DEV_TEST":
-        return True, _get_dev_record(device_id), None
+    if not is_official_token(clean_token):
+        return False, None, "توکن نامعتبر است."
 
     data = _load_json(TOKEN_FILE)
     record = data.get(clean_token)
