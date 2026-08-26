@@ -55,6 +55,7 @@ from modules import site_policy
 from modules.runtime_maintenance import run as run_runtime_maintenance
 from modules.watchdog_reporting import deliver_pending_reports
 from modules.performance_monitor import SlowProcessMonitor
+from modules.runtime_snapshot import RuntimeSnapshotMonitor
 from handlers.message_handler import (
     handle_new_message,
     send_activation_message,
@@ -205,6 +206,7 @@ class SoroushAntiSpamBot:
         self.health_monitor = PeriodicHealthMonitor(self, self.logger, interval_seconds=600.0)
         self.outgoing_sender = None
         self.performance_monitor = None
+        self.runtime_snapshot = None
         self.notice_cleanup = NoticeCleanup(
             os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -784,6 +786,10 @@ class SoroushAntiSpamBot:
         self.notice_cleanup.start()
         if hasattr(self, "health_monitor") and self.health_monitor is not None:
             self.health_monitor.start()
+        # Diagnostic-only: periodic PERFORMANCE SNAPSHOT. Does not change
+        # queues, governor, concurrency, timeouts, or caches.
+        self.runtime_snapshot = RuntimeSnapshotMonitor(self, self.logger)
+        self.runtime_snapshot.start()
         self.logger.log_info(
             "NOTICE CLEANUP STARTED "
             f"ttl_s={self.notice_cleanup.ttl_seconds:g} "
