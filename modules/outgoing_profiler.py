@@ -43,6 +43,19 @@ _REQUEST_OPS = {
     "EditChatDefaultBannedRightsRequest": "moderation",
 }
 
+_SYNC_TRACE_REQUESTS = frozenset({
+    "GetDifferenceRequest",
+    "GetChannelDifferenceRequest",
+})
+_RECONNECT_GEN = 0
+_LAST_RECONNECT = {
+    "started_at": None,
+    "ended_at": None,
+    "elapsed_ms": 0.0,
+    "pending_before": (),
+    "reason": None,
+}
+
 
 def begin_response_measurement():
     """برای هر handler یک context مستقلِ زمان پاسخ ایجاد می‌کند."""
@@ -62,12 +75,129 @@ def mark_rpc_on_wire():
 
     Called from send-path hooks (``connection.send`` / ``writer.drain``)
     and from tests. Does nothing when no ``_call`` is in progress.
+    A later write on the same await is a reconnect replay, not a new RPC.
     """
     call = _CALL_STATE.get()
-    if call is None or call.get("send_started") is not None:
+    if call is None:
         return False
-    call["send_started"] = time.perf_counter()
+    now = time.perf_counter()
+    logger = call.get("logger")
+    name = call.get("request_name") or "unknown"
+    request_id = call.get("request_id") or "-"
+    if call.get("send_started") is None:
+        call["send_started"] = now
+        queued = call.get("queued") or now
+        if _should_trace(name):
+            _log_conn_trace(
+                logger,
+                "SOCKET SEND",
+                request=name,
+                request_id=request_id,
+                queue_to_wire_ms=(now - queued) * 1000.0,
+            )
+        return True
+    call["resend_count"] = int(call.get("resend_count") or 0) + 1
+    call["last_resend"] = now
+    _log_conn_trace(
+        logger,
+        "SOCKET RESEND",
+        request=name,
+        request_id=request_id,
+        resend_count=call["resend_count"],
+        since_first_send_ms=(now - call["send_started"]) * 1000.0,
+    )
     return True
+
+
+def _log_conn_trace(logger, event, **fields):
+    if logger is None:
+        return
+    parts = [f"CONN TRACE {event}"]
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if key == "extra":
+            parts.append(str(value))
+        elif isinstance(value, float):
+            parts.append(f"{key}={value:.1f}")
+        else:
+            parts.append(f"{key}={value}")
+    try:
+        logger.log_info(" ".join(parts))
+    except Exception:
+        pass
+
+
+def _pending_trace(sender, limit=12):
+    try:
+        from modules.connection_guard import inspect_pending
+        rows = inspect_pending(sender)
+    except Exception:
+        rows = []
+    parts = []
+    ids = []
+    for row in rows[:limit]:
+        ids.append(row.get("msg_id"))
+        parts.append(
+            f"{row.get('request_type')}:msg={row.get('msg_id')}"
+            f":age_ms={float(row.get('age_ms') or 0):.0f}"
+            f":done={int(bool(row.get('future_done')))}"
+        )
+    return {
+        "count": len(rows),
+        "ids": tuple(ids),
+        "text": ",".join(parts) if parts else "-",
+        "types": ",".join(
+            str(row.get("request_type") or "?") for row in rows[:limit]
+        ) or "-",
+    }
+
+
+def _snapshot_line(client):
+    bot = getattr(client, "_outgoing_sender_bot", None) if client is not None else None
+    if bot is None:
+        bot = getattr(client, "_bot", None) if client is not None else None
+    pending_tasks = 0
+    try:
+        from modules.runtime_snapshot import collect_sync, _task_counts, _rss_mb, _username_directory_size
+        if bot is not None:
+            snap = collect_sync(bot)
+            return (
+                f"pending_tasks={snap.get('pending_tasks')} "
+                f"rpc_pending={snap.get('rpc_pending')} "
+                f"sender_pending={snap.get('sender_pending')} "
+                f"memory_mb={snap.get('memory_mb')} "
+                f"username_directory_cache_size={snap.get('username_directory_cache_size')} "
+                f"event_loop_lag_ms={snap.get('event_loop_lag_ms')}"
+            )
+        pending_tasks, _active = _task_counts()
+        return (
+            f"pending_tasks={pending_tasks} "
+            f"rpc_pending={len(_INFLIGHT_RPCS)} "
+            f"sender_pending=0 "
+            f"memory_mb={_rss_mb():.1f} "
+            f"username_directory_cache_size={_username_directory_size()} "
+            f"event_loop_lag_ms=0.0"
+        )
+    except Exception:
+        return (
+            f"pending_tasks={pending_tasks} rpc_pending={len(_INFLIGHT_RPCS)} "
+            "sender_pending=0 memory_mb=0.0 username_directory_cache_size=0 "
+            "event_loop_lag_ms=0.0"
+        )
+
+
+def _is_sync_trace(request_name):
+    return str(request_name or "") in _SYNC_TRACE_REQUESTS
+
+
+def _should_trace(request_name):
+    if _is_sync_trace(request_name):
+        return True
+    started = _LAST_RECONNECT.get("started_at")
+    if started is not None and (time.perf_counter() - started) < 20.0:
+        return True
+    return False
 
 
 def pending_rpc_snapshot(sender=None):
@@ -340,27 +470,29 @@ def _hook_method(obj, name):
 
 
 def _ensure_send_hooks(client):
-    """Hook the live sender/connection once it exists (after connect)."""
-    if getattr(client, "_outgoing_send_hooks", False):
-        return
+    """Hook the live sender/connection; re-hook after reconnect if objects change."""
     sender = getattr(client, "_sender", None)
     if sender is None:
         return
-    hooked = False
     conn = getattr(sender, "_connection", None)
+    writer = getattr(conn, "_writer", None) if conn is not None else None
+    ws = getattr(writer, "_ws", None) if writer is not None else None
+    marker = (id(conn), id(writer), id(ws))
+    if getattr(client, "_outgoing_send_hook_ids", None) == marker:
+        return
+    hooked = False
     if conn is not None:
         hooked = _hook_method(conn, "send") or hooked
-        writer = getattr(conn, "_writer", None)
         if writer is not None:
             hooked = _hook_method(writer, "drain") or hooked
-            ws = getattr(writer, "_ws", None)
             if ws is not None:
                 hooked = _hook_method(ws, "send_bytes") or hooked
-    if hooked:
-        try:
+    try:
+        client._outgoing_send_hook_ids = marker
+        if hooked:
             client._outgoing_send_hooks = True
-        except (AttributeError, TypeError):
-            pass
+    except (AttributeError, TypeError):
+        pass
 
 
 def _wrap_existing(obj, name, factory):
@@ -476,6 +608,17 @@ def _ensure_reconnect_hooks(client, logger):
                 and not getattr(sender, "_reconnecting", False)
             )
             if will_start:
+                global _RECONNECT_GEN
+                _RECONNECT_GEN += 1
+                pending = _pending_trace(sender)
+                _LAST_RECONNECT["started_at"] = time.perf_counter()
+                _LAST_RECONNECT["ended_at"] = None
+                _LAST_RECONNECT["pending_before"] = pending["ids"]
+                _LAST_RECONNECT["reason"] = repr(error)
+                inflight = ",".join(
+                    str(row.get("request") or row.get("operation") or "?")
+                    for row in _INFLIGHT_RPCS.values()
+                ) or "-"
                 snapshot = pending_rpc_snapshot(sender)
                 logger.log_info(
                     "RECONNECT START "
@@ -483,6 +626,21 @@ def _ensure_reconnect_hooks(client, logger):
                     f"sender_pending={snapshot['sender_pending']} "
                     f"request_ids={_format_request_ids(snapshot)} "
                     f"operations={_format_operations(snapshot)}"
+                )
+                _log_conn_trace(
+                    logger,
+                    "RECONNECT START",
+                    reason=repr(error),
+                    gen=_RECONNECT_GEN,
+                    inflight=inflight,
+                    pending=pending["text"],
+                    sender_pending=pending["count"],
+                )
+                _log_conn_trace(
+                    logger,
+                    "SNAPSHOT",
+                    reason="reconnect_start",
+                    extra=_snapshot_line(client),
                 )
             return original(error)
         return hooked
@@ -505,12 +663,34 @@ def _ensure_reconnect_hooks(client, logger):
             elapsed_ms = (time.perf_counter() - started) * 1000
             connected = bool(getattr(sender, "_user_connected", False))
             label = "RECONNECT SUCCESS" if connected else "RECONNECT FAILED"
+            after = _pending_trace(sender)
+            before_ids = set(_LAST_RECONNECT.get("pending_before") or ())
+            after_ids = set(after["ids"])
+            replayed = sorted(before_ids.intersection(after_ids), key=str)
+            _LAST_RECONNECT["ended_at"] = time.perf_counter()
+            _LAST_RECONNECT["elapsed_ms"] = elapsed_ms
             logger.log_info(
                 f"{label} elapsed_ms={elapsed_ms:.1f} "
                 f"pending_rpc={snapshot['count']} "
                 f"sender_pending={pending_rpc_snapshot(sender)['sender_pending']} "
                 f"request_ids={_format_request_ids(snapshot)}"
             )
+            _log_conn_trace(
+                logger,
+                label,
+                elapsed_ms=elapsed_ms,
+                replayed_count=len(replayed),
+                replayed_ids=",".join(str(item) for item in replayed) or "-",
+                pending=after["text"],
+            )
+            _log_conn_trace(
+                logger,
+                "SNAPSHOT",
+                reason="reconnect_end",
+                extra=_snapshot_line(client),
+            )
+            _ensure_send_hooks(client)
+            _hook_ws_lifecycle(sender, logger)
             return result
         if not asyncio.iscoroutinefunction(original):
             def sync_hooked(last_error):
@@ -557,10 +737,67 @@ def _ensure_reconnect_hooks(client, logger):
     _wrap_existing(sender, "_start_reconnect", start_factory)
     _wrap_existing(sender, "_reconnect", reconnect_factory)
     _hook_websocket_reset(sender, logger)
+    _hook_ws_lifecycle(sender, logger)
     try:
         sender._outgoing_reconnect_hooks = True
     except (AttributeError, TypeError):
         pass
+
+
+def _hook_ws_lifecycle(sender, logger):
+    """Log WebSocket close/recv death without changing disconnect behavior."""
+    conn = getattr(sender, "_connection", None)
+    if conn is None:
+        return
+
+    def _wrap_close(obj, name, source):
+        original = getattr(obj, name, None)
+        if original is None or getattr(original, "_outgoing_ws_close_hook", False):
+            return
+        if asyncio.iscoroutinefunction(original):
+            async def hooked(*args, **kwargs):
+                pending = _pending_trace(sender)
+                inflight = ",".join(
+                    str(row.get("request") or row.get("operation") or "?")
+                    for row in _INFLIGHT_RPCS.values()
+                ) or "-"
+                _log_conn_trace(
+                    logger,
+                    "WS CLOSE",
+                    source=source,
+                    inflight=inflight,
+                    pending=pending["text"],
+                    sender_pending=pending["count"],
+                )
+                return await original(*args, **kwargs)
+        else:
+            def hooked(*args, **kwargs):
+                pending = _pending_trace(sender)
+                inflight = ",".join(
+                    str(row.get("request") or row.get("operation") or "?")
+                    for row in _INFLIGHT_RPCS.values()
+                ) or "-"
+                _log_conn_trace(
+                    logger,
+                    "WS CLOSE",
+                    source=source,
+                    inflight=inflight,
+                    pending=pending["text"],
+                    sender_pending=pending["count"],
+                )
+                return original(*args, **kwargs)
+        hooked._outgoing_ws_close_hook = True
+        try:
+            setattr(obj, name, hooked)
+        except (AttributeError, TypeError):
+            pass
+
+    _wrap_close(conn, "disconnect", "connection.disconnect")
+    _wrap_close(conn, "close", "connection.close")
+    writer = getattr(conn, "_writer", None)
+    ws = getattr(writer, "_ws", None) if writer is not None else None
+    if ws is not None:
+        _wrap_close(ws, "close", "websocket.close")
 
 
 def _hook_websocket_reset(sender, logger):
@@ -648,16 +885,39 @@ def _wrap_call(client, logger):
         request_id = None if op_state is None else op_state.get("request_id")
         if not request_id:
             request_id = f"{id(asyncio.current_task()):x}-{time.monotonic_ns():x}"
-        call = {"send_started": None, "queued": time.perf_counter()}
+        request_name = _request_name(request)
+        gen_at_start = _RECONNECT_GEN
+        call = {
+            "send_started": None,
+            "queued": time.perf_counter(),
+            "logger": logger,
+            "request_name": request_name,
+            "request_id": request_id,
+            "resend_count": 0,
+        }
         token = _CALL_STATE.set(call)
         inflight_key = _register_inflight(request, {
             "request_id": request_id,
-            "operation": operation or _request_name(request),
+            "operation": operation or request_name,
             "chat_id": chat_id,
-            "request": _request_name(request),
+            "request": request_name,
         })
         result = "success"
+        sender = None
+        if args:
+            sender = args[0]
+        elif client is not None:
+            sender = getattr(client, "_sender", None)
         try:
+            _log_conn_trace(
+                logger,
+                "AWAIT START",
+                request=request_name,
+                request_id=request_id,
+                chat_id=chat_id,
+                reconnect_gen=gen_at_start,
+                pending=_pending_trace(sender)["text"],
+            )
             return await original(*args, **kwargs)
         except asyncio.CancelledError:
             result = "cancelled"
@@ -676,6 +936,25 @@ def _wrap_call(client, logger):
                 rpc_wait_ms = (returned - send_started) * 1000
             post_rpc_ms = (time.perf_counter() - returned) * 1000
             total_rpc_ms = (time.perf_counter() - call["queued"]) * 1000
+            reconnects = max(0, _RECONNECT_GEN - gen_at_start)
+            reconnect_ms = 0.0
+            if reconnects and _LAST_RECONNECT.get("elapsed_ms"):
+                reconnect_ms = float(_LAST_RECONNECT.get("elapsed_ms") or 0.0)
+            if _should_trace(request_name) or reconnects or rpc_wait_ms >= 2000:
+                _log_conn_trace(
+                    logger,
+                    "RESPONSE" if not str(result).startswith("failed") and result != "cancelled" else "AWAIT END",
+                    request=request_name,
+                    request_id=request_id,
+                    result=result,
+                    await_ms=total_rpc_ms,
+                    socket_wait_ms=connection_wait_ms,
+                    rpc_await_ms=rpc_wait_ms,
+                    reconnects=reconnects,
+                    reconnect_ms=reconnect_ms,
+                    resend_count=int(call.get("resend_count") or 0),
+                    socket_sent=int(send_started is not None),
+                )
             _CALL_STATE.reset(token)
             _unregister_inflight(inflight_key)
             record = {

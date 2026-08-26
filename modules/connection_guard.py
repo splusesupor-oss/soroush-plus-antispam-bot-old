@@ -613,6 +613,11 @@ def install_rpc_timeout(client, timeout=60.0, on_timeout=None, logger=None):
                     f"CONNECTION GUARD rpc timeout after {timeout}s "
                     f"request={name} dropped_pending={dropped}"
                 )
+                logger.log_info(
+                    "CONN TRACE TIMEOUT "
+                    f"request={name} after_s={timeout} "
+                    f"dropped_pending={dropped}"
+                )
             if on_timeout is not None:
                 on_timeout(request)
             raise RpcTimeout(f"{name} did not answer within {timeout}s") from None
