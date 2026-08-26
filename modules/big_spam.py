@@ -99,6 +99,11 @@ _AD_MARKERS = (
     "اد پیوی",
     "اد پی وی",
     "پیوی پیام",
+    "حال پی",
+    "تمام سانسور",
+    "حال میدم",
+    "فیلم پی",
+    "🔞",
 )
 
 _COMPACT_STEMS = (
@@ -120,6 +125,10 @@ _COMPACT_STEMS = (
     "ادپیوی",
     "تادیرنشده",
     "بکوب",
+    "حالپی",
+    "تمامسانسور",
+    "حالمیدم",
+    "فیلمپی",
 )
 
 _PROMO_RE = re.compile(
@@ -130,7 +139,8 @@ _PROMO_RE = re.compile(
     r"(?:جوین|عضو)\s*(?:شو|کن|کانال)|"
     r"فیلم\s*(?:گذاشتم|دارم|جدید)|"
     r"اد\s*پی\s*وی|"
-    r"تا\s*دیر\s*نشده|بکوب"
+    r"تا\s*دیر\s*نشده|بکوب|"
+    r"حال\s*پی|تمام\s*سانسور|حال\s*می(?:د|ذ)م|فیلم\s*پی|🔞"
 )
 
 _TRANSLATE = str.maketrans({
@@ -266,6 +276,9 @@ def is_contentful(text):
 
 
 def looks_promotional(text):
+    raw = str(text or "")
+    if "🔞" in raw:
+        return True
     normalized = normalize_text(text)
     if not normalized:
         return False

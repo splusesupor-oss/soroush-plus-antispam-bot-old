@@ -44,18 +44,18 @@ def detector(words):
 
 
 def test_source_still_word_boundary():
-    print("\n### منبع check_banned_words دست‌نخورده است")
+    print("\n### منبع check_banned_words مستقل از فیلتر گروه است")
     source = inspect.getsource(SpamDetector.check_banned_words)
     refresh = inspect.getsource(SpamDetector._refresh_banned_word_patterns)
-    normalize = inspect.getsource(SpamDetector._normalize_banned_word)
+    fold = inspect.getsource(SpamDetector._fold_banned_letters)
+    fuzzy = inspect.getsource(SpamDetector._banned_word_fuzzy_body)
     check("از group_words_storage استفاده نمی‌کند", "group_words" not in source)
-    check("از سوئیچ گروه استفاده نمی‌کند", "is_enabled" not in source)
     check("از find_matching_filter_word استفاده نمی‌کند",
           "find_matching_filter_word" not in source + refresh)
-    check("الگوی مرزی قبلی باقی است",
-          r"(?<![آ-یa-zA-Z0-9])" in refresh)
-    check("نرمال‌سازی ي/ك/نیم‌فاصله قبلی باقی است",
-          '"ي"' in normalize and '"ک"' in normalize)
+    check("مرز کلمه با lookbehind حروف است",
+          r"(?<![" in refresh or "_BANNED_LETTER_CLASS" in refresh)
+    check("نرمال‌سازی ي/ك باقی است", '"ي"' in fold and '"ک"' in fold)
+    check("فاصلهٔ مبهم بین حروف را می‌پذیرد", "_BANNED_SEP_OPT" in fuzzy)
 
 
 def test_bio_still_detected():

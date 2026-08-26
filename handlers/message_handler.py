@@ -255,7 +255,14 @@ def _send_spam_cleanup_notice(trigger):
 def _detector_moderation_trigger(reason):
     """Separate content/link filters from genuine spam-wave notifications."""
     value = str(reason or "")
-    if value.startswith("کلمه ممنوعه (") or value.startswith("لینک مشکوک ("):
+    if "spam_banned_word" in value:
+        return "spam"
+    if (
+        value.startswith("banned_word")
+        or value.startswith("کلمه ممنوعه (")
+        or "کلمه ممنوعه (" in value
+        or value.startswith("لینک مشکوک (")
+    ):
         return "filter_group"
     return "spam"
 
@@ -3076,6 +3083,23 @@ async def handle_new_message(bot, event):
                 f"message_id={getattr(event.message, 'id', None)} "
                 f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
             )
+        # Banned words run before the spam/burst filter so obfuscated
+        # forms map to the original listed word, not to generic flood.
+        banned_precheck = False
+        banned_precheck_reason = None
+        if (not skip_inspect and not event.is_private and not admin_bypass
+                and not native_admin_warn_only):
+            banned_precheck, banned_precheck_reason = bot.detector.check_banned_words(
+                message_text, chat_id
+            )
+            if banned_precheck:
+                bot.logger.log_info(
+                    "BANNED WORD PRECHECK "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"reason=banned_word detail={banned_precheck_reason!r} "
+                    f"text={message_text[:60]!r}"
+                )
+
         # Fast lane for promotional/repeated payloads: it runs immediately
         # after the in-memory tracker update. Two clearly similar ads, or
         # one packed promotional box, queue the ban and start cleanup now.
@@ -3088,6 +3112,13 @@ async def handle_new_message(bot, event):
                 current_id = getattr(event.message, "id", None)
                 if current_id:
                     big_ids.add(current_id)
+                if banned_precheck:
+                    big_reason = f"spam_banned_word {banned_precheck_reason}"
+                    bot.logger.log_info(
+                        "SPAM BANNED WORD "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"reason={big_reason!r}"
+                    )
                 _queue_big_spam_ban(
                     bot, event, chat_id, user_id, sender, big_ids, big_reason
                 )
@@ -7354,8 +7385,12 @@ async def handle_new_message(bot, event):
                 _strict_on = _is_strict_check(chat_id)
                 if not _strict_on:
                     bot.logger.log_info(f"BANNED WORD SKIP strict_off chat_id={chat_id} text={message_text[:60]!r}")
-                elif is_spam and "کلمه ممنوعه" in str(reason):
-                    bot.logger.log_info(f"BANNED WORD HIT chat_id={chat_id} reason={reason!r} text={message_text[:60]!r}")
+                elif is_spam and ("کلمه ممنوعه" in str(reason) or "banned_word" in str(reason)):
+                    kind = "spam_banned_word" if "spam_banned_word" in str(reason) else "banned_word"
+                    bot.logger.log_info(
+                        f"BANNED WORD HIT kind={kind} chat_id={chat_id} "
+                        f"reason={reason!r} text={message_text[:60]!r}"
+                    )
                 elif not is_spam:
                     # Check if text would have matched banned word but strict off or no match
                     # We do a quick check without full pattern to avoid double work

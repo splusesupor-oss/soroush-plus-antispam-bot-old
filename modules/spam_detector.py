@@ -49,27 +49,97 @@ class SpamDetector:
         # امتیاز برای تصمیم ترکیبی
         self.spam_score_threshold = 2
 
+    _BANNED_LETTER_CLASS = r"a-zA-Z0-9_\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFC"
+    # Optional separators between letters of one token (space, ZWNJ, tatweel, punct).
+    _BANNED_SEP_OPT = r"[\s\u200c\u200d\u0640\W_]*"
+    # Required separator where the listed phrase itself contains a space.
+    _BANNED_SEP_REQ = r"[\s\u200c\u200d\u0640\W_]+"
+    _BANNED_SIMILAR = {
+        "ک": "کك",
+        "ی": "یيىئ",
+        "س": "سصث",
+        "ا": "اأإآٱ",
+        "ه": "هة",
+        "و": "وؤ",
+        "ت": "تط",
+    }
+
     def _refresh_banned_word_patterns(self):
         version = getattr(self.config, "_banned_words_version", 0)
         if version == self._banned_words_version:
             return
-        persian_chars = r"a-zA-Z0-9_\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFC"
         patterns = []
         for raw_word in self.config.banned_words:
-            word = self._normalize_banned_word(raw_word)
-            if word:
-                patterns.append((word, re.compile(
-                    rf"(?<![{persian_chars}]){re.escape(word)}(?![{persian_chars}])"
-                )))
+            display = str(raw_word or "").strip()
+            body = self._banned_word_fuzzy_body(display)
+            if not display or not body:
+                continue
+            patterns.append((
+                display,
+                re.compile(
+                    rf"(?<![{self._BANNED_LETTER_CLASS}]){body}"
+                    rf"(?![{self._BANNED_LETTER_CLASS}])",
+                    re.UNICODE,
+                ),
+            ))
+        # Longer phrases win so «فیلم پی» is not reported as «پی».
+        patterns.sort(key=lambda item: len(item[0]), reverse=True)
         self._banned_word_patterns = tuple(patterns)
         self._banned_words_version = version
+
+    @classmethod
+    def _fold_banned_letters(cls, value):
+        """Unify Arabic/Persian lookalikes; keep spaces/punct for fuzzy matching."""
+        if not value:
+            return ""
+        t = str(value).lower().replace("\ufe0f", "").replace("\ufe0e", "")
+        t = re.sub(r"[\u0640\u064b-\u065f\u0670]", "", t)
+        t = (
+            t.replace("ي", "ی").replace("ى", "ی").replace("ئ", "ی")
+            .replace("ك", "ک")
+            .replace("ة", "ه")
+            .replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ٱ", "ا")
+            .replace("ؤ", "و")
+            .replace("ص", "س")
+        )
+        return t
+
+    @classmethod
+    def _banned_char_class(cls, ch):
+        alts = cls._BANNED_SIMILAR.get(ch, ch)
+        if len(alts) == 1:
+            return re.escape(ch)
+        return "[" + "".join(re.escape(part) for part in dict.fromkeys(alts)) + "]"
+
+    @classmethod
+    def _banned_word_fuzzy_body(cls, word):
+        """Build a body that accepts spaced/ZWNJ/punctuated/elongated forms.
+
+        Spaces in the listed phrase stay required separators so «بی ام»
+        does not match «بیام». Letters of one token may be split or repeated.
+        """
+        folded = cls._fold_banned_letters(word)
+        parts = []
+        pending_required = False
+        for ch in folded:
+            if ch.isspace() or ch in "\u200c\u200d":
+                if parts:
+                    pending_required = True
+                continue
+            if pending_required:
+                parts.append(cls._BANNED_SEP_REQ)
+                pending_required = False
+            elif parts:
+                parts.append(cls._BANNED_SEP_OPT)
+            parts.append(cls._banned_char_class(ch) + r"+")
+        return "".join(parts)
 
     @staticmethod
     def _normalize_banned_word(value):
         if not value:
             return ""
         t = re.sub(r"[\u0640\u064b-\u065f]", "", str(value))
-        t = re.sub(r"[\u200c\u200d\u200e\u200f\ufeff\u00a0\-_.,/\\;:!؟،؛|()\[\]{}<>+=*&^%$#@~\"\'`«»…]+", " ", t)
+        t = re.sub(r"[\u200c\u200d\u200e\u200f\ufeff\u00a0\-_.,/\\;:!؟،؛|()\[\]{}<>+=*&^%$#@~\"'`«»…]+", " ", t)
         t = t.replace("ي", "ی").replace("ك", "ک").replace("ة", "ه").replace("آ", "ا").replace("أ", "ا").replace("إ", "ا")
         return " ".join(t.lower().split())
 
@@ -155,10 +225,13 @@ class SpamDetector:
             except Exception:
                 pass
         self._refresh_banned_word_patterns()
-        text_lower = self._normalize_banned_word(text)
+        haystack = self._fold_banned_letters(text)
+        if not haystack:
+            return False, None
         for word, pattern in self._banned_word_patterns:
-            if pattern.search(text_lower):
-                return True, f"کلمه ممنوعه ({word})"
+            if pattern.search(haystack):
+                # Obfuscated input maps back to the original listed word.
+                return True, f"banned_word کلمه ممنوعه ({word})"
         return False, None
 
     def check_spam_score(self, text: str, chat_id=None, include_banned_words=True) -> Tuple[int, List[str]]:
