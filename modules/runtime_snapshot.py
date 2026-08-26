@@ -221,23 +221,22 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
 
     rpc_pending = 0
     sender_pending = 0
+    sender_keepalive = 0
+    sender_stale = 0
+    sender_oldest = 0.0
+    sender_by_type = {}
     try:
         from modules.outgoing_profiler import pending_rpc_snapshot
         sender = getattr(getattr(bot, "client", None), "_sender", None)
         snap = pending_rpc_snapshot(sender)
         rpc_pending = int(snap.get("count") or 0)
         sender_pending = int(snap.get("sender_pending") or 0)
+        sender_keepalive = int(snap.get("sender_pending_keepalive") or 0)
+        sender_stale = int(snap.get("sender_pending_stale") or 0)
+        sender_oldest = float(snap.get("sender_pending_oldest_age_ms") or 0.0)
+        sender_by_type = dict(snap.get("sender_pending_by_type") or {})
     except Exception:
         pass
-    outgoing = getattr(bot, "outgoing_sender", None)
-    if outgoing is not None:
-        try:
-            sender_pending = max(sender_pending, int(outgoing._normal_pending()))
-        except Exception:
-            try:
-                sender_pending = max(sender_pending, _qsize_sum(getattr(outgoing, "_queues", {})))
-            except Exception:
-                pass
 
     governor = getattr(bot, "rpc_governor", None)
     governor_wait_ms = _governor_wait_ms(governor)
@@ -255,6 +254,10 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
         "rpc_pending": int(rpc_pending),
         "rpc_governor_wait_ms": round(float(governor_wait_ms), 1),
         "sender_pending": int(sender_pending),
+        "sender_pending_keepalive": int(sender_keepalive),
+        "sender_pending_stale": int(sender_stale),
+        "sender_pending_oldest_age_ms": round(sender_oldest, 1),
+        "sender_pending_by_type": sender_by_type,
         "active_auto_notice_timers": int(_notice_timer_count(bot)),
         "username_directory_cache_size": int(_username_directory_size()),
         "economy_cache_size": int(_economy_cache_size()),
@@ -307,6 +310,12 @@ def detect_issues(current: Dict[str, Any], previous: Optional[Dict[str, Any]] = 
         lines.append(
             f"RPC BACKLOG DETECTED pending={rpc_pending} sender_pending={sender_pending}"
         )
+    prev_sender = int((previous or {}).get("sender_pending") or 0)
+    for mark in (10, 20, 40, 60):
+        if sender_pending >= mark > prev_sender:
+            lines.append(
+                f"SENDER PENDING GROWTH previous={prev_sender} current={sender_pending} crossed={mark}"
+            )
 
     notices = int(current.get("active_auto_notice_timers") or 0)
     prev_notices = int((previous or {}).get("active_auto_notice_timers") or 0)
@@ -398,6 +407,8 @@ class RuntimeSnapshotMonitor:
         self.baseline: Optional[Dict[str, Any]] = None
         self._milestones_logged = set()
         self.snapshots: list[Dict[str, Any]] = []
+        self._last_force = 0.0
+        self._force_lock = False
 
     def _log(self, message: str, *, error: bool = False) -> None:
         if self.logger is None:

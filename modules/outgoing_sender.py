@@ -352,6 +352,13 @@ class OutgoingSender:
                 # one normal send consume both slots and forced urgent
                 # priority-0 notices to wait behind it.
                 gate_wait_ms = 0
+                phase_token = None
+                try:
+                    from modules.outgoing_profiler import add_rpc_phase, begin_rpc_phases
+                    phase_token, _phases = begin_rpc_phases("send_message")
+                    add_rpc_phase("queue_wait_ms", queue_wait_ms)
+                except Exception:
+                    phase_token = None
                 try:
                     # ⚠️ همیشه خارج از حالت dispatch اجرا شود: worker با
                     # create_task از داخل کانتکست dispatcher ساخته می‌شود و
@@ -390,6 +397,12 @@ class OutgoingSender:
                         self.logger.log_error(f"OUTGOING SEND FAILED chat_id={chat_id} error={e!r}")
                 finally:
                     queue.task_done()
+                    if phase_token is not None:
+                        try:
+                            from modules.outgoing_profiler import end_rpc_phases
+                            end_rpc_phases(phase_token)
+                        except Exception:
+                            pass
                     if self.logger:
                         elapsed = (time.perf_counter() - started) * 1000
                         if elapsed >= 200:
@@ -626,12 +639,27 @@ def _wrap_call_with_gate(client, logger, governor=None):
         permit = None
         t_call_start = time.perf_counter()
         call_error = False
+        phase_token = None
+        try:
+            from modules.outgoing_profiler import (
+                add_rpc_phase,
+                begin_rpc_phases,
+                current_rpc_phases,
+            )
+            if current_rpc_phases() is None:
+                phase_token, _ = begin_rpc_phases(name)
+        except Exception:
+            phase_token = None
 
         try:
             if is_low:
                 gate = _gate_for_chat(chat_for_gate)
                 gate_wait = await gate.acquire()
                 gate_acquired = True
+                try:
+                    add_rpc_phase("sender_wait_ms", gate_wait)
+                except Exception:
+                    pass
                 if gate_wait >= 20 and logger:
                     logger.log_info(
                         "OUTGOING RPC GATE "
@@ -645,7 +673,15 @@ def _wrap_call_with_gate(client, logger, governor=None):
                     urgent_send=urgent_send,
                     critical_context=critical_context,
                 )
+                gov_started = time.perf_counter()
                 permit = await governor.acquire(admission)
+                try:
+                    add_rpc_phase(
+                        "governor_wait_ms",
+                        (time.perf_counter() - gov_started) * 1000.0,
+                    )
+                except Exception:
+                    pass
 
             try:
                 return await orig(
@@ -669,6 +705,12 @@ def _wrap_call_with_gate(client, logger, governor=None):
                 permit.release()
             if is_low and gate is not None and gate_acquired:
                 _release_chat_gate(chat_for_gate, gate)
+            if phase_token is not None:
+                try:
+                    from modules.outgoing_profiler import end_rpc_phases
+                    end_rpc_phases(phase_token)
+                except Exception:
+                    pass
 
     wrapped._patched_gate = True
     wrapped._rpc_governor = governor

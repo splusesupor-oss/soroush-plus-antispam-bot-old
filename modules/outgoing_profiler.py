@@ -19,10 +19,13 @@ _RESPONSE_RPC_MS = contextvars.ContextVar("response_rpc_ms", default=0.0)
 _RPC_DEPTH = contextvars.ContextVar("outgoing_rpc_depth", default=0)
 _OP_STATE = contextvars.ContextVar("outgoing_op_state", default=None)
 _CALL_STATE = contextvars.ContextVar("outgoing_call_state", default=None)
+_RPC_PHASES = contextvars.ContextVar("outgoing_rpc_phases", default=None)
 _INFLIGHT_RPCS = {}
 _RPC_DEBUG = os.getenv("BOT_RPC_DEBUG", "").strip() == "1"
 # 400–800ms is normal successful Soroush server RTT, not a local failure.
 _RPC_SLOW_WARNING_MS = float(os.getenv("BOT_RPC_SLOW_WARNING_MS", "1500"))
+_RPC_SLOW_MS = float(os.getenv("BOT_RPC_SLOW_MS", "500"))
+_RPC_CRITICAL_MS = float(os.getenv("BOT_RPC_CRITICAL_MS", "2000"))
 
 _TRACED_OPS = {
     "send_message",
@@ -71,18 +74,119 @@ def pending_rpc_snapshot(sender=None):
     """In-flight traced RPCs, plus SPlusthon ``_pending_state`` size if present."""
     rows = list(_INFLIGHT_RPCS.values())
     sender_pending = 0
+    breakdown = {
+        "keepalive": 0,
+        "stale": 0,
+        "live": 0,
+        "oldest_age_ms": 0.0,
+        "by_type": {},
+        "rows": [],
+    }
     if sender is not None:
         pending = getattr(sender, "_pending_state", None) or {}
         try:
             sender_pending = len(pending)
         except TypeError:
             sender_pending = 0
+        try:
+            from modules.connection_guard import pending_breakdown
+            breakdown = pending_breakdown(sender)
+            sender_pending = int(breakdown.get("count") or sender_pending)
+        except Exception:
+            pass
     return {
         "count": len(rows),
         "sender_pending": sender_pending,
+        "sender_pending_keepalive": int(breakdown.get("keepalive") or 0),
+        "sender_pending_stale": int(breakdown.get("stale") or 0),
+        "sender_pending_live": int(breakdown.get("live") or 0),
+        "sender_pending_oldest_age_ms": float(breakdown.get("oldest_age_ms") or 0.0),
+        "sender_pending_by_type": dict(breakdown.get("by_type") or {}),
+        "sender_pending_rows": list(breakdown.get("rows") or ()),
         "request_ids": [row.get("request_id") for row in rows if row.get("request_id")],
         "operations": [row.get("operation") for row in rows if row.get("operation")],
     }
+
+
+def begin_rpc_phases(operation=None):
+    """Start a timing bag that queue / governor / sender / _call all fill."""
+    state = {
+        "queue_wait_ms": 0.0,
+        "governor_wait_ms": 0.0,
+        "sender_wait_ms": 0.0,
+        "rpc_await_ms": 0.0,
+        "total_ms": 0.0,
+        "operation": operation,
+        "started": time.perf_counter(),
+    }
+    return _RPC_PHASES.set(state), state
+
+
+def current_rpc_phases():
+    return _RPC_PHASES.get()
+
+
+def add_rpc_phase(name, milliseconds):
+    state = _RPC_PHASES.get()
+    if state is None:
+        return None
+    try:
+        state[name] = float(state.get(name, 0.0) or 0.0) + float(milliseconds or 0.0)
+    except (TypeError, ValueError):
+        pass
+    return state
+
+
+def end_rpc_phases(token):
+    if token is not None:
+        try:
+            _RPC_PHASES.reset(token)
+        except Exception:
+            pass
+
+
+def _force_runtime_snapshot(owner, reason):
+    bot = owner
+    if owner is not None and not hasattr(owner, "runtime_snapshot"):
+        bot = getattr(owner, "_outgoing_sender_bot", None)
+    monitor = getattr(bot, "runtime_snapshot", None) if bot is not None else None
+    request = getattr(monitor, "request_immediate", None)
+    if callable(request):
+        request(reason)
+
+
+def _log_rpc_budget(logger, owner, operation, phases, extra=None):
+    if logger is None or phases is None:
+        return
+    queue_wait = float(phases.get("queue_wait_ms") or 0.0)
+    governor_wait = float(phases.get("governor_wait_ms") or 0.0)
+    sender_wait = float(phases.get("sender_wait_ms") or 0.0)
+    rpc_await = float(phases.get("rpc_await_ms") or 0.0)
+    started = phases.get("started")
+    if started is not None:
+        total = max(0.0, (time.perf_counter() - started) * 1000.0)
+    else:
+        total = queue_wait + governor_wait + sender_wait + rpc_await
+    phases["total_ms"] = total
+    sender = getattr(owner, "_sender", None) if owner is not None else None
+    snapshot = pending_rpc_snapshot(sender)
+    sender_pending = int(snapshot.get("sender_pending") or 0)
+    line = (
+        f"operation={operation or phases.get('operation') or 'unknown'} "
+        f"queue_wait_ms={queue_wait:.1f} "
+        f"governor_wait_ms={governor_wait:.1f} "
+        f"sender_wait_ms={sender_wait:.1f} "
+        f"rpc_await_ms={rpc_await:.1f} "
+        f"total_ms={total:.1f} "
+        f"sender_pending={sender_pending}"
+    )
+    if extra:
+        line = f"{line} {extra}"
+    if total >= _RPC_CRITICAL_MS:
+        logger.log_error(f"OUTGOING RPC CRITICAL {line}")
+        _force_runtime_snapshot(owner, "rpc_critical")
+    elif total >= _RPC_SLOW_MS:
+        logger.log_info(f"OUTGOING RPC SLOW {line}")
 
 
 def _format_request_ids(snapshot):
@@ -297,12 +401,12 @@ def _ensure_reconnect_hooks(client, logger):
             try:
                 from modules.connection_guard import (
                     drop_completed_pending,
-                    drop_stale_pending,
                     note_pending,
+                    reclaim_dead_pending,
                 )
                 drop_completed_pending(sender)
                 note_pending(sender)
-                drop_stale_pending(sender, time.monotonic() - 180)
+                reclaim_dead_pending(sender, logger=logger)
             except Exception:
                 pass
             outstanding = getattr(sender, "_ping", None)
@@ -580,6 +684,12 @@ def _wrap_call(client, logger):
             if op_state is not None:
                 op_state.setdefault("calls", []).append(record)
                 op_state["last_return"] = time.perf_counter()
+            phases = current_rpc_phases()
+            if phases is not None:
+                phases["rpc_await_ms"] = float(phases.get("rpc_await_ms") or 0.0) + rpc_wait_ms
+                phases["sender_wait_ms"] = float(phases.get("sender_wait_ms") or 0.0) + connection_wait_ms
+                if not phases.get("operation"):
+                    phases["operation"] = operation or _request_name(request)
             should_log = (
                 (operation in _TRACED_OPS)
                 or _RPC_DEBUG
@@ -587,6 +697,20 @@ def _wrap_call(client, logger):
             )
             if should_log and "RpcOverloadError" not in result:
                 _log_trace(logger, record)
+            if "RpcOverloadError" not in result:
+                _log_rpc_budget(
+                    logger,
+                    client,
+                    operation or _request_name(request),
+                    phases if phases is not None else {
+                        "queue_wait_ms": 0.0,
+                        "governor_wait_ms": 0.0,
+                        "sender_wait_ms": connection_wait_ms,
+                        "rpc_await_ms": rpc_wait_ms,
+                        "started": call["queued"],
+                    },
+                    extra=f"result={result}",
+                )
 
     measured._outgoing_profiled = True
     try:

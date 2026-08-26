@@ -46,13 +46,35 @@ def remember(chat_id, user_id, username):
     key = normalize(username)
     if not key or user_id is None:
         return None
-    chat = accounts.chat_key(chat_id)
-    with storage.transaction(defer=True) as data:
-        book = data.setdefault("usernames", {}).setdefault(chat, {})
-        if book.get(key) == str(user_id):
-            return str(user_id)
-        book[key] = str(user_id)
-        return str(user_id)
+    try:
+        chat = accounts.chat_key(chat_id)
+    except Exception:
+        return None
+    target = str(user_id)
+    try:
+        existing = storage.read_path("usernames", chat, key, default=None)
+        if existing is not None and str(existing) == target:
+            return target
+    except Exception:
+        existing = None
+    try:
+        with storage.transaction(defer=True) as data:
+            if not isinstance(data, dict):
+                return None
+            books = data.get("usernames")
+            if not isinstance(books, dict):
+                books = {}
+                data["usernames"] = books
+            book = books.get(chat)
+            if not isinstance(book, dict):
+                book = {}
+                books[chat] = book
+            if book.get(key) == target:
+                return target
+            book[key] = target
+            return target
+    except Exception:
+        return None
 
 
 def lookup(chat_id, username):

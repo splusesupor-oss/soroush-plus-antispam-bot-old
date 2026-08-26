@@ -326,6 +326,165 @@ def drop_completed_pending(sender):
     return removed
 
 
+_KEEPALIVE_REQUESTS = frozenset({
+    "PingRequest",
+    "PingDelayDisconnectRequest",
+    "MsgsAck",
+    "HttpWait",
+    "Pong",
+})
+STALE_LOG_SECONDS = 15.0
+KEEPALIVE_PENDING_TTL = 30.0
+RPC_PENDING_TTL = 60.0
+
+
+def _state_request_name(state):
+    request = getattr(state, "request", None)
+    if request is None:
+        return "unknown"
+    try:
+        return type(request).__name__
+    except Exception:
+        return "unknown"
+
+
+def inspect_pending(sender):
+    """Read-only view of ``sender._pending_state`` rows."""
+    pending = getattr(sender, "_pending_state", None)
+    if not pending or not hasattr(pending, "items"):
+        return []
+    table = _seen_at(sender)
+    now = time.monotonic()
+    rows = []
+    for msg_id, state in list(pending.items()):
+        future = getattr(state, "future", None)
+        started = table.get(msg_id)
+        request_type = _state_request_name(state)
+        age_ms = None if started is None else max(0.0, (now - started) * 1000.0)
+        done = future is None or bool(getattr(future, "done", lambda: True)())
+        cancelled = bool(
+            future is not None and getattr(future, "cancelled", lambda: False)()
+        )
+        rows.append({
+            "msg_id": msg_id,
+            "request_type": request_type,
+            "operation": request_type,
+            "age_ms": 0.0 if age_ms is None else round(age_ms, 1),
+            "age_known": started is not None,
+            "future_done": done,
+            "future_cancelled": cancelled,
+            "is_keepalive": request_type in _KEEPALIVE_REQUESTS,
+        })
+    return rows
+
+
+def pending_breakdown(sender):
+    """Compact counters for snapshots. Never mutates sender state."""
+    rows = inspect_pending(sender)
+    by_type = {}
+    stale = 0
+    oldest = 0.0
+    keepalive = 0
+    live = 0
+    for row in rows:
+        name = row["request_type"] or "unknown"
+        by_type[name] = by_type.get(name, 0) + 1
+        age = float(row.get("age_ms") or 0.0)
+        oldest = max(oldest, age)
+        if row.get("is_keepalive"):
+            keepalive += 1
+        if row.get("future_done") or row.get("future_cancelled") or age >= STALE_LOG_SECONDS * 1000:
+            stale += 1
+        elif not row.get("future_done"):
+            live += 1
+    return {
+        "count": len(rows),
+        "keepalive": keepalive,
+        "stale": stale,
+        "live": live,
+        "oldest_age_ms": round(oldest, 1),
+        "by_type": by_type,
+        "rows": rows,
+    }
+
+
+def drop_request_pending(sender, request):
+    """Remove the sender row for this exact request after _call finishes."""
+    pending = getattr(sender, "_pending_state", None)
+    if not pending or request is None or not hasattr(pending, "items"):
+        return 0
+    table = _seen_at(sender)
+    removed = 0
+    for msg_id, state in list(pending.items()):
+        if getattr(state, "request", None) is not request:
+            continue
+        pending.pop(msg_id, None)
+        table.pop(msg_id, None)
+        future = getattr(state, "future", None)
+        if future is not None and not future.done():
+            future.cancel()
+        removed += 1
+    return removed
+
+
+def reclaim_dead_pending(
+    sender,
+    *,
+    now=None,
+    rpc_timeout=RPC_PENDING_TTL,
+    keepalive_ttl=KEEPALIVE_PENDING_TTL,
+    logger=None,
+    log_stale=True,
+):
+    """Remove only states that cannot still be a live application RPC.
+
+    Live Send/Delete/moderation rows younger than ``rpc_timeout`` stay.
+    Completed, cancelled, leftover keepalive, and rows older than the
+    RPC timeout are removed after ``STALE SENDER PENDING`` is logged.
+    """
+    pending = getattr(sender, "_pending_state", None)
+    if not pending or not hasattr(pending, "items"):
+        return 0
+    if now is None:
+        now = time.monotonic()
+    table = _seen_at(sender)
+    removed = 0
+    for msg_id, state in list(pending.items()):
+        future = getattr(state, "future", None)
+        started = table.get(msg_id)
+        request_type = _state_request_name(state)
+        age = None if started is None else max(0.0, now - started)
+        done = future is None or bool(getattr(future, "done", lambda: True)())
+        cancelled = bool(
+            future is not None and getattr(future, "cancelled", lambda: False)()
+        )
+        is_keepalive = request_type in _KEEPALIVE_REQUESTS
+        if log_stale and logger is not None and age is not None and age >= STALE_LOG_SECONDS:
+            logger.log_info(
+                "STALE SENDER PENDING "
+                f"age_ms={age * 1000.0:.1f} "
+                f"request_type={request_type} "
+                f"operation={request_type} "
+                f"future_done={int(done)} "
+                f"keepalive={int(is_keepalive)}"
+            )
+        should_drop = False
+        if done or cancelled:
+            should_drop = True
+        elif is_keepalive and (age is None or age >= float(keepalive_ttl)):
+            should_drop = True
+        elif age is not None and age >= float(rpc_timeout):
+            should_drop = True
+        if not should_drop:
+            continue
+        pending.pop(msg_id, None)
+        table.pop(msg_id, None)
+        if future is not None and not future.done():
+            future.cancel()
+        removed += 1
+    return removed
+
+
 def drop_stale_pending(sender, deadline):
     """درخواست‌های معلقی که از مهلت گذشته‌اند را از جدول سِندر پاک می‌کند.
 
@@ -400,6 +559,7 @@ def install_rpc_timeout(client, timeout=60.0, on_timeout=None, logger=None):
             # هر چیزی که پیش از شروع این درخواست معلق مانده قطعاً
             # زامبی است؛ همراه با خودِ این درخواست پاک می‌شود.
             dropped = drop_stale_pending(sender, started)
+            dropped += drop_request_pending(sender, request)
             if logger is not None:
                 logger.log_error(
                     f"CONNECTION GUARD rpc timeout after {timeout}s "
@@ -408,6 +568,15 @@ def install_rpc_timeout(client, timeout=60.0, on_timeout=None, logger=None):
             if on_timeout is not None:
                 on_timeout(request)
             raise RpcTimeout(f"{name} did not answer within {timeout}s") from None
+        except asyncio.CancelledError:
+            drop_request_pending(sender, request)
+            drop_completed_pending(sender)
+            raise
+        finally:
+            # Success, exception, timeout or cancel: this request's await
+            # is over. Leftover completed rows must not stay in the map.
+            drop_completed_pending(sender)
+            drop_request_pending(sender, request)
 
     setattr(_call, _RPC_MARKER, True)
     client._call = _call

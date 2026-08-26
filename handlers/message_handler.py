@@ -99,6 +99,7 @@ from modules.reminders import begin as begin_reminder, waiting as waiting_remind
 from modules.translation import begin as begin_translation, waiting as waiting_translation, clear as clear_translation, translate_to_persian
 # 💰 اقتصاد: تنها از راه API عمومی. هیچ دسترسی مستقیمی به دیتابیس نیست.
 import economy
+from economy import directory as username_directory
 from economy import (
     get_profile as get_coin_profile,
     get_rank as coin_rank,
@@ -3489,11 +3490,11 @@ async def handle_new_message(bot, event):
         # ------------------------------------------------------------------
         if not event.is_private:
             try:
-                economy.directory.remember(
+                username_directory.remember(
                     chat_id, user_id, getattr(sender, "username", None),
                 )
             except Exception as error:
-                bot.logger.log_error(f"USERNAME DIRECTORY FAILED {error!r}")
+                _log_username_directory_failure(bot, error)
 
         # ------------------------------------------------------------------
         # ⏳ تاریخ انقضای گروه — پیش از هر دستور دیگری.

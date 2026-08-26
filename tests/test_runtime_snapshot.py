@@ -117,6 +117,7 @@ def test_reads_existing_queue_sizes_only():
         outgoing_sender=SimpleNamespace(_normal_pending=lambda: 6, _queues={}),
         notice_cleanup=SimpleNamespace(_items={"g1": [{}, {}], "g2": [{}]}, _workers={}),
         reply_input_peer_cache={"u1": object(), "u2": object()},
+        client=SimpleNamespace(_sender=SimpleNamespace(_pending_state={i: object() for i in range(6)})),
         rpc_governor=SimpleNamespace(_queues={
             2: {"g1": [FakeWaiter(wait_ms=80), FakeWaiter(wait_ms=10, done=True)]},
         }),
@@ -206,6 +207,9 @@ def test_burst_then_backlog_appears_in_logs():
         bot.message_delete_queue._queues["g1"] = FakeQueue(12)
         bot.group_dispatcher._normal_pending["g1"] = 15
         bot.outgoing_sender = SimpleNamespace(_normal_pending=lambda: 11, _queues={})
+        bot.client = SimpleNamespace(
+            _sender=SimpleNamespace(_pending_state={i: object() for i in range(11)})
+        )
         bot.notice_cleanup._items["g1"] = [{} for _ in range(9)]
         bot.reply_input_peer_cache.update({f"u{i}": i for i in range(20)})
         await monitor.emit()

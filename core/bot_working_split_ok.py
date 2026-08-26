@@ -830,12 +830,10 @@ class SoroushAntiSpamBot:
                     try:
                         _sender = getattr(self.client, "_sender", None)
                         if _sender is not None:
-                            _dropped = connection_guard.drop_completed_pending(
-                                _sender
-                            )
                             connection_guard.note_pending(_sender)
-                            _dropped += connection_guard.drop_stale_pending(
-                                _sender, time.monotonic() - 180)
+                            _dropped = connection_guard.reclaim_dead_pending(
+                                _sender, logger=self.logger
+                            )
                             if _dropped:
                                 _left = len(
                                     getattr(_sender, "_pending_state", None)
