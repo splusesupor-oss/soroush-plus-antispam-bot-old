@@ -67,6 +67,10 @@ from handlers.message_handler import (
     _resolved_event_peer,
 )
 from handlers.broadcast_handler import handle_private_broadcast
+from handlers.private_handler import (
+    register_private_handlers,
+    try_handle_private_start,
+)
 from modules.name_family import cancel_round as cancel_name_family_round
 from modules.broadcast_state import (
     BROADCAST_COMMAND_WORDS,
@@ -2319,6 +2323,14 @@ class SoroushAntiSpamBot:
             Returning immediately lets SPlusthon keep delivering other chats
             while this chat's worker processes its own queue.
             """
+            try:
+                if await try_handle_private_start(self, event):
+                    return
+            except Exception as private_start_error:
+                self.logger.log_error(
+                    "PRIVATE START FAILED "
+                    f"error={private_start_error!r}"
+                )
             raw_text = ""
             try:
                 message = getattr(event, "message", None)
@@ -2362,6 +2374,8 @@ class SoroushAntiSpamBot:
                 kind=kind,
                 on_overflow=lambda ev=event: self._overflow_message(ev),
             )
+
+        register_private_handlers(self)
 
         # ⛑️ حلقهٔ اصلی: مالکِ بازسازی، supervisor است (با client_factory
         # که یک SoroushClient کاملاً جدید با سشن تازه می‌سازد و self.client
@@ -2467,4 +2481,3 @@ class SoroushAntiSpamBot:
 
         except Exception as e:
             print("delete spam error:", e)
-
