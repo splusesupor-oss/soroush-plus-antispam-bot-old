@@ -477,6 +477,121 @@ def test_keepalive_ping_bypasses_governor_in_call_wrapper():
     assert after["holders"] == []
 
 
+def test_send_and_delete_do_not_share_one_slot():
+    async def scenario():
+        governor = RpcGovernor(total_limit=2, delete_limit=1, send_limit=1)
+        delete_permit = await governor.acquire(admission(P1_DELETE, "delete", "A"))
+        send_permit = await asyncio.wait_for(
+            governor.acquire(admission(P2_SEND, "send", "B")),
+            timeout=0.05,
+        )
+        snap = governor.snapshot()
+        extra_send = asyncio.create_task(
+            governor.acquire(admission(P2_SEND, "send", "C"))
+        )
+        extra_delete = asyncio.create_task(
+            governor.acquire(admission(P1_DELETE, "delete", "D"))
+        )
+        await asyncio.sleep(0)
+        same_bucket_blocked = (not extra_send.done()) and (not extra_delete.done())
+        delete_permit.release()
+        extra_delete = await asyncio.wait_for(extra_delete, timeout=0.05)
+        send_permit.release()
+        extra_send = await asyncio.wait_for(extra_send, timeout=0.05)
+        extra_delete.release()
+        extra_send.release()
+        return snap, same_bucket_blocked, governor.snapshot()
+
+    snap, blocked, after = asyncio.run(scenario())
+    assert snap["active"] == 2
+    assert snap["active_by_bucket"].get("delete") == 1
+    assert snap["active_by_bucket"].get("send") == 1
+    assert blocked
+    assert after["active"] == 0
+
+
+def test_critical_still_beats_send_and_delete():
+    async def scenario():
+        governor = RpcGovernor(total_limit=2, delete_limit=1, send_limit=1)
+        delete_permit = await governor.acquire(admission(P1_DELETE, "delete", "A"))
+        send_permit = await governor.acquire(admission(P2_SEND, "send", "B"))
+        extra_send = asyncio.create_task(
+            governor.acquire(admission(P2_SEND, "send", "C"))
+        )
+        critical_task = asyncio.create_task(
+            governor.acquire(admission(P0_CRITICAL, "critical", "admin"))
+        )
+        await asyncio.sleep(0)
+        assert not extra_send.done()
+        assert not critical_task.done()
+        send_permit.release()
+        critical = await asyncio.wait_for(critical_task, timeout=0.05)
+        send_still_waiting = not extra_send.done()
+        snap = governor.snapshot()
+        delete_permit.release()
+        extra = await asyncio.wait_for(extra_send, timeout=0.05)
+        critical.release()
+        extra.release()
+        return snap, send_still_waiting, governor.snapshot()
+
+    snap, send_waiting, after = asyncio.run(scenario())
+    assert snap["active_by_bucket"].get("critical") == 1
+    assert send_waiting
+    assert after["active"] == 0
+
+
+def test_send_delete_critical_fairness_no_starvation():
+    async def scenario():
+        governor = RpcGovernor(total_limit=2, delete_limit=1, send_limit=1, heavy_limit=1)
+        holder_d = await governor.acquire(admission(P1_DELETE, "delete", "hold-d"))
+        holder_s = await governor.acquire(admission(P2_SEND, "send", "hold-s"))
+        order = []
+
+        async def run(priority, bucket, label, chat):
+            permit = await governor.acquire(admission(priority, bucket, chat))
+            order.append(label)
+            permit.release()
+
+        tasks = [
+            asyncio.create_task(run(P2_SEND, "send", "S1", "s1")),
+            asyncio.create_task(run(P2_SEND, "send", "S2", "s2")),
+            asyncio.create_task(run(P1_DELETE, "delete", "D1", "d1")),
+            asyncio.create_task(run(P0_CRITICAL, "critical", "C1", "c1")),
+            asyncio.create_task(run(P3_HEAVY, "heavy", "H1", "h1")),
+        ]
+        await asyncio.sleep(0)
+        holder_s.release()
+        holder_d.release()
+        await asyncio.gather(*tasks)
+        return order, governor.snapshot()
+
+    order, snapshot = asyncio.run(scenario())
+    assert order[0] == "C1"
+    assert "S1" in order and "S2" in order
+    assert "D1" in order
+    assert "H1" in order
+    assert snapshot["active"] == 0
+    assert snapshot["waiting"] == 0
+
+
+def test_cross_bucket_governor_wait_is_not_seconds():
+    async def scenario():
+        governor = RpcGovernor(total_limit=2, delete_limit=1, send_limit=1)
+        started = __import__("time").perf_counter()
+        delete_permit = await governor.acquire(admission(P1_DELETE, "delete", "A"))
+        send_permit = await asyncio.wait_for(
+            governor.acquire(admission(P2_SEND, "send", "B")),
+            timeout=0.05,
+        )
+        wait_ms = (__import__("time").perf_counter() - started) * 1000.0
+        delete_permit.release()
+        send_permit.release()
+        return wait_ms
+
+    wait_ms = asyncio.run(scenario())
+    assert wait_ms < 80.0, wait_ms
+
+
 def test_total_ms_matches_phase_sum_not_wall_clock():
     logger = _MemLogger()
     started = __import__("time").perf_counter() - 2.5

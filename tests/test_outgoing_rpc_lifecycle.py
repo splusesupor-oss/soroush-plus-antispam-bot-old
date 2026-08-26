@@ -388,6 +388,82 @@ def test_directory_does_not_raise_or_spam():
     check("از username_directory ماژول‌سطح استفاده می‌شود", "username_directory.remember" in source)
 
 
+
+def test_superseded_keepalive_is_dropped_live_rpc_stays():
+    print("\n### پینگ قدیمی با پینگ تازه جایگزین می‌شود؛ Send زنده می‌ماند")
+
+    async def scenario():
+        logger = Logger()
+        sender = TrackingSender()
+        live = sender.put(SendMessageRequest(3), age=4.0)
+        newest = None
+        for age in (22.0, 18.0, 12.0, 3.0):
+            newest = sender.put(PingRequest(), age=age)
+        dropped = cg.reclaim_superseded_keepalive(sender, keep_newest=1, logger=logger)
+        left = [
+            type(state.request).__name__ for state in sender._pending_state.values()
+        ]
+        return live, newest, dropped, left, logger
+
+    live, newest, dropped, left, logger = asyncio.run(scenario())
+    check("سه پینگ قدیمی حذف شد", dropped == 3, f"-> {dropped}")
+    check("Send زنده ماند", "SendMessageRequest" in left, f"-> {left}")
+    check("فقط یک Ping زنده ماند", left.count("PingRequest") == 1, f"-> {left}")
+    check("future پینگ تازه لغو نشد", not newest.future.done())
+    check("future سند لغو نشد", not live.future.done())
+    check("KEEPALIVE SUPERSEDED لاگ شد", any(
+        line.startswith("KEEPALIVE SUPERSEDED") for line in logger.infos
+    ))
+
+
+def test_reconnect_drops_keepalive_not_live_send():
+    print("\n### reconnect فقط keepalive را پاک می‌کند")
+
+    async def scenario():
+        sender = TrackingSender()
+        live = sender.put(DeleteMessagesRequest(9), age=2.0)
+        sender.put(PingRequest(), age=8.0)
+        sender.put(PingRequest(), age=16.0)
+        dropped = cg.drop_keepalive_pending(sender)
+        left = [
+            type(state.request).__name__ for state in sender._pending_state.values()
+        ]
+        return live, dropped, left
+
+    live, dropped, left = asyncio.run(scenario())
+    check("هر دو ping حذف شد", dropped == 2, f"-> {dropped}")
+    check("Delete زنده ماند", left == ["DeleteMessagesRequest"], f"-> {left}")
+    check("future دیلیت لغو نشد", not live.future.done())
+
+
+def test_new_keepalive_ping_clears_old_pending():
+    print("\n### پینگ تازه قبل از ارسال، پینگ‌های بی‌پاسخ را پاک می‌کند")
+
+    async def scenario():
+        logger = Logger()
+        client = TrackingClient(rpc_ms=5)
+        client._sender._keepalive_ping = lambda rnd_id: rnd_id
+        client._sender._handle_pong = lambda message: None
+        client._sender._start_reconnect = lambda error: None
+        client._sender._user_connected = True
+        client._sender._reconnecting = False
+        client._sender._ping = None
+        instrument_client(client, logger)
+        sender = client._sender
+        sender.put(SendMessageRequest(1), age=1.0)
+        sender.put(PingRequest(), age=9.0)
+        sender.put(PingRequest(), age=19.0)
+        sender._keepalive_ping(77)
+        left = [
+            type(state.request).__name__ for state in sender._pending_state.values()
+        ]
+        return left, logger
+
+    left, logger = asyncio.run(scenario())
+    check("پینگ قدیمی نماند", "PingRequest" not in left, f"-> {left}")
+    check("Send زنده ماند", left == ["SendMessageRequest"], f"-> {left}")
+
+
 def test_detect_sender_growth_sequence():
     print("\n### دتکتور 0→10→20→40→60")
     previous = {"sender_pending": 0, "rpc_pending": 0, "event_loop_lag_ms": 0}
@@ -403,6 +479,9 @@ def main():
     test_completed_and_timeout_leave_no_pending()
     test_splusthon_zombie_is_reclaimed()
     test_inspect_and_stale_keepalive_vs_live_rpc()
+    test_superseded_keepalive_is_dropped_live_rpc_stays()
+    test_reconnect_drops_keepalive_not_live_send()
+    test_new_keepalive_ping_clears_old_pending()
     test_wave_of_groups_does_not_accumulate()
     test_startup_30_60_90_snapshots_and_growth()
     test_directory_does_not_raise_or_spam()

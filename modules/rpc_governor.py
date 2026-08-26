@@ -286,7 +286,7 @@ class RpcGovernor:
         self,
         *,
         total_limit=2,
-        noncritical_limit=1,
+        noncritical_limit=None,
         delete_limit=None,
         send_limit=None,
         heavy_limit=None,
@@ -297,20 +297,36 @@ class RpcGovernor:
         max_send_waiters=32,
     ):
         self.total_limit = max(1, int(total_limit))
-        self.noncritical_limit = max(
-            1, min(int(noncritical_limit), self.total_limit)
-        )
+        isolated_default = noncritical_limit is None
         if delete_limit is None:
-            delete_limit = max(1, self.noncritical_limit // 2)
+            delete_limit = 1 if isolated_default else max(1, int(noncritical_limit) // 2)
         if send_limit is None:
-            send_limit = max(1, (self.noncritical_limit // 2) - 1) if self.noncritical_limit > 3 else 1
+            if isolated_default:
+                send_limit = 1
+            else:
+                send_limit = (
+                    max(1, (int(noncritical_limit) // 2) - 1)
+                    if int(noncritical_limit) > 3
+                    else 1
+                )
         if heavy_limit is None:
             heavy_limit = 1
         self.class_limits = {
             "delete": max(1, int(delete_limit)),
             "send": max(1, int(send_limit)),
             "heavy": max(1, int(heavy_limit)),
+            "other": 1,
         }
+        if isolated_default:
+            # Send and delete each have their own cap. They share the
+            # connection budget, not one mutex.
+            noncritical_limit = min(
+                self.total_limit,
+                self.class_limits["delete"] + self.class_limits["send"],
+            )
+        self.noncritical_limit = max(
+            1, min(int(noncritical_limit), self.total_limit)
+        )
         self.enabled = bool(enabled)
         self.shadow = bool(shadow)
         self.logger = logger
@@ -339,18 +355,22 @@ class RpcGovernor:
     def from_environment(cls, logger=None):
         """Build conservative fixed limits after the project's .env is loaded."""
         total_limit = min(3, max(2, _env_int("BOT_RPC_TOTAL_LIMIT", 2)))
+        delete_limit = min(2, max(1, _env_int("BOT_RPC_DELETE_LIMIT", 1)))
+        send_limit = min(2, max(1, _env_int("BOT_RPC_SEND_LIMIT", 1)))
+        heavy_limit = min(1, max(1, _env_int("BOT_RPC_HEAVY_LIMIT", 1)))
+        isolated = min(total_limit, delete_limit + send_limit)
         noncritical_limit = min(
-            total_limit - 1,
-            max(1, _env_int("BOT_RPC_NONCRITICAL_LIMIT", 1))
+            total_limit,
+            max(1, _env_int("BOT_RPC_NONCRITICAL_LIMIT", isolated)),
         )
         return cls(
-            # A single Soroush connection becomes unstable above these caps;
-            # retain env configurability while guaranteeing reserved critical slots.
+            # Peak in-flight stays at total_limit. Send and delete no longer
+            # share one noncritical mutex; P0 still wins the next free slot.
             total_limit=total_limit,
             noncritical_limit=noncritical_limit,
-            delete_limit=min(2, max(1, _env_int("BOT_RPC_DELETE_LIMIT", 1))),
-            send_limit=min(2, max(1, _env_int("BOT_RPC_SEND_LIMIT", 1))),
-            heavy_limit=min(1, max(1, _env_int("BOT_RPC_HEAVY_LIMIT", 1))),
+            delete_limit=delete_limit,
+            send_limit=send_limit,
+            heavy_limit=heavy_limit,
             enabled=_env_bool("BOT_RPC_GOVERNOR_ENABLED", True),
             shadow=_env_bool("BOT_RPC_GOVERNOR_SHADOW", False),
             logger=logger,

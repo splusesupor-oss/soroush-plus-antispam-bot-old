@@ -397,10 +397,14 @@ def _ensure_reconnect_hooks(client, logger):
             try:
                 from modules.connection_guard import (
                     drop_completed_pending,
+                    drop_keepalive_pending,
                     note_pending,
                     reclaim_dead_pending,
                 )
                 drop_completed_pending(sender)
+                # Previous unanswered pings are dead: a new heartbeat is
+                # about to be written. Live send/delete rows stay.
+                drop_keepalive_pending(sender, logger=logger)
                 note_pending(sender)
                 reclaim_dead_pending(sender, logger=logger)
             except Exception:
@@ -439,8 +443,12 @@ def _ensure_reconnect_hooks(client, logger):
                 # Original receive handling gets first chance to resolve the
                 # pong.  Completed rows are then removed immediately instead
                 # of waiting for the periodic stale-state sweep.
-                from modules.connection_guard import drop_completed_pending
+                from modules.connection_guard import (
+                    drop_completed_pending,
+                    reclaim_superseded_keepalive,
+                )
                 drop_completed_pending(sender)
+                reclaim_superseded_keepalive(sender, keep_newest=1)
         if not asyncio.iscoroutinefunction(original):
             def sync_hooked(message):
                 pong = getattr(message, "obj", message)
@@ -452,8 +460,12 @@ def _ensure_reconnect_hooks(client, logger):
                 try:
                     return original(message)
                 finally:
-                    from modules.connection_guard import drop_completed_pending
+                    from modules.connection_guard import (
+                        drop_completed_pending,
+                        reclaim_superseded_keepalive,
+                    )
                     drop_completed_pending(sender)
+                    reclaim_superseded_keepalive(sender, keep_newest=1)
             return sync_hooked
         return hooked
 

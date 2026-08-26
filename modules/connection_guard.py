@@ -408,6 +408,54 @@ def pending_breakdown(sender):
     }
 
 
+def _drop_pending_row(pending, table, msg_id, state):
+    pending.pop(msg_id, None)
+    table.pop(msg_id, None)
+    future = getattr(state, "future", None)
+    if future is not None and not future.done():
+        future.cancel()
+
+
+def reclaim_superseded_keepalive(sender, *, keep_newest=1, logger=None):
+    """Keep at most ``keep_newest`` unanswered keepalive rows.
+
+    A later Ping supersedes earlier ones: the connection only needs the
+    latest heartbeat.  Live send/delete/moderation rows are never touched.
+    """
+    pending = getattr(sender, "_pending_state", None)
+    if not pending or not hasattr(pending, "items"):
+        return 0
+    table = _seen_at(sender)
+    keepalives = []
+    for msg_id, state in list(pending.items()):
+        request_type = _state_request_name(state)
+        if request_type not in _KEEPALIVE_REQUESTS:
+            continue
+        future = getattr(state, "future", None)
+        if future is not None and future.done():
+            continue
+        started = table.get(msg_id)
+        keepalives.append((started if started is not None else 0.0, msg_id, state))
+    keep_newest = max(0, int(keep_newest))
+    if len(keepalives) <= keep_newest:
+        return 0
+    keepalives.sort(key=lambda item: item[0])
+    victims = keepalives if keep_newest == 0 else keepalives[:-keep_newest]
+    for _started, msg_id, state in victims:
+        _drop_pending_row(pending, table, msg_id, state)
+    if logger is not None and victims:
+        logger.log_info(
+            "KEEPALIVE SUPERSEDED "
+            f"dropped={len(victims)} kept={keep_newest}"
+        )
+    return len(victims)
+
+
+def drop_keepalive_pending(sender, logger=None):
+    """Drop every keepalive row. Used on reconnect so they are not replayed."""
+    return reclaim_superseded_keepalive(sender, keep_newest=0, logger=logger)
+
+
 def drop_request_pending(sender, request):
     """Remove the sender row for this exact request after _call finishes."""
     pending = getattr(sender, "_pending_state", None)
