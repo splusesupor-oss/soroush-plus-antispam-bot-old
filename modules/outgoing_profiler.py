@@ -162,11 +162,7 @@ def _log_rpc_budget(logger, owner, operation, phases, extra=None):
     governor_wait = float(phases.get("governor_wait_ms") or 0.0)
     sender_wait = float(phases.get("sender_wait_ms") or 0.0)
     rpc_await = float(phases.get("rpc_await_ms") or 0.0)
-    started = phases.get("started")
-    if started is not None:
-        total = max(0.0, (time.perf_counter() - started) * 1000.0)
-    else:
-        total = queue_wait + governor_wait + sender_wait + rpc_await
+    total = queue_wait + governor_wait + sender_wait + rpc_await
     phases["total_ms"] = total
     sender = getattr(owner, "_sender", None) if owner is not None else None
     snapshot = pending_rpc_snapshot(sender)

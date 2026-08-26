@@ -103,6 +103,26 @@ class _Waiter:
     admitted: bool = False
 
 
+@dataclass
+class _Holder:
+    request_name: str
+    bucket: str
+    chat_key: str
+    priority: int
+    acquired_at: float
+    sequence: int
+
+
+KEEPALIVE_REQUESTS = frozenset({
+    "PingRequest",
+    "PingDelayDisconnectRequest",
+    "MsgsAck",
+    "HttpWait",
+    "Pong",
+})
+GOVERNOR_BLOCKED_MS = 500.0
+
+
 class RpcOverloadError(RuntimeError):
     """A disposable low-priority RPC was rejected before it could backlog."""
 
@@ -110,20 +130,23 @@ class RpcOverloadError(RuntimeError):
 class RpcPermit:
     """One governor admission. ``release`` is idempotent."""
 
-    __slots__ = ("_governor", "priority", "bucket", "shadow", "released")
+    __slots__ = (
+        "_governor", "priority", "bucket", "shadow", "released", "holder",
+    )
 
-    def __init__(self, governor, priority, bucket, *, shadow=False):
+    def __init__(self, governor, priority, bucket, *, shadow=False, holder=None):
         self._governor = governor
         self.priority = int(priority)
         self.bucket = str(bucket)
         self.shadow = bool(shadow)
         self.released = False
+        self.holder = holder
 
     def release(self):
         if self.released:
             return False
         self.released = True
-        self._governor._release(self.priority, self.bucket)
+        self._governor._release(self.priority, self.bucket, holder=self.holder)
         return True
 
     async def __aenter__(self):
@@ -174,6 +197,13 @@ def _unwrap_requests(request):
             pending.appendleft(inner)
             continue
         yield current
+
+
+def is_keepalive_request(request):
+    names = [type(item).__name__ for item in _unwrap_requests(request)]
+    if not names:
+        names = [type(request).__name__]
+    return bool(set(names).intersection(KEEPALIVE_REQUESTS))
 
 
 def _request_chat(request):
@@ -296,6 +326,7 @@ class RpcGovernor:
         self._noncritical_cursor = 0
         self._waiting = 0
         self._max_waiting = 0
+        self._holders = []
         self.stats = {
             "admitted": 0,
             "released": 0,
@@ -348,12 +379,38 @@ class RpcGovernor:
                 return False
         return True
 
-    def _increment_active(self, priority, bucket):
+    def _increment_active(self, priority, bucket, *, request_name="?", chat_key="?", sequence=0):
         self._active_total += 1
         if priority != P0_CRITICAL:
             self._active_noncritical += 1
         self._active_by_bucket[bucket] += 1
         self.stats["admitted"] += 1
+        holder = _Holder(
+            request_name=str(request_name or "?"),
+            bucket=str(bucket),
+            chat_key=str(chat_key or "global"),
+            priority=int(priority),
+            acquired_at=time.perf_counter(),
+            sequence=int(sequence or 0),
+        )
+        self._holders.append(holder)
+        return holder
+
+    def format_holders(self, now=None):
+        now = time.perf_counter() if now is None else float(now)
+        parts = []
+        for holder in self._holders:
+            held_ms = max(0.0, (now - holder.acquired_at) * 1000.0)
+            parts.append(
+                f"{holder.bucket}:{holder.request_name}"
+                f":chat={holder.chat_key}:held_ms={held_ms:.0f}"
+            )
+        return parts
+
+    def format_active_by_bucket(self):
+        buckets = {"critical": 0, "delete": 0, "send": 0, "heavy": 0, "other": 0}
+        buckets.update(dict(self._active_by_bucket))
+        return ",".join(f"{name}:{int(count)}" for name, count in buckets.items() if count)
 
     def _enqueue(self, waiter):
         groups = self._queues[waiter.priority]
@@ -416,8 +473,16 @@ class RpcGovernor:
             if waiter.future.done():
                 continue
             waiter.admitted = True
-            self._increment_active(waiter.priority, waiter.bucket)
-            permit = RpcPermit(self, waiter.priority, waiter.bucket)
+            holder = self._increment_active(
+                waiter.priority,
+                waiter.bucket,
+                request_name=waiter.request_name,
+                chat_key=waiter.chat_key,
+                sequence=waiter.sequence,
+            )
+            permit = RpcPermit(
+                self, waiter.priority, waiter.bucket, holder=holder
+            )
             waiter.future.set_result(permit)
 
     async def acquire(self, admission):
@@ -436,15 +501,27 @@ class RpcGovernor:
 
         if not self.enabled and not self.shadow:
             # Wrapper normally bypasses this mode. Keep direct use harmless.
-            self._increment_active(admission.priority, admission.bucket)
-            return RpcPermit(self, admission.priority, admission.bucket)
+            holder = self._increment_active(
+                admission.priority,
+                admission.bucket,
+                request_name=admission.request_name,
+                chat_key=admission.chat_key,
+            )
+            return RpcPermit(
+                self, admission.priority, admission.bucket, holder=holder
+            )
 
         if self.shadow:
             if not self._eligible(admission.priority, admission.bucket):
                 self.stats["shadow_would_wait"] += 1
-            self._increment_active(admission.priority, admission.bucket)
+            holder = self._increment_active(
+                admission.priority,
+                admission.bucket,
+                request_name=admission.request_name,
+                chat_key=admission.chat_key,
+            )
             return RpcPermit(
-                self, admission.priority, admission.bucket, shadow=True
+                self, admission.priority, admission.bucket, shadow=True, holder=holder
             )
 
         loop = asyncio.get_running_loop()
@@ -460,6 +537,11 @@ class RpcGovernor:
         )
         self._enqueue(waiter)
         self._drain()
+        watch = None
+        if self.logger is not None and not waiter.future.done():
+            watch = asyncio.create_task(
+                self._emit_blocked_if_waiting(admission, waiter)
+            )
         try:
             permit = await waiter.future
         except asyncio.CancelledError:
@@ -474,6 +556,9 @@ class RpcGovernor:
             # A cancelled future is lazily removed by the next drain.
             self._drain()
             raise
+        finally:
+            if watch is not None:
+                watch.cancel()
 
         wait_ms = (time.perf_counter() - waiter.enqueued_at) * 1000
         if wait_ms >= self.wait_log_ms:
@@ -487,9 +572,62 @@ class RpcGovernor:
                     f"wait_ms={wait_ms:.1f} active={self._active_total} "
                     f"waiting={self._waiting}"
                 )
+                self.logger.log_info(
+                    "GOVERNOR ACQUIRE "
+                    f"request={admission.request_name} "
+                    f"bucket={admission.bucket} "
+                    f"wait_ms={wait_ms:.1f} "
+                    f"active={self._active_total} "
+                    f"active_by_bucket={self.format_active_by_bucket() or '-'} "
+                    f"waiting={self._waiting}"
+                )
         return permit
 
-    def _release(self, priority, bucket):
+    async def _emit_blocked_if_waiting(self, admission, waiter):
+        try:
+            await asyncio.sleep(GOVERNOR_BLOCKED_MS / 1000.0)
+        except asyncio.CancelledError:
+            return
+        if waiter.future.done() or waiter.admitted or self.logger is None:
+            return
+        wait_ms = (time.perf_counter() - waiter.enqueued_at) * 1000.0
+        bucket_limit = (
+            self.total_limit
+            if admission.priority == P0_CRITICAL
+            else self.class_limits.get(admission.bucket, self.noncritical_limit)
+        )
+        holders = self.format_holders()
+        self.logger.log_error(
+            "GOVERNOR BLOCKED "
+            f"bucket={admission.bucket} "
+            f"request={admission.request_name} "
+            f"wait_ms={wait_ms:.1f} "
+            f"active={self._active_total} "
+            f"limit={bucket_limit} "
+            f"total_limit={self.total_limit} "
+            f"noncritical_limit={self.noncritical_limit} "
+            f"active_by_bucket={self.format_active_by_bucket() or '-'} "
+            f"waiting={self._waiting} "
+            f"holders=[{','.join(holders) if holders else '-'}]"
+        )
+
+    def _release(self, priority, bucket, holder=None):
+        hold_ms = 0.0
+        if holder is not None:
+            hold_ms = max(0.0, (time.perf_counter() - holder.acquired_at) * 1000.0)
+            try:
+                self._holders.remove(holder)
+            except ValueError:
+                holder = None
+        if holder is None:
+            for item in list(self._holders):
+                if item.priority == priority and item.bucket == bucket:
+                    hold_ms = max(
+                        0.0, (time.perf_counter() - item.acquired_at) * 1000.0
+                    )
+                    self._holders.remove(item)
+                    holder = item
+                    break
         if self._active_total > 0:
             self._active_total -= 1
         if priority != P0_CRITICAL and self._active_noncritical > 0:
@@ -497,6 +635,14 @@ class RpcGovernor:
         if self._active_by_bucket.get(bucket, 0) > 0:
             self._active_by_bucket[bucket] -= 1
         self.stats["released"] += 1
+        if hold_ms >= GOVERNOR_BLOCKED_MS and self.logger is not None:
+            name = holder.request_name if holder is not None else "?"
+            self.logger.log_info(
+                "GOVERNOR RELEASE "
+                f"request={name} bucket={bucket} "
+                f"hold_ms={hold_ms:.1f} active={self._active_total} "
+                f"waiting={self._waiting}"
+            )
         self._drain()
 
     def snapshot(self):
@@ -517,6 +663,7 @@ class RpcGovernor:
             "waiting": sum(waiting_by_priority.values()),
             "waiting_by_priority": waiting_by_priority,
             "max_waiting": self._max_waiting,
+            "holders": self.format_holders(),
             "stats": dict(self.stats),
         }
 

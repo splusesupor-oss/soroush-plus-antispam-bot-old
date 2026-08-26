@@ -21,7 +21,7 @@ import inspect
 import os
 import time
 
-from modules.rpc_governor import RpcGovernor, classify_request
+from modules.rpc_governor import RpcGovernor, classify_request, is_keepalive_request
 
 try:
     from modules.group_id import normalize_group_id
@@ -667,7 +667,11 @@ def _wrap_call_with_gate(client, logger, governor=None):
                         f"inflight_low={gate.inflight}"
                     )
 
-            if governor is not None and (governor.enabled or governor.shadow):
+            if (
+                governor is not None
+                and (governor.enabled or governor.shadow)
+                and not is_keepalive_request(request)
+            ):
                 admission = classify_request(
                     request,
                     urgent_send=urgent_send,
