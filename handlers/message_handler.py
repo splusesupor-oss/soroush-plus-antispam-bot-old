@@ -4388,7 +4388,6 @@ async def handle_new_message(bot, event):
         # ---- 🦊 سیستم اختصاصی ورود به سایت بازی روباه (Fox Game Center) ----
         if clean_text in ("سایت بازی", "سایت", "لینک بازی", "/game", "/site"):
             from modules import fox_game_tokens, group_storage
-            import economy
 
             # ۰. بررسی فعال بودن روباه در گروه ثبت‌شده
             if not group_storage.is_active(chat_id):
