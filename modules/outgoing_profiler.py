@@ -305,6 +305,15 @@ def _log_rpc_budget(logger, owner, operation, phases, extra=None):
     sender = getattr(owner, "_sender", None) if owner is not None else None
     snapshot = pending_rpc_snapshot(sender)
     sender_pending = int(snapshot.get("sender_pending") or 0)
+    ping_age = 0.0
+    for row in snapshot.get("sender_pending_rows") or ():
+        name = str(row.get("request_type") or "")
+        if row.get("is_keepalive") or "Ping" in name:
+            ping_age = max(ping_age, float(row.get("age_ms") or 0.0))
+    type_map = snapshot.get("sender_pending_by_type") or {}
+    type_text = ",".join(
+        f"{key}:{value}" for key, value in type_map.items() if value
+    ) or "-"
     line = (
         f"operation={operation or phases.get('operation') or 'unknown'} "
         f"queue_wait_ms={queue_wait:.1f} "
@@ -312,7 +321,11 @@ def _log_rpc_budget(logger, owner, operation, phases, extra=None):
         f"sender_wait_ms={sender_wait:.1f} "
         f"rpc_await_ms={rpc_await:.1f} "
         f"total_ms={total:.1f} "
-        f"sender_pending={sender_pending}"
+        f"sender_pending={sender_pending} "
+        f"sender_pending_live={int(snapshot.get('sender_pending_live') or 0)} "
+        f"sender_pending_keepalive={int(snapshot.get('sender_pending_keepalive') or 0)} "
+        f"ping_age_ms={ping_age:.0f} "
+        f"pending_by_type={type_text}"
     )
     if extra:
         line = f"{line} {extra}"

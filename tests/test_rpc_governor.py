@@ -606,3 +606,114 @@ def test_total_ms_matches_phase_sum_not_wall_clock():
     _log_rpc_budget(logger, None, "send_message", phases)
     assert abs(phases["total_ms"] - 50.0) < 0.01
     assert not any("OUTGOING RPC CRITICAL" in line for line in logger.errors)
+
+
+def test_governor_hold_slow_splits_permit_from_ping_pending():
+    import time as time_mod
+    import modules.rpc_governor as rg
+
+    class PingRequest:
+        pass
+
+    async def scenario():
+        old = rg.GOVERNOR_BLOCKED_MS
+        rg.GOVERNOR_BLOCKED_MS = 40.0
+        logger = _MemLogger()
+        loop = asyncio.get_running_loop()
+        ping_future = loop.create_future()
+        sender = SimpleNamespace(
+            _pending_state={
+                99: SimpleNamespace(future=ping_future, request=PingRequest()),
+            },
+            _guard_seen_at={99: time_mod.monotonic() - 2.0},
+        )
+        try:
+            governor = RpcGovernor(
+                total_limit=1, noncritical_limit=1, logger=logger
+            )
+            governor._observe_sender = sender
+            holder = await governor.acquire(admission(P2_SEND, "send", "busy"))
+            waiter = asyncio.create_task(
+                governor.acquire(admission(P1_DELETE, "delete", "blocked"))
+            )
+            await asyncio.sleep(0.06)
+            assert not waiter.done()
+            snap = governor.snapshot()
+            holder.release()
+            permit = await asyncio.wait_for(waiter, timeout=0.2)
+            permit.release()
+            return snap, logger.errors, logger.infos, governor.snapshot()
+        finally:
+            if not ping_future.done():
+                ping_future.cancel()
+            rg.GOVERNOR_BLOCKED_MS = old
+
+    snap, errors, infos, after = asyncio.run(scenario())
+    holds = [line for line in errors if line.startswith("GOVERNOR HOLD SLOW")]
+    blocked = [line for line in errors if line.startswith("GOVERNOR BLOCKED")]
+    drains = [line for line in infos if line.startswith("GOVERNOR DRAIN")]
+    releases = [line for line in infos if line.startswith("GOVERNOR RELEASE")]
+    assert holds, errors
+    hold = holds[0]
+    assert "reason=rpc_in_flight" in hold
+    assert "bucket=send" in hold
+    assert "held_ms=" in hold
+    assert "ping_age_ms=" in hold
+    assert "pending_by_type=PingRequest:1" in hold
+    ping_age = float(hold.split("ping_age_ms=")[1].split()[0])
+    assert ping_age >= 1500.0, hold
+    assert "waiting_by_bucket=delete:1" in hold
+    assert blocked, errors
+    assert "waiting_by_bucket=delete:1" in blocked[0]
+    assert "pending_by_type=PingRequest:1" in blocked[0]
+    assert "holders=[" in blocked[0]
+    assert "send:send" in blocked[0]
+    assert snap["waiting"] == 1
+    assert any("PingRequest" not in item for item in snap["holders"])
+    assert releases, infos
+    assert "reason=rpc_in_flight" in releases[0]
+    assert drains, infos
+    assert "waiting=0" in drains[0]
+    assert after["active"] == 0
+    assert after["waiting"] == 0
+    assert after["holders"] == []
+
+
+def test_governor_drain_logs_after_multi_waiter_burst():
+    import modules.rpc_governor as rg
+
+    async def scenario():
+        old = rg.GOVERNOR_BLOCKED_MS
+        rg.GOVERNOR_BLOCKED_MS = 40.0
+        logger = _MemLogger()
+        try:
+            governor = RpcGovernor(
+                total_limit=1, noncritical_limit=1, logger=logger
+            )
+            holder = await governor.acquire(admission(P2_SEND, "send", "busy"))
+            first = asyncio.create_task(
+                governor.acquire(admission(P1_DELETE, "delete", "A"))
+            )
+            second = asyncio.create_task(
+                governor.acquire(admission(P2_SEND, "send", "B"))
+            )
+            await asyncio.sleep(0)
+            assert governor.snapshot()["waiting"] == 2
+            holder.release()
+            permit_a = await asyncio.wait_for(first, timeout=0.2)
+            permit_a.release()
+            permit_b = await asyncio.wait_for(second, timeout=0.2)
+            permit_b.release()
+            return logger.infos, governor.snapshot()
+        finally:
+            rg.GOVERNOR_BLOCKED_MS = old
+
+    infos, after = asyncio.run(scenario())
+    drains = [line for line in infos if line.startswith("GOVERNOR DRAIN")]
+    assert drains, infos
+    text = drains[-1]
+    assert "waiting=0" in text
+    assert "max_waiting=2" in text
+    assert after["active"] == 0
+    assert after["waiting"] == 0
+

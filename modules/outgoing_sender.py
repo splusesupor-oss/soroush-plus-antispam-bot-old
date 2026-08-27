@@ -622,6 +622,11 @@ def _wrap_call_with_gate(client, logger, governor=None):
     @functools.wraps(orig)
     async def wrapped(sender, request, ordered=False, flood_sleep_threshold=None):
         name = _req_name(request)
+        if governor is not None:
+            try:
+                governor._observe_sender = sender
+            except Exception:
+                pass
         send_priority = _SEND_PRIORITY.get()
         dispatch_priority = _DISPATCH_ACTIVE.get()
         urgent_send = send_priority == 0

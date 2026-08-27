@@ -111,6 +111,7 @@ class _Holder:
     priority: int
     acquired_at: float
     sequence: int
+    watch: object = None
 
 
 KEEPALIVE_REQUESTS = frozenset({
@@ -342,6 +343,9 @@ class RpcGovernor:
         self._noncritical_cursor = 0
         self._waiting = 0
         self._max_waiting = 0
+        self._backlog_started = None
+        self._burst_max_waiting = 0
+        self._observe_sender = None
         self._holders = []
         self.stats = {
             "admitted": 0,
@@ -414,6 +418,13 @@ class RpcGovernor:
             sequence=int(sequence or 0),
         )
         self._holders.append(holder)
+        if self.logger is not None and self.enabled and not self.shadow:
+            try:
+                holder.watch = asyncio.get_running_loop().create_task(
+                    self._emit_hold_if_slow(holder)
+                )
+            except RuntimeError:
+                holder.watch = None
         return holder
 
     def format_holders(self, now=None):
@@ -441,6 +452,11 @@ class RpcGovernor:
         group.append(waiter)
         self._waiting += 1
         self._max_waiting = max(self._max_waiting, self._waiting)
+        if self._waiting == 1:
+            self._backlog_started = time.perf_counter()
+            self._burst_max_waiting = 1
+        else:
+            self._burst_max_waiting = max(self._burst_max_waiting, self._waiting)
 
     def _pop_priority(self, priority):
         """Pop one eligible waiter, round-robin between chats of a class."""
@@ -482,28 +498,32 @@ class RpcGovernor:
         return None
 
     def _drain(self):
-        if not self.enabled or self.shadow:
-            return
-        while self._active_total < self.total_limit:
-            waiter = self._pop_priority(P0_CRITICAL)
-            if waiter is None:
-                waiter = self._pop_noncritical()
-            if waiter is None:
+        previous_waiting = self._waiting
+        try:
+            if not self.enabled or self.shadow:
                 return
-            if waiter.future.done():
-                continue
-            waiter.admitted = True
-            holder = self._increment_active(
-                waiter.priority,
-                waiter.bucket,
-                request_name=waiter.request_name,
-                chat_key=waiter.chat_key,
-                sequence=waiter.sequence,
-            )
-            permit = RpcPermit(
-                self, waiter.priority, waiter.bucket, holder=holder
-            )
-            waiter.future.set_result(permit)
+            while self._active_total < self.total_limit:
+                waiter = self._pop_priority(P0_CRITICAL)
+                if waiter is None:
+                    waiter = self._pop_noncritical()
+                if waiter is None:
+                    return
+                if waiter.future.done():
+                    continue
+                waiter.admitted = True
+                holder = self._increment_active(
+                    waiter.priority,
+                    waiter.bucket,
+                    request_name=waiter.request_name,
+                    chat_key=waiter.chat_key,
+                    sequence=waiter.sequence,
+                )
+                permit = RpcPermit(
+                    self, waiter.priority, waiter.bucket, holder=holder
+                )
+                waiter.future.set_result(permit)
+        finally:
+            self._emit_drain_if_cleared(previous_waiting)
 
     async def acquire(self, admission):
         """Wait for admission, or only observe limits in shadow mode."""
@@ -603,6 +623,111 @@ class RpcGovernor:
                 )
         return permit
 
+    def format_waiting_by_bucket(self):
+        counts = {
+            "critical": 0, "delete": 0, "send": 0, "heavy": 0, "other": 0,
+        }
+        for groups in self._queues.values():
+            for group in groups.values():
+                for waiter in group:
+                    if waiter.future.done():
+                        continue
+                    bucket = str(getattr(waiter, "bucket", "other") or "other")
+                    counts[bucket] = counts.get(bucket, 0) + 1
+        return ",".join(
+            f"{name}:{counts[name]}"
+            for name in ("critical", "delete", "send", "heavy", "other")
+            if counts.get(name)
+        )
+
+    def _pending_brief(self):
+        """Read-only sender pending view. Never mutates RPC/queue state."""
+        sender = getattr(self, "_observe_sender", None)
+        ping_age = 0.0
+        sender_pending = 0
+        by_type = "-"
+        try:
+            from modules.outgoing_profiler import pending_rpc_snapshot
+            snapshot = pending_rpc_snapshot(sender)
+            sender_pending = int(snapshot.get("sender_pending") or 0)
+            type_map = snapshot.get("sender_pending_by_type") or {}
+            by_type = ",".join(
+                f"{key}:{value}" for key, value in type_map.items() if value
+            ) or "-"
+            for row in snapshot.get("sender_pending_rows") or ():
+                name = str(row.get("request_type") or "")
+                if row.get("is_keepalive") or "Ping" in name:
+                    ping_age = max(ping_age, float(row.get("age_ms") or 0.0))
+        except Exception:
+            pass
+        return ping_age, sender_pending, by_type
+
+    def _bucket_limit(self, priority, bucket):
+        if priority == P0_CRITICAL:
+            return self.total_limit
+        return self.class_limits.get(bucket, self.noncritical_limit)
+
+    def _cancel_holder_watch(self, holder):
+        watch = getattr(holder, "watch", None) if holder is not None else None
+        if watch is None:
+            return
+        holder.watch = None
+        if not watch.done():
+            watch.cancel()
+
+    def _emit_drain_if_cleared(self, previous_waiting):
+        if self._waiting != 0:
+            return
+        started = self._backlog_started
+        burst_max = self._burst_max_waiting
+        self._backlog_started = None
+        self._burst_max_waiting = 0
+        if previous_waiting <= 0 or started is None or self.logger is None:
+            return
+        burst_ms = (time.perf_counter() - started) * 1000.0
+        if burst_ms < GOVERNOR_BLOCKED_MS and burst_max < 2:
+            return
+        ping_age, sender_pending, by_type = self._pending_brief()
+        try:
+            self.logger.log_info(
+                "GOVERNOR DRAIN "
+                f"waiting=0 burst_ms={burst_ms:.1f} "
+                f"max_waiting={burst_max} active={self._active_total} "
+                f"active_by_bucket={self.format_active_by_bucket() or '-'} "
+                f"sender_pending={sender_pending} ping_age_ms={ping_age:.0f} "
+                f"pending_by_type={by_type}"
+            )
+        except Exception:
+            pass
+
+    async def _emit_hold_if_slow(self, holder):
+        try:
+            await asyncio.sleep(max(0.001, GOVERNOR_BLOCKED_MS / 1000.0))
+        except asyncio.CancelledError:
+            return
+        if self.logger is None or holder not in self._holders:
+            return
+        held_ms = max(0.0, (time.perf_counter() - holder.acquired_at) * 1000.0)
+        ping_age, sender_pending, by_type = self._pending_brief()
+        holders = self.format_holders()
+        try:
+            self.logger.log_error(
+                "GOVERNOR HOLD SLOW "
+                f"bucket={holder.bucket} request={holder.request_name} "
+                f"chat={holder.chat_key} held_ms={held_ms:.1f} "
+                f"reason=rpc_in_flight "
+                f"active={self._active_total} waiting={self._waiting} "
+                f"active_by_bucket={self.format_active_by_bucket() or '-'} "
+                f"waiting_by_bucket={self.format_waiting_by_bucket() or '-'} "
+                f"limit={self._bucket_limit(holder.priority, holder.bucket)} "
+                f"total_limit={self.total_limit} "
+                f"sender_pending={sender_pending} ping_age_ms={ping_age:.0f} "
+                f"pending_by_type={by_type} "
+                f"holders=[{','.join(holders) if holders else '-'}]"
+            )
+        except Exception:
+            pass
+
     async def _emit_blocked_if_waiting(self, admission, waiter):
         try:
             await asyncio.sleep(GOVERNOR_BLOCKED_MS / 1000.0)
@@ -611,12 +736,9 @@ class RpcGovernor:
         if waiter.future.done() or waiter.admitted or self.logger is None:
             return
         wait_ms = (time.perf_counter() - waiter.enqueued_at) * 1000.0
-        bucket_limit = (
-            self.total_limit
-            if admission.priority == P0_CRITICAL
-            else self.class_limits.get(admission.bucket, self.noncritical_limit)
-        )
+        bucket_limit = self._bucket_limit(admission.priority, admission.bucket)
         holders = self.format_holders()
+        ping_age, sender_pending, by_type = self._pending_brief()
         self.logger.log_error(
             "GOVERNOR BLOCKED "
             f"bucket={admission.bucket} "
@@ -628,6 +750,9 @@ class RpcGovernor:
             f"noncritical_limit={self.noncritical_limit} "
             f"active_by_bucket={self.format_active_by_bucket() or '-'} "
             f"waiting={self._waiting} "
+            f"waiting_by_bucket={self.format_waiting_by_bucket() or '-'} "
+            f"sender_pending={sender_pending} ping_age_ms={ping_age:.0f} "
+            f"pending_by_type={by_type} "
             f"holders=[{','.join(holders) if holders else '-'}]"
         )
 
@@ -635,6 +760,7 @@ class RpcGovernor:
         hold_ms = 0.0
         if holder is not None:
             hold_ms = max(0.0, (time.perf_counter() - holder.acquired_at) * 1000.0)
+            self._cancel_holder_watch(holder)
             try:
                 self._holders.remove(holder)
             except ValueError:
@@ -645,6 +771,7 @@ class RpcGovernor:
                     hold_ms = max(
                         0.0, (time.perf_counter() - item.acquired_at) * 1000.0
                     )
+                    self._cancel_holder_watch(item)
                     self._holders.remove(item)
                     holder = item
                     break
@@ -657,11 +784,15 @@ class RpcGovernor:
         self.stats["released"] += 1
         if hold_ms >= GOVERNOR_BLOCKED_MS and self.logger is not None:
             name = holder.request_name if holder is not None else "?"
+            ping_age, sender_pending, by_type = self._pending_brief()
             self.logger.log_info(
                 "GOVERNOR RELEASE "
                 f"request={name} bucket={bucket} "
-                f"hold_ms={hold_ms:.1f} active={self._active_total} "
-                f"waiting={self._waiting}"
+                f"hold_ms={hold_ms:.1f} reason=rpc_in_flight "
+                f"active={self._active_total} waiting={self._waiting} "
+                f"waiting_by_bucket={self.format_waiting_by_bucket() or '-'} "
+                f"sender_pending={sender_pending} ping_age_ms={ping_age:.0f} "
+                f"pending_by_type={by_type}"
             )
         self._drain()
 
