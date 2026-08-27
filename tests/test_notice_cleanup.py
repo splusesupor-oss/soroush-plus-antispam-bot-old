@@ -180,6 +180,43 @@ def test_persisted_short_group_id_is_restored_before_delete_rpc():
     check("RPC chat is -100 form", calls and calls[0][0] == -1000009429374, f"-> {calls}")
 
 
+def test_notice_timer_burst_retires_workers():
+    print("\\n### ۱۲ اعلان موقت worker را leak نمی‌کند")
+
+    class _Queue:
+        def enqueue(self, chat_id, ids, *, priority=1, rpc_peer=None):
+            future = asyncio.get_running_loop().create_future()
+            future.set_result((len(ids), []))
+            return future
+
+    async def run():
+        handle, path = tempfile.mkstemp(suffix=".json")
+        os.close(handle)
+        os.unlink(path)
+        cleaner = NoticeCleanup(path, ttl_seconds=0.05, delete_queue=_Queue())
+        try:
+            cleaner.start()
+            now = time.time()
+            for index in range(12):
+                cleaner.schedule(-(100 + index), 1000 + index, now=now)
+            during = sum(1 for task in cleaner._workers.values() if not task.done())
+            await asyncio.sleep(0.25)
+            leftover_workers = sum(
+                1 for task in cleaner._workers.values() if not task.done()
+            )
+            leftover_items = sum(len(rows) for rows in cleaner._items.values())
+            return during, leftover_workers, leftover_items
+        finally:
+            cleaner.stop()
+            if os.path.isfile(path):
+                os.unlink(path)
+
+    during, leftover_workers, leftover_items = asyncio.run(run())
+    check("burst started workers", during >= 12, f"-> {during}")
+    check("workers retired after TTL", leftover_workers == 0, f"-> {leftover_workers}")
+    check("notice rows drained", leftover_items == 0, f"-> {leftover_items}")
+
+
 if __name__ == "__main__":
     test_schedule_is_per_group_and_not_due_yet()
     test_new_notice_waits_its_own_ttl()
@@ -188,5 +225,6 @@ if __name__ == "__main__":
     test_capture_sent_uses_message_id()
     test_worker_deletes_only_that_group()
     test_persisted_short_group_id_is_restored_before_delete_rpc()
+    test_notice_timer_burst_retires_workers()
     print(f"\n{PASSED} passed, {FAILED} failed")
     raise SystemExit(1 if FAILED else 0)

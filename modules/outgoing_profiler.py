@@ -610,11 +610,16 @@ def _ensure_reconnect_hooks(client, logger):
         def hooked(rnd_id):
             try:
                 from modules.connection_guard import (
+                    complete_keepalive_pending,
                     drop_completed_pending,
+                    live_keepalive_count,
+                    log_ping_lifecycle,
                     note_pending,
                     reclaim_dead_pending,
                     reclaim_superseded_keepalive,
+                    stamp_keepalive_ping_id,
                     unanswered_keepalive_count,
+                    unanswered_keepalive_ids,
                 )
                 drop_completed_pending(sender)
                 note_pending(sender)
@@ -630,8 +635,8 @@ def _ensure_reconnect_hooks(client, logger):
             outstanding = getattr(sender, "_ping", None)
             snapshot = pending_rpc_snapshot(sender)
             try:
-                from modules.connection_guard import unanswered_keepalive_count
-                live_pings = unanswered_keepalive_count(sender)
+                from modules.connection_guard import live_keepalive_count
+                live_pings = live_keepalive_count(sender)
             except Exception:
                 live_pings = 0
             if outstanding is None:
@@ -643,18 +648,70 @@ def _ensure_reconnect_hooks(client, logger):
                         f"sender_pending={snapshot['sender_pending']}"
                     )
                     return None
+                try:
+                    from modules.connection_guard import log_ping_lifecycle
+                    log_ping_lifecycle(logger, rnd_id, "CREATED")
+                except Exception:
+                    pass
                 logger.log_info(
                     "KEEPALIVE PING SENT "
                     f"ping_id={rnd_id} pending_rpc={snapshot['count']} "
                     f"sender_pending={snapshot['sender_pending']}"
                 )
-                result = original(rnd_id)
+                try:
+                    result = original(rnd_id)
+                except asyncio.CancelledError:
+                    try:
+                        from modules.connection_guard import (
+                            complete_keepalive_pending,
+                            log_ping_lifecycle,
+                        )
+                        log_ping_lifecycle(logger, rnd_id, "CANCELLED")
+                        complete_keepalive_pending(
+                            sender, ping_id=rnd_id, logger=logger,
+                            reason="CANCELLED",
+                        )
+                    except Exception:
+                        pass
+                    raise
+                except Exception:
+                    try:
+                        from modules.connection_guard import (
+                            complete_keepalive_pending,
+                            log_ping_lifecycle,
+                        )
+                        log_ping_lifecycle(logger, rnd_id, "EXCEPTION")
+                        complete_keepalive_pending(
+                            sender, ping_id=rnd_id, logger=logger,
+                            reason="EXCEPTION",
+                        )
+                    except Exception:
+                        pass
+                    raise
                 try:
                     from modules.connection_guard import (
+                        log_ping_lifecycle,
                         note_pending,
                         reclaim_superseded_keepalive,
+                        stamp_keepalive_ping_id,
+                        unanswered_keepalive_ids,
                     )
                     note_pending(sender)
+                    stamp_keepalive_ping_id(sender, rnd_id)
+                    queued_ids = unanswered_keepalive_ids(sender)
+                    if queued_ids:
+                        log_ping_lifecycle(
+                            logger, rnd_id, "QUEUED",
+                            msg_id=queued_ids[-1],
+                            sender_pending=len(queued_ids),
+                        )
+                    on_wire = getattr(sender, "_ping", None) is not None
+                    if on_wire or queued_ids:
+                        log_ping_lifecycle(
+                            logger, rnd_id, "SENT",
+                            on_wire=int(on_wire),
+                            queued=int(bool(queued_ids)),
+                        )
                     reclaim_superseded_keepalive(
                         sender, keep_newest=1, logger=logger
                     )
@@ -685,6 +742,18 @@ def _ensure_reconnect_hooks(client, logger):
                     f"pending_rpc={snapshot['count']}"
                 )
                 _clear_outstanding_ping(sender)
+                try:
+                    from modules.connection_guard import (
+                        complete_keepalive_pending,
+                        log_ping_lifecycle,
+                    )
+                    log_ping_lifecycle(logger, outstanding, "TIMEOUT")
+                    complete_keepalive_pending(
+                        sender, ping_id=outstanding, logger=logger,
+                        reason="TIMEOUT",
+                    )
+                except Exception:
+                    pass
             return original(rnd_id)
         return hooked
 
@@ -699,15 +768,20 @@ def _ensure_reconnect_hooks(client, logger):
             try:
                 return await original(message)
             finally:
-                # Original receive handling gets first chance to resolve the
-                # pong.  Completed rows are then removed immediately instead
-                # of waiting for the periodic stale-state sweep.
+                # Pong is the PingRequest response even if SPlusthon left
+                # future_done=0 in _pending_state.  Drop that row now so it
+                # cannot occupy the one-live-ping slot.
                 from modules.connection_guard import (
+                    complete_keepalive_pending,
                     drop_completed_pending,
-                    reclaim_superseded_keepalive,
+                    log_ping_lifecycle,
                 )
                 drop_completed_pending(sender)
-                reclaim_superseded_keepalive(sender, keep_newest=1)
+                ping_id = getattr(pong, "ping_id", None)
+                log_ping_lifecycle(logger, ping_id, "RESPONSE")
+                complete_keepalive_pending(
+                    sender, ping_id=ping_id, logger=logger, reason="RESPONSE",
+                )
         if not asyncio.iscoroutinefunction(original):
             def sync_hooked(message):
                 pong = getattr(message, "obj", message)
@@ -720,11 +794,16 @@ def _ensure_reconnect_hooks(client, logger):
                     return original(message)
                 finally:
                     from modules.connection_guard import (
+                        complete_keepalive_pending,
                         drop_completed_pending,
-                        reclaim_superseded_keepalive,
+                        log_ping_lifecycle,
                     )
                     drop_completed_pending(sender)
-                    reclaim_superseded_keepalive(sender, keep_newest=1)
+                    ping_id = getattr(pong, "ping_id", None)
+                    log_ping_lifecycle(logger, ping_id, "RESPONSE")
+                    complete_keepalive_pending(
+                        sender, ping_id=ping_id, logger=logger, reason="RESPONSE",
+                    )
             return sync_hooked
         return hooked
 
@@ -738,6 +817,13 @@ def _ensure_reconnect_hooks(client, logger):
                 global _RECONNECT_GEN
                 _RECONNECT_GEN += 1
                 _clear_outstanding_ping(sender)
+                try:
+                    from modules.connection_guard import drop_keepalive_pending
+                    drop_keepalive_pending(
+                        sender, logger=logger, reason="CLEANED",
+                    )
+                except Exception:
+                    pass
                 pending = _pending_trace(sender)
                 _LAST_RECONNECT["started_at"] = time.perf_counter()
                 _LAST_RECONNECT["ended_at"] = None
