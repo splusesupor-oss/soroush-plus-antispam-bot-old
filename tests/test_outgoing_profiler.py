@@ -387,6 +387,7 @@ def test_keepalive_and_reconnect_logs():
           f"-> {sender.pings}")
     check("reconnect اصلی صدا نشد",
           sender.reconnects == [], f"-> {sender.reconnects}")
+    check("kept=0 روی keepalive نیست", "kept=0" not in texts)
 
 
 def test_pong_timeout_reconnects_only_when_rpc_stuck():

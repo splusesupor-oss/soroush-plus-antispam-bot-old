@@ -443,12 +443,38 @@ def reclaim_superseded_keepalive(sender, *, keep_newest=1, logger=None):
     victims = keepalives if keep_newest == 0 else keepalives[:-keep_newest]
     for _started, msg_id, state in victims:
         _drop_pending_row(pending, table, msg_id, state)
+    kept = unanswered_keepalive_count(sender)
     if logger is not None and victims:
         logger.log_info(
             "KEEPALIVE SUPERSEDED "
-            f"dropped={len(victims)} kept={keep_newest}"
+            f"dropped={len(victims)} kept={kept}"
         )
     return len(victims)
+
+
+def unanswered_keepalive_ids(sender):
+    """Message ids of unanswered keepalive rows, newest last."""
+    pending = getattr(sender, "_pending_state", None)
+    if not pending or not hasattr(pending, "items"):
+        return []
+    table = _seen_at(sender)
+    rows = []
+    for msg_id, state in list(pending.items()):
+        request_type = _state_request_name(state)
+        if request_type not in _KEEPALIVE_REQUESTS:
+            continue
+        future = getattr(state, "future", None)
+        if future is not None and future.done():
+            continue
+        started = table.get(msg_id)
+        rows.append((started if started is not None else 0.0, msg_id))
+    rows.sort(key=lambda item: item[0])
+    return [msg_id for _started, msg_id in rows]
+
+
+def unanswered_keepalive_count(sender):
+    """How many keepalive rows are still waiting for a pong."""
+    return len(unanswered_keepalive_ids(sender))
 
 
 def drop_keepalive_pending(sender, logger=None):

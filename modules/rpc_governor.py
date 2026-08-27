@@ -277,11 +277,9 @@ def classify_request(request, *, urgent_send=False, critical_context=False):
 class RpcGovernor:
     """Fixed-limit, priority-aware and per-chat-fair RPC admission control."""
 
-    # P0 is always considered first. Noncritical traffic uses a weighted
-    # cycle: security deletion gets more turns, while P2/P3 cannot starve.
-    _NONCRITICAL_CYCLE = (
-        P1_DELETE, P2_SEND, P1_DELETE, P2_SEND, P1_DELETE, P3_HEAVY,
-    )
+    # Strict order: P0, then P1 (delete/antispam), then P2, then P3.
+    # A weighted mix previously let GetParticipants (P3) take a free slot
+    # while DeleteMessages (P1) was already waiting.
 
     def __init__(
         self,
@@ -340,7 +338,6 @@ class RpcGovernor:
         self._queues = {priority: {} for priority in range(4)}
         self._chat_rounds = {priority: deque() for priority in range(4)}
         self._sequence = 0
-        self._noncritical_cursor = 0
         self._waiting = 0
         self._max_waiting = 0
         self._backlog_started = None
@@ -392,15 +389,35 @@ class RpcGovernor:
     def waiting(self):
         return self._waiting
 
+    def _urgent_waiting(self):
+        """True when a P0/P1 waiter is queued (even if its own cap is full)."""
+        for priority in (P0_CRITICAL, P1_DELETE):
+            groups = self._queues.get(priority) or {}
+            for group in groups.values():
+                for waiter in group:
+                    if not waiter.future.done():
+                        return True
+        return False
+
     def _eligible(self, priority, bucket):
         if self._active_total >= self.total_limit:
             return False
-        if priority != P0_CRITICAL:
-            if self._active_noncritical >= self.noncritical_limit:
-                return False
-            cap = self.class_limits.get(bucket)
-            if cap is not None and self._active_by_bucket[bucket] >= cap:
-                return False
+        if priority == P0_CRITICAL:
+            return True
+        cap = self.class_limits.get(bucket)
+        if cap is not None and self._active_by_bucket[bucket] >= cap:
+            return False
+        if priority <= P1_DELETE:
+            # Heavy occupancy must not stall delete/antispam. Send+delete
+            # still share noncritical_limit; total_limit and class caps stay.
+            occupied = self._active_noncritical - int(
+                self._active_by_bucket.get("heavy") or 0
+            )
+            return occupied < self.noncritical_limit
+        if self._active_noncritical >= self.noncritical_limit:
+            return False
+        if priority >= P3_HEAVY and self._urgent_waiting():
+            return False
         return True
 
     def _increment_active(self, priority, bucket, *, request_name="?", chat_key="?", sequence=0):
@@ -487,11 +504,9 @@ class RpcGovernor:
             return waiter
         return None
 
-    def _pop_noncritical(self):
-        cycle = self._NONCRITICAL_CYCLE
-        for _ in range(len(cycle)):
-            priority = cycle[self._noncritical_cursor]
-            self._noncritical_cursor = (self._noncritical_cursor + 1) % len(cycle)
+    def _pop_next(self):
+        """Admit the highest-priority eligible waiter. P1 always beats P3."""
+        for priority in (P0_CRITICAL, P1_DELETE, P2_SEND, P3_HEAVY):
             waiter = self._pop_priority(priority)
             if waiter is not None:
                 return waiter
@@ -503,9 +518,7 @@ class RpcGovernor:
             if not self.enabled or self.shadow:
                 return
             while self._active_total < self.total_limit:
-                waiter = self._pop_priority(P0_CRITICAL)
-                if waiter is None:
-                    waiter = self._pop_noncritical()
+                waiter = self._pop_next()
                 if waiter is None:
                     return
                 if waiter.future.done():

@@ -608,37 +608,59 @@ def _ensure_reconnect_hooks(client, logger):
 
     def ping_factory(original):
         def hooked(rnd_id):
-            # 🧟 پیش‌گیری از «سیل PingRequest»: پینگ‌های keepalive از مسیر
-            # client._call عبور نمی‌کنند، پس مهر زمانِ ردیفِ ۶۰ثانیه‌ای
-            # هرگز روی آن‌ها نمی‌خورد و در صورت از دست رفتن Pong برای
-            # همیشه در _pending_state می‌ماندند (در لاگ: sender_pending=63
-            # و سیل «pending msg … PingRequest»). پیش از ارسال هر پینگِ
-            # تازه، همهٔ ورودی‌های تکمیل‌شده و زامبی‌های قدیمی‌تر از ۱۸۰
-            # ثانیه را پاک می‌کنیم تا انباشت غیرممکن شود.
             try:
                 from modules.connection_guard import (
                     drop_completed_pending,
-                    drop_keepalive_pending,
                     note_pending,
                     reclaim_dead_pending,
+                    reclaim_superseded_keepalive,
+                    unanswered_keepalive_count,
                 )
                 drop_completed_pending(sender)
-                # Previous unanswered pings are dead: a new heartbeat is
-                # about to be written. Live send/delete rows stay.
-                drop_keepalive_pending(sender, logger=logger)
                 note_pending(sender)
                 reclaim_dead_pending(sender, logger=logger)
+                # At most one unanswered Ping. Older heartbeats are
+                # superseded; the newest stays. Never wipe to kept=0.
+                if unanswered_keepalive_count(sender) > 1:
+                    reclaim_superseded_keepalive(
+                        sender, keep_newest=1, logger=logger
+                    )
             except Exception:
                 pass
             outstanding = getattr(sender, "_ping", None)
             snapshot = pending_rpc_snapshot(sender)
+            try:
+                from modules.connection_guard import unanswered_keepalive_count
+                live_pings = unanswered_keepalive_count(sender)
+            except Exception:
+                live_pings = 0
             if outstanding is None:
+                if live_pings >= 1:
+                    logger.log_info(
+                        "KEEPALIVE PING SKIPPED "
+                        f"ping_id={rnd_id} live_pings={live_pings} "
+                        f"pending_rpc={snapshot['count']} "
+                        f"sender_pending={snapshot['sender_pending']}"
+                    )
+                    return None
                 logger.log_info(
                     "KEEPALIVE PING SENT "
                     f"ping_id={rnd_id} pending_rpc={snapshot['count']} "
                     f"sender_pending={snapshot['sender_pending']}"
                 )
-                return original(rnd_id)
+                result = original(rnd_id)
+                try:
+                    from modules.connection_guard import (
+                        note_pending,
+                        reclaim_superseded_keepalive,
+                    )
+                    note_pending(sender)
+                    reclaim_superseded_keepalive(
+                        sender, keep_newest=1, logger=logger
+                    )
+                except Exception:
+                    pass
+                return result
             reconnect, reason, oldest_ms, last_ok_ms = _pong_timeout_decision(
                 sender, snapshot
             )

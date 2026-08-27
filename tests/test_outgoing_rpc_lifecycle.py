@@ -411,9 +411,11 @@ def test_superseded_keepalive_is_dropped_live_rpc_stays():
     check("فقط یک Ping زنده ماند", left.count("PingRequest") == 1, f"-> {left}")
     check("future پینگ تازه لغو نشد", not newest.future.done())
     check("future سند لغو نشد", not live.future.done())
-    check("KEEPALIVE SUPERSEDED لاگ شد", any(
-        line.startswith("KEEPALIVE SUPERSEDED") for line in logger.infos
-    ))
+    superseded = [line for line in logger.infos if line.startswith("KEEPALIVE SUPERSEDED")]
+    check("KEEPALIVE SUPERSEDED لاگ شد", bool(superseded))
+    if superseded:
+        check("kept تعداد واقعی باقی‌مانده است", "kept=1" in superseded[0], f"-> {superseded[0]}")
+        check("kept=0 دیگر پارامتر keep_newest نیست", "kept=0" not in superseded[0])
 
 
 def test_reconnect_drops_keepalive_not_live_send():
@@ -437,7 +439,7 @@ def test_reconnect_drops_keepalive_not_live_send():
 
 
 def test_new_keepalive_ping_clears_old_pending():
-    print("\n### پینگ تازه قبل از ارسال، پینگ‌های بی‌پاسخ را پاک می‌کند")
+    print("\n### ping factory keeps at most one live Ping; Send stays")
 
     async def scenario():
         logger = Logger()
@@ -460,8 +462,16 @@ def test_new_keepalive_ping_clears_old_pending():
         return left, logger
 
     left, logger = asyncio.run(scenario())
-    check("پینگ قدیمی نماند", "PingRequest" not in left, f"-> {left}")
-    check("Send زنده ماند", left == ["SendMessageRequest"], f"-> {left}")
+    ping_left = left.count("PingRequest")
+    check("at most one unanswered Ping", ping_left <= 1, f"-> {left}")
+    check("Send stayed", "SendMessageRequest" in left, f"-> {left}")
+    check(
+        "only Send and at most one Ping",
+        set(left) <= {"SendMessageRequest", "PingRequest"},
+        f"-> {left}",
+    )
+    texts = "\n".join(logger.infos)
+    check("kept=0 is not on the ping path", "kept=0" not in texts)
 
 
 def test_detect_sender_growth_sequence():

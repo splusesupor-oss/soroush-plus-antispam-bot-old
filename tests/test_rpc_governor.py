@@ -717,3 +717,107 @@ def test_governor_drain_logs_after_multi_waiter_burst():
     assert after["active"] == 0
     assert after["waiting"] == 0
 
+
+def test_delete_is_admitted_before_waiting_heavy():
+    """Prod 21:18: GetParticipants took the free slot ahead of DeleteMessages."""
+
+    async def scenario():
+        governor = RpcGovernor(
+            total_limit=2, delete_limit=1, send_limit=1, heavy_limit=1
+        )
+        holder_a = await governor.acquire(admission(P0_CRITICAL, "critical", "hold-a"))
+        holder_b = await governor.acquire(admission(P0_CRITICAL, "critical", "hold-b"))
+        extra_delete = asyncio.create_task(
+            governor.acquire(admission(P1_DELETE, "delete", "d1"))
+        )
+        extra_heavy = asyncio.create_task(
+            governor.acquire(admission(P3_HEAVY, "heavy", "h1"))
+        )
+        await asyncio.sleep(0)
+        holder_b.release()
+        delete_permit = await asyncio.wait_for(extra_delete, timeout=0.05)
+        heavy_still_waiting = not extra_heavy.done()
+        snap = governor.snapshot()
+        delete_permit.release()
+        holder_a.release()
+        extra_heavy = await asyncio.wait_for(extra_heavy, timeout=0.05)
+        extra_heavy.release()
+        return heavy_still_waiting, snap, governor.snapshot()
+
+    heavy_waiting, snap, after = asyncio.run(scenario())
+    assert heavy_waiting
+    assert snap["active_by_bucket"].get("delete") == 1
+    assert snap["active_by_bucket"].get("heavy") != 1
+    assert after["active"] == 0
+    assert after["waiting"] == 0
+
+
+def test_heavy_not_admitted_while_delete_waiting_at_cap():
+    """A free slot must not go to P3 while a P1 waiter exists, even at delete cap."""
+
+    async def scenario():
+        governor = RpcGovernor(
+            total_limit=2, delete_limit=1, send_limit=1, heavy_limit=1
+        )
+        holder_d = await governor.acquire(admission(P1_DELETE, "delete", "hold-d"))
+        holder_s = await governor.acquire(admission(P2_SEND, "send", "hold-s"))
+        extra_delete = asyncio.create_task(
+            governor.acquire(admission(P1_DELETE, "delete", "wait-d"))
+        )
+        extra_heavy = asyncio.create_task(
+            governor.acquire(admission(P3_HEAVY, "heavy", "wait-h"))
+        )
+        await asyncio.sleep(0)
+        holder_s.release()
+        await asyncio.sleep(0)
+        heavy_took_slot = extra_heavy.done()
+        delete_still_waiting = not extra_delete.done()
+        snap = governor.snapshot()
+        holder_d.release()
+        extra_delete = await asyncio.wait_for(extra_delete, timeout=0.05)
+        extra_heavy = await asyncio.wait_for(extra_heavy, timeout=0.05)
+        extra_delete.release()
+        extra_heavy.release()
+        return heavy_took_slot, delete_still_waiting, snap, governor.snapshot()
+
+    heavy_took, delete_waiting, snap, after = asyncio.run(scenario())
+    assert not heavy_took
+    assert delete_waiting
+    assert snap["active"] == 1
+    assert snap["waiting_by_bucket"].get("delete") == 1
+    assert snap["waiting_by_bucket"].get("heavy") == 1
+    assert after["active"] == 0
+
+
+def test_p1_not_blocked_by_heavy_occupying_noncritical():
+    async def scenario():
+        governor = RpcGovernor(
+            total_limit=3,
+            noncritical_limit=1,
+            delete_limit=1,
+            send_limit=1,
+            heavy_limit=1,
+        )
+        heavy = await governor.acquire(admission(P3_HEAVY, "heavy", "read"))
+        delete = await asyncio.wait_for(
+            governor.acquire(admission(P1_DELETE, "delete", "antispam")),
+            timeout=0.05,
+        )
+        snap = governor.snapshot()
+        extra_send = asyncio.create_task(
+            governor.acquire(admission(P2_SEND, "send", "notice"))
+        )
+        await asyncio.sleep(0)
+        send_blocked = not extra_send.done()
+        extra_send.cancel()
+        await asyncio.gather(extra_send, return_exceptions=True)
+        heavy.release()
+        delete.release()
+        return snap, send_blocked, governor.snapshot()
+
+    snap, send_blocked, after = asyncio.run(scenario())
+    assert snap["active_by_bucket"].get("heavy") == 1
+    assert snap["active_by_bucket"].get("delete") == 1
+    assert send_blocked
+    assert after["active"] == 0
+
