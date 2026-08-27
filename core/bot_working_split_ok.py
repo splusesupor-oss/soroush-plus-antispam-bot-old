@@ -453,6 +453,11 @@ class SoroushAntiSpamBot:
                 if stale(bucket, key, self.BURST_STATE_TTL):
                     mapping.pop(key, None)
                     self._temporary_state_touched.pop((bucket, key), None)
+        try:
+            from modules.runtime_snapshot import prune_unbounded_maps
+            prune_unbounded_maps(self)
+        except Exception:
+            pass
 
     def _make_client(self):
         """یک ``SoroushClient`` کاملاً جدید با سشنِ تازه می‌سازد.
@@ -790,8 +795,8 @@ class SoroushAntiSpamBot:
         self.notice_cleanup.start()
         if hasattr(self, "health_monitor") and self.health_monitor is not None:
             self.health_monitor.start()
-        # Diagnostic-only: periodic PERFORMANCE SNAPSHOT. Does not change
-        # queues, governor, concurrency, timeouts, or caches.
+        # Diagnostic-only: PERFORMANCE SNAPSHOT every 30–60s plus a 5-minute
+        # ACCUMULATION REPORT. Does not change queues, governor, or RPC.
         self.runtime_snapshot = RuntimeSnapshotMonitor(self, self.logger)
         self.runtime_snapshot.start()
         self.logger.log_info(

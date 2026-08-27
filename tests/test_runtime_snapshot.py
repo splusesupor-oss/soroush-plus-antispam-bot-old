@@ -25,12 +25,16 @@ if "splusthon" not in sys.modules:
     sys.modules["splusthon"] = splusthon
 
 from modules.runtime_snapshot import (
+    ACCUMULATION_KEYS,
     METRIC_KEYS,
     RuntimeSnapshotMonitor,
     collect,
     collect_sync,
+    detect_accumulation,
     detect_issues,
+    format_accumulation_report,
     format_snapshot,
+    prune_unbounded_maps,
     vs_baseline_lines,
 )
 
@@ -56,9 +60,18 @@ class FakeQueue:
 
 
 class FakeWaiter:
-    def __init__(self, wait_ms=0, done=False):
+    def __init__(self, wait_ms=0, done=False, bucket="send"):
         self.enqueued_at = time.perf_counter() - (float(wait_ms) / 1000.0)
         self.future = SimpleNamespace(done=lambda: bool(done))
+        self.bucket = bucket
+
+
+class FakeTask:
+    def __init__(self, done=False):
+        self._done = bool(done)
+
+    def done(self):
+        return self._done
 
 
 def make_bot(**overrides):
@@ -301,6 +314,119 @@ def test_vs_baseline_flags_queue_growth():
     check("normal_queue_pending" in joined.split("metrics=")[-1], "queue flagged")
 
 
+def test_accumulation_report_fields_and_governor_buckets():
+    print("test_accumulation_report_fields_and_governor_buckets")
+    bot = make_bot(
+        moderation_queue=SimpleNamespace(
+            _pending_keys={("g1", 1, "mute")},
+            _queues={"g1": FakeQueue(2)},
+            _workers={"g1": [FakeTask(done=True), FakeTask(done=False)]},
+        ),
+        message_delete_queue=SimpleNamespace(
+            _queues={"g1": FakeQueue(3)},
+            _pending_ids={1, 2, 3},
+            _workers={"g1": FakeTask(done=True)},
+        ),
+        group_dispatcher=SimpleNamespace(
+            _normal_pending={"g1": 4},
+            _queues={("g1", "normal"): FakeQueue(4), ("g1", "admin"): FakeQueue(1)},
+            _workers={("g1", "normal"): [FakeTask(done=True)]},
+        ),
+        outgoing_sender=SimpleNamespace(
+            _normal_pending=lambda: 2,
+            _queues={("g1", "normal"): FakeQueue(2)},
+            _workers={("g1", "normal"): [FakeTask(done=False)]},
+        ),
+        rpc_governor=SimpleNamespace(_queues={
+            1: {"g1": [FakeWaiter(wait_ms=40, bucket="delete")]},
+            2: {"g1": [FakeWaiter(wait_ms=80, bucket="send"), FakeWaiter(wait_ms=10, done=True, bucket="send")]},
+            3: {"g1": [FakeWaiter(wait_ms=20, bucket="heavy")]},
+        }),
+        bot_sent_messages=[1, 2, 3],
+        reply_input_peer_cache={"u1": object(), "u2": object()},
+        performance_monitor=SimpleNamespace(_batch={"a": {}, "b": {}}),
+        punished_users={"x", "y"},
+        flood_messages={"g1": [1, 2]},
+    )
+    snapshot = collect_sync(bot)
+    missing = [key for key in ACCUMULATION_KEYS if key not in snapshot]
+    check(not missing, f"accumulation keys present {missing}")
+    check(snapshot["governor_waiting"] == 3, f"waiting={snapshot['governor_waiting']}")
+    check(snapshot["governor_waiting_by_bucket"]["delete"] == 1, "delete bucket")
+    check(snapshot["governor_waiting_by_bucket"]["send"] == 1, "send bucket")
+    check(snapshot["governor_waiting_by_bucket"]["heavy"] == 1, "heavy bucket")
+    check(snapshot["leftover_done_workers"] >= 3, f"leftover={snapshot['leftover_done_workers']}")
+    check(snapshot["dispatcher_jobs"] == 5, f"dispatcher_jobs={snapshot['dispatcher_jobs']}")
+    check(snapshot["sender_jobs"] == 2, f"sender_jobs={snapshot['sender_jobs']}")
+    check(snapshot["delete_jobs"] == 3, f"delete_jobs={snapshot['delete_jobs']}")
+    check(snapshot["bot_sent_messages_size"] == 3, "bot_sent_messages counted")
+    check(snapshot["performance_batch_size"] == 2, "performance batch counted")
+    check(snapshot["long_map_total"] >= 7, f"long_map_total={snapshot['long_map_total']}")
+    text = format_accumulation_report(snapshot)
+    check(text.startswith("ACCUMULATION REPORT"), "accumulation title")
+    check("governor_waiting_by_bucket=" in text, "bucket line")
+    check("pending_tasks=" in text, "pending_tasks line")
+    check("memory_mb=" in text, "memory line")
+
+
+def test_accumulation_growth_and_periodic_log():
+    print("test_accumulation_growth_and_periodic_log")
+    previous = {key: 0 for key in ACCUMULATION_KEYS}
+    current = {key: 0 for key in ACCUMULATION_KEYS}
+    current.update({
+        "pending_tasks": 40,
+        "rpc_pending": 6,
+        "sender_pending": 5,
+        "governor_waiting": 4,
+        "memory_mb": 20.0,
+        "username_directory_cache_size": 30,
+        "leftover_done_workers": 2,
+        "long_map_total": 80,
+        "governor_waiting_by_bucket": {"send": 3, "delete": 1},
+    })
+    previous["memory_mb"] = 10.0
+    lines = detect_accumulation(current, previous)
+    joined = "\n".join(lines)
+    check("ACCUMULATION GROWTH metric=pending_tasks" in joined, "task growth")
+    check("ACCUMULATION GROWTH metric=memory_mb" in joined, "memory growth")
+    check("WORKER LEFTOVER DETECTED" in joined, "leftover workers")
+    check("GOVERNOR WAITING PER BUCKET" in joined, "waiting per bucket")
+
+    async def scenario():
+        logger = Logger()
+        bot = make_bot()
+        monitor = RuntimeSnapshotMonitor(
+            bot, logger, interval_seconds=0.04, lag_probe_seconds=0.0,
+            accumulation_interval_seconds=0.05,
+        )
+        monitor.start()
+        await asyncio.sleep(0.16)
+        await monitor.stop()
+        reports = [msg for msg in logger.infos if msg.startswith("ACCUMULATION REPORT")]
+        check(len(reports) >= 2, f"periodic accumulation count={len(reports)}")
+        first = reports[0]
+        for key in ("pending_tasks", "rpc_pending", "sender_pending", "governor_waiting", "memory_mb"):
+            check(f"{key}=" in first, f"accumulation has {key}")
+
+    asyncio.run(scenario())
+
+
+def test_prune_unbounded_maps_caps_lists_and_caches():
+    print("test_prune_unbounded_maps_caps_lists_and_caches")
+    bot = make_bot(
+        bot_sent_messages=list(range(2500)),
+        reply_input_peer_cache={f"u{i}": i for i in range(700)},
+        performance_monitor=SimpleNamespace(_batch={f"k{i}": {"count": 1, "max_ms": 200} for i in range(600)}),
+    )
+    trimmed = prune_unbounded_maps(bot)
+    check(len(bot.bot_sent_messages) <= 2000, f"sent={len(bot.bot_sent_messages)}")
+    check(len(bot.reply_input_peer_cache) <= 500, f"peer={len(bot.reply_input_peer_cache)}")
+    check(len(bot.performance_monitor._batch) <= 500, f"batch={len(bot.performance_monitor._batch)}")
+    check(trimmed.get("bot_sent_messages", 0) > 0, "sent trimmed")
+    check(trimmed.get("reply_input_peer_cache", 0) > 0, "peer trimmed")
+    check(trimmed.get("performance_batch", 0) > 0, "batch trimmed")
+
+
 def main():
     test_snapshot_contains_requested_metrics()
     test_reads_existing_queue_sizes_only()
@@ -311,6 +437,9 @@ def main():
     test_event_loop_lag_is_measured()
     test_username_directory_unboundlocal_still_fixed()
     test_vs_baseline_flags_queue_growth()
+    test_accumulation_report_fields_and_governor_buckets()
+    test_accumulation_growth_and_periodic_log()
+    test_prune_unbounded_maps_caps_lists_and_caches()
     print("ALL RUNTIME SNAPSHOT TESTS PASSED")
 
 

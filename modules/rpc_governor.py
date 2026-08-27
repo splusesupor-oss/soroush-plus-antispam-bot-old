@@ -667,11 +667,20 @@ class RpcGovernor:
 
     def snapshot(self):
         waiting_by_priority = {}
+        waiting_by_bucket = {
+            "critical": 0, "delete": 0, "send": 0, "heavy": 0, "other": 0,
+        }
         for priority, groups in self._queues.items():
             waiting_by_priority[_PRIORITY_LABELS[priority]] = sum(
                 sum(1 for waiter in group if not waiter.future.done())
                 for group in groups.values()
             )
+            for group in groups.values():
+                for waiter in group:
+                    if waiter.future.done():
+                        continue
+                    bucket = str(getattr(waiter, "bucket", "other") or "other")
+                    waiting_by_bucket[bucket] = waiting_by_bucket.get(bucket, 0) + 1
         return {
             "enabled": self.enabled,
             "shadow": self.shadow,
@@ -682,6 +691,7 @@ class RpcGovernor:
             "active_by_bucket": dict(self._active_by_bucket),
             "waiting": sum(waiting_by_priority.values()),
             "waiting_by_priority": waiting_by_priority,
+            "waiting_by_bucket": waiting_by_bucket,
             "max_waiting": self._max_waiting,
             "holders": self.format_holders(),
             "stats": dict(self.stats),

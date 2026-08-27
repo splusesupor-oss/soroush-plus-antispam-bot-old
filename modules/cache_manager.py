@@ -186,6 +186,7 @@ class PermissionCircuitBreaker:
     """
 
     _instance = None
+    MAX_BREAKERS = 2000
 
     def __init__(self, default_cooldown: float = 180.0, logger=None):
         self.default_cooldown = float(default_cooldown)
@@ -244,15 +245,31 @@ class PermissionCircuitBreaker:
         key = _safe_chat_key(chat_id)
         record = self._breakers.get(key)
         if record is not None and record.state != STATE_CLOSED:
-            record.state = STATE_CLOSED
-            record.failure_count = 0
-            record.probe_in_flight = False
             self.stats["recovered"] += 1
             if self.logger:
                 self.logger.log_info(
                     f"CIRCUIT BREAKER RECOVERED chat_id={key} "
                     "permissions confirmed, state reset to CLOSED"
                 )
+            # Recovered chats do not need a permanent CLOSED row.
+            self._breakers.pop(key, None)
+
+    def cleanup_expired(self, now=None) -> int:
+        """Drop recovered/expired records so the map cannot grow without bound."""
+        now = time.monotonic() if now is None else float(now)
+        dropped = 0
+        for key, record in list(self._breakers.items()):
+            if record.state == STATE_CLOSED:
+                self._breakers.pop(key, None)
+                dropped += 1
+                continue
+            if record.state == STATE_OPEN and (now - record.tripped_at) >= (record.cooldown * 2):
+                self._breakers.pop(key, None)
+                dropped += 1
+        while len(self._breakers) > self.MAX_BREAKERS:
+            self._breakers.pop(next(iter(self._breakers)), None)
+            dropped += 1
+        return dropped
 
     def record_failure(
         self, chat_id, error=None, cooldown: Optional[float] = None
@@ -277,6 +294,8 @@ class PermissionCircuitBreaker:
         if record is None:
             record = BreakerRecord()
             self._breakers[key] = record
+            if len(self._breakers) > self.MAX_BREAKERS:
+                self.cleanup_expired()
 
         record.state = STATE_OPEN
         record.tripped_at = now

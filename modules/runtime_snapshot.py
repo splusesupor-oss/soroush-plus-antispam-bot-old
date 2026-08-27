@@ -2,6 +2,9 @@
 
 هیچ صف، Governor، concurrency یا cache ای را تغییر نمی‌دهد. فقط متریک
 می‌خواند، با مقدار قبلی مقایسه می‌کند و رشد/انباشت را لاگ می‌کند.
+
+هر ۵ دقیقه یک «ACCUMULATION REPORT» جدا از PERFORMANCE SNAPSHOT ۳۰–۶۰ثانیه‌ای
+ثبت می‌شود تا رشد RAM بعد از چند ده دقیقه دیده شود.
 """
 from __future__ import annotations
 
@@ -26,6 +29,29 @@ METRIC_KEYS = (
     "economy_cache_size",
     "peer_cache_size",
     "memory_mb",
+)
+
+ACCUMULATION_KEYS = METRIC_KEYS + (
+    "governor_waiting",
+    "governor_waiting_by_bucket",
+    "governor_active_by_bucket",
+    "inflight_rpc_count",
+    "leftover_done_workers",
+    "dispatcher_jobs",
+    "dispatcher_workers",
+    "sender_jobs",
+    "sender_workers",
+    "delete_jobs",
+    "delete_workers",
+    "moderation_jobs",
+    "moderation_workers",
+    "bot_sent_messages_size",
+    "performance_batch_size",
+    "circuit_breaker_tracked",
+    "tracker_rows",
+    "spam_history_rows",
+    "long_map_total",
+    "pending_task_names",
 )
 
 # Size-like metrics: a rising value over time is the signal we want.
@@ -57,9 +83,57 @@ CACHE_METRICS = (
     "peer_cache_size",
 )
 
+ACCUMULATION_GROWTH_METRICS = (
+    "pending_tasks",
+    "rpc_pending",
+    "sender_pending",
+    "governor_waiting",
+    "memory_mb",
+    "username_directory_cache_size",
+    "economy_cache_size",
+    "peer_cache_size",
+    "bot_sent_messages_size",
+    "performance_batch_size",
+    "inflight_rpc_count",
+    "leftover_done_workers",
+    "dispatcher_jobs",
+    "sender_jobs",
+    "delete_jobs",
+    "moderation_jobs",
+    "tracker_rows",
+    "spam_history_rows",
+    "long_map_total",
+    "circuit_breaker_tracked",
+)
+
+_LONG_MAP_ATTRS = (
+    "reply_input_peer_cache",
+    "bot_sent_messages",
+    "punished_users",
+    "spam_lock",
+    "flood_messages",
+    "repeat_messages",
+    "user_messages",
+    "group_timer_tasks",
+    "spam_burst_messages",
+    "rejoin_spam_state",
+    "forward_spam_counts",
+    "_temporary_state_touched",
+    "spammer_messages",
+    "native_group_admin_cache",
+    "native_group_admin_ids_cache",
+    "_forward_albums",
+    "_big_spam_incidents",
+    "_spam_cleanup_incidents",
+    "moderation_notification_guard",
+)
+
+_BUCKET_ORDER = ("critical", "delete", "send", "heavy", "other")
+
 MILESTONES_SECONDS = (30 * 60, 60 * 60, 90 * 60)
 
 DEFAULT_INTERVAL_SECONDS = 45.0
+DEFAULT_ACCUMULATION_SECONDS = 300.0
 LAG_PROBE_SECONDS = 0.05
 LAG_WARN_MS = 50.0
 TASK_GROWTH_DELTA = 20
@@ -69,6 +143,9 @@ RPC_BACKLOG = 10
 NOTICE_GROWTH_DELTA = 5
 CACHE_GROWTH_DELTA = 10
 MEMORY_GROWTH_MB = 8.0
+ACCUMULATION_MEMORY_GROWTH_MB = 4.0
+BOT_SENT_MESSAGES_MAX = 2000
+PEER_CACHE_MAX = 500
 
 
 def _safe_len(value: Any) -> int:
@@ -118,6 +195,23 @@ def _task_counts() -> tuple[int, int]:
     return pending, active
 
 
+def _pending_task_names(limit: int = 8) -> Dict[str, int]:
+    try:
+        tasks = [task for task in asyncio.all_tasks() if not task.done()]
+    except Exception:
+        return {}
+    counts: Dict[str, int] = {}
+    for task in tasks:
+        try:
+            name = task.get_name() if hasattr(task, "get_name") else "unnamed"
+        except Exception:
+            name = "unnamed"
+        name = str(name or "unnamed")[:80]
+        counts[name] = counts.get(name, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return dict(ranked[: max(1, int(limit))])
+
+
 async def _event_loop_lag_ms(probe_seconds: float = LAG_PROBE_SECONDS) -> float:
     expected = max(0.0, float(probe_seconds))
     started = time.perf_counter()
@@ -142,6 +236,64 @@ def _governor_wait_ms(governor: Any) -> float:
     except Exception:
         return 0.0
     return longest
+
+
+def _empty_buckets() -> Dict[str, int]:
+    return {name: 0 for name in _BUCKET_ORDER}
+
+
+def _governor_waiting_by_bucket(governor: Any) -> Dict[str, int]:
+    buckets = _empty_buckets()
+    if governor is None:
+        return buckets
+    try:
+        snapshot = governor.snapshot()
+        raw = snapshot.get("waiting_by_bucket") if isinstance(snapshot, dict) else None
+        if isinstance(raw, dict) and raw:
+            for name in _BUCKET_ORDER:
+                buckets[name] = int(raw.get(name, 0) or 0)
+            for name, value in raw.items():
+                if name not in buckets:
+                    buckets[str(name)] = int(value or 0)
+            return buckets
+    except Exception:
+        pass
+    try:
+        for groups in getattr(governor, "_queues", {}).values():
+            for waiters in groups.values():
+                for waiter in waiters:
+                    future = getattr(waiter, "future", None)
+                    if future is not None and getattr(future, "done", lambda: True)():
+                        continue
+                    bucket = str(getattr(waiter, "bucket", "other") or "other")
+                    if bucket not in buckets:
+                        buckets[bucket] = 0
+                    buckets[bucket] += 1
+    except Exception:
+        return _empty_buckets()
+    return buckets
+
+
+def _governor_active_by_bucket(governor: Any) -> Dict[str, int]:
+    buckets = _empty_buckets()
+    if governor is None:
+        return buckets
+    try:
+        snapshot = governor.snapshot()
+        raw = snapshot.get("active_by_bucket") if isinstance(snapshot, dict) else None
+        if isinstance(raw, dict):
+            for name, value in raw.items():
+                buckets[str(name)] = int(value or 0)
+            return buckets
+    except Exception:
+        pass
+    try:
+        raw = dict(getattr(governor, "_active_by_bucket", {}) or {})
+        for name, value in raw.items():
+            buckets[str(name)] = int(value or 0)
+    except Exception:
+        return _empty_buckets()
+    return buckets
 
 
 def _username_directory_size() -> int:
@@ -202,6 +354,112 @@ def _normal_queue_pending(bot: Any) -> int:
     return max(mapped, queued)
 
 
+def _worker_counts(mapping: Any) -> tuple[int, int]:
+    """Return (alive, leftover_done) for a worker map of tasks or lists of tasks."""
+    alive = leftover = 0
+    if not mapping:
+        return 0, 0
+    try:
+        values = mapping.values() if hasattr(mapping, "values") else mapping
+    except Exception:
+        return 0, 0
+    for item in values or ():
+        tasks = item if isinstance(item, (list, tuple, set)) else (item,)
+        for task in tasks:
+            if task is None:
+                continue
+            done = getattr(task, "done", None)
+            try:
+                is_done = bool(done()) if callable(done) else False
+            except Exception:
+                continue
+            if is_done:
+                leftover += 1
+            else:
+                alive += 1
+    return alive, leftover
+
+
+def _history_row_count(mapping: Any) -> int:
+    if not mapping:
+        return 0
+    try:
+        return sum(_safe_len(rows) for rows in mapping.values())
+    except Exception:
+        return _safe_len(mapping)
+
+
+def _long_map_sizes(bot: Any) -> Dict[str, int]:
+    sizes: Dict[str, int] = {}
+    for name in _LONG_MAP_ATTRS:
+        sizes[name] = _safe_len(getattr(bot, name, None))
+    return sizes
+
+
+def _fmt_map(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    parts = []
+    for key, item in value.items():
+        if item in (0, None, "", {}, []):
+            continue
+        parts.append(f"{key}:{item}")
+    return ",".join(parts) if parts else "-"
+
+
+def _fmt_value(key: str, value: Any) -> str:
+    if isinstance(value, dict):
+        return f"{key}={_fmt_map(value)}"
+    if isinstance(value, float):
+        if key.endswith("_ms") or key == "memory_mb":
+            return f"{key}={value:.1f}"
+        return f"{key}={value}"
+    return f"{key}={value}"
+
+
+def prune_unbounded_maps(bot: Any) -> Dict[str, int]:
+    """Bound leftover RAM maps. Does not touch Queue/Governor/RPC behavior."""
+    trimmed: Dict[str, int] = {}
+    sent = getattr(bot, "bot_sent_messages", None)
+    if isinstance(sent, list) and len(sent) > BOT_SENT_MESSAGES_MAX:
+        dropped = len(sent) - (BOT_SENT_MESSAGES_MAX // 2)
+        del sent[:dropped]
+        trimmed["bot_sent_messages"] = dropped
+    cache = getattr(bot, "reply_input_peer_cache", None)
+    if isinstance(cache, dict):
+        dropped = 0
+        while len(cache) > PEER_CACHE_MAX:
+            cache.pop(next(iter(cache)), None)
+            dropped += 1
+        if dropped:
+            trimmed["reply_input_peer_cache"] = dropped
+    monitor = getattr(bot, "performance_monitor", None)
+    batch = getattr(monitor, "_batch", None) if monitor is not None else None
+    trim_batch = getattr(monitor, "trim_batch", None) if monitor is not None else None
+    if callable(trim_batch):
+        dropped = int(trim_batch() or 0)
+        if dropped:
+            trimmed["performance_batch"] = dropped
+    elif isinstance(batch, dict) and len(batch) > 500:
+        dropped = 0
+        while len(batch) > 500:
+            batch.pop(next(iter(batch)), None)
+            dropped += 1
+        if dropped:
+            trimmed["performance_batch"] = dropped
+    try:
+        from modules.cache_manager import PermissionCircuitBreaker
+        breaker = PermissionCircuitBreaker.get_default()
+        cleanup = getattr(breaker, "cleanup_expired", None)
+        if callable(cleanup):
+            dropped = int(cleanup() or 0)
+            if dropped:
+                trimmed["circuit_breaker"] = dropped
+    except Exception:
+        pass
+    return trimmed
+
+
 def collect_sync(bot: Any) -> Dict[str, Any]:
     """Cheap, non-awaiting counters. Loop lag is filled in by collect()."""
     started_at = float(getattr(bot, "started_at", time.time()) or time.time())
@@ -213,11 +471,19 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
     moderation_pending = _safe_len(getattr(moderation, "_pending_keys", None))
     if moderation_pending == 0 and moderation is not None:
         moderation_pending = _qsize_sum(getattr(moderation, "_queues", {}))
+    moderation_jobs = _qsize_sum(getattr(moderation, "_queues", {}) if moderation else {})
+    moderation_workers, moderation_leftover = _worker_counts(
+        getattr(moderation, "_workers", {}) if moderation is not None else {}
+    )
 
     delete_queue = getattr(bot, "message_delete_queue", None)
     delete_pending = _qsize_sum(getattr(delete_queue, "_queues", {}) if delete_queue else {})
     if delete_pending == 0 and delete_queue is not None:
         delete_pending = _safe_len(getattr(delete_queue, "_pending_ids", None))
+    delete_jobs = _qsize_sum(getattr(delete_queue, "_queues", {}) if delete_queue else {})
+    delete_workers, delete_leftover = _worker_counts(
+        getattr(delete_queue, "_workers", {}) if delete_queue is not None else {}
+    )
 
     rpc_pending = 0
     sender_pending = 0
@@ -225,6 +491,7 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
     sender_stale = 0
     sender_oldest = 0.0
     sender_by_type = {}
+    inflight_rpc_count = 0
     try:
         from modules.outgoing_profiler import pending_rpc_snapshot
         sender = getattr(getattr(bot, "client", None), "_sender", None)
@@ -235,13 +502,66 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
         sender_stale = int(snap.get("sender_pending_stale") or 0)
         sender_oldest = float(snap.get("sender_pending_oldest_age_ms") or 0.0)
         sender_by_type = dict(snap.get("sender_pending_by_type") or {})
+        inflight_rpc_count = int(snap.get("inflight") or snap.get("count") or 0)
     except Exception:
         pass
+    if inflight_rpc_count == 0:
+        inflight_rpc_count = int(rpc_pending)
 
     governor = getattr(bot, "rpc_governor", None)
     governor_wait_ms = _governor_wait_ms(governor)
+    waiting_by_bucket = _governor_waiting_by_bucket(governor)
+    active_by_bucket = _governor_active_by_bucket(governor)
+    governor_waiting = sum(int(value) for value in waiting_by_bucket.values())
+    try:
+        snapshot = governor.snapshot() if governor is not None else {}
+        if isinstance(snapshot, dict) and snapshot.get("waiting") is not None:
+            governor_waiting = int(snapshot.get("waiting") or governor_waiting)
+    except Exception:
+        pass
 
     peer_cache = getattr(bot, "reply_input_peer_cache", None) or {}
+    outgoing = getattr(bot, "outgoing_sender", None)
+    sender_jobs = _qsize_sum(getattr(outgoing, "_queues", {}) if outgoing else {})
+    sender_workers, sender_leftover = _worker_counts(
+        getattr(outgoing, "_workers", {}) if outgoing is not None else {}
+    )
+
+    dispatcher = getattr(bot, "group_dispatcher", None)
+    dispatcher_jobs = _qsize_sum(getattr(dispatcher, "_queues", {}) if dispatcher else {})
+    dispatcher_workers, dispatcher_leftover = _worker_counts(
+        getattr(dispatcher, "_workers", {}) if dispatcher is not None else {}
+    )
+
+    leftover_done_workers = (
+        moderation_leftover + delete_leftover + sender_leftover + dispatcher_leftover
+    )
+
+    tracker_rows = 0
+    spam_history_rows = 0
+    try:
+        from modules import message_tracker
+        tracker_rows = _history_row_count(getattr(message_tracker, "_HISTORY", {}))
+    except Exception:
+        tracker_rows = 0
+    try:
+        from modules import spam_history
+        spam_history_rows = _history_row_count(getattr(spam_history, "MESSAGE_HISTORY", {}))
+    except Exception:
+        spam_history_rows = 0
+
+    long_maps = _long_map_sizes(bot)
+    performance_batch_size = _safe_len(
+        getattr(getattr(bot, "performance_monitor", None), "_batch", None)
+    )
+    circuit_breaker_tracked = 0
+    try:
+        from modules.cache_manager import PermissionCircuitBreaker
+        breaker = getattr(PermissionCircuitBreaker, "_instance", None)
+        if breaker is not None:
+            circuit_breaker_tracked = _safe_len(getattr(breaker, "_breakers", None))
+    except Exception:
+        circuit_breaker_tracked = 0
 
     return {
         "uptime": uptime,
@@ -263,6 +583,27 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
         "economy_cache_size": int(_economy_cache_size()),
         "peer_cache_size": int(_safe_len(peer_cache)),
         "memory_mb": round(_rss_mb(), 1),
+        "governor_waiting": int(governor_waiting),
+        "governor_waiting_by_bucket": waiting_by_bucket,
+        "governor_active_by_bucket": active_by_bucket,
+        "inflight_rpc_count": int(inflight_rpc_count),
+        "leftover_done_workers": int(leftover_done_workers),
+        "dispatcher_jobs": int(dispatcher_jobs),
+        "dispatcher_workers": int(dispatcher_workers),
+        "sender_jobs": int(sender_jobs),
+        "sender_workers": int(sender_workers),
+        "delete_jobs": int(delete_jobs),
+        "delete_workers": int(delete_workers),
+        "moderation_jobs": int(moderation_jobs),
+        "moderation_workers": int(moderation_workers),
+        "bot_sent_messages_size": int(_safe_len(getattr(bot, "bot_sent_messages", None))),
+        "performance_batch_size": int(performance_batch_size),
+        "circuit_breaker_tracked": int(circuit_breaker_tracked),
+        "tracker_rows": int(tracker_rows),
+        "spam_history_rows": int(spam_history_rows),
+        "long_map_sizes": long_maps,
+        "long_map_total": int(sum(long_maps.values())),
+        "pending_task_names": _pending_task_names(),
     }
 
 
@@ -272,17 +613,44 @@ async def collect(bot: Any, *, lag_probe_seconds: float = LAG_PROBE_SECONDS) -> 
     pending_tasks, active_tasks = _task_counts()
     snapshot["pending_tasks"] = int(pending_tasks)
     snapshot["active_tasks"] = int(active_tasks)
+    snapshot["pending_task_names"] = _pending_task_names()
     return snapshot
 
 
 def format_snapshot(snapshot: Dict[str, Any], *, title: str = "PERFORMANCE SNAPSHOT") -> str:
     lines = [title, f"uptime={int(snapshot.get('uptime', 0))}s"]
     for key in METRIC_KEYS:
-        value = snapshot.get(key, 0)
-        if isinstance(value, float):
-            lines.append(f"{key}={value:.1f}" if key.endswith("_ms") or key == "memory_mb" else f"{key}={value}")
-        else:
-            lines.append(f"{key}={value}")
+        lines.append(_fmt_value(key, snapshot.get(key, 0)))
+    return "\n".join(lines)
+
+
+def format_accumulation_report(
+    snapshot: Dict[str, Any],
+    previous: Optional[Dict[str, Any]] = None,
+    *,
+    title: str = "ACCUMULATION REPORT",
+) -> str:
+    lines = [title, f"uptime={int(snapshot.get('uptime', 0))}s"]
+    for key in ACCUMULATION_KEYS:
+        lines.append(_fmt_value(key, snapshot.get(key, 0)))
+    long_maps = snapshot.get("long_map_sizes") or {}
+    if isinstance(long_maps, dict) and long_maps:
+        lines.append("long_maps=" + _fmt_map(long_maps))
+    if previous:
+        grown = []
+        for key in ACCUMULATION_GROWTH_METRICS:
+            try:
+                delta = float(snapshot.get(key, 0) or 0) - float(previous.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if key == "memory_mb":
+                if delta >= ACCUMULATION_MEMORY_GROWTH_MB:
+                    grown.append(f"{key}={delta:+.1f}")
+            elif delta > 0:
+                grown.append(f"{key}={int(delta):+d}" if float(delta).is_integer() else f"{key}={delta:+.1f}")
+        lines.append("delta_5m=" + (",".join(grown) if grown else "none"))
+    else:
+        lines.append("delta_5m=baseline")
     return "\n".join(lines)
 
 
@@ -351,6 +719,49 @@ def detect_issues(current: Dict[str, Any], previous: Optional[Dict[str, Any]] = 
     return lines
 
 
+def detect_accumulation(
+    current: Dict[str, Any],
+    previous: Optional[Dict[str, Any]] = None,
+) -> list[str]:
+    """Flag 5-minute RAM/task/cache growth. Read-only."""
+    lines: list[str] = []
+    leftover = int(current.get("leftover_done_workers") or 0)
+    if leftover:
+        lines.append(f"WORKER LEFTOVER DETECTED leftover_done_workers={leftover}")
+    waiting = current.get("governor_waiting_by_bucket") or {}
+    if isinstance(waiting, dict):
+        busy = {name: int(value or 0) for name, value in waiting.items() if int(value or 0)}
+        if sum(busy.values()) >= 3:
+            lines.append("GOVERNOR WAITING PER BUCKET " + _fmt_map(busy))
+    if previous is None:
+        return lines
+    for metric in ACCUMULATION_GROWTH_METRICS:
+        try:
+            before = float(previous.get(metric, 0) or 0)
+            after = float(current.get(metric, 0) or 0)
+            delta = after - before
+        except (TypeError, ValueError):
+            continue
+        if metric == "memory_mb":
+            if delta < ACCUMULATION_MEMORY_GROWTH_MB:
+                continue
+            lines.append(
+                f"ACCUMULATION GROWTH metric={metric} previous={before:.1f} "
+                f"current={after:.1f} delta={delta:.1f}"
+            )
+            continue
+        if delta <= 0:
+            continue
+        if metric in CACHE_METRICS or metric.endswith("_size") or metric.endswith("_rows") or metric.endswith("_total"):
+            if delta < CACHE_GROWTH_DELTA and after < CACHE_GROWTH_DELTA * 5:
+                continue
+        lines.append(
+            f"ACCUMULATION GROWTH metric={metric} previous={int(before)} "
+            f"current={int(after)} delta={int(delta)}"
+        )
+    return lines
+
+
 def vs_baseline_lines(current: Dict[str, Any], baseline: Dict[str, Any]) -> list[str]:
     lines = ["PERFORMANCE VS BASELINE"]
     unusual = []
@@ -381,7 +792,7 @@ def vs_baseline_lines(current: Dict[str, Any], baseline: Dict[str, Any]) -> list
 
 
 class RuntimeSnapshotMonitor:
-    """Background loop: baseline at t=0, then every 30–60s."""
+    """Background loop: baseline at t=0, then every 30–60s, plus a 5-minute accumulation report."""
 
     def __init__(
         self,
@@ -390,6 +801,7 @@ class RuntimeSnapshotMonitor:
         *,
         interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
         lag_probe_seconds: float = LAG_PROBE_SECONDS,
+        accumulation_interval_seconds: float = DEFAULT_ACCUMULATION_SECONDS,
     ):
         self.bot = bot
         self.logger = logger
@@ -400,11 +812,25 @@ class RuntimeSnapshotMonitor:
             except ValueError:
                 pass
         self.interval_seconds = min(60.0, max(30.0, float(interval_seconds))) if interval_seconds >= 1 else max(0.01, float(interval_seconds))
+        env_acc = os.environ.get("BOT_ACCUMULATION_SECONDS", "").strip()
+        if env_acc:
+            try:
+                accumulation_interval_seconds = float(env_acc)
+            except ValueError:
+                pass
+        if accumulation_interval_seconds >= 1:
+            self.accumulation_interval_seconds = max(
+                60.0, min(900.0, float(accumulation_interval_seconds))
+            )
+        else:
+            self.accumulation_interval_seconds = max(0.01, float(accumulation_interval_seconds))
         self.lag_probe_seconds = max(0.0, float(lag_probe_seconds))
         self._task: Optional[asyncio.Task] = None
         self._closed = False
         self.previous: Optional[Dict[str, Any]] = None
         self.baseline: Optional[Dict[str, Any]] = None
+        self.accumulation_previous: Optional[Dict[str, Any]] = None
+        self._last_accumulation_mono = 0.0
         self._milestones_logged = set()
         self.snapshots: list[Dict[str, Any]] = []
         self._last_force = 0.0
@@ -416,6 +842,20 @@ class RuntimeSnapshotMonitor:
         method = getattr(self.logger, "log_error" if error else "log_info", None)
         if callable(method):
             method(message)
+
+    def _maybe_log_accumulation(self, snapshot: Dict[str, Any]) -> None:
+        now = time.monotonic()
+        due = (
+            self.accumulation_previous is None
+            or (now - self._last_accumulation_mono) >= self.accumulation_interval_seconds
+        )
+        if not due:
+            return
+        self._log(format_accumulation_report(snapshot, self.accumulation_previous))
+        for line in detect_accumulation(snapshot, self.accumulation_previous):
+            self._log(line, error=True)
+        self.accumulation_previous = dict(snapshot)
+        self._last_accumulation_mono = now
 
     async def emit(self, *, title: str = "PERFORMANCE SNAPSHOT") -> Dict[str, Any]:
         snapshot = await collect(self.bot, lag_probe_seconds=self.lag_probe_seconds)
@@ -432,6 +872,7 @@ class RuntimeSnapshotMonitor:
                 self._log(f"PERFORMANCE MILESTONE elapsed={mark}s")
                 for line in vs_baseline_lines(snapshot, self.baseline):
                     self._log(line)
+        self._maybe_log_accumulation(snapshot)
         self.previous = dict(snapshot)
         self.snapshots.append(snapshot)
         if len(self.snapshots) > 200:

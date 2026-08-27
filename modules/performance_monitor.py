@@ -29,6 +29,7 @@ DEFAULT_QUEUE_SIZE = 2
 REPEAT_THRESHOLD = 3
 NOISY_STAGE_REPEAT_MS = 500.0
 NOISY_STAGES = ("receive", "spam_check")
+MAX_BATCH_KEYS = 500
 
 
 def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
@@ -245,6 +246,7 @@ class SlowProcessMonitor:
             aggregate["count"] += 1
             aggregate["max_ms"] = max(float(aggregate["max_ms"]), event["total_ms"])
             aggregate.update(event)
+        self.trim_batch()
 
         real_now = time.time()
         now = real_now if now_epoch is None else float(now_epoch)
@@ -323,6 +325,26 @@ class SlowProcessMonitor:
 
     def _owner_snapshot(self) -> list[Dict[str, Any]]:
         return [item for item in self._batch.values() if owner_worthy_event(item)]
+
+    def trim_batch(self, max_keys: int = MAX_BATCH_KEYS) -> int:
+        """Drop oldest non-worthy aggregates first so unique chats cannot leak RAM."""
+        limit = max(1, int(max_keys))
+        dropped = 0
+        if len(self._batch) <= limit:
+            return 0
+        extras = [
+            key for key, event in list(self._batch.items())
+            if not owner_worthy_event(event)
+        ]
+        for key in extras:
+            if len(self._batch) <= limit:
+                break
+            if self._batch.pop(key, None) is not None:
+                dropped += 1
+        while len(self._batch) > limit:
+            self._batch.pop(next(iter(self._batch)), None)
+            dropped += 1
+        return dropped
 
     async def flush_batch(self) -> bool:
         if not self._batch or self._rpc_pressure() >= self.rpc_pressure_limit:

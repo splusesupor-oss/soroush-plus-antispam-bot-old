@@ -81,6 +81,8 @@ class MetricsCollector:
         self.overflow_counts[source] += 1
         if chat_id is not None:
             self.overflow_groups[str(chat_id)] += 1
+            while len(self.overflow_groups) > 200:
+                self.overflow_groups.pop(next(iter(self.overflow_groups)), None)
 
     def record_error(self, component: str, error_message: str):
         """ثبت خلاصه خطا برای گزارش تشخیصی."""
