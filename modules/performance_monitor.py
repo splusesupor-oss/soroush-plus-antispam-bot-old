@@ -3,6 +3,10 @@
 The hot path only updates small in-memory aggregates.  It never logs each slow
 message, writes state, resolves peers, or makes an RPC.  This is deliberate:
 monitoring must not become the source of the latency it observes.
+
+Owner delivery is throttled separately from internal aggregation: at most one
+owner message per cooldown window, and only for paths that are actually severe
+(>=1000ms) or repeatedly slow.
 """
 from __future__ import annotations
 
@@ -17,10 +21,14 @@ from modules.time_utils import now_local
 
 MIN_THRESHOLD_MS = 150.0
 DEFAULT_ALERT_THRESHOLD_MS = 1000.0
-DEFAULT_ALERT_INTERVAL_SECONDS = 30.0
-DEFAULT_BATCH_INTERVAL_SECONDS = 5 * 60.0
+DEFAULT_ALERT_INTERVAL_SECONDS = 15 * 60.0
+DEFAULT_BATCH_INTERVAL_SECONDS = 15 * 60.0
+DEFAULT_OWNER_COOLDOWN_SECONDS = 15 * 60.0
 DEFAULT_RPC_PRESSURE_LIMIT = 8
 DEFAULT_QUEUE_SIZE = 2
+REPEAT_THRESHOLD = 3
+NOISY_STAGE_REPEAT_MS = 500.0
+NOISY_STAGES = ("receive", "spam_check")
 
 
 def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
@@ -42,8 +50,48 @@ def _safe_handler(value: Any) -> str:
     return text[:120] or "unknown_handler"
 
 
+def stage_name(handler: Any) -> str:
+    text = str(handler or "").strip().lower()
+    if ":" in text:
+        return text.rsplit(":", 1)[-1].strip()
+    return text
+
+
+def is_noisy_stage(handler: Any) -> bool:
+    return stage_name(handler) in NOISY_STAGES
+
+
+def owner_worthy_event(event: Optional[Dict[str, Any]]) -> bool:
+    """Whether a path belongs in an owner-facing slowness report.
+
+    Internal aggregation still records every event above MIN_THRESHOLD_MS.
+    Owner delivery is limited to:
+    - paths whose max duration is at least 1000ms, or
+    - paths that were slow several times in the window (count >= 3).
+    receive / spam_check under 500ms are omitted unless they actually repeat.
+    """
+    if not isinstance(event, dict):
+        return False
+    try:
+        max_ms = float(event.get("max_ms") or event.get("total_ms") or 0.0)
+    except (TypeError, ValueError):
+        max_ms = 0.0
+    try:
+        count = int(event.get("count") or 1)
+    except (TypeError, ValueError):
+        count = 1
+    noisy = is_noisy_stage(event.get("handler"))
+    if noisy and max_ms < NOISY_STAGE_REPEAT_MS and count < REPEAT_THRESHOLD:
+        return False
+    if max_ms >= DEFAULT_ALERT_THRESHOLD_MS:
+        return True
+    if count >= REPEAT_THRESHOLD:
+        return True
+    return False
+
+
 class SlowProcessMonitor:
-    """Aggregate slow events; alert severe events at most once per 30 seconds."""
+    """Aggregate slow events; send at most one owner report per cooldown window."""
 
     def __init__(
         self,
@@ -62,12 +110,17 @@ class SlowProcessMonitor:
         global_min_interval_seconds: Optional[float] = None,
         owner_notify_threshold_ms: Optional[float] = None,
     ):
-        del state_path, cooldown_seconds, global_min_interval_seconds
+        del state_path
         self.threshold_ms = MIN_THRESHOLD_MS
         requested_alert = (
             owner_notify_threshold_ms
             if alert_threshold_ms is None and owner_notify_threshold_ms is not None
             else alert_threshold_ms
+        )
+        requested_cooldown = (
+            global_min_interval_seconds
+            if global_min_interval_seconds is not None
+            else cooldown_seconds
         )
         self.alert_threshold_ms = (
             _env_float(
@@ -89,6 +142,12 @@ class SlowProcessMonitor:
                 minimum=1.0,
             ) if batch_interval_seconds is None else max(0.01, float(batch_interval_seconds))
         )
+        self.owner_cooldown_seconds = (
+            _env_float(
+                "WATCHDOG_SLOW_OWNER_COOLDOWN_SECONDS",
+                DEFAULT_OWNER_COOLDOWN_SECONDS,
+            ) if requested_cooldown is None else max(0.0, float(requested_cooldown))
+        )
         self.rpc_pressure_limit = (
             _env_int("WATCHDOG_SLOW_RPC_PRESSURE_LIMIT", DEFAULT_RPC_PRESSURE_LIMIT)
             if rpc_pressure_limit is None else max(1, int(rpc_pressure_limit))
@@ -105,6 +164,7 @@ class SlowProcessMonitor:
         self._batch_task: Optional[asyncio.Task] = None
         self._closed = False
         self._last_alert = 0.0
+        self._last_owner_send = 0.0
         # key -> count/max/latest event. Aggregating prevents a busy group from
         # retaining an unbounded list in memory while preserving all slow paths.
         self._batch: Dict[str, Dict[str, Any]] = {}
@@ -133,6 +193,18 @@ class SlowProcessMonitor:
     @staticmethod
     def _key(handler: str, chat_id: Any) -> str:
         return f"{handler}|{chat_id}"
+
+    def _owner_cooldown_ok(self, now: float) -> bool:
+        if self._last_owner_send <= 0:
+            return True
+        return (now - self._last_owner_send) >= self.owner_cooldown_seconds
+
+    def _reserve_owner_send(self, now: float) -> bool:
+        if not self._owner_cooldown_ok(now):
+            return False
+        self._last_owner_send = now
+        self._last_alert = now
+        return True
 
     def record(
         self,
@@ -167,21 +239,30 @@ class SlowProcessMonitor:
         key = self._key(event["handler"], chat_id)
         aggregate = self._batch.get(key)
         if aggregate is None:
-            self._batch[key] = {**event, "count": 1, "max_ms": event["total_ms"]}
+            aggregate = {**event, "count": 1, "max_ms": event["total_ms"]}
+            self._batch[key] = aggregate
         else:
             aggregate["count"] += 1
             aggregate["max_ms"] = max(float(aggregate["max_ms"]), event["total_ms"])
             aggregate.update(event)
 
-        now = time.time() if now_epoch is None else float(now_epoch)
-        if elapsed < self.alert_threshold_ms or now - self._last_alert < self.alert_interval_seconds:
+        real_now = time.time()
+        now = real_now if now_epoch is None else float(now_epoch)
+        if elapsed < self.alert_threshold_ms:
+            return False
+        if not owner_worthy_event(aggregate):
+            return False
+        if not self._owner_cooldown_ok(real_now):
+            return False
+        if self._last_alert > 0 and now - self._last_alert < self.alert_interval_seconds:
             return False
         try:
-            self.queue.put_nowait(event)
+            self.queue.put_nowait(dict(event))
         except asyncio.QueueFull:
             return False
         # Reserve before the network task so bursts cannot enqueue multiple RPCs.
         self._last_alert = now
+        self._last_owner_send = real_now
         return True
 
     @staticmethod
@@ -240,10 +321,20 @@ class SlowProcessMonitor:
             )
         return "\n".join(lines[:250])
 
+    def _owner_snapshot(self) -> list[Dict[str, Any]]:
+        return [item for item in self._batch.values() if owner_worthy_event(item)]
+
     async def flush_batch(self) -> bool:
         if not self._batch or self._rpc_pressure() >= self.rpc_pressure_limit:
             return False
-        snapshot = list(self._batch.values())
+        snapshot = self._owner_snapshot()
+        if not snapshot:
+            return False
+        now = time.time()
+        previous_send = self._last_owner_send
+        previous_alert = self._last_alert
+        if not self._reserve_owner_send(now):
+            return False
         # Keep entries until the send succeeds, so a reconnect cannot lose them.
         if await self._send(self.format_batch(snapshot), "SLOW_PROCESS_BATCH"):
             for event in snapshot:
@@ -251,6 +342,8 @@ class SlowProcessMonitor:
                 if self._batch.get(key) is event:
                     self._batch.pop(key, None)
             return True
+        self._last_owner_send = previous_send
+        self._last_alert = previous_alert
         return False
 
     async def _alert_worker(self) -> None:

@@ -21,7 +21,7 @@ if "splusthon" not in sys.modules:
     sys.modules["splusthon"] = splusthon
 
 from modules import owner_private
-from modules.performance_monitor import SlowProcessMonitor
+from modules.performance_monitor import SlowProcessMonitor, owner_worthy_event
 
 
 class Logger:
@@ -57,13 +57,13 @@ class MonitorTests(unittest.TestCase):
             self.assertFalse(monitor.record(total_ms=400, chat_id=1, message_id=2, handler="normal"))
             self.assertEqual(logger.infos, [])
             self.assertEqual(client.sent, [])
-            await monitor.flush_batch()
+            sent = await monitor.flush_batch()
             await monitor.close()
-            return client
-        client = asyncio.run(scenario())
-        self.assertEqual(len(client.sent), 1)
-        self.assertIn("گزارش تجمیعی", client.sent[0][1])
-        self.assertIn("تعداد=1", client.sent[0][1])
+            return client, sent, monitor
+        client, sent, monitor = asyncio.run(scenario())
+        self.assertFalse(sent)
+        self.assertEqual(client.sent, [])
+        self.assertEqual(len(monitor._batch), 1)
 
     def test_severe_event_alerts_once_per_30_seconds(self):
         async def scenario():
@@ -108,6 +108,186 @@ class MonitorTests(unittest.TestCase):
         client, logger = asyncio.run(scenario())
         self.assertEqual(client.sent, [])
         self.assertEqual(logger.infos, [])
+
+    def test_owner_worthy_filter_skips_one_off_and_noisy_short_events(self):
+        self.assertFalse(owner_worthy_event({
+            "handler": "pipeline", "max_ms": 400, "count": 1,
+        }))
+        self.assertTrue(owner_worthy_event({
+            "handler": "pipeline", "max_ms": 400, "count": 3,
+        }))
+        self.assertTrue(owner_worthy_event({
+            "handler": "process_incoming_message:receive",
+            "max_ms": 1001,
+            "count": 1,
+        }))
+        self.assertFalse(owner_worthy_event({
+            "handler": "process_incoming_message:receive",
+            "max_ms": 400,
+            "count": 1,
+        }))
+        self.assertFalse(owner_worthy_event({
+            "handler": "process_incoming_message:spam_check",
+            "max_ms": 350,
+            "count": 2,
+        }))
+        self.assertTrue(owner_worthy_event({
+            "handler": "process_incoming_message:spam_check",
+            "max_ms": 350,
+            "count": 3,
+        }))
+
+    def test_receive_under_500ms_is_not_reported_until_it_repeats(self):
+        async def scenario():
+            logger, client = Logger(), Client(self.owner_id)
+            monitor = SlowProcessMonitor(client, logger, batch_interval_seconds=3600)
+            self.assertFalse(monitor.record(
+                total_ms=400,
+                chat_id=11,
+                message_id=1,
+                handler="process_incoming_message:receive",
+            ))
+            self.assertFalse(await monitor.flush_batch())
+            self.assertEqual(client.sent, [])
+            for index in range(3):
+                self.assertFalse(monitor.record(
+                    total_ms=220 + index,
+                    chat_id=12,
+                    message_id=10 + index,
+                    handler="process_incoming_message:spam_check",
+                ))
+            self.assertTrue(await monitor.flush_batch())
+            await monitor.close()
+            return client
+        client = asyncio.run(scenario())
+        self.assertEqual(len(client.sent), 1)
+        self.assertIn("گزارش تجمیعی", client.sent[0][1])
+        self.assertIn("spam_check", client.sent[0][1])
+        self.assertNotIn(":receive", client.sent[0][1])
+
+    def test_owner_cooldown_allows_only_one_report_per_window(self):
+        async def scenario():
+            logger, client = Logger(), Client(self.owner_id)
+            monitor = SlowProcessMonitor(
+                client,
+                logger,
+                alert_interval_seconds=0,
+                batch_interval_seconds=3600,
+                cooldown_seconds=15 * 60,
+            )
+            self.assertTrue(monitor.record(
+                total_ms=1001,
+                chat_id=1,
+                message_id=2,
+                handler="slow",
+                now_epoch=100,
+            ))
+            self.assertFalse(monitor.record(
+                total_ms=2000,
+                chat_id=1,
+                message_id=3,
+                handler="slow",
+                now_epoch=160,
+            ))
+            await monitor.queue.join()
+            self.assertFalse(await monitor.flush_batch())
+            await monitor.close()
+            return client
+        client = asyncio.run(scenario())
+        self.assertEqual(len(client.sent), 1)
+        self.assertIn("گزارش کندی شدید", client.sent[0][1])
+
+    def test_group_traffic_does_not_spam_owner_reports(self):
+        async def scenario():
+            logger, client = Logger(), Client(self.owner_id)
+            monitor = SlowProcessMonitor(
+                client,
+                logger,
+                alert_interval_seconds=0,
+                batch_interval_seconds=3600,
+                cooldown_seconds=15 * 60,
+            )
+            queued_severe = 0
+            for index in range(250):
+                if monitor.record(
+                    total_ms=220 + (index % 80),
+                    chat_id=9001,
+                    message_id=index,
+                    handler="process_incoming_message:receive",
+                ):
+                    queued_severe += 1
+                if monitor.record(
+                    total_ms=310 + (index % 50),
+                    chat_id=9001,
+                    message_id=1000 + index,
+                    handler="process_incoming_message:spam_check",
+                ):
+                    queued_severe += 1
+                if monitor.record(
+                    total_ms=180,
+                    chat_id=9001,
+                    message_id=2000 + index,
+                    handler="process_incoming_message:pipeline",
+                ):
+                    queued_severe += 1
+            for index in range(40):
+                if monitor.record(
+                    total_ms=1100 + index,
+                    chat_id=9001,
+                    message_id=3000 + index,
+                    handler="process_incoming_message:pipeline",
+                ):
+                    queued_severe += 1
+            await monitor.queue.join()
+            first_count = len(client.sent)
+            flushed = await monitor.flush_batch()
+            await monitor.close()
+            return client, queued_severe, first_count, flushed
+        client, queued_severe, first_count, flushed = asyncio.run(scenario())
+        self.assertLessEqual(queued_severe, 1)
+        self.assertLessEqual(first_count, 1)
+        self.assertFalse(flushed)
+        self.assertLessEqual(len(client.sent), 1)
+        self.assertGreater(len(client.sent), 0)
+
+    def test_repeated_short_receive_flush_sends_one_aggregate(self):
+        async def scenario():
+            logger, client = Logger(), Client(self.owner_id)
+            monitor = SlowProcessMonitor(
+                client,
+                logger,
+                batch_interval_seconds=3600,
+                cooldown_seconds=15 * 60,
+            )
+            queued = 0
+            for index in range(400):
+                if monitor.record(
+                    total_ms=200 + (index % 200),
+                    chat_id=42,
+                    message_id=index,
+                    handler="process_incoming_message:receive",
+                ):
+                    queued += 1
+                if monitor.record(
+                    total_ms=210 + (index % 100),
+                    chat_id=42,
+                    message_id=5000 + index,
+                    handler="process_incoming_message:spam_check",
+                ):
+                    queued += 1
+            await monitor.queue.join()
+            before = len(client.sent)
+            flushed = await monitor.flush_batch()
+            second = await monitor.flush_batch()
+            await monitor.close()
+            return client, queued, before, flushed, second
+        client, queued, before, flushed, second = asyncio.run(scenario())
+        self.assertEqual(queued, 0)
+        self.assertEqual(before, 0)
+        self.assertTrue(flushed)
+        self.assertFalse(second)
+        self.assertEqual(len(client.sent), 1)
+        self.assertIn("گزارش تجمیعی", client.sent[0][1])
 
 
 if __name__ == "__main__":

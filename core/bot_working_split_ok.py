@@ -747,7 +747,7 @@ class SoroushAntiSpamBot:
             self.client, self, self.logger
         )
         # Live slow-handler monitoring is separate from crash delivery.  Its
-        # bounded worker sends only deduplicated >150ms reports to the owner;
+        # bounded worker sends at most one owner report per cooldown window;
         # the message hot path performs no await, disk write, or network call.
         self.performance_monitor = SlowProcessMonitor(
             self.client, self.logger
