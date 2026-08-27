@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from modules import outgoing_profiler as op
 from modules.outgoing_profiler import (
     instrument_client,
     instrument_event,
@@ -339,10 +340,17 @@ class LiveClient(FakeClient):
         return "ok"
 
 
+def _reset_pong_gate():
+    op._LAST_RPC_OK_AT = None
+    op._LAST_RPC_ACTIVITY_AT = None
+    op._INFLIGHT_RPCS.clear()
+
+
 def test_keepalive_and_reconnect_logs():
-    print("\n### ping / pong / timeout / reconnect فقط لاگ می‌شوند")
+    print("\n### ping / pong / timeout لاگ می‌شوند؛ RPC تازه reconnect نمی‌کند")
 
     async def scenario():
+        _reset_pong_gate()
         logger = Logger()
         client = LiveClient()
         client.rpc_ms = 80
@@ -356,7 +364,6 @@ def test_keepalive_and_reconnect_logs():
         })())
         sender._keepalive_ping(22)
         sender._keepalive_ping(33)
-        await sender._reconnect("net")
         await task
         return logger, sender
 
@@ -371,13 +378,52 @@ def test_keepalive_and_reconnect_logs():
     check("پینگ ارسال شد", "KEEPALIVE PING SENT" in texts)
     check("پونگ دریافت شد", "KEEPALIVE PONG RECEIVED" in texts)
     check("timeout پونگ ثبت شد", "KEEPALIVE PONG TIMEOUT" in texts)
-    check("شروع reconnect ثبت شد", "RECONNECT START" in texts)
-    check("موفقیت reconnect ثبت شد", "RECONNECT SUCCESS" in texts)
+    check("timeout جوان نادیده گرفته شد", "KEEPALIVE PONG TIMEOUT IGNORED" in texts)
+    check("reconnect بی‌دلیل شروع نشد", "RECONNECT START" not in texts)
     check("request_id RPC در حال انتظار در timeout هست",
           "request_ids=" in texts and "pending_rpc=" in texts)
-    check("منطق پینگ عوض نشده: اول sent بعد timeout",
-          sender.pings[0][0] == "sent" and sender.pings[-1][0] == "timeout",
+    check("پینگ بعدی به‌جای قطع اتصال ارسال شد",
+          sender.pings[0][0] == "sent" and sender.pings[-1][0] == "sent",
           f"-> {sender.pings}")
+    check("reconnect اصلی صدا نشد",
+          sender.reconnects == [], f"-> {sender.reconnects}")
+
+
+def test_pong_timeout_reconnects_only_when_rpc_stuck():
+    print("\n### pong timeout فقط با RPC گیرکرده reconnect می‌کند")
+
+    async def scenario():
+        _reset_pong_gate()
+        previous = op.PONG_RECONNECT_STUCK_SECONDS
+        op.PONG_RECONNECT_STUCK_SECONDS = 0.01
+        logger = Logger()
+        client = LiveClient()
+        client.rpc_ms = 80
+        hang = asyncio.Event()
+
+        async def _call(sender, request, ordered=False, flood_sleep_threshold=None):
+            await hang.wait()
+            return "ok"
+
+        client._call = _call
+        instrument_client(client, logger)
+        sender = client._sender
+        task = asyncio.create_task(client.send_message(-5, "stuck"))
+        await asyncio.sleep(0.03)
+        sender._keepalive_ping(11)
+        sender._keepalive_ping(22)
+        await sender._reconnect("net")
+        hang.set()
+        await task
+        op.PONG_RECONNECT_STUCK_SECONDS = previous
+        return logger, sender
+
+    logger, sender = asyncio.run(scenario())
+    texts = "\n".join(logger.infos)
+    check("timeout پونگ ثبت شد", "KEEPALIVE PONG TIMEOUT" in texts)
+    check("شروع reconnect ثبت شد", "RECONNECT START" in texts)
+    check("موفقیت reconnect ثبت شد", "RECONNECT SUCCESS" in texts)
+    check("reconnect به‌خاطر RPC گیرکرده است", "reason=pending_rpc_stuck" in texts)
     check("reconnect اصلی هنوز صدا می‌شود",
           sender.reconnects == [None], f"-> {sender.reconnects}")
 
@@ -389,6 +435,7 @@ def main():
     test_no_behavior_change_and_idempotent()
     test_send_path_hook_stamps_drain()
     test_keepalive_and_reconnect_logs()
+    test_pong_timeout_reconnects_only_when_rpc_stuck()
     print(f"\npassed={PASSED} failed={FAILED}")
     return 1 if FAILED else 0
 

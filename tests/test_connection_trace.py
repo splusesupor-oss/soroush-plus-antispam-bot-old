@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 
 from modules import connection_guard as cg
+from modules import outgoing_profiler as op
 from modules.outgoing_profiler import (
     instrument_client,
     mark_rpc_on_wire,
@@ -139,21 +140,28 @@ def test_getdifference_logs_await_send_response():
 
 def test_reconnect_logs_inflight_getdifference_and_replay():
     async def scenario():
-        logger = Logger()
-        client = Client()
-        client.hang_until = asyncio.Event()
-        instrument_client(client, logger)
-        sender = client._sender
-        task = asyncio.create_task(
-            client._call(sender, GetChannelDifferenceRequest())
-        )
-        await asyncio.sleep(0.01)
-        sender._keepalive_ping(11)
-        sender._keepalive_ping(22)
-        await sender._reconnect("net")
-        client.hang_until.set()
-        await task
-        return logger, sender
+        op._LAST_RPC_OK_AT = None
+        op._LAST_RPC_ACTIVITY_AT = None
+        previous = op.PONG_RECONNECT_STUCK_SECONDS
+        op.PONG_RECONNECT_STUCK_SECONDS = 0.001
+        try:
+            logger = Logger()
+            client = Client()
+            client.hang_until = asyncio.Event()
+            instrument_client(client, logger)
+            sender = client._sender
+            task = asyncio.create_task(
+                client._call(sender, GetChannelDifferenceRequest())
+            )
+            await asyncio.sleep(0.01)
+            sender._keepalive_ping(11)
+            sender._keepalive_ping(22)
+            await sender._reconnect("net")
+            client.hang_until.set()
+            await task
+            return logger, sender
+        finally:
+            op.PONG_RECONNECT_STUCK_SECONDS = previous
 
     logger, sender = asyncio.run(scenario())
     texts = "\n".join(logger.infos)
@@ -166,6 +174,33 @@ def test_reconnect_logs_inflight_getdifference_and_replay():
     assert "pending_tasks=" in texts
     assert "sender_pending=" in texts
     assert sender.reconnects == ["pong-timeout"]
+
+
+def test_pong_timeout_skips_reconnect_for_young_rpc():
+    async def scenario():
+        op._LAST_RPC_OK_AT = None
+        op._LAST_RPC_ACTIVITY_AT = None
+        logger = Logger()
+        client = Client()
+        client.hang_until = asyncio.Event()
+        instrument_client(client, logger)
+        sender = client._sender
+        task = asyncio.create_task(
+            client._call(sender, GetChannelDifferenceRequest())
+        )
+        await asyncio.sleep(0.01)
+        sender._keepalive_ping(11)
+        sender._keepalive_ping(22)
+        client.hang_until.set()
+        await task
+        return logger, sender
+
+    logger, sender = asyncio.run(scenario())
+    texts = "\n".join(logger.infos)
+    assert "KEEPALIVE PONG TIMEOUT" in texts
+    assert "KEEPALIVE PONG TIMEOUT IGNORED" in texts
+    assert "RECONNECT START" not in texts
+    assert sender.reconnects == []
 
 
 def test_ws_close_logs_inflight():

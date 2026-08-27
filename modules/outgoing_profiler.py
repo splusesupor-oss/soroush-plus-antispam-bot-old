@@ -55,6 +55,14 @@ _LAST_RECONNECT = {
     "pending_before": (),
     "reason": None,
 }
+# Missed keepalive pong is not by itself a dead socket. Reconnect only when a
+# live RPC has been unanswered for several seconds and no real response has
+# arrived recently. A short network delay or a busy GetChannelDifference must
+# not tear the websocket down.
+PONG_RECONNECT_STUCK_SECONDS = float(os.getenv("BOT_PONG_RECONNECT_STUCK_SECONDS", "4"))
+PONG_RECENT_RESPONSE_SECONDS = float(os.getenv("BOT_PONG_RECENT_RESPONSE_SECONDS", "5"))
+_LAST_RPC_OK_AT = None
+_LAST_RPC_ACTIVITY_AT = None
 
 
 def begin_response_measurement():
@@ -325,6 +333,74 @@ def _format_operations(snapshot):
     return ",".join(str(item) for item in ops) if ops else "-"
 
 
+def _note_rpc_activity():
+    global _LAST_RPC_ACTIVITY_AT
+    _LAST_RPC_ACTIVITY_AT = time.perf_counter()
+
+
+def _note_rpc_ok():
+    global _LAST_RPC_OK_AT, _LAST_RPC_ACTIVITY_AT
+    now = time.perf_counter()
+    _LAST_RPC_OK_AT = now
+    _LAST_RPC_ACTIVITY_AT = now
+
+
+def _event_loop_is_healthy():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return True
+    if loop.is_closed() or not loop.is_running():
+        return False
+    return True
+
+
+def _oldest_live_rpc_age_ms(sender, snapshot=None):
+    oldest = 0.0
+    if snapshot is None:
+        snapshot = pending_rpc_snapshot(sender)
+    for row in snapshot.get("sender_pending_rows") or ():
+        if row.get("is_keepalive") or row.get("future_done"):
+            continue
+        oldest = max(oldest, float(row.get("age_ms") or 0.0))
+    now = time.perf_counter()
+    for record in _INFLIGHT_RPCS.values():
+        started = record.get("started")
+        if started is None:
+            continue
+        oldest = max(oldest, (now - float(started)) * 1000.0)
+    return oldest
+
+
+def _pong_timeout_decision(sender, snapshot):
+    """Whether a missed keepalive pong should tear down the websocket."""
+    now = time.perf_counter()
+    oldest_ms = _oldest_live_rpc_age_ms(sender, snapshot)
+    last_ok = _LAST_RPC_OK_AT
+    last_ok_ms = None if last_ok is None else (now - last_ok) * 1000.0
+    loop_ok = _event_loop_is_healthy()
+    recent_response = (
+        last_ok_ms is not None
+        and last_ok_ms < (PONG_RECENT_RESPONSE_SECONDS * 1000.0)
+    )
+    stuck = oldest_ms >= (PONG_RECONNECT_STUCK_SECONDS * 1000.0)
+    if not loop_ok:
+        return False, "event_loop_unhealthy", oldest_ms, last_ok_ms
+    if recent_response:
+        return False, "recent_response", oldest_ms, last_ok_ms
+    if not stuck:
+        return False, "rpc_not_stuck", oldest_ms, last_ok_ms
+    return True, "pending_rpc_stuck", oldest_ms, last_ok_ms
+
+
+def _clear_outstanding_ping(sender):
+    try:
+        sender._ping = None
+    except Exception:
+        return False
+    return True
+
+
 def _register_inflight(request, record):
     if request is None:
         return None
@@ -509,7 +585,7 @@ def _wrap_existing(obj, name, factory):
 
 
 def _ensure_reconnect_hooks(client, logger):
-    """Log keepalive/reconnect without changing SPlusthon timing or retries."""
+    """Log keepalive/reconnect; skip pong-timeout reconnect unless an RPC is stuck."""
     sender = getattr(client, "_sender", None)
     if sender is None:
         return
@@ -549,15 +625,31 @@ def _ensure_reconnect_hooks(client, logger):
                     f"ping_id={rnd_id} pending_rpc={snapshot['count']} "
                     f"sender_pending={snapshot['sender_pending']}"
                 )
-            else:
+                return original(rnd_id)
+            reconnect, reason, oldest_ms, last_ok_ms = _pong_timeout_decision(
+                sender, snapshot
+            )
+            last_ok_text = "-" if last_ok_ms is None else f"{last_ok_ms:.1f}"
+            logger.log_info(
+                "KEEPALIVE PONG TIMEOUT "
+                f"ping_id={outstanding} next_ping_id={rnd_id} "
+                f"pending_rpc={snapshot['count']} "
+                f"sender_pending={snapshot['sender_pending']} "
+                f"request_ids={_format_request_ids(snapshot)} "
+                f"operations={_format_operations(snapshot)} "
+                f"reconnect={int(reconnect)} reason={reason} "
+                f"oldest_rpc_ms={oldest_ms:.1f} "
+                f"last_response_ms={last_ok_text} "
+                f"event_loop_ok={int(_event_loop_is_healthy())}"
+            )
+            if not reconnect:
                 logger.log_info(
-                    "KEEPALIVE PONG TIMEOUT "
-                    f"ping_id={outstanding} next_ping_id={rnd_id} "
-                    f"pending_rpc={snapshot['count']} "
-                    f"sender_pending={snapshot['sender_pending']} "
-                    f"request_ids={_format_request_ids(snapshot)} "
-                    f"operations={_format_operations(snapshot)}"
+                    "KEEPALIVE PONG TIMEOUT IGNORED "
+                    f"reason={reason} oldest_rpc_ms={oldest_ms:.1f} "
+                    f"last_response_ms={last_ok_text} "
+                    f"pending_rpc={snapshot['count']}"
                 )
+                _clear_outstanding_ping(sender)
             return original(rnd_id)
         return hooked
 
@@ -610,6 +702,7 @@ def _ensure_reconnect_hooks(client, logger):
             if will_start:
                 global _RECONNECT_GEN
                 _RECONNECT_GEN += 1
+                _clear_outstanding_ping(sender)
                 pending = _pending_trace(sender)
                 _LAST_RECONNECT["started_at"] = time.perf_counter()
                 _LAST_RECONNECT["ended_at"] = None
@@ -901,7 +994,9 @@ def _wrap_call(client, logger):
             "operation": operation or request_name,
             "chat_id": chat_id,
             "request": request_name,
+            "started": time.perf_counter(),
         })
+        _note_rpc_activity()
         result = "success"
         sender = None
         if args:
@@ -957,6 +1052,8 @@ def _wrap_call(client, logger):
                 )
             _CALL_STATE.reset(token)
             _unregister_inflight(inflight_key)
+            if result == "success":
+                _note_rpc_ok()
             record = {
                 "request_id": request_id,
                 "operation": operation or _request_name(request),
