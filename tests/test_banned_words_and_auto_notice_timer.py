@@ -25,7 +25,7 @@ from modules.group_words_storage import (
 from modules.spam_detector import SpamDetector
 from modules.notice_cleanup import NoticeCleanup, capture_sent
 from modules.message_delete_queue import MessageDeleteQueue
-from modules.admin_actions import AdminActions
+from modules.admin_actions import AdminActions, public_warning_reason_line
 from modules.cache_manager import PermissionCircuitBreaker
 
 
@@ -249,6 +249,19 @@ def test_admin_actions_send_warning_notice_integration():
         assert len(client.sent_messages) == 1
         sent_warning = client.sent_messages[0]
 
+        await admin.send_warning(
+            chat_id=chat_id - 1,
+            username="spammer2",
+            reason="banned_word کلمه ممنوعه (پی)",
+            count=1,
+            threshold=3,
+            user=type("U", (), {"id": 4242, "first_name": "Ali", "last_name": "", "username": "spammer2"})(),
+        )
+        banned_notice = client.sent_messages[-1].text
+        assert "banned_word" not in banned_notice
+        assert "bannde_word" not in banned_notice
+        assert "دلیل کلمه ممنوعه : (پی)" in banned_notice
+
         # Wait for notice cleanup TTL
         await asyncio.sleep(0.25)
 
@@ -265,11 +278,25 @@ def test_admin_actions_send_warning_notice_integration():
     asyncio.run(scenario())
 
 
+def test_warning_hides_internal_banned_word_tag():
+    print("\n--- TEST 4: Warning notice hides banned_word tag ---")
+    line = public_warning_reason_line("banned_word کلمه ممنوعه (پی)")
+    assert line == "دلیل کلمه ممنوعه : (پی)", line
+    assert "banned_word" not in line
+    line = public_warning_reason_line("spam_banned_word banned_word کلمه ممنوعه (کیر)")
+    assert line == "دلیل کلمه ممنوعه : (کیر)", line
+    assert "banned_word" not in line
+    line = public_warning_reason_line("فیلتر گروه (تبلیغ)")
+    assert line == "دلیل فیلتر گروه : (تبلیغ)", line
+    print("  PASS: Internal banned_word tag is stripped from the public notice.")
+
+
 def main():
     print("================ RUNNING FIX VALIDATION TESTS ================")
     test_banned_words_whole_word_matching()
     test_auto_notice_lifecycle_and_diagnostic_logs()
     test_admin_actions_send_warning_notice_integration()
+    test_warning_hides_internal_banned_word_tag()
     print("\n================ ALL TESTS PASSED SUCCESSFULLY ================")
 
 

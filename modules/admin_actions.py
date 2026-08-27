@@ -40,6 +40,25 @@ def _is_flood_wait(error):
     return "flood" in name or ("wait" in name and "second" in str(error).lower())
 
 
+_INTERNAL_REASON_TAGS = re.compile(
+    r"\b(?:spam_banned_word|banned_word|bannde_word)\b\s*",
+    re.IGNORECASE,
+)
+
+
+def public_warning_reason_line(reason):
+    """User-facing warning reason. Internal detector tags never appear."""
+    raw = str(reason or "نامشخص").strip()
+    raw = _INTERNAL_REASON_TAGS.sub("", raw).strip()
+    banned_match = re.search(r"کلمه ممنوعه\s*\((.*?)\)", raw)
+    group_filter_match = re.search(r"فیلتر گروه\s*\((.*?)\)", raw)
+    if banned_match:
+        return f"دلیل کلمه ممنوعه : ({banned_match.group(1)})"
+    if group_filter_match:
+        return f"دلیل فیلتر گروه : ({group_filter_match.group(1)})"
+    return f"دلیل فیلتر گروه : {raw}"
+
+
 class AdminActions:
     def __init__(self, client, logger, config_manager, *, peer_cache=None,
                  bot_account_id=None, circuit_breaker=None):
@@ -489,15 +508,7 @@ class AdminActions:
             # a username, which is still rendered with the same policy.
             display_source = user if user is not None else {"username": username}
             name = format_user(display_source)
-            raw_reason = str(reason or "نامشخص").strip()
-            banned_match = re.match(r"^کلمه ممنوعه\s*\((.*?)\)$", raw_reason)
-            group_filter_match = re.match(r"^فیلتر گروه\s*\((.*?)\)$", raw_reason)
-            if banned_match:
-                reason_line = f"دلیل کلمه ممنوعه : ({banned_match.group(1)})"
-            elif group_filter_match:
-                reason_line = f"دلیل فیلتر گروه : ({group_filter_match.group(1)})"
-            else:
-                reason_line = f"دلیل فیلتر گروه : {raw_reason}"
+            reason_line = public_warning_reason_line(reason)
             digits = str(count).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
             max_digits = str(threshold).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
             prefix = f"⚠️ کاربر {name}\n"
