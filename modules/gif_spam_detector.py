@@ -37,6 +37,9 @@ MAX_DELETE_ATTEMPTS = 3
 # شمارندهٔ GIFهای پیاپی هر کاربر — فقط برای همین ماژول.
 GIF_COUNTER = defaultdict(lambda: deque(maxlen=GIF_THRESHOLD))
 
+# آخرین GIF هر کلید؛ بدون این، شمارنده تا ری‌استارت می‌ماند.
+_COUNTER_TOUCHED = {}
+
 # کاربرانی که آستانه را رد کرده‌اند: (chat_id, user_id) -> زمان انقضا.
 _FLAGGED = {}
 
@@ -82,6 +85,8 @@ def is_flagged(chat_id, user_id):
         return False
     if expiry <= _now():
         _FLAGGED.pop((chat_id, user_id), None)
+        GIF_COUNTER.pop((chat_id, user_id), None)
+        _COUNTER_TOUCHED.pop((chat_id, user_id), None)
         return False
     return True
 
@@ -97,11 +102,13 @@ def reset_gif_history(chat_id, user_id):
     شده دوباره آزاد کند، وگرنه همان باگِ «چند گیف باقی می‌ماند» برمی‌گردد.
     """
     GIF_COUNTER.pop((chat_id, user_id), None)
+    _COUNTER_TOUCHED.pop((chat_id, user_id), None)
 
 
 def clear_user(chat_id, user_id):
     """پاک‌سازی کامل: هم شمارنده و هم حالت flagged."""
     GIF_COUNTER.pop((chat_id, user_id), None)
+    _COUNTER_TOUCHED.pop((chat_id, user_id), None)
     _FLAGGED.pop((chat_id, user_id), None)
 
 
@@ -123,10 +130,12 @@ def track_gif(chat_id, user_id, message_id):
 
     history = GIF_COUNTER[key]
     history.append(message_id)
+    _COUNTER_TOUCHED[key] = _now()
 
     if len(history) >= GIF_THRESHOLD:
         batch = list(history)
         GIF_COUNTER.pop(key, None)
+        _COUNTER_TOUCHED.pop(key, None)
         flag_user(chat_id, user_id)
         _STATS["threshold_hits"] += 1
         # Keep the first GIF as the representative; only duplicates are
@@ -247,9 +256,46 @@ def stats():
     return dict(_STATS)
 
 
+def cleanup_expired(now=None):
+    """Drop idle GIF counters and expired flags. Owner is the 60s loop.
+
+    Keys used to live until the next GIF or a process restart. In busy
+    groups that is one deque per unique sender for the whole uptime.
+    """
+    now = _now() if now is None else now
+    removed = 0
+    for key, expiry in list(_FLAGGED.items()):
+        if expiry <= now:
+            _FLAGGED.pop(key, None)
+            GIF_COUNTER.pop(key, None)
+            _COUNTER_TOUCHED.pop(key, None)
+            removed += 1
+    for key, seen in list(_COUNTER_TOUCHED.items()):
+        if key in _FLAGGED:
+            continue
+        if now - seen >= FLAG_DURATION:
+            GIF_COUNTER.pop(key, None)
+            _COUNTER_TOUCHED.pop(key, None)
+            removed += 1
+    for key in list(GIF_COUNTER):
+        if key not in _COUNTER_TOUCHED and key not in _FLAGGED:
+            GIF_COUNTER.pop(key, None)
+            removed += 1
+    for chat_id, task in list(_FLUSH_TASKS.items()):
+        done = getattr(task, "done", None)
+        try:
+            is_done = bool(done()) if callable(done) else True
+        except Exception:
+            is_done = True
+        if is_done:
+            _FLUSH_TASKS.pop(chat_id, None)
+    return removed
+
+
 def reset_all():
     """پاک‌سازی کامل وضعیت — برای تست."""
     GIF_COUNTER.clear()
+    _COUNTER_TOUCHED.clear()
     _FLAGGED.clear()
     _DELETE_QUEUE.clear()
     _FLUSH_TASKS.clear()

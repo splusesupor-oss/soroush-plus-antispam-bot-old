@@ -471,6 +471,103 @@ def test_ban_execution_and_admin_check_logs_are_debug_only():
     )
 
 
+def test_cleanup_expired_handler_state_sweeps_ttl_maps():
+    print("\\n### جاروی TTL هندلر نقشه‌های منقضی را بدون سقف پاک می‌کند")
+    handler.ADMIN_PERMISSION_CACHE.clear()
+    bot = SimpleNamespace(
+        native_group_admin_cache={
+            ("g1", "u1"): (True, 10.0),
+            ("g1", "u2"): (False, 100.0),
+        },
+        native_group_admin_ids_cache={
+            "g1": (frozenset({"u1"}), 10.0),
+            "g2": (frozenset({"u9"}), 80.0),
+        },
+        _native_admin_fail_logged={
+            ("g1", "u1"): 5.0,
+            ("g1", "u3"): 90.0,
+        },
+        _forward_albums={
+            ("g1", 1): {"ids": {1}, "is_forward": True, "expires": 5.0},
+            ("g1", 2): {"ids": {2}, "is_forward": False, "expires": 70.0},
+        },
+        group_timer_tasks={
+            11: {SimpleNamespace(done=lambda: True)},
+            12: {SimpleNamespace(done=lambda: False)},
+        },
+        _spam_cleanup_incidents={
+            ("g", "orphan"): {
+                "id": 1, "deleted": 0, "ban_confirmed": False,
+                "_touched_at": 1.0,
+            },
+            ("g", "fresh"): {
+                "id": 2, "deleted": 0, "ban_confirmed": False,
+                "_touched_at": 50.0,
+            },
+            ("g", "live"): {
+                "id": 3, "deleted": 0, "ban_confirmed": False,
+                "_touched_at": 1.0,
+                "notice_task": SimpleNamespace(done=lambda: False),
+            },
+        },
+        _auto_spam_cleanup_tasks={
+            ("g", "done"): SimpleNamespace(done=lambda: True),
+        },
+        _auto_spam_cleanup_pending={("g", "orphan"): {1}},
+        _big_spam_incidents={
+            ("g", "stale"): {
+                "id": 9, "ban_state": "failed", "_touched_at": 0.0,
+                "cleanup_task": SimpleNamespace(done=lambda: True),
+            },
+            ("g", "pending"): {
+                "id": 10, "ban_state": "pending",
+                "ban_absolute_deadline": 999.0, "_touched_at": 1.0,
+                "cleanup_task": None,
+            },
+        },
+    )
+    handler.ADMIN_PERMISSION_CACHE[(-1, 1, "a")] = (10.0, True)
+    handler.ADMIN_PERMISSION_CACHE[(-1, 2, "b")] = (90.0, False)
+    removed = handler.cleanup_expired_handler_state(bot, now=60.0)
+    check("native admin منقضی رفت", ("g1", "u1") not in bot.native_group_admin_cache)
+    check("native admin زنده ماند", ("g1", "u2") in bot.native_group_admin_cache)
+    check("admin-ids منقضی رفت", "g1" not in bot.native_group_admin_ids_cache)
+    check("admin-ids زنده ماند", "g2" in bot.native_group_admin_ids_cache)
+    check("fail-log منقضی رفت", ("g1", "u1") not in bot._native_admin_fail_logged)
+    check("fail-log زنده ماند", ("g1", "u3") in bot._native_admin_fail_logged)
+    check("permission منقضی رفت", (-1, 1, "a") not in handler.ADMIN_PERMISSION_CACHE)
+    check("permission زنده ماند", (-1, 2, "b") in handler.ADMIN_PERMISSION_CACHE)
+    check("آلبوم منقضی رفت", ("g1", 1) not in bot._forward_albums)
+    check("آلبوم زنده ماند", ("g1", 2) in bot._forward_albums)
+    check("تایمر تمام‌شده رفت", 11 not in bot.group_timer_tasks)
+    check("تایمر زنده ماند", 12 in bot.group_timer_tasks)
+    check("incident یتیم رفت", ("g", "orphan") not in bot._spam_cleanup_incidents)
+    check("pending یتیم رفت", ("g", "orphan") not in bot._auto_spam_cleanup_pending)
+    check("incident تازه ماند", ("g", "fresh") in bot._spam_cleanup_incidents)
+    check("incident با تسک زنده ماند", ("g", "live") in bot._spam_cleanup_incidents)
+    check("تسک cleanup تمام‌شده رفت",
+          ("g", "done") not in bot._auto_spam_cleanup_tasks)
+    check("big-spam کهنه رفت", ("g", "stale") not in bot._big_spam_incidents)
+    check("big-spam pending تا مهلت ماند",
+          ("g", "pending") in bot._big_spam_incidents)
+    check("حداقل چند کلید واقعاً حذف شد", removed >= 8, f"-> {removed}")
+    handler.ADMIN_PERMISSION_CACHE.clear()
+
+
+def test_owner_cleanup_wires_ttl_sweeps():
+    print("\\n### cleanup_temporary_state جاروی GIF و هندلر را صدا می‌زند")
+    source = (ROOT / "core" / "bot_working_split_ok.py").read_text(
+        encoding="utf-8"
+    )
+    start = source.find("def cleanup_temporary_state")
+    end = source.find("\n    def _make_client", start)
+    body = source[start:end if end != -1 else start + 4000]
+    check("هندلر TTL در owner loop است",
+          "cleanup_expired_handler_state" in body)
+    check("GIF TTL در owner loop است",
+          "gif_spam_detector" in body and "cleanup_expired" in body)
+
+
 if __name__ == "__main__":
     test_negative_native_admin_ttl_is_raised()
     test_native_admin_check_is_only_for_management_commands()

@@ -454,6 +454,16 @@ class SoroushAntiSpamBot:
                     mapping.pop(key, None)
                     self._temporary_state_touched.pop((bucket, key), None)
         try:
+            from handlers.message_handler import cleanup_expired_handler_state
+            cleanup_expired_handler_state(self, now)
+        except Exception:
+            pass
+        try:
+            from modules.gif_spam_detector import cleanup_expired as gif_cleanup
+            gif_cleanup()
+        except Exception:
+            pass
+        try:
             from modules.runtime_snapshot import prune_unbounded_maps
             prune_unbounded_maps(self)
         except Exception:

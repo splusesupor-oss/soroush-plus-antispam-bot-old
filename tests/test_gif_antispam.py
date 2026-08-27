@@ -209,6 +209,48 @@ def test_undeletable_message_isolated():
           gsd.pending_count(CHAT) == 1, f"-> {gsd.pending_count(CHAT)}")
 
 
+def test_cleanup_expired_drops_idle_not_live():
+    print("\n### cleanup_expired شمارندهٔ بیکار را پاک می‌کند، زنده را نه")
+    gsd.reset_all()
+    gsd.track_gif(CHAT, 8001, 1)
+    gsd.track_gif(CHAT, 8001, 2)
+    live_key = (CHAT, 8001)
+    check("شمارنده بعد از track وجود دارد", live_key in gsd.GIF_COUNTER)
+    check("لمس ثبت شده", live_key in gsd._COUNTER_TOUCHED)
+    now = gsd._now()
+    removed = gsd.cleanup_expired(now)
+    check("شمارنده تازه در همان لحظه پاک نمی‌شود",
+          live_key in gsd.GIF_COUNTER, f"-> removed={removed}")
+    gsd._COUNTER_TOUCHED[live_key] = now - gsd.FLAG_DURATION - 1
+    removed = gsd.cleanup_expired(now)
+    check("شمارندهٔ بیکار بعد از FLAG_DURATION پاک شد",
+          live_key not in gsd.GIF_COUNTER and live_key not in gsd._COUNTER_TOUCHED,
+          f"-> removed={removed}")
+    check("حداقل یک کلید حذف شد", removed >= 1, f"-> {removed}")
+
+
+def test_cleanup_expired_drops_expired_flags():
+    print("\n### cleanup_expired فلگ منقضی را بدون سقف مصنوعی پاک می‌کند")
+    gsd.reset_all()
+    gsd.flag_user(CHAT, 8002, duration=10)
+    key = (CHAT, 8002)
+    check("فلگ تازه زنده است", gsd.is_flagged(CHAT, 8002))
+    gsd._FLAGGED[key] = gsd._now() - 1
+    removed = gsd.cleanup_expired()
+    check("فلگ منقضی از نقشه رفت", key not in gsd._FLAGGED, f"-> {removed}")
+    check("is_flagged بعد از جارو False است", not gsd.is_flagged(CHAT, 8002))
+
+
+def test_reset_all_clears_counter_touch():
+    print("\n### reset_all لمس شمارنده را هم پاک می‌کند")
+    gsd.reset_all()
+    gsd.track_gif(CHAT, 8003, 1)
+    gsd.reset_all()
+    check("GIF_COUNTER خالی", len(gsd.GIF_COUNTER) == 0)
+    check("_COUNTER_TOUCHED خالی", len(gsd._COUNTER_TOUCHED) == 0)
+    check("_FLAGGED خالی", len(gsd._FLAGGED) == 0)
+
+
 def test_independent_state():
     print("\n### استقلال از سایر ماژول‌های ضداسپم")
     import modules.spam_detector as sd
@@ -259,6 +301,9 @@ def main():
     test_flush_deletes_everything()
     test_flush_retries_on_failure()
     test_undeletable_message_isolated()
+    test_cleanup_expired_drops_idle_not_live()
+    test_cleanup_expired_drops_expired_flags()
+    test_reset_all_clears_counter_touch()
     test_independent_state()
     test_end_to_end_burst()
 

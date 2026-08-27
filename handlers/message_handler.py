@@ -730,11 +730,14 @@ def _big_spam_incident(bot, key, seed_ids=()):
             "retry_rounds": 0,
             "abandoned_ids": set(),
             "cleanup_task": None,
+            "_touched_at": time.monotonic(),
             # Reopened incidents for an already-punished user can drain at
             # once. A newly queued ban changes this to ``pending`` below and
             # keeps the incident open until SPlus confirms the restriction.
             "ban_state": "confirmed",
         }
+    else:
+        incident["_touched_at"] = time.monotonic()
     incident["ids"].update(
         message_id for message_id in seed_ids
         if isinstance(message_id, int) and message_id > 0
@@ -1580,11 +1583,14 @@ def _spam_cleanup_incident(bot, key, event):
             "deleted": 0,
             "ban_confirmed": False,
             "event": event,
+            "_touched_at": time.monotonic(),
         }
-    elif event is not None:
-        # Keep the latest event only as reply context; all counts remain in the
-        # same incident and are never reset by a later cleanup batch.
-        incident["event"] = event
+    else:
+        incident["_touched_at"] = time.monotonic()
+        if event is not None:
+            # Keep the latest event only as reply context; all counts remain in the
+            # same incident and are never reset by a later cleanup batch.
+            incident["event"] = event
     return incident
 
 
@@ -2590,6 +2596,135 @@ def _delete_cooldown_allowed(chat_id):
     DELETE_COMMAND_COOLDOWNS[chat_id] = now
     _prune_delete_cooldowns()
     return True
+
+
+def _loop_now(now=None):
+    if now is not None:
+        return now
+    try:
+        return _asyncio.get_running_loop().time()
+    except RuntimeError:
+        return time.monotonic()
+
+
+def _task_is_live(task):
+    if task is None:
+        return False
+    done = getattr(task, "done", None)
+    try:
+        return not (done() if callable(done) else True)
+    except Exception:
+        return False
+
+
+def _prune_ttl_cache(cache, now):
+    """Drop expired ``(value, expires_at)`` or ``(expires_at, value)`` rows."""
+    if not isinstance(cache, dict):
+        return 0
+    removed = 0
+    for key, row in list(cache.items()):
+        try:
+            expires_at = row[1] if isinstance(row, tuple) and len(row) > 1 else None
+        except (TypeError, IndexError):
+            expires_at = None
+        if expires_at is None or expires_at <= now:
+            cache.pop(key, None)
+            removed += 1
+    return removed
+
+
+def cleanup_expired_handler_state(bot, now=None):
+    """TTL-sweep handler maps owned by the 60s cleanup loop.
+
+    These maps already have expiry on read or a FIFO cap. Without a periodic
+    sweep, expired (chat, user) keys stay until restart and the bot slows
+    as unique senders accumulate.
+    """
+    now = _loop_now(now)
+    removed = 0
+    removed += _prune_ttl_cache(
+        getattr(bot, "native_group_admin_cache", None), now
+    )
+    removed += _prune_ttl_cache(
+        getattr(bot, "native_group_admin_ids_cache", None), now
+    )
+    fail_log = getattr(bot, "_native_admin_fail_logged", None)
+    if isinstance(fail_log, dict):
+        for key, until in list(fail_log.items()):
+            if until <= now:
+                fail_log.pop(key, None)
+                removed += 1
+    for key, (expires_at, _value) in list(ADMIN_PERMISSION_CACHE.items()):
+        if expires_at <= now:
+            ADMIN_PERMISSION_CACHE.pop(key, None)
+            removed += 1
+    albums = getattr(bot, "_forward_albums", None)
+    if isinstance(albums, dict):
+        for key, row in list(albums.items()):
+            expires = row.get("expires") if isinstance(row, dict) else None
+            if expires is None or expires <= now:
+                albums.pop(key, None)
+                removed += 1
+    timers = getattr(bot, "group_timer_tasks", None)
+    if isinstance(timers, dict):
+        for chat_id, tasks in list(timers.items()):
+            live = set()
+            for task in list(tasks or ()):
+                if _task_is_live(task):
+                    live.add(task)
+                else:
+                    removed += 1
+            if live:
+                timers[chat_id] = live
+            else:
+                timers.pop(chat_id, None)
+    incident_ttl = 10 * 60
+    incidents = getattr(bot, "_spam_cleanup_incidents", None) or {}
+    auto_tasks = getattr(bot, "_auto_spam_cleanup_tasks", None) or {}
+    pending = getattr(bot, "_auto_spam_cleanup_pending", None) or {}
+    big = getattr(bot, "_big_spam_incidents", None) or {}
+    for key, incident in list(incidents.items()):
+        if not isinstance(incident, dict):
+            incidents.pop(key, None)
+            removed += 1
+            continue
+        big_inc = big.get(key)
+        big_task = (
+            big_inc.get("cleanup_task") if isinstance(big_inc, dict) else None
+        )
+        if (
+            _task_is_live(incident.get("notice_task"))
+            or _task_is_live(auto_tasks.get(key))
+            or _task_is_live(big_task)
+        ):
+            continue
+        touched = float(incident.get("_touched_at") or 0)
+        if touched and now - touched < incident_ttl:
+            continue
+        incidents.pop(key, None)
+        pending.pop(key, None)
+        removed += 1
+    for key, task in list(auto_tasks.items()):
+        if not _task_is_live(task):
+            auto_tasks.pop(key, None)
+            removed += 1
+    for key, incident in list(big.items()):
+        if not isinstance(incident, dict):
+            big.pop(key, None)
+            removed += 1
+            continue
+        if _task_is_live(incident.get("cleanup_task")):
+            continue
+        if incident.get("ban_state") == "pending":
+            deadline = incident.get("ban_absolute_deadline")
+            if deadline is not None and now < float(deadline):
+                continue
+        touched = float(incident.get("_touched_at") or 0)
+        if touched and now - touched < incident_ttl:
+            continue
+        big.pop(key, None)
+        removed += 1
+    return removed
 
 
 # Commands which belong to this bot must never be interpreted as an AI/search
