@@ -614,6 +614,7 @@ def _ensure_reconnect_hooks(client, logger):
                     drop_completed_pending,
                     live_keepalive_count,
                     log_ping_lifecycle,
+                    log_unanswered_ping_states,
                     note_pending,
                     reclaim_dead_pending,
                     reclaim_superseded_keepalive,
@@ -624,8 +625,7 @@ def _ensure_reconnect_hooks(client, logger):
                 drop_completed_pending(sender)
                 note_pending(sender)
                 reclaim_dead_pending(sender, logger=logger)
-                # At most one unanswered Ping. Older heartbeats are
-                # superseded; the newest stays. Never wipe to kept=0.
+                # Extra pings only. Never wipe the last live PingRequest.
                 if unanswered_keepalive_count(sender) > 1:
                     reclaim_superseded_keepalive(
                         sender, keep_newest=1, logger=logger
@@ -635,22 +635,36 @@ def _ensure_reconnect_hooks(client, logger):
             outstanding = getattr(sender, "_ping", None)
             snapshot = pending_rpc_snapshot(sender)
             try:
-                from modules.connection_guard import live_keepalive_count
+                from modules.connection_guard import (
+                    live_keepalive_count,
+                    log_ping_lifecycle,
+                    log_unanswered_ping_states,
+                    unanswered_keepalive_ids,
+                )
                 live_pings = live_keepalive_count(sender)
             except Exception:
                 live_pings = 0
-            if outstanding is None:
-                if live_pings >= 1:
-                    logger.log_info(
-                        "KEEPALIVE PING SKIPPED "
-                        f"ping_id={rnd_id} live_pings={live_pings} "
-                        f"pending_rpc={snapshot['count']} "
-                        f"sender_pending={snapshot['sender_pending']}"
+            if live_pings >= 1:
+                logger.log_info(
+                    "KEEPALIVE PING SKIPPED "
+                    f"ping_id={rnd_id} live_pings={live_pings} "
+                    f"pending_rpc={snapshot['count']} "
+                    f"sender_pending={snapshot['sender_pending']}"
+                )
+                try:
+                    log_unanswered_ping_states(
+                        sender, logger, action="skip", next_ping_id=rnd_id,
                     )
-                    return None
+                except Exception:
+                    pass
+                return None
+            if outstanding is None:
                 try:
                     from modules.connection_guard import log_ping_lifecycle
-                    log_ping_lifecycle(logger, rnd_id, "CREATED")
+                    log_ping_lifecycle(
+                        logger, rnd_id, "CREATED",
+                        future_done=0, task_done=0, in_sender_pending=0,
+                    )
                 except Exception:
                     pass
                 logger.log_info(
@@ -666,7 +680,9 @@ def _ensure_reconnect_hooks(client, logger):
                             complete_keepalive_pending,
                             log_ping_lifecycle,
                         )
-                        log_ping_lifecycle(logger, rnd_id, "CANCELLED")
+                        log_ping_lifecycle(
+                            logger, rnd_id, "CANCELLED", action="cancel",
+                        )
                         complete_keepalive_pending(
                             sender, ping_id=rnd_id, logger=logger,
                             reason="CANCELLED",
@@ -680,7 +696,9 @@ def _ensure_reconnect_hooks(client, logger):
                             complete_keepalive_pending,
                             log_ping_lifecycle,
                         )
-                        log_ping_lifecycle(logger, rnd_id, "EXCEPTION")
+                        log_ping_lifecycle(
+                            logger, rnd_id, "EXCEPTION", action="cancel",
+                        )
                         complete_keepalive_pending(
                             sender, ping_id=rnd_id, logger=logger,
                             reason="EXCEPTION",
@@ -692,7 +710,6 @@ def _ensure_reconnect_hooks(client, logger):
                     from modules.connection_guard import (
                         log_ping_lifecycle,
                         note_pending,
-                        reclaim_superseded_keepalive,
                         stamp_keepalive_ping_id,
                         unanswered_keepalive_ids,
                     )
@@ -704,6 +721,9 @@ def _ensure_reconnect_hooks(client, logger):
                             logger, rnd_id, "QUEUED",
                             msg_id=queued_ids[-1],
                             sender_pending=len(queued_ids),
+                            future_done=0,
+                            task_done=0,
+                            in_sender_pending=1,
                         )
                     on_wire = getattr(sender, "_ping", None) is not None
                     if on_wire or queued_ids:
@@ -711,10 +731,12 @@ def _ensure_reconnect_hooks(client, logger):
                             logger, rnd_id, "SENT",
                             on_wire=int(on_wire),
                             queued=int(bool(queued_ids)),
+                            future_done=0,
+                            task_done=0,
+                            in_sender_pending=int(bool(queued_ids)),
                         )
-                    reclaim_superseded_keepalive(
-                        sender, keep_newest=1, logger=logger
-                    )
+                    # Do not reclaim after send: that cancelled the ping
+                    # just placed on the wire (dropped=1 kept=0).
                 except Exception:
                     pass
                 return result
@@ -747,7 +769,9 @@ def _ensure_reconnect_hooks(client, logger):
                         complete_keepalive_pending,
                         log_ping_lifecycle,
                     )
-                    log_ping_lifecycle(logger, outstanding, "TIMEOUT")
+                    log_ping_lifecycle(
+                        logger, outstanding, "TIMEOUT", action="cancel",
+                    )
                     complete_keepalive_pending(
                         sender, ping_id=outstanding, logger=logger,
                         reason="TIMEOUT",

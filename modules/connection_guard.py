@@ -333,6 +333,12 @@ _KEEPALIVE_REQUESTS = frozenset({
     "HttpWait",
     "Pong",
 })
+# Only these occupy the one-live-ping slot. MsgsAck/HttpWait must never
+# supersede or cancel a PingRequest (that produced dropped=1 kept=0).
+_PING_REQUESTS = frozenset({
+    "PingRequest",
+    "PingDelayDisconnectRequest",
+})
 STALE_LOG_SECONDS = 15.0
 # An unanswered Ping is already logged as STALE at 15s. Waiting until 30s
 # left a future_done=0 heartbeat occupying the one-live-ping slot.
@@ -375,6 +381,7 @@ def inspect_pending(sender):
             "age_known": started is not None,
             "future_done": done,
             "future_cancelled": cancelled,
+            "is_ping": _is_ping_request_name(request_type),
             "is_keepalive": request_type in _KEEPALIVE_REQUESTS,
         })
     return rows
@@ -393,7 +400,7 @@ def pending_breakdown(sender):
         by_type[name] = by_type.get(name, 0) + 1
         age = float(row.get("age_ms") or 0.0)
         oldest = max(oldest, age)
-        if row.get("is_keepalive"):
+        if row.get("is_ping"):
             keepalive += 1
         if row.get("future_done") or row.get("future_cancelled") or age >= STALE_LOG_SECONDS * 1000:
             stale += 1
@@ -418,34 +425,94 @@ def _drop_pending_row(pending, table, msg_id, state):
         future.cancel()
 
 
-def reclaim_superseded_keepalive(sender, *, keep_newest=1, logger=None):
-    """Keep at most ``keep_newest`` unanswered keepalive rows.
+def _is_ping_request_name(name):
+    return str(name or "") in _PING_REQUESTS
 
-    A later Ping supersedes earlier ones: the connection only needs the
-    latest heartbeat.  Live send/delete/moderation rows are never touched.
+
+def _future_done(future):
+    if future is None:
+        return False
+    done = getattr(future, "done", None)
+    try:
+        return bool(done()) if callable(done) else False
+    except Exception:
+        return False
+
+
+def _future_cancelled(future):
+    if future is None:
+        return False
+    cancelled = getattr(future, "cancelled", None)
+    try:
+        return bool(cancelled()) if callable(cancelled) else False
+    except Exception:
+        return False
+
+
+def _ping_age_ms(table, msg_id, now=None):
+    started = table.get(msg_id) if table is not None else None
+    if started is None:
+        return None
+    if now is None:
+        now = time.monotonic()
+    return round(max(0.0, (now - started) * 1000.0), 1)
+
+
+def _iter_unanswered_pings(sender):
+    pending = getattr(sender, "_pending_state", None)
+    if not pending or not hasattr(pending, "items"):
+        return
+    table = _seen_at(sender)
+    for msg_id, state in list(pending.items()):
+        if not _is_ping_request_name(_state_request_name(state)):
+            continue
+        future = getattr(state, "future", None)
+        if _future_done(future):
+            continue
+        started = table.get(msg_id)
+        yield started if started is not None else 0.0, msg_id, state
+
+
+def reclaim_superseded_keepalive(sender, *, keep_newest=1, logger=None):
+    """Keep at most ``keep_newest`` unanswered PingRequest rows.
+
+    MsgsAck/HttpWait are not pings and must not cancel a live PingRequest.
+    A single live ping is never dropped: that produced ``dropped=1 kept=0``.
+    Live send/delete/moderation rows are never touched.
     """
     pending = getattr(sender, "_pending_state", None)
     if not pending or not hasattr(pending, "items"):
         return 0
     table = _seen_at(sender)
-    keepalives = []
-    for msg_id, state in list(pending.items()):
-        request_type = _state_request_name(state)
-        if request_type not in _KEEPALIVE_REQUESTS:
-            continue
-        future = getattr(state, "future", None)
-        if future is not None and future.done():
-            continue
-        started = table.get(msg_id)
-        keepalives.append((started if started is not None else 0.0, msg_id, state))
-    keep_newest = max(0, int(keep_newest))
-    if len(keepalives) <= keep_newest:
+    pings = list(_iter_unanswered_pings(sender))
+    # Supersede never wipes the last live ping. keep_newest=0 belongs to
+    # reconnect cleanup via complete_keepalive_pending, not this path.
+    keep_newest = max(1, int(keep_newest))
+    if len(pings) <= keep_newest:
         return 0
-    keepalives.sort(key=lambda item: item[0])
-    victims = keepalives if keep_newest == 0 else keepalives[:-keep_newest]
+    pings.sort(key=lambda item: item[0])
+    victims = pings[:-keep_newest]
+    kept_rows = pings[-keep_newest:]
     for _started, msg_id, state in victims:
+        future = getattr(state, "future", None)
+        log_ping_lifecycle(
+            logger, _request_ping_id(state), "TIMEOUT",
+            action="cancel",
+            msg_id=msg_id,
+            age_ms=None if _started == 0.0 else round((time.monotonic() - _started) * 1000.0, 1) if _started else None,
+            future_done=int(_future_done(future)),
+            task_done=int(_future_done(future)),
+            in_sender_pending=1,
+            reason="superseded_extra_ping",
+        )
         _drop_pending_row(pending, table, msg_id, state)
-    kept = unanswered_keepalive_count(sender)
+        log_ping_lifecycle(
+            logger, _request_ping_id(state), "CLEANED",
+            action="remove",
+            msg_id=msg_id,
+            reason="superseded_extra_ping",
+        )
+    kept = sum(1 for _s, msg_id, state in kept_rows if msg_id in pending and not _future_done(getattr(state, "future", None)))
     if logger is not None and victims:
         logger.log_info(
             "KEEPALIVE SUPERSEDED "
@@ -455,51 +522,28 @@ def reclaim_superseded_keepalive(sender, *, keep_newest=1, logger=None):
 
 
 def unanswered_keepalive_ids(sender):
-    """Message ids of unanswered keepalive rows, newest last."""
-    pending = getattr(sender, "_pending_state", None)
-    if not pending or not hasattr(pending, "items"):
-        return []
-    table = _seen_at(sender)
-    rows = []
-    for msg_id, state in list(pending.items()):
-        request_type = _state_request_name(state)
-        if request_type not in _KEEPALIVE_REQUESTS:
-            continue
-        future = getattr(state, "future", None)
-        if future is not None and future.done():
-            continue
-        started = table.get(msg_id)
-        rows.append((started if started is not None else 0.0, msg_id))
+    """Message ids of unanswered PingRequest rows, newest last."""
+    rows = list(_iter_unanswered_pings(sender))
     rows.sort(key=lambda item: item[0])
-    return [msg_id for _started, msg_id in rows]
+    return [msg_id for _started, msg_id, _state in rows]
 
 
 def unanswered_keepalive_count(sender):
-    """How many keepalive rows are still waiting for a pong."""
+    """How many PingRequest rows are still waiting for a pong."""
     return len(unanswered_keepalive_ids(sender))
 
 
 def live_keepalive_count(sender, stale_after=STALE_LOG_SECONDS):
-    """Unanswered keepalive rows that are still a healthy in-flight ping.
+    """PingRequest rows whose futures are not done and not yet stale.
 
-    A future_done=0 row older than the stale bound is bookkeeping, not a
-    live heartbeat.  Skip/send decisions must use this, not the raw map.
+    This is the live_pings invariant: count real PingRequest futures, never
+    MsgsAck/HttpWait or a keepalive deque.
     """
-    pending = getattr(sender, "_pending_state", None)
-    if not pending or not hasattr(pending, "items"):
-        return 0
-    table = _seen_at(sender)
     now = time.monotonic()
     limit = float(stale_after)
     live = 0
-    for msg_id, state in list(pending.items()):
-        if _state_request_name(state) not in _KEEPALIVE_REQUESTS:
-            continue
-        future = getattr(state, "future", None)
-        if future is not None and future.done():
-            continue
-        started = table.get(msg_id)
-        if started is not None and (now - started) >= limit:
+    for started, _msg_id, _state in _iter_unanswered_pings(sender):
+        if started and (now - started) >= limit:
             continue
         live += 1
     return live
@@ -521,6 +565,29 @@ def log_ping_lifecycle(logger, ping_id, state, **fields):
         pass
 
 
+def log_unanswered_ping_states(sender, logger, *, action, next_ping_id=None):
+    """Log every unanswered PingRequest with action=skip|complete|..."""
+    pending = getattr(sender, "_pending_state", None)
+    table = _seen_at(sender)
+    now = time.monotonic()
+    for started, msg_id, state in _iter_unanswered_pings(sender):
+        future = getattr(state, "future", None)
+        log_ping_lifecycle(
+            logger,
+            _request_ping_id(state),
+            "STATE",
+            action=action,
+            msg_id=msg_id,
+            age_ms=_ping_age_ms(table, msg_id, now),
+            future_done=int(_future_done(future)),
+            task_done=int(_future_done(future)),
+            in_sender_pending=int(
+                pending is not None and hasattr(pending, "__contains__") and msg_id in pending
+            ),
+            next_ping_id=next_ping_id,
+        )
+
+
 def _request_ping_id(state):
     request = getattr(state, "request", None)
     if request is None:
@@ -535,7 +602,7 @@ def stamp_keepalive_ping_id(sender, ping_id):
         return 0
     stamped = 0
     for state in list(pending.values()):
-        if _state_request_name(state) not in _KEEPALIVE_REQUESTS:
+        if not _is_ping_request_name(_state_request_name(state)):
             continue
         request = getattr(state, "request", None)
         if request is None or getattr(request, "ping_id", None) is not None:
@@ -549,47 +616,53 @@ def stamp_keepalive_ping_id(sender, ping_id):
 
 
 def complete_keepalive_pending(
-    sender, ping_id=None, *, logger=None, reason="CLEANED",
+    sender, ping_id=None, *, logger=None, reason="CLEANED", action=None,
 ):
-    """Cancel and remove keepalive rows. Never starts a reconnect.
+    """Cancel and remove PingRequest rows. Never starts a reconnect.
 
     Pong / timeout / exception / connection-change all use this so a
     future_done=0 PingRequest cannot occupy sender_pending forever.
-    Live send/delete rows are never touched.
+    MsgsAck/HttpWait and live send/delete rows are never touched.
     """
     pending = getattr(sender, "_pending_state", None)
     if not pending or not hasattr(pending, "items"):
         return 0
     table = _seen_at(sender)
+    now = time.monotonic()
     victims = []
     unmatched = []
     for msg_id, state in list(pending.items()):
-        if _state_request_name(state) not in _KEEPALIVE_REQUESTS:
+        if not _is_ping_request_name(_state_request_name(state)):
             continue
         req_ping = _request_ping_id(state)
         if ping_id is not None and req_ping is not None and req_ping != ping_id:
             unmatched.append((msg_id, state, req_ping))
             continue
         victims.append((msg_id, state, req_ping))
-    # One-live-ping: if the pong/timeout id did not match, still drop the
-    # unanswered keepalive rows so bookkeeping cannot block the next ping.
     if ping_id is not None and not victims and unmatched:
         victims = unmatched
         unmatched = []
     removed = 0
     for msg_id, state, req_ping in victims:
         future = getattr(state, "future", None)
-        future_done = future is None or bool(getattr(future, "done", lambda: True)())
-        cancelled = bool(
-            future is not None and getattr(future, "cancelled", lambda: False)()
-        )
+        action = action or {
+            "RESPONSE": "complete",
+            "TIMEOUT": "cancel",
+            "CANCELLED": "cancel",
+            "EXCEPTION": "cancel",
+            "CLEANED": "remove",
+            "reconnect": "reconnect",
+        }.get(reason, "remove")
         log_ping_lifecycle(
             logger,
             ping_id if ping_id is not None else req_ping,
             reason,
+            action=action,
             msg_id=msg_id,
-            future_done=int(future_done),
-            future_cancelled=int(cancelled),
+            age_ms=_ping_age_ms(table, msg_id, now),
+            future_done=int(_future_done(future)),
+            task_done=int(_future_done(future)),
+            in_sender_pending=1,
             request_type=_state_request_name(state),
         )
         _drop_pending_row(pending, table, msg_id, state)
@@ -597,17 +670,22 @@ def complete_keepalive_pending(
             logger,
             ping_id if ping_id is not None else req_ping,
             "CLEANED",
+            action="remove",
             msg_id=msg_id,
+            future_done=1,
+            task_done=1,
+            in_sender_pending=0,
             reason=reason,
         )
         removed += 1
     return removed
 
 
-def drop_keepalive_pending(sender, logger=None, reason="CLEANED"):
-    """Drop every keepalive row. Used on reconnect so they are not replayed."""
+def drop_keepalive_pending(sender, logger=None, reason="CLEANED", action=None):
+    """Drop every PingRequest row. Used on reconnect so they are not replayed."""
     return complete_keepalive_pending(
         sender, ping_id=None, logger=logger, reason=reason,
+        action=action or "reconnect",
     )
 
 
@@ -661,6 +739,7 @@ def reclaim_dead_pending(
         cancelled = bool(
             future is not None and getattr(future, "cancelled", lambda: False)()
         )
+        is_ping = _is_ping_request_name(request_type)
         is_keepalive = request_type in _KEEPALIVE_REQUESTS
         if log_stale and logger is not None and age is not None and age >= STALE_LOG_SECONDS:
             logger.log_info(
@@ -669,35 +748,44 @@ def reclaim_dead_pending(
                 f"request_type={request_type} "
                 f"operation={request_type} "
                 f"future_done={int(done)} "
-                f"keepalive={int(is_keepalive)}"
+                f"keepalive={int(is_ping)}"
             )
         should_drop = False
         if done or cancelled:
             should_drop = True
-        elif is_keepalive and (age is None or age >= float(keepalive_ttl)):
+        elif is_ping and (age is None or age >= float(keepalive_ttl)):
             should_drop = True
         elif age is not None and age >= float(rpc_timeout):
             should_drop = True
         if not should_drop:
             continue
-        if is_keepalive and logger is not None:
+        if is_ping and logger is not None:
             ping_id = _request_ping_id(state)
             why = "TIMEOUT" if not done and not cancelled else (
                 "CANCELLED" if cancelled else "RESPONSE"
             )
             log_ping_lifecycle(
                 logger, ping_id, why,
-                msg_id=msg_id, age_ms=None if age is None else round(age * 1000.0, 1),
+                action="cancel" if why in ("TIMEOUT", "CANCELLED") else "complete",
+                msg_id=msg_id,
+                age_ms=None if age is None else round(age * 1000.0, 1),
                 future_done=int(done),
+                task_done=int(done),
+                in_sender_pending=1,
             )
         pending.pop(msg_id, None)
         table.pop(msg_id, None)
         if future is not None and not future.done():
             future.cancel()
-        if is_keepalive and logger is not None:
+        if is_ping and logger is not None:
             log_ping_lifecycle(
                 logger, _request_ping_id(state), "CLEANED",
-                msg_id=msg_id, reason="stale_reclaim",
+                action="remove",
+                msg_id=msg_id,
+                future_done=1,
+                task_done=1,
+                in_sender_pending=0,
+                reason="stale_reclaim",
             )
         removed += 1
     return removed

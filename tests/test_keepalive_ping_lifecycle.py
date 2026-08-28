@@ -49,6 +49,16 @@ class PingRequest:
         self.ping_id = ping_id
 
 
+class MsgsAck:
+    def __init__(self, ids=None):
+        self.ids = ids or []
+
+
+class HttpWait:
+    def __init__(self, max_delay=0):
+        self.max_delay = max_delay
+
+
 class RequestState:
     def __init__(self, request, future, msg_id):
         self.request = request
@@ -337,10 +347,35 @@ def test_pong_timeout_reconnects_only_for_stuck_rpc():
 
     logger, sender = asyncio.run(scenario())
     texts = "\n".join(logger.infos)
+    # Previous PingRequest is still in sender pending: do not build a new one.
+    assert "KEEPALIVE PING SKIPPED" in texts
+    assert any("action=skip" in line for line in _states(logger))
+    assert len(_keepalive_pending(sender)) == 1
+    assert cg.live_keepalive_count(sender) == 1
+    assert sender.pings == [("sent", 11)]
+    assert "RECONNECT START" not in texts
+    assert sender.reconnects == []
+
+
+def test_tracker_leftover_timeout_does_not_reconnect():
+    async def scenario():
+        logger = Logger()
+        client = PingClient()
+        instrument_client(client, logger)
+        sender = client._sender
+        sender._keepalive_ping(11)
+        sender._pending_state.clear()
+        cg._seen_at(sender).clear()
+        sender._keepalive_ping(22)
+        return logger, sender
+
+    logger, sender = asyncio.run(scenario())
+    texts = "\n".join(logger.infos)
     assert "KEEPALIVE PONG TIMEOUT" in texts
     assert "KEEPALIVE PONG TIMEOUT IGNORED" in texts
     assert "RECONNECT START" not in texts
     assert sender.reconnects == []
+    assert cg.live_keepalive_count(sender) <= 1
 
 
 def test_governor_limits_and_p0_p1_order():
@@ -413,3 +448,142 @@ def test_live_pings_ignore_stale_bookkeeping():
     assert stale == 0
     assert unanswered == 1
     assert live == 1
+
+def test_msgsack_does_not_supersede_live_ping():
+    async def scenario():
+        logger = Logger()
+        sender = PingSender()
+        ping = sender.put(PingRequest(1), age=2.0, ping_id=1)
+        ack = sender.put(MsgsAck([1]), age=0.5)
+        live = cg.live_keepalive_count(sender)
+        unanswered = cg.unanswered_keepalive_count(sender)
+        dropped = cg.reclaim_superseded_keepalive(
+            sender, keep_newest=1, logger=logger,
+        )
+        left = [type(state.request).__name__ for state in sender._pending_state.values()]
+        return logger, ping, ack, live, unanswered, dropped, left
+
+    logger, ping, ack, live, unanswered, dropped, left = asyncio.run(scenario())
+    assert live == 1
+    assert unanswered == 1
+    assert dropped == 0
+    assert left.count("PingRequest") == 1
+    assert left.count("MsgsAck") == 1
+    assert not ping.future.done()
+    assert not ack.future.done()
+    texts = "\n".join(logger.infos)
+    assert "KEEPALIVE SUPERSEDED" not in texts
+    assert "kept=0" not in texts
+
+
+def test_supersede_never_drops_last_live_ping():
+    async def scenario():
+        logger = Logger()
+        sender = PingSender()
+        ping = sender.put(PingRequest(9), ping_id=9)
+        dropped = cg.reclaim_superseded_keepalive(
+            sender, keep_newest=0, logger=logger,
+        )
+        return logger, ping, dropped, cg.live_keepalive_count(sender), sender
+
+    logger, ping, dropped, live, sender = asyncio.run(scenario())
+    assert dropped == 0
+    assert live == 1
+    assert not ping.future.done()
+    assert len(_keepalive_pending(sender)) == 1
+    assert "kept=0" not in "\n".join(logger.infos)
+
+
+def test_no_new_ping_while_previous_live_even_if_tracker_set():
+    async def scenario():
+        logger = Logger()
+        client = PingClient()
+        instrument_client(client, logger)
+        sender = client._sender
+        sender._keepalive_ping(21)
+        assert sender._ping == 21
+        sender._keepalive_ping(22)
+        snap = pending_rpc_snapshot(sender)
+        return logger, sender, snap
+
+    logger, sender, snap = asyncio.run(scenario())
+    assert sender.pings == [("sent", 21)]
+    assert len(_keepalive_pending(sender)) == 1
+    assert snap["sender_pending_keepalive"] == 1
+    assert cg.live_keepalive_count(sender) == 1
+    texts = "\n".join(logger.infos)
+    assert "KEEPALIVE PING SKIPPED" in texts
+    assert "KEEPALIVE SUPERSEDED" not in texts
+    assert "kept=0" not in texts
+    skip_states = [line for line in _states(logger) if "action=skip" in line]
+    assert skip_states
+    assert "future_done=0" in skip_states[0]
+    assert "in_sender_pending=1" in skip_states[0]
+
+
+def test_supersede_cancels_old_future_keeps_newest():
+    async def scenario():
+        logger = Logger()
+        sender = PingSender()
+        old = sender.put(PingRequest(1), age=5.0, ping_id=1)
+        newest = sender.put(PingRequest(2), age=1.0, ping_id=2)
+        dropped = cg.reclaim_superseded_keepalive(
+            sender, keep_newest=1, logger=logger,
+        )
+        left = [type(state.request).__name__ for state in sender._pending_state.values()]
+        return logger, old, newest, dropped, left, sender
+
+    logger, old, newest, dropped, left, sender = asyncio.run(scenario())
+    assert dropped == 1
+    assert old.future.done()
+    assert old.future.cancelled()
+    assert not newest.future.done()
+    assert left == ["PingRequest"]
+    assert cg.live_keepalive_count(sender) == 1
+    superseded = [line for line in logger.infos if line.startswith("KEEPALIVE SUPERSEDED")]
+    assert superseded
+    assert "dropped=1" in superseded[0]
+    assert "kept=1" in superseded[0]
+    assert "kept=0" not in superseded[0]
+
+
+def test_complete_pong_does_not_touch_msgsack_or_httpwait():
+    async def scenario():
+        sender = PingSender()
+        ack = sender.put(MsgsAck([7]), age=0.2)
+        wait = sender.put(HttpWait(1), age=0.2)
+        ping = sender.put(PingRequest(5), ping_id=5)
+        removed = cg.complete_keepalive_pending(
+            sender, ping_id=5, reason="RESPONSE",
+        )
+        left = [type(state.request).__name__ for state in sender._pending_state.values()]
+        return removed, left, ack, wait, ping, sender
+
+    removed, left, ack, wait, ping, sender = asyncio.run(scenario())
+    assert removed == 1
+    assert sorted(left) == ["HttpWait", "MsgsAck"]
+    assert not ack.future.done()
+    assert not wait.future.done()
+    assert ping.future.done()
+    assert cg.live_keepalive_count(sender) == 0
+    assert pending_rpc_snapshot(sender)["sender_pending_keepalive"] == 0
+
+
+def test_max_one_live_ping_across_repeated_sends():
+    async def scenario():
+        logger = Logger()
+        client = PingClient()
+        instrument_client(client, logger)
+        sender = client._sender
+        for ping_id in (1, 2, 3, 4, 5):
+            sender._keepalive_ping(ping_id)
+            assert cg.live_keepalive_count(sender) <= 1
+            assert len(_keepalive_pending(sender)) <= 1
+        return logger, sender
+
+    logger, sender = asyncio.run(scenario())
+    assert cg.live_keepalive_count(sender) == 1
+    assert len(_keepalive_pending(sender)) == 1
+    assert sender.pings == [("sent", 1)]
+    assert "kept=0" not in "\n".join(logger.infos)
+
