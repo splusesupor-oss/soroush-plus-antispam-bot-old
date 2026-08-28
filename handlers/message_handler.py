@@ -4451,11 +4451,6 @@ async def handle_new_message(bot, event):
                         f"chat_id={chat_id} user_id={user_id} "
                         f"count={len(ids)} ids={ids!r}"
                     )
-                    bot.logger.log_info(
-                        "PUNISHMENT TRIGGERED user="
-                        f"{user_id} action=ban"
-                    )
-
                     async def repeat_history_ban_succeeded(_result):
                         bot.logger.log_info(
                             f"PUNISHMENT RESULT user={user_id} success=True"
