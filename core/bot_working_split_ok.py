@@ -68,9 +68,11 @@ from handlers.message_handler import (
 )
 from handlers.broadcast_handler import handle_private_broadcast
 from handlers.private_handler import (
+    is_private_event,
     register_private_handlers,
     try_handle_private_start,
 )
+from modules.message_dedup import begin as dedup_begin, finish as dedup_finish
 from modules.name_family import cancel_round as cancel_name_family_round
 from modules.broadcast_state import (
     BROADCAST_COMMAND_WORDS,
@@ -2362,7 +2364,48 @@ class SoroushAntiSpamBot:
             except Exception:
                 raw_text = ""
             chat_id = getattr(event, "chat_id", None)
-            priority, kind = classify_priority(raw_text, event)
+            message_id = getattr(getattr(event, "message", None), "id", None)
+            private = False
+            try:
+                private = is_private_event(event)
+            except Exception:
+                private = bool(getattr(event, "is_private", False))
+            event_type = type(event).__name__
+            if not private:
+                try:
+                    self.logger.log_info(
+                        "MESSAGE DEDUP CHECK "
+                        f"chat_id={chat_id} message_id={message_id} "
+                        f"event_type={event_type}"
+                    )
+                except Exception:
+                    pass
+                accepted = False
+                try:
+                    accepted = dedup_begin(chat_id, message_id)
+                except Exception:
+                    accepted = True
+                if not accepted:
+                    try:
+                        self.logger.log_info(
+                            "MESSAGE DEDUP SKIP "
+                            f"chat_id={chat_id} message_id={message_id} "
+                            "reason=duplicate "
+                            f"event_type={event_type}"
+                        )
+                    except Exception:
+                        pass
+                    return
+                try:
+                    self.logger.log_info(
+                        "MESSAGE DEDUP ACCEPT "
+                        f"chat_id={chat_id} message_id={message_id} "
+                        f"event_type={event_type}"
+                    )
+                except Exception:
+                    pass
+            try:
+                priority, kind = classify_priority(raw_text, event)
 
             # فرمان‌های کاربر در نسخهٔ اولیه مستقیماً از همان کلاینت اصلی
             # اجرا می‌شدند. عبور آن‌ها از ingest → GroupDispatcher → صف
@@ -2370,30 +2413,44 @@ class SoroushAntiSpamBot:
             # اجرا کنند ولی به «راهنما» و بازی‌ها نرسند. فرمان را دوباره روی
             # مسیر مستقیم و تک‌کلاینتی اجرا کن؛ این مسیر reply را هم مستقیم
             # با همان self.client می‌فرستد.
-            if kind in {"admin", "command"}:
-                await process_priority_command(event)
-                return
+                if not private:
+                    try:
+                        self.logger.log_info(
+                            "MESSAGE ROUTE "
+                            f"chat_id={chat_id} message_id={message_id} "
+                            f"route={'priority_' + str(kind) if kind in {'admin', 'command'} else 'group_dispatch_' + str(kind)} "
+                            f"event_type={event_type}"
+                        )
+                    except Exception:
+                        pass
+                if kind in {"admin", "command"}:
+                    await process_priority_command(event)
+                    return
 
-            try:
-                decision = ingest_event(self, event)
-            except Exception:
-                decision = None
-            if decision is not None and decision.skip_heavy:
-                return
-            # فقط ترافیک عادی/ضداسپم در صف جدا می‌ماند تا موج اسپم event
-            # loop را اشغال نکند.
-            try:
-                if getattr(self, "outgoing_sender", None) is not None:
-                    install_event_wrapper(event, self.outgoing_sender)
-            except Exception:
-                pass
-            self.group_dispatcher.submit(
-                chat_id,
-                lambda ev=event: process_incoming_message(ev),
-                priority=priority,
-                kind=kind,
-                on_overflow=lambda ev=event: self._overflow_message(ev),
-            )
+                try:
+                    decision = ingest_event(self, event)
+                except Exception:
+                    decision = None
+                if decision is not None and decision.skip_heavy:
+                    return
+                try:
+                    if getattr(self, "outgoing_sender", None) is not None:
+                        install_event_wrapper(event, self.outgoing_sender)
+                except Exception:
+                    pass
+                self.group_dispatcher.submit(
+                    chat_id,
+                    lambda ev=event: process_incoming_message(ev),
+                    priority=priority,
+                    kind=kind,
+                    on_overflow=lambda ev=event: self._overflow_message(ev),
+                )
+            finally:
+                if not private:
+                    try:
+                        dedup_finish(chat_id, message_id)
+                    except Exception:
+                        pass
 
         register_private_handlers(self)
 
