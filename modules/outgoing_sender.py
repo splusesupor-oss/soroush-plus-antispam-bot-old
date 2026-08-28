@@ -525,51 +525,8 @@ def _wrap_event_reply(sender):
     # via install_event. For now, we handle per-event patching in instrument_event.
     pass
 
-def _is_group_event_for_response(event):
-    """Return True for group updates whose replies must be source-deduped."""
-    if event is None or bool(getattr(event, "is_private", False)):
-        return False
-    if bool(getattr(event, "is_group", False) or getattr(event, "is_channel", False)):
-        return True
-    try:
-        return int(getattr(event, "chat_id", None)) < 0
-    except (TypeError, ValueError):
-        return False
-
-
-def _claim_group_response(event):
-    """Claim the one outgoing response slot for this source message."""
-    if not _is_group_event_for_response(event):
-        return True
-    try:
-        from modules.message_dedup import claim_response
-        message = getattr(event, "message", None)
-        return claim_response(
-            getattr(event, "chat_id", None),
-            getattr(message, "id", None),
-        )
-    except Exception:
-        # Sending must remain fail-open if a compatibility event has no
-        # dedup-capable shape.
-        return True
-
-
-def _release_group_response(event):
-    if not _is_group_event_for_response(event):
-        return
-    try:
-        from modules.message_dedup import release_response
-        message = getattr(event, "message", None)
-        release_response(
-            getattr(event, "chat_id", None),
-            getattr(message, "id", None),
-        )
-    except Exception:
-        pass
-
-
 def install_event_wrapper(event, sender):
-    """Patch one event reply and enforce one group response per source id."""
+    """Patch a single event's reply to be non-blocking inside dispatch."""
     orig = getattr(event, "reply", None)
     if orig is None or getattr(orig, _PATCHED_ATTR, False):
         return False
@@ -577,8 +534,6 @@ def install_event_wrapper(event, sender):
 
     @functools.wraps(orig)
     async def wrapped(*args, **kwargs):
-        if not _claim_group_response(event):
-            return None
         dispatch_prio = _DISPATCH_ACTIVE.get()
         if dispatch_prio is not False and dispatch_prio is not None:
             chat_id = getattr(event, "chat_id", None)

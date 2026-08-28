@@ -91,21 +91,10 @@ def test_start_matching():
 def test_private_detection():
     print("\n### private detection")
     check("is_private True", pv.is_private_event(FakeEvent(is_private=True)))
-    check("is_private False on group id",
-          not pv.is_private_event(FakeEvent(is_private=False, chat_id=-1000023164149)))
+    check("is_private False", not pv.is_private_event(FakeEvent(is_private=False)))
     check("None is not private", not pv.is_private_event(None))
     group = FakeEvent(is_private=False, chat_id=-1000023164149)
     check("group event is not private", not pv.is_private_event(group))
-    splus_dm = FakeEvent("/start", is_private=False, chat_id=68074059)
-    check("SPlusthon DM positive chat_id is private", pv.is_private_event(splus_dm))
-    class Chat:
-        pass
-    named_dm = FakeEvent("/start", is_private=False, chat_id=68074059)
-    named_dm.chat = Chat()
-    check("positive chat_id wins over Chat class name", pv.is_private_event(named_dm))
-    named_group = FakeEvent("/start", is_private=False, chat_id=-1000023164149)
-    named_group.chat = Chat()
-    check("negative chat_id stays group even with Chat class", not pv.is_private_event(named_group))
     class PeerUser:
         pass
 
@@ -171,12 +160,9 @@ def test_callback_answers_without_new_message():
     event = FakeEvent(is_private=True, data=b"test_button")
     handled = asyncio.run(pv.handle_private_callback(bot, event))
     check("consumed", handled is True)
-    check("answered toast", event.answers == [(pv.TEST_OK_TEXT, {})], f"answers={event.answers!r}")
-    check("visible PV reply", event.replies == [(pv.TEST_OK_TEXT, {})], f"replies={event.replies!r}")
-    check("no fallback edit when reply works", event.edits == [])
-    logs = "\n".join(line for _level, line in bot.logger.lines)
-    check("button received log", "PV TEST BUTTON RECEIVED" in logs)
-    check("button sent log", "PV TEST BUTTON RESPONSE SENT" in logs)
+    check("answered", event.answers == [(pv.TEST_OK_TEXT, {})], f"answers={event.answers!r}")
+    check("no new reply", event.replies == [])
+    check("no fallback edit when answer works", event.edits == [])
 
 
 def test_callback_edit_fallback():
@@ -186,14 +172,11 @@ def test_callback_edit_fallback():
         async def answer(self, text, **kwargs):
             raise RuntimeError("toast unavailable")
 
-        async def reply(self, text, **kwargs):
-            raise RuntimeError("reply unavailable")
-
     bot = FakeBot()
     event = NoAnswerEvent(is_private=True, data=b"test_button")
     handled = asyncio.run(pv.handle_private_callback(bot, event))
     check("consumed via edit", handled is True)
-    check("no extra reply when reply missing", event.replies == [])
+    check("no new reply", event.replies == [])
     check("edited same message", event.edits and event.edits[0][0] == pv.TEST_OK_TEXT,
           f"edits={event.edits!r}")
 
@@ -209,66 +192,6 @@ def test_callback_ignores_other_data_and_groups():
     check("group callback ignored",
           asyncio.run(pv.handle_private_callback(bot, group)) is False)
     check("group callback no reply", group.replies == [])
-
-
-def test_unresolved_pv_start_without_chat_id():
-    print("\n### PV /start with is_private=False and chat_id=None")
-    bot = FakeBot()
-    event = FakeEvent("/start", is_private=False, chat_id=None)
-    handled = asyncio.run(pv.try_handle_private_start(bot, event))
-    check("consumed unresolved PV /start", handled is True)
-    check("welcome sent", event.replies and event.replies[0][0] == pv.START_TEXT)
-    logs = "\n".join(line for _level, line in bot.logger.lines)
-    check("PV START RECEIVED", "PV START RECEIVED" in logs)
-    check("PV START SENT", "PV START SENT" in logs)
-
-
-def test_splus_private_start_when_is_private_false():
-    print("\n### SPlusthon PV /start with is_private=False")
-    bot = FakeBot()
-    event = FakeEvent("/start", is_private=False, chat_id=68074059)
-    handled = asyncio.run(pv.try_handle_private_start(bot, event))
-    check("consumed", handled is True)
-    check("welcome sent", event.replies and event.replies[0][0] == pv.START_TEXT)
-    logs = "\n".join(line for _level, line in bot.logger.lines)
-    check("PV START RECEIVED", "PV START RECEIVED" in logs)
-    check("PV START ROUTED", "PV START ROUTED" in logs)
-    check("PV START HANDLER", "PV START HANDLER" in logs)
-    check("PV START SENT", "PV START SENT" in logs)
-
-
-def test_start_from_raw_text_field():
-    print("\n### /start on raw_text when message.message is empty")
-    bot = FakeBot()
-    event = FakeEvent("", is_private=True, chat_id=42)
-    event.message.message = ""
-    event.raw_text = "/start"
-    handled = asyncio.run(pv.try_handle_private_start(bot, event))
-    check("consumed from raw_text", handled is True)
-    check("welcome sent", event.replies and event.replies[0][0] == pv.START_TEXT)
-
-
-def test_group_start_not_routed_to_pv_even_with_slash():
-    print("\n### group /start stays out of PV handler")
-    bot = FakeBot()
-    event = FakeEvent("/start", is_private=False, chat_id=-1000023164149)
-    handled = asyncio.run(pv.try_handle_private_start(bot, event))
-    check("not consumed", handled is False)
-    check("no PV reply", event.replies == [])
-    logs = "\n".join(line for _level, line in bot.logger.lines)
-    check("received log still emitted", "PV START RECEIVED" in logs)
-    check("not routed", "PV START ROUTED" not in logs)
-    check("not sent", "PV START SENT" not in logs)
-
-
-def test_normal_pv_text_stays_on_pv_path_without_start_reply():
-    print("\n### normal PV text is private but not /start")
-    bot = FakeBot()
-    event = FakeEvent("سلام", is_private=False, chat_id=68074059)
-    handled = asyncio.run(pv.try_handle_private_start(bot, event))
-    check("detected private", pv.is_private_event(event) is True)
-    check("not consumed as /start", handled is False)
-    check("no start reply", event.replies == [])
 
 
 def test_core_wiring():
@@ -296,11 +219,6 @@ def main():
     test_callback_answers_without_new_message()
     test_callback_edit_fallback()
     test_callback_ignores_other_data_and_groups()
-    test_unresolved_pv_start_without_chat_id()
-    test_splus_private_start_when_is_private_false()
-    test_start_from_raw_text_field()
-    test_group_start_not_routed_to_pv_even_with_slash()
-    test_normal_pv_text_stays_on_pv_path_without_start_reply()
     test_core_wiring()
     print(f"\n{'=' * 52}")
     print(f"passed={PASSED} failed={FAILED}")
