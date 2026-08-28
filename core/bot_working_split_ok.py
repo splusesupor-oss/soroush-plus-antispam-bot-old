@@ -2330,6 +2330,33 @@ class SoroushAntiSpamBot:
                     )
 
 
+        # ── minimal entry gate: one processing per (chat_id, message_id) ──
+        # The same group update can be handed to this handler twice
+        # (NewMessage then MessageEdited with the same id, or a replay).
+        # Only the first delivery may enter the pipeline; repeats inside the
+        # short TTL are dropped here, before any routing/queueing. Private
+        # chats and different messages are untouched, and a real later edit
+        # of the same message (after the TTL) is still processed.
+        from collections import OrderedDict as _entry_od
+        import time as _entry_time
+        _entry_seen = _entry_od()
+        _entry_ttl_s = 5.0
+        _entry_max = 4096
+
+        def _entry_new(chat_id, message_id):
+            now = _entry_time.monotonic()
+            cutoff = now - _entry_ttl_s
+            while _entry_seen:
+                _oldest_key, _oldest_t = next(iter(_entry_seen.items()))
+                if len(_entry_seen) <= _entry_max and _oldest_t >= cutoff:
+                    break
+                _entry_seen.popitem(last=False)
+            key = (chat_id, message_id)
+            if key in _entry_seen:
+                return False
+            _entry_seen[key] = now
+            return True
+
         @self.client.on(events.NewMessage())
         @self.client.on(events.MessageEdited())
         async def new_message_handler(event):
@@ -2338,6 +2365,16 @@ class SoroushAntiSpamBot:
             Returning immediately lets SPlusthon keep delivering other chats
             while this chat's worker processes its own queue.
             """
+            # Entry gate: the same group message may arrive twice (NewMessage
+            # then MessageEdited / replay); only the first delivery proceeds.
+            try:
+                if not getattr(event, "is_private", False):
+                    _g_chat = getattr(event, "chat_id", None)
+                    _g_msg = getattr(getattr(event, "message", None), "id", None)
+                    if _g_chat is not None and _g_msg is not None and not _entry_new(_g_chat, _g_msg):
+                        return
+            except Exception:
+                pass
             try:
                 if await try_handle_private_start(self, event):
                     return
