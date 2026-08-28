@@ -1233,6 +1233,9 @@ class SoroushAntiSpamBot:
             started_cmd = time.perf_counter()
             text = ""
             try:
+                # PV /start must not fall into the group admin `/` lane.
+                if await try_handle_private_start(self, event):
+                    return
                 instrument_event(event, self.logger)
                 raw_text = ""
                 try:
@@ -2104,6 +2107,8 @@ class SoroushAntiSpamBot:
 
                   # پیوی فقط دستور صفر کردن تخلف
                 if is_private_splus:
+                    if await try_handle_private_start(self, event):
+                        return
                     text = normalize_command_text(
                         event.message.message or ""
                     )
