@@ -211,6 +211,18 @@ def test_callback_ignores_other_data_and_groups():
     check("group callback no reply", group.replies == [])
 
 
+def test_unresolved_pv_start_without_chat_id():
+    print("\n### PV /start with is_private=False and chat_id=None")
+    bot = FakeBot()
+    event = FakeEvent("/start", is_private=False, chat_id=None)
+    handled = asyncio.run(pv.try_handle_private_start(bot, event))
+    check("consumed unresolved PV /start", handled is True)
+    check("welcome sent", event.replies and event.replies[0][0] == pv.START_TEXT)
+    logs = "\n".join(line for _level, line in bot.logger.lines)
+    check("PV START RECEIVED", "PV START RECEIVED" in logs)
+    check("PV START SENT", "PV START SENT" in logs)
+
+
 def test_splus_private_start_when_is_private_false():
     print("\n### SPlusthon PV /start with is_private=False")
     bot = FakeBot()
@@ -284,6 +296,7 @@ def main():
     test_callback_answers_without_new_message()
     test_callback_edit_fallback()
     test_callback_ignores_other_data_and_groups()
+    test_unresolved_pv_start_without_chat_id()
     test_splus_private_start_when_is_private_false()
     test_start_from_raw_text_field()
     test_group_start_not_routed_to_pv_even_with_slash()
