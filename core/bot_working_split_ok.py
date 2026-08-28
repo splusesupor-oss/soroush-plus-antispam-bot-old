@@ -73,6 +73,7 @@ from handlers.private_handler import (
     try_handle_private_start,
 )
 from modules.message_dedup import begin as dedup_begin, finish as dedup_finish
+from modules.dispatch_lock import claim_dispatch
 from modules.name_family import cancel_round as cancel_name_family_round
 from modules.broadcast_state import (
     BROADCAST_COMMAND_WORDS,
@@ -2371,6 +2372,13 @@ class SoroushAntiSpamBot:
             except Exception:
                 private = bool(getattr(event, "is_private", False))
             event_type = type(event).__name__
+            # Central message dispatch gate. A single (chat_id, message_id)
+            # may only enter the handler pipeline once per process. ``MessageEdited``
+            # and replayed ``NewMessage`` events for the same id reach this same
+            # handler; the gate stops them before ``message_dedup``, the
+            # priority command path, or ``group_dispatcher.submit`` see them.
+            if not private and not claim_dispatch(chat_id, message_id):
+                return
             if not private:
                 try:
                     self.logger.log_info(
@@ -2423,6 +2431,14 @@ class SoroushAntiSpamBot:
                         )
                     except Exception:
                         pass
+                # Install the single send gate before either route. Priority
+                # commands used to return before this wrapper was installed,
+                # leaving their direct replies outside the response guard.
+                try:
+                    if getattr(self, "outgoing_sender", None) is not None:
+                        install_event_wrapper(event, self.outgoing_sender)
+                except Exception:
+                    pass
                 if kind in {"admin", "command"}:
                     await process_priority_command(event)
                     return
@@ -2433,11 +2449,6 @@ class SoroushAntiSpamBot:
                     decision = None
                 if decision is not None and decision.skip_heavy:
                     return
-                try:
-                    if getattr(self, "outgoing_sender", None) is not None:
-                        install_event_wrapper(event, self.outgoing_sender)
-                except Exception:
-                    pass
                 self.group_dispatcher.submit(
                     chat_id,
                     lambda ev=event: process_incoming_message(ev),
