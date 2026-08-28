@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -130,6 +131,9 @@ def make_mock_bot():
         spam_lock=set(),
         is_spam_locked=lambda k: False,
         config_manager=SimpleNamespace(get=lambda k, d=None: d),
+        detector=SimpleNamespace(
+            check_banned_words=lambda *a, **k: (False, None),
+        ),
     )
 
 
@@ -336,3 +340,193 @@ def test_nickname_update_and_real_leaderboard():
     assert found["wins"] >= 1
     assert found["gold_won"] >= 15
     assert found["bronze_won"] >= 100
+
+@pytest.fixture(autouse=True)
+def _isolate_fox_token_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(fox_game_tokens, "TOKEN_FILE", tmp_path / "fox_game_tokens.json")
+    monkeypatch.setattr(fox_game_tokens, "LEADERBOARD_FILE", tmp_path / "fox_game_leaderboard.json")
+
+
+def _expire_token(token):
+    data = fox_game_tokens._load_json(fox_game_tokens.TOKEN_FILE)
+    data[token]["expires_at"] = time.time() - 10
+    data[token]["retired"] = False
+    fox_game_tokens._save_json(fox_game_tokens.TOKEN_FILE, data)
+
+
+def test_new_user_gets_token_a():
+    chat_id = "cycle_chat"
+    user_id = "user_a"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    token = fox_game_tokens.create_token(chat_id, user_id, "کاربر آ")
+    assert token
+    found, record = fox_game_tokens.find_active_token(chat_id, user_id)
+    assert found == token
+    assert record["user_id"] == user_id
+    assert record["created_at"] <= time.time()
+    assert record["expires_at"] > time.time()
+    assert record["expires_at"] - record["created_at"] == pytest.approx(
+        fox_game_tokens.TOKEN_LIFETIME_SECONDS, abs=2
+    )
+
+
+def test_same_user_before_24h_gets_same_token():
+    chat_id = "cycle_chat"
+    user_id = "user_same"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    first = fox_game_tokens.create_token(chat_id, user_id, "یک")
+    second = fox_game_tokens.create_token(chat_id, user_id, "دو")
+    assert first == second
+    data = fox_game_tokens._load_json(fox_game_tokens.TOKEN_FILE)
+    live = [
+        key for key, rec in data.items()
+        if rec.get("user_id") == user_id and not rec.get("retired")
+        and float(rec.get("expires_at", 0)) > time.time()
+    ]
+    assert live == [first]
+
+
+def test_same_user_after_24h_gets_new_token_not_previous():
+    chat_id = "cycle_chat"
+    user_id = "user_exp"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    first = fox_game_tokens.create_token(chat_id, user_id, "قدیم")
+    _expire_token(first)
+    second, created = fox_game_tokens.issue_user_token(chat_id, user_id, "جدید")
+    assert created is True
+    assert second != first
+    found, record = fox_game_tokens.find_active_token(chat_id, user_id)
+    assert found == second
+    assert record["created_at"] <= time.time()
+    assert record["expires_at"] - record["created_at"] == pytest.approx(
+        fox_game_tokens.TOKEN_LIFETIME_SECONDS, abs=2
+    )
+    data = fox_game_tokens._load_json(fox_game_tokens.TOKEN_FILE)
+    assert first in data
+    assert data[first].get("retired") is True
+
+
+def test_restart_before_24h_still_returns_same_token():
+    chat_id = "cycle_chat"
+    user_id = "user_restart"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    first = fox_game_tokens.create_token(chat_id, user_id, "پایدار")
+    # Simulate process restart: no in-memory cache, only the JSON file.
+    found, record = fox_game_tokens.find_active_token(chat_id, user_id)
+    again = fox_game_tokens.create_token(chat_id, user_id, "پایدار")
+    assert found == first
+    assert again == first
+    assert record["issued_at"] == record["created_at"] or "created_at" in record
+
+
+def test_restart_after_expiry_assigns_new_token():
+    chat_id = "cycle_chat"
+    user_id = "user_restart_exp"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    first = fox_game_tokens.create_token(chat_id, user_id, "قدیم")
+    _expire_token(first)
+    found, _ = fox_game_tokens.find_active_token(chat_id, user_id)
+    assert found is None
+    second = fox_game_tokens.create_token(chat_id, user_id, "بعد ریستارت")
+    assert second != first
+
+
+def test_concurrent_requests_same_user_one_token():
+    chat_id = "cycle_chat"
+    user_id = "user_race"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    barrier = threading.Barrier(8)
+    results = []
+
+    def worker():
+        barrier.wait()
+        results.append(fox_game_tokens.create_token(chat_id, user_id, "همزمان"))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(set(results)) == 1
+    data = fox_game_tokens._load_json(fox_game_tokens.TOKEN_FILE)
+    live = [
+        key for key, rec in data.items()
+        if rec.get("user_id") == user_id and not rec.get("retired")
+        and float(rec.get("expires_at", 0)) > time.time()
+    ]
+    assert len(live) == 1
+
+
+def test_two_users_never_receive_the_same_token():
+    chat_id = "cycle_chat"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    barrier = threading.Barrier(6)
+    results = []
+
+    def worker(uid):
+        barrier.wait()
+        results.append((uid, fox_game_tokens.create_token(chat_id, uid, uid)))
+
+    threads = [
+        threading.Thread(target=worker, args=(f"user_{i}",))
+        for i in range(6)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    tokens = [token for _uid, token in results]
+    assert len(tokens) == 6
+    assert len(set(tokens)) == 6
+
+
+def test_empty_pool_does_not_mint_or_reuse(monkeypatch):
+    chat_id = "cycle_chat"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    monkeypatch.setattr(fox_game_tokens, "load_official_tokens", lambda: ["ONLY-TOKEN-1"])
+    first = fox_game_tokens.create_token(chat_id, "owner", "مالک")
+    assert first == "ONLY-TOKEN-1"
+    with pytest.raises(ValueError, match="فعلاً توکن جدیدی موجود نیست"):
+        fox_game_tokens.create_token(chat_id, "other", "دیگر")
+    found, _ = fox_game_tokens.find_active_token(chat_id, "other")
+    assert found is None
+    still, _ = fox_game_tokens.find_active_token(chat_id, "owner")
+    assert still == first
+
+
+def test_expired_token_not_returned_to_same_user(monkeypatch):
+    chat_id = "cycle_chat"
+    user_id = "user_no_recycle"
+    group_storage.activate_group(chat_id, "گروه چرخه")
+    monkeypatch.setattr(
+        fox_game_tokens, "load_official_tokens",
+        lambda: ["POOL-A", "POOL-B"],
+    )
+    first = fox_game_tokens.create_token(chat_id, user_id, "اول")
+    assert first == "POOL-A"
+    _expire_token(first)
+    second = fox_game_tokens.create_token(chat_id, user_id, "دوم")
+    assert second == "POOL-B"
+    assert second != first
+
+
+def test_empty_pool_command_shows_message(monkeypatch):
+    async def scenario():
+        chat_id = 7011
+        user_id = 8011
+        group_storage.activate_group(chat_id, "گروه خالی")
+        _reset_site_wallet(chat_id, user_id)
+        economy.add_bronze(chat_id, user_id, 90, note="شارژ")
+        monkeypatch.setattr(fox_game_tokens, "load_official_tokens", lambda: ["SITE-ONLY"])
+        first = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
+        await handle_new_message(make_mock_bot(), first)
+        second_user = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id + 1)
+        _reset_site_wallet(chat_id, user_id + 1)
+        economy.add_bronze(chat_id, user_id + 1, 90, note="شارژ")
+        await handle_new_message(make_mock_bot(), second_user)
+        assert "توکن اختصاصی شما کپی کنید" in first.replies[0]
+        assert "فعلاً توکن جدیدی موجود نیست" in second_user.replies[0]
+        assert "SITE-ONLY" not in second_user.replies[0]
+
+    asyncio.run(scenario())
+

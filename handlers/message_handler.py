@@ -4612,9 +4612,35 @@ async def handle_new_message(bot, event):
                     await event.reply("❌ خطا در کسر سکه، لطفاً مجدداً امتحان کنید.")
                     return
                 try:
-                    token = fox_game_tokens.create_token(
+                    token, created_new = fox_game_tokens.issue_user_token(
                         chat_id, site_user_id, sender_name, sender_user
                     )
+                    if not created_new:
+                        try:
+                            economy.add_bronze(
+                                chat_id, site_user_id, cost_bronze,
+                                note="بازگشت هزینه سایت بازی",
+                            )
+                        except Exception:
+                            pass
+                except ValueError as token_err:
+                    try:
+                        economy.add_bronze(
+                            chat_id, site_user_id, cost_bronze,
+                            note="بازگشت هزینه سایت بازی",
+                        )
+                    except Exception:
+                        pass
+                    bot.logger.log_error(
+                        "FOX GAME TOKEN CREATE FAILED "
+                        f"chat_id={chat_id} user_id={site_user_id} error={token_err!r}"
+                    )
+                    err_text = str(token_err)
+                    if "موجود نیست" in err_text:
+                        await event.reply("فعلاً توکن جدیدی موجود نیست")
+                    else:
+                        await event.reply("❌ صدور توکن انجام نشد، سکه برگردانده شد. دوباره تلاش کنید.")
+                    return
                 except Exception as token_err:
                     try:
                         economy.add_bronze(
