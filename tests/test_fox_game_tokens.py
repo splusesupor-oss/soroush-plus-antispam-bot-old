@@ -157,7 +157,7 @@ def test_bot_command_site_group_inactive():
 
 
 def test_bot_command_site_insufficient_balance():
-    """Verify bot replies with insufficient balance warning when bronze < 30 in active group."""
+    """Verify bot replies with insufficient balance warning when bronze < 20 in active group."""
     async def scenario():
         chat_id = 6001
         user_id = 9002
@@ -172,24 +172,25 @@ def test_bot_command_site_insufficient_balance():
 
         assert len(event.replies) == 1
         assert "موجودی کافی نیست" in event.replies[0]
-        assert "حداقل ۳۰ برنز" in event.replies[0]
+        assert "حداقل ۲۰ برنز" in event.replies[0]
 
     asyncio.run(scenario())
 
 
-def test_bot_command_site_accepts_exact_thirty_bronze():
-    """Exactly 30 bronze must unlock the site, matching the user-facing threshold."""
+def test_bot_command_site_accepts_exact_twenty_bronze():
+    """Exactly 20 bronze must unlock the site, matching the user-facing threshold."""
     async def scenario():
         chat_id = 6310
         user_id = 9310
-        group_storage.activate_group(chat_id, "گروه آستانه ۳۰")
+        group_storage.activate_group(chat_id, "گروه آستانه ۲۰")
         _reset_site_wallet(chat_id, user_id)
-        economy.add_bronze(chat_id, user_id, 30, note="شارژ آستانه")
+        economy.add_bronze(chat_id, user_id, 20, note="شارژ آستانه")
 
         event = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
         await handle_new_message(make_mock_bot(), event)
         assert len(event.replies) == 1
-        assert "توکن اختصاصی شما کپی کنید" in event.replies[0]
+        assert "https://fox-game.aifox-chat.workers.dev/" in event.replies[0]
+        assert "توکن اختصاصی" not in event.replies[0]
         assert economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0) == 0
 
     asyncio.run(scenario())
@@ -212,20 +213,21 @@ def test_bot_command_site_finds_wallet_across_chat_id_aliases():
         event = MockEvent("سایت بازی", chat_id=command_chat, user_id=str(user_id))
         await handle_new_message(make_mock_bot(), event)
         assert len(event.replies) == 1
-        assert "توکن اختصاصی شما کپی کنید" in event.replies[0]
-        assert economy.get_balance(stored_chat, user_id).get(economy.BRONZE, 0) == 1
+        assert "https://fox-game.aifox-chat.workers.dev/" in event.replies[0]
+        assert "توکن اختصاصی" not in event.replies[0]
+        assert economy.get_balance(stored_chat, user_id).get(economy.BRONZE, 0) == 11
 
     asyncio.run(scenario())
 
 
-def test_bot_command_site_reuses_valid_token_without_second_charge():
-    """A still-valid 24h token must be resent without taking another 30 bronze."""
+def test_bot_command_site_charges_twenty_each_time():
+    """Each سایت بازی request costs 20 bronze and only returns the site link."""
     async def scenario():
         chat_id = 6320
         user_id = 9320
-        group_storage.activate_group(chat_id, "گروه توکن فعال")
+        group_storage.activate_group(chat_id, "گروه لینک سایت")
         _reset_site_wallet(chat_id, user_id)
-        economy.add_bronze(chat_id, user_id, 50, note="شارژ توکن")
+        economy.add_bronze(chat_id, user_id, 50, note="شارژ لینک")
 
         bot = make_mock_bot()
         first = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
@@ -233,15 +235,16 @@ def test_bot_command_site_reuses_valid_token_without_second_charge():
         second = MockEvent("سایت بازی", chat_id=chat_id, user_id=user_id)
         await handle_new_message(bot, second)
 
-        assert "توکن اختصاصی شما کپی کنید" in first.replies[0]
-        assert "توکن اختصاصی شما کپی کنید" in second.replies[0]
-        assert economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0) == 20
+        assert "https://fox-game.aifox-chat.workers.dev/" in first.replies[0]
+        assert "توکن اختصاصی" not in first.replies[0]
+        assert "https://fox-game.aifox-chat.workers.dev/" in second.replies[0]
+        assert economy.get_balance(chat_id, user_id).get(economy.BRONZE, 0) == 10
 
     asyncio.run(scenario())
 
 
 def test_bot_command_site_successful_deduction_and_link():
-    """Verify bot deducts 30 bronze and returns exclusive token link when bronze >= 30."""
+    """Verify bot deducts 20 bronze and returns the site link without a token."""
     async def scenario():
         chat_id = 6402
         user_id = 9403
@@ -257,14 +260,12 @@ def test_bot_command_site_successful_deduction_and_link():
 
         assert len(event.replies) == 1
         reply = event.replies[0]
-        assert "توکن اختصاصی شما کپی کنید" in reply
+        assert "توکن اختصاصی" not in reply
         assert "https://fox-game.aifox-chat.workers.dev/" in reply
         assert "گروه فعال شده" in reply
-        assert "۲۴ ساعت" in reply
 
-        # Check balance after deduction
         b = economy.get_balance(chat_id, user_id)
-        assert b.get(economy.BRONZE, 0) == 20  # 50 - 30 = 20
+        assert b.get(economy.BRONZE, 0) == 30  # 50 - 20 = 30
 
     asyncio.run(scenario())
 
@@ -524,8 +525,9 @@ def test_empty_pool_command_shows_message(monkeypatch):
         _reset_site_wallet(chat_id, user_id + 1)
         economy.add_bronze(chat_id, user_id + 1, 90, note="شارژ")
         await handle_new_message(make_mock_bot(), second_user)
-        assert "توکن اختصاصی شما کپی کنید" in first.replies[0]
-        assert "فعلاً توکن جدیدی موجود نیست" in second_user.replies[0]
+        assert "https://fox-game.aifox-chat.workers.dev/" in first.replies[0]
+        assert "توکن اختصاصی" not in first.replies[0]
+        assert "https://fox-game.aifox-chat.workers.dev/" in second_user.replies[0]
         assert "SITE-ONLY" not in second_user.replies[0]
 
     asyncio.run(scenario())

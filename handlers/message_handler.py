@@ -4549,9 +4549,8 @@ async def handle_new_message(bot, event):
 
         # ---- 🦊 سیستم اختصاصی ورود به سایت بازی روباه (Fox Game Center) ----
         if clean_text in ("سایت بازی", "سایت", "لینک بازی", "/game", "/site"):
-            from modules import fox_game_tokens, group_storage
+            from modules import group_storage
 
-            # ۰. بررسی فعال بودن روباه در گروه ثبت‌شده
             if not group_storage.is_active(chat_id):
                 await event.reply(
                     "❌ روباه در این گروه فعال نیست.\n"
@@ -4560,27 +4559,14 @@ async def handle_new_message(bot, event):
                 return
 
             site_user_id = user_id or getattr(event, "sender_id", None) or getattr(sender, "id", None)
-            cost_bronze = 30
+            cost_bronze = 20
             user_balance = economy.get_balance(chat_id, site_user_id)
             try:
                 current_bronze = int(user_balance.get(economy.BRONZE, 0) or 0)
             except (TypeError, ValueError):
                 current_bronze = 0
 
-            sender_name = getattr(sender, "first_name", "") or ""
-            sender_user = getattr(sender, "username", "") or ""
-
-            existing_token, _existing = fox_game_tokens.find_active_token(
-                chat_id, site_user_id
-            )
-            if existing_token:
-                token = existing_token
-                bot.logger.log_info(
-                    "FOX GAME TOKEN REUSED "
-                    f"user_id={site_user_id} chat_id={chat_id} "
-                    f"token={token[:8]}... bronze={current_bronze}"
-                )
-            elif current_bronze < cost_bronze:
+            if current_bronze < cost_bronze:
                 bot.logger.log_info(
                     "FOX GAME SITE INSUFFICIENT "
                     f"user_id={site_user_id} chat_id={chat_id} "
@@ -4590,73 +4576,22 @@ async def handle_new_message(bot, event):
                 await event.reply(
                     "❌ موجودی کافی نیست\n"
                     f"موجودی فعلی شما: {current_bronze} برنز\n"
-                    "برای دریافت سایت حداقل ۳۰ برنز نیاز دارید"
+                    "برای دریافت سایت حداقل ۲۰ برنز نیاز دارید"
                 )
                 return
-            else:
-                try:
-                    economy.spend(
-                        chat_id, site_user_id, cost_bronze, economy.BRONZE,
-                        note="ورود به سایت بازی روباه",
-                    )
-                except Exception as spend_err:
-                    bot.logger.log_error(
-                        "FOX GAME SITE SPEND FAILED "
-                        f"chat_id={chat_id} user_id={site_user_id} error={spend_err!r}"
-                    )
-                    await event.reply("❌ خطا در کسر سکه، لطفاً مجدداً امتحان کنید.")
-                    return
-                try:
-                    token, created_new = fox_game_tokens.issue_user_token(
-                        chat_id, site_user_id, sender_name, sender_user
-                    )
-                    if not created_new:
-                        try:
-                            economy.add_bronze(
-                                chat_id, site_user_id, cost_bronze,
-                                note="بازگشت هزینه سایت بازی",
-                            )
-                        except Exception:
-                            pass
-                except ValueError as token_err:
-                    try:
-                        economy.add_bronze(
-                            chat_id, site_user_id, cost_bronze,
-                            note="بازگشت هزینه سایت بازی",
-                        )
-                    except Exception:
-                        pass
-                    bot.logger.log_error(
-                        "FOX GAME TOKEN CREATE FAILED "
-                        f"chat_id={chat_id} user_id={site_user_id} error={token_err!r}"
-                    )
-                    err_text = str(token_err)
-                    if "موجود نیست" in err_text:
-                        await event.reply("فعلاً توکن جدیدی موجود نیست")
-                    else:
-                        await event.reply("❌ صدور توکن انجام نشد، سکه برگردانده شد. دوباره تلاش کنید.")
-                    return
-                except Exception as token_err:
-                    try:
-                        economy.add_bronze(
-                            chat_id, site_user_id, cost_bronze,
-                            note="بازگشت هزینه سایت بازی",
-                        )
-                    except Exception:
-                        pass
-                    bot.logger.log_error(
-                        "FOX GAME TOKEN CREATE FAILED "
-                        f"chat_id={chat_id} user_id={site_user_id} error={token_err!r}"
-                    )
-                    await event.reply("❌ صدور توکن انجام نشد، سکه برگردانده شد. دوباره تلاش کنید.")
-                    return
 
-            site_base = os.getenv("FOX_GAME_SITE_URL", "http://localhost:3000").rstrip("/")
-            game_url = f"{site_base}/?token={token}"
-
-            bot.logger.log_info(
-                f"FOX GAME TOKEN ISSUED user_id={site_user_id} chat_id={chat_id} token={token[:8]}..."
-            )
+            try:
+                economy.spend(
+                    chat_id, site_user_id, cost_bronze, economy.BRONZE,
+                    note="ورود به سایت بازی روباه",
+                )
+            except Exception as spend_err:
+                bot.logger.log_error(
+                    "FOX GAME SITE SPEND FAILED "
+                    f"chat_id={chat_id} user_id={site_user_id} error={spend_err!r}"
+                )
+                await event.reply("❌ خطا در کسر سکه، لطفاً مجدداً امتحان کنید.")
+                return
 
             group_title = f"گروه {chat_id}"
             try:
@@ -4666,14 +4601,16 @@ async def handle_new_message(bot, event):
             except Exception:
                 pass
 
+            bot.logger.log_info(
+                f"FOX GAME SITE LINK user_id={site_user_id} chat_id={chat_id} cost={cost_bronze}"
+            )
+
             msg = (
-                "💭توکن اختصاصی شما کپی کنید حتما \n\n"
-                f"{token}\n\n"
                 "🖇لینک سایت بازی روباه\n"
                 "https://fox-game.aifox-chat.workers.dev/\n\n"
                 f"🔘 گروه فعال شده {group_title}\n\n"
                 "                          ─━━━━━━⊱✿⊰━━━━━━─\n"
-                "این توکن هر ۲۴ ساعت منقضی می‌شود اطلاعات شما از بین نمی‌رود می‌توانید دوباره با دستور سایت بازی توکن ۲۴ ساعته دیگر دریافت کنید\n"
+                "اطلاعات و رتبه‌بندی شما در سایت ذخیره می‌شود.\n"
                 "                           ─━━━━━━⊱✿⊰━━━━━━─"
             )
             await event.reply(msg)
