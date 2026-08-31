@@ -99,6 +99,7 @@ def test_user_with_pahlavi_saying_roobah_or_robot():
 
         bot = SimpleNamespace(
             logger=MagicMock(),
+            client=SimpleNamespace(get_entity=AsyncMock(), send_message=AsyncMock()),
             tracker=MagicMock(get_count=lambda c, u: 0),
             punished_users=set(),
             is_spam_locked=lambda k: False,

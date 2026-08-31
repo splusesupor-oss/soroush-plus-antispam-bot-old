@@ -151,3 +151,85 @@ def unblock(user_id):
 def record_for(user_id):
     return _load().get(str(user_id))
 
+
+# ---------------------------------------------------------------------------
+# منطق مشترک تصمیم‌گیری + اعلان برای هر سه caller
+# ---------------------------------------------------------------------------
+
+RESTRICTION_NOTICE = (
+    "⚠️ دسترسی شما از ربات حذف شد.\n\n"
+    "نام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
+)
+
+RESTRICTION_NOTICE_BOLD_LENGTH = len("⚠️ دسترسی شما از ربات حذف شد.")
+
+STATUS_BLOCKED = "blocked"
+STATUS_HELD = "held"
+STATUS_RESTORED = "restored"
+STATUS_CLEAN = "clean"
+
+
+def sync_block_state(user, user_id, bio=None):
+    """منبع واحد تصمیم‌گیری گارد دسترسی پروفایل.
+
+    فقط چک «زنده» (``reason``) تعیین‌کنندهٔ نتیجه است. رکورد ذخیره‌شده هرگز
+    به‌عنوان منبع تشخیص استفاده نمی‌شود و دلیل قدیمیِ آن هرگز برنگردانده
+    می‌شود؛ در نتیجه کاربری که نام/یوزرنیم/بیوی تمیز شده، در اولین پیامِ
+    بعدی بازیابی می‌شود به‌جای اینکه برای همیشه با همان اعلان قدیمی
+    مواجه شود.
+
+    خروجی ``(status, reason)``:
+
+    * ``("blocked", term)``  — نام/یوزرنیم/بیوی فعلی با کلمهٔ ممنوعه
+      مطابقت دارد؛ بلوک (دوباره) ذخیره شد. فراخوان اعلان می‌دهد و پیام
+      را نمی‌پردازد.
+    * ``("held", None)``     — پروفایل قابل بازرسی نبود (بدون user و
+      بدون bio) در حالی که کاربر قبلاً بلوک است. بلوک قبلی بدون هیچ
+      اعلانی حفظ می‌شود؛ فراخوان پیام را نمی‌پردازد.
+    * ``("restored", None)`` — کاربر قبلاً بلوک بود اما چک زنده تمیز
+      است؛ رکورد کهنه حذف شده. فراخوان به‌رویش عادی ادامه می‌دهد.
+    * ``("clean", None)``    — کار خاصی لازم نیست.
+    """
+    if user_id is None:
+        return (STATUS_CLEAN, None)
+    if not _extract_user_strings(user, bio):
+        return (STATUS_HELD if is_blocked(user_id) else STATUS_CLEAN, None)
+    current = reason(user, bio)
+    if current:
+        block(user_id, current)
+        return (STATUS_BLOCKED, current)
+    if is_blocked(user_id):
+        unblock(user_id)
+        return (STATUS_RESTORED, None)
+    return (STATUS_CLEAN, None)
+
+
+async def send_restriction_notice(event, client=None, chat_id=None,
+                                  text=RESTRICTION_NOTICE):
+    """مسیر مشترک اعلان: پاسخ Bold، پاسخ ساده، سپس ارسال مستقیم.
+
+    دقیقاً همان زنجیرۀ fallback که قبلاً در هر سه فراخوان تکرار می‌شد تا
+    رفتار همهٔ مسیرها یکسان بماند.
+    """
+    try:
+        from splusthon.tl.types import MessageEntityBold
+        await event.reply(
+            text,
+            formatting_entities=[MessageEntityBold(
+                offset=0, length=RESTRICTION_NOTICE_BOLD_LENGTH)],
+        )
+        return
+    except Exception:
+        pass
+    try:
+        await event.reply(text)
+        return
+    except Exception:
+        pass
+    target = chat_id if chat_id is not None else getattr(event, "chat_id", None)
+    if client is not None and target is not None:
+        try:
+            await client.send_message(target, text)
+        except Exception:
+            pass
+

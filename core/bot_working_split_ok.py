@@ -1291,34 +1291,27 @@ class SoroushAntiSpamBot:
                 chat_id = getattr(event, "chat_id", None)
 
                 # 🔒 Profile Access Guard check in priority commands
+                # Live reason() check is the only detection source; the stored
+                # record is never re-injected as a reason and a renamed user is
+                # restored on the first clean message (see sync_block_state).
                 if sender_id and not is_global_owner(sender_id):
                     profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None) if sender else None
-                    profile_reason = access_profile_guard.reason(sender, profile_bio) if sender else None
-                    if not profile_reason and access_profile_guard.is_blocked(sender_id):
-                        record = access_profile_guard.record_for(sender_id)
-                        profile_reason = record.get("reason") if record else "قوانین پروفایل"
-
-                    if profile_reason:
-                        access_profile_guard.block(sender_id, profile_reason)
+                    guard_status, profile_reason = access_profile_guard.sync_block_state(
+                        sender, sender_id, profile_bio)
+                    if guard_status == access_profile_guard.STATUS_BLOCKED:
                         self.logger.log_info(
                             f"PROFILE ACCESS RESTRICTION ACTIVE user_id={sender_id} "
                             f"name={getattr(sender, 'first_name', '')!r} reason={profile_reason!r}"
                         )
-                        notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
-                        try:
-                            from splusthon.tl.types import MessageEntityBold as _ProfileBold
-                            await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
-                        except Exception:
-                            try:
-                                await event.reply(notice)
-                            except Exception:
-                                try:
-                                    await self.client.send_message(chat_id, notice)
-                                except Exception:
-                                    pass
+                        await access_profile_guard.send_restriction_notice(
+                            event, client=self.client, chat_id=chat_id)
                         return
-                    elif access_profile_guard.is_blocked(sender_id):
-                        access_profile_guard.unblock(sender_id)
+                    if guard_status == access_profile_guard.STATUS_HELD:
+                        self.logger.log_info(
+                            f"PROFILE ACCESS RESTRICTION HELD user_id={sender_id} "
+                            f"reason=profile_unverifiable")
+                        return
+                    if guard_status == access_profile_guard.STATUS_RESTORED:
                         self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={sender_id}")
 
                 if chat_id is None or not is_active(chat_id):

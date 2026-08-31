@@ -3047,34 +3047,27 @@ async def handle_new_message(bot, event):
                 pass
 
         # 🔒 فیلتر دسترسی پروفایل کاربر (نام/بیوگرافی/یوزرنیم) - در بالاترین نقطه ممکن
+        # تنها منبع تشخیص، چک زندهٔ reason() است؛ دلیل قدیمیِ رکورد ذخیره‌شده
+        # هرگز به‌عنوان profile_reason تزریق نمی‌شود و با نام/بیوی تمیز،
+        # رکورد کهنه حذف و دسترسی کاربر برمی‌گردد (sync_block_state).
         if user_id and not is_global_owner(user_id):
             profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None) if sender else None
-            profile_reason = access_profile_guard.reason(sender, profile_bio) if sender else None
-            if not profile_reason and access_profile_guard.is_blocked(user_id):
-                record = access_profile_guard.record_for(user_id)
-                profile_reason = record.get("reason") if record else "قوانین پروفایل"
-
-            if profile_reason:
-                access_profile_guard.block(user_id, profile_reason)
+            guard_status, profile_reason = access_profile_guard.sync_block_state(
+                sender, user_id, profile_bio)
+            if guard_status == access_profile_guard.STATUS_BLOCKED:
                 bot.logger.log_info(
                     f"PROFILE ACCESS RESTRICTION ACTIVE user_id={user_id} "
                     f"name={format_user(sender)!r} reason={profile_reason!r}"
                 )
-                notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
-                try:
-                    from splusthon.tl.types import MessageEntityBold as _ProfileBold
-                    await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
-                except Exception:
-                    try:
-                        await event.reply(notice)
-                    except Exception:
-                        try:
-                            await bot.client.send_message(chat_id, notice)
-                        except Exception:
-                            pass
+                await access_profile_guard.send_restriction_notice(
+                    event, client=bot.client, chat_id=chat_id)
                 return
-            elif access_profile_guard.is_blocked(user_id):
-                access_profile_guard.unblock(user_id)
+            if guard_status == access_profile_guard.STATUS_HELD:
+                bot.logger.log_info(
+                    f"PROFILE ACCESS RESTRICTION HELD user_id={user_id} "
+                    f"reason=profile_unverifiable")
+                return
+            if guard_status == access_profile_guard.STATUS_RESTORED:
                 bot.logger.log_info(f"PROFILE ACCESS RESTORED user_id={user_id}")
 
         # Big-spam incidents are the sole opt-in per-message ID registry.
