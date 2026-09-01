@@ -1286,7 +1286,8 @@ class SoroushAntiSpamBot:
                             event=event,
                             sender=sender,
                             logger=self.logger,
-                        )
+                        ),
+                        name="owner-peer:remember",
                     )
                 chat_id = getattr(event, "chat_id", None)
 
@@ -1431,7 +1432,8 @@ class SoroushAntiSpamBot:
                                 event=event,
                                 sender=_entry_sender,
                                 logger=self.logger,
-                            )
+                            ),
+                            name="owner-peer:remember",
                         )
                     self.debug_message_log(
                         "BOT EVENT ENTRY DEBUG\n"

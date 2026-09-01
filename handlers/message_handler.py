@@ -585,7 +585,7 @@ def _run_background(bot, name, callback, *args):
             callback(*args)
         except Exception as error:
             bot.logger.log_error(f"BACKGROUND {name} FAILED: {error}")
-    return _asyncio.create_task(run())
+    return _asyncio.create_task(run(), name=f"bg:{name}")
 
 
 def _schedule_reply(bot, event, *args, **kwargs):
@@ -597,7 +597,8 @@ def _schedule_reply(bot, event, *args, **kwargs):
             logger = getattr(bot, "logger", None)
             if logger is not None:
                 logger.log_error(f"SCHEDULED REPLY FAILED error={error!r}")
-    return _asyncio.create_task(run())
+    return _asyncio.create_task(
+        run(), name=f"reply:{getattr(event, 'chat_id', None)}")
 
 
 def is_game_answer_active(chat_id, user_id):
@@ -1566,7 +1567,7 @@ def _queue_message_deletes(bot, chat_id, message_ids, *, priority=1):
                 f"DELETE BACKGROUND FALLBACK FAILED chat_id={chat_id} error={error!r}"
             )
             return 0, ids
-    return _asyncio.create_task(fallback())
+    return _asyncio.create_task(fallback(), name="delete:fallback")
 
 
 def _spam_cleanup_incident(bot, key, event):
@@ -2953,7 +2954,7 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
                 f"SEARCH RESPONSE ERROR chat_id={chat_id} user_id={user_id} error={error!r}"
             )
 
-    _asyncio.create_task(answer_from_public_source())
+    _asyncio.create_task(answer_from_public_source(), name="web:public-source")
     return True
 
 
@@ -6430,7 +6431,7 @@ async def handle_new_message(bot, event):
                     await event.reply(
                         f"{_fullwidth_digits(deleted_count)} پیام پاک شد 💣"
                     )
-                _asyncio.create_task(finish_manual_bulk_delete())
+                _asyncio.create_task(finish_manual_bulk_delete(), name="delete:bulk-finish")
                 return
 
             except Exception as e:
@@ -7206,7 +7207,7 @@ async def handle_new_message(bot, event):
                     delete_future = _queue_message_deletes(
                         bot, chat.id, [reply_id], priority=0
                     )
-                    _asyncio.create_task(event.delete())
+                    _asyncio.create_task(event.delete(), name="delete:event")
 
                     async def finish_single_delete():
                         deleted, remaining = await delete_future
@@ -7218,7 +7219,7 @@ async def handle_new_message(bot, event):
                                 f"remaining={remaining!r}"
                             )
                             await event.reply("❌ پاک کردن پیام انجام نشد")
-                    _asyncio.create_task(finish_single_delete())
+                    _asyncio.create_task(finish_single_delete(), name="delete:single-finish")
 
                 return
 
@@ -7285,7 +7286,7 @@ async def handle_new_message(bot, event):
                 if queue is not None:
                     queue.enqueue(chat_id, ids)
                 else:
-                    _asyncio.create_task(bot.client.delete_messages(chat_id, ids))
+                    _asyncio.create_task(bot.client.delete_messages(chat_id, ids), name="delete:flood-batch")
 
                 bot.flood_messages[chat_id] = []
 
@@ -7610,8 +7611,8 @@ async def handle_new_message(bot, event):
                 # creating a lock, deletion job, or ban attempt.
                 _asyncio.create_task(bot.admin_actions.send_warning(
                     chat_id=chat_id, username=username, user=sender,
-                    reason=reason, count=count, threshold=threshold, reply_to=None
-                ))
+                    reason=reason, count=count, threshold=threshold, reply_to=None,
+                ), name="warn:send")
                 _clear_native_admin_moderation_state(
                     bot, chat_id, user_id, force=True
                 )
@@ -7731,8 +7732,8 @@ async def handle_new_message(bot, event):
             if count <= 5:
                 _asyncio.create_task(bot.admin_actions.send_warning(
                     chat_id=chat_id, username=username, user=sender,
-                    reason=reason, count=count, threshold=threshold, reply_to=None
-                ))
+                    reason=reason, count=count, threshold=threshold, reply_to=None,
+                ), name="warn:send")
             if pending_spam_cleanup_ids:
                 _schedule_auto_spam_cleanup(
                     bot, event, chat_id, user_id, pending_spam_cleanup_ids,

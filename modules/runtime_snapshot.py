@@ -18,6 +18,8 @@ METRIC_KEYS = (
     "event_loop_lag_ms",
     "pending_tasks",
     "active_tasks",
+    "event_handler_tasks",
+    "task_kind_counts",
     "moderation_queue_pending",
     "delete_queue_pending",
     "normal_queue_pending",
@@ -210,6 +212,90 @@ def _pending_task_names(limit: int = 8) -> Dict[str, int]:
         counts[name] = counts.get(name, 0) + 1
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return dict(ranked[: max(1, int(limit))])
+
+
+_TASK_KINDS = (
+    "dispatch", "reply", "delete", "warn", "owner_peer",
+    "bg", "web", "queue_worker", "snapshot", "other",
+)
+
+_KIND_PREFIXES = (
+    ("reply:", "reply"),
+    ("delete:", "delete"),
+    ("warn:", "warn"),
+    ("owner-peer:", "owner_peer"),
+    ("bg:", "bg"),
+    ("web:", "web"),
+    ("notice-cleanup-", "queue_worker"),
+)
+
+
+def _event_handler_task_set(bot: Any):
+    """SPlusthon's set of in-flight update dispatch tasks (read-only).
+
+    ``client._event_handler_tasks`` holds one entry per update whose
+    ``_dispatch_update`` task has not finished yet.  Reading its length
+    tells how many of the live tasks are library-level update dispatches.
+    """
+    client = getattr(bot, "client", None)
+    if client is None:
+        return frozenset()
+    value = getattr(client, "_event_handler_tasks", None)
+    if isinstance(value, (set, frozenset)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return frozenset(value)
+    return frozenset()
+
+
+def _task_kind_counts(eh_tasks: Any) -> Dict[str, int]:
+    """Classify all live tasks by diagnostic kind.  Read-only, bounded output.
+
+    Kinds:
+      dispatch     — update dispatch tasks (in ``_event_handler_tasks`` or
+                     coroutine ``_dispatch_update``)
+      reply        — fire-and-forget reply tasks (name ``reply:<chat>``)
+      delete       — fire-and-forget delete tasks (name ``delete:<what>``)
+      warn         — fire-and-forget warning tasks (name ``warn:<what>``)
+      owner_peer   — owner peer cache tasks (name ``owner-peer:<what>``)
+      bg           — background bookkeeping tasks (name ``bg:<what>``)
+      web          — web search answer tasks (name ``web:<what>``)
+      queue_worker — per-chat queue workers (coroutine ``..._worker`` or
+                     name ``notice-cleanup-<chat>``)
+      snapshot     — this monitor's own loop
+      other        — everything else (permanent loops, game timers,
+                     library internals, unnamed tasks)
+    """
+    counts: Dict[str, int] = {kind: 0 for kind in _TASK_KINDS}
+    try:
+        tasks = [task for task in asyncio.all_tasks() if not task.done()]
+    except Exception:
+        return counts
+    for task in tasks:
+        kind = "other"
+        try:
+            if task in eh_tasks:
+                kind = "dispatch"
+            else:
+                name = str(task.get_name() or "")
+                if name == "runtime-performance-snapshot":
+                    kind = "snapshot"
+                else:
+                    for prefix, mapped in _KIND_PREFIXES:
+                        if name.startswith(prefix):
+                            kind = mapped
+                            break
+                    if kind == "other":
+                        coro = task.get_coro()
+                        qual = str(getattr(coro, "__qualname__", "") or "")
+                        if qual == "_dispatch_update":
+                            kind = "dispatch"
+                        elif qual.endswith("._worker"):
+                            kind = "queue_worker"
+        except Exception:
+            kind = "other"
+        counts[kind] += 1
+    return counts
 
 
 async def _event_loop_lag_ms(probe_seconds: float = LAG_PROBE_SECONDS) -> float:
@@ -466,6 +552,7 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
     uptime = max(0, int(time.time() - started_at))
 
     pending_tasks, active_tasks = _task_counts()
+    eh_tasks = _event_handler_task_set(bot)
 
     moderation = getattr(bot, "moderation_queue", None)
     moderation_pending = _safe_len(getattr(moderation, "_pending_keys", None))
@@ -568,6 +655,8 @@ def collect_sync(bot: Any) -> Dict[str, Any]:
         "event_loop_lag_ms": 0.0,
         "pending_tasks": int(pending_tasks),
         "active_tasks": int(active_tasks),
+        "event_handler_tasks": int(len(eh_tasks)),
+        "task_kind_counts": _task_kind_counts(eh_tasks),
         "moderation_queue_pending": int(moderation_pending),
         "delete_queue_pending": int(delete_pending),
         "normal_queue_pending": int(_normal_queue_pending(bot)),
@@ -666,6 +755,29 @@ def detect_issues(current: Dict[str, Any], previous: Optional[Dict[str, Any]] = 
     prev_active = int((previous or {}).get("active_tasks") or 0)
     if active >= TASK_GROWTH_ABS or (previous and active - prev_active >= TASK_GROWTH_DELTA):
         lines.append(f"TASK GROWTH DETECTED active={active} pending={pending}")
+        # Diagnostic breakdown of what the live tasks actually are.
+        raw_counts = current.get("task_kind_counts")
+        counts = raw_counts if isinstance(raw_counts, dict) else {}
+
+        def _ck(key: str) -> int:
+            try:
+                return int(counts.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        try:
+            event_handler = int(current.get("event_handler_tasks") or 0)
+        except (TypeError, ValueError):
+            event_handler = 0
+        lines.append(
+            "TASK BREAKDOWN "
+            f"active={active} "
+            f"event_handler={event_handler} "
+            f"reply={_ck('reply')} delete={_ck('delete')} warn={_ck('warn')} "
+            f"owner_peer={_ck('owner_peer')} bg={_ck('bg')} web={_ck('web')} "
+            f"queue={_ck('queue_worker')} snapshot={_ck('snapshot')} "
+            f"other={_ck('other')}"
+        )
 
     for queue_name in QUEUE_METRICS:
         value = int(current.get(queue_name) or 0)
