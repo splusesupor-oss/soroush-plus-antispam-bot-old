@@ -304,15 +304,17 @@ def _format_group_member(user):
 
 
 async def _group_main_owner_display(bot, chat, fallback_user=None):
-    """نام نمایشی مالک اصلیِ خودِ گروه (owner بومی گروه در سروش).
+    """نام نمایشی مالک اصلیِ خودِ گروه (سازندهٔ گروه در سروش).
 
-    اگر مالک شناسایی/دریافت نشد (owner_id خالی یا خطای RPC)، به فرستنده
+    در این نسخهٔ SPlusthon entityِ Chat فاقد fieldِ owner_id است؛ سازندهٔ
+    گروه اولین itemِ get_participants است (TL: chatParticipantCreator) و
+    به‌عنوان User کامل برمی‌گردد. اگر شناسایی/دریافت نشد، به فرستندهٔ
     دستور (fallback_user) برمی‌گردد تا خطِ «مالک اصلی» هرگز خالی نماند.
     """
     try:
-        owner_id = getattr(chat, "owner_id", None)
-        if owner_id:
-            owner_user = await bot.client.get_entity(owner_id)
+        participants = await bot.client.get_participants(chat, limit=1)
+        if participants:
+            owner_user = participants[0]
             if owner_user is not None:
                 return format_user(owner_user)
     except Exception:
@@ -2140,7 +2142,7 @@ async def handle_fast_owner_command(bot, event, text=None):
             # username → نام نمایشی. خطوط بدون فاصلهٔ خالی.
             _owner_display = await _group_main_owner_display(bot, _chat, _sender)
             await event.reply(
-                f"↻- گروه\n「 {title} 」ثبت شد ☑️\n"
+                f"↻- گروه\n\u200f「 {title} 」ثبت شد ☑️\n"
                 f"**مالک اصلی** : ❨ {_owner_display}❩"
             )
         except Exception as error:
@@ -6276,7 +6278,7 @@ async def handle_new_message(bot, event):
                 # username → نام نمایشی. خطوط بدون فاصلهٔ خالی.
                 _owner_display = await _group_main_owner_display(bot, chat, sender)
                 await event.reply(
-                    f"↻- گروه\n「 {title} 」ثبت شد ☑️\n"
+                    f"↻- گروه\n\u200f「 {title} 」ثبت شد ☑️\n"
                     f"**مالک اصلی** : ❨ {_owner_display}❩"
                 )
 
