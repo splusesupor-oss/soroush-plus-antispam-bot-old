@@ -141,7 +141,6 @@ from modules import user_history
 from modules import group_level
 from modules import bot_detector
 from modules import ad_name_detector
-from modules import access_profile_guard
 from modules import warning_threshold
 from modules import punishment_mode
 from modules.user_display import format_user
@@ -3050,30 +3049,6 @@ async def handle_new_message(bot, event):
                 event._bot_cached_sender = sender
             except Exception:
                 pass
-
-        # 🔒 فیلتر دسترسی پروفایل کاربر (نام/بیوگرافی/یوزرنیم) - در بالاترین نقطه ممکن
-        # تنها منبع تشخیص، چک زندهٔ reason() است؛ دلیل قدیمیِ رکورد ذخیره‌شده
-        # هرگز به‌عنوان profile_reason تزریق نمی‌شود و با نام/بیوی تمیز،
-        # رکورد کهنه حذف و دسترسی کاربر برمی‌گردد (sync_block_state).
-        if user_id and not is_global_owner(user_id):
-            profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None) if sender else None
-            guard_status, profile_reason = access_profile_guard.sync_block_state(
-                sender, user_id, profile_bio)
-            if guard_status == access_profile_guard.STATUS_BLOCKED:
-                bot.logger.log_info(
-                    f"PROFILE ACCESS RESTRICTION ACTIVE user_id={user_id} "
-                    f"name={format_user(sender)!r} reason={profile_reason!r}"
-                )
-                await access_profile_guard.send_restriction_notice(
-                    event, client=bot.client, chat_id=chat_id)
-                return
-            if guard_status == access_profile_guard.STATUS_HELD:
-                bot.logger.log_info(
-                    f"PROFILE ACCESS RESTRICTION HELD user_id={user_id} "
-                    f"reason=profile_unverifiable")
-                return
-            if guard_status == access_profile_guard.STATUS_RESTORED:
-                bot.logger.log_info(f"PROFILE ACCESS RESTORED user_id={user_id}")
 
         # Big-spam incidents are the sole opt-in per-message ID registry.
         # Capture before any later return/lock branch can race this event.
