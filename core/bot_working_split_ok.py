@@ -235,6 +235,10 @@ class SoroushAntiSpamBot:
     FORWARD_STATE_TTL = 15 * 60
     REJOIN_STATE_TTL = 24 * 60 * 60
     SPAMMER_MESSAGES_TTL = 15 * 60
+    # Safety cap for punished_users: reconciliation drops only entries whose
+    # punishment is verified inactive; the cap applies to that same verified
+    # subset and never removes an active punishment.
+    PUNISHED_USERS_MAX = 5000
 
     def _state_now(self):
         return time.monotonic()
@@ -468,6 +472,90 @@ class SoroushAntiSpamBot:
             prune_unbounded_maps(self)
         except Exception:
             pass
+        try:
+            self.cleanup_punished_users_state()
+        except Exception:
+            pass
+
+    def cleanup_punished_users_state(self):
+        """هماهنگ‌سازی ``punished_users`` با منابع حقیقت مجازات فعال.
+
+        فقط entryهایی حذف می‌شوند که دیگر مجازات فعال ندارند؛ بدون TTL
+        کورکورانه:
+
+        * گروه‌های بن: منبع حقیقت مجازات فعال، ذخیره‌گاه دائمی بن‌هاست
+          (``banned_users.json``/SQLite). کاربری که دیگر در آن نیست (unban
+          یا هر آزادسازی — همهٔ مسیرهای آزادسازی از آن ذخیره‌گاه پاک
+          می‌شوند)، entry‌اش اینجا حذف می‌شود.
+        * گروه‌های سکوت: مجازات «سکوت دائمی» است که فقط در سمت سرور
+          زندگی می‌کند (ربات استور حالت mute ندارد و
+          ``tracker.muted_users`` هیچ‌جا در کد زنده نوشته نمی‌شود)، پس
+          entryها نگهداری می‌شوند؛ مسیرهای آزادسازی (رفع سکوت، unban و
+          تشخیص آزادسازی دستی) در لحظهٔ آزادسازی entry را discard می‌کنند.
+        * اگر key در mapهای ``tracker`` باشد نگهداری می‌شود (احتیاطی؛
+          امروز خالی‌اند ولی اگر مسیر زنده‌ای روزی بنویسد، محافظت می‌شود).
+        * هر خطا در هر چک → entry نگهداری می‌شود (پیش روی شک، حذف نکن).
+
+        سقف ایمنی (``PUNISHED_USERS_MAX``) هیچ‌وقت مجازات فعال را حذف
+        نمی‌کند؛ فقط روی همان دستهٔ «بدون مجازات فعال» اعمال می‌شود.
+        """
+        try:
+            punished = self.punished_users
+            if not punished:
+                return 0
+            from modules import punishment_mode
+            try:
+                ban_data = load_banned()
+            except Exception:
+                # ذخیره‌گاه بن خوانا نیست؛ نمی‌توان «فعال/غیرفعال» را تأیید
+                # کرد → هیچ entry‌ای حذف نمی‌شود (پیش روی شک، پاک‌سازی
+                # انجام نمی‌شود و sweep بعدی دوباره امتحان می‌کند).
+                return 0
+
+            def still_punished(key):
+                if (key in self.tracker.banned_users
+                        or key in self.tracker.muted_users):
+                    return True
+                group_key, sep, user_key = str(key).rpartition(":")
+                if not sep or not group_key or not user_key:
+                    return True  # فرمت ناشناخته: دست نزن
+                try:
+                    if punishment_mode.is_mute(group_key):
+                        return True  # سکوت دائمی: منبع حقیقت سمت سرور است
+                except Exception:
+                    pass
+                try:
+                    if is_banned(group_key, user_key, data=ban_data):
+                        return True
+                except Exception:
+                    return True  # شکست چک: نگهداری کن
+                return False
+
+            removed = 0
+            for key in list(punished):
+                if not still_punished(key):
+                    punished.discard(key)
+                    removed += 1
+            if len(punished) > self.PUNISHED_USERS_MAX:
+                for key in list(punished):
+                    if len(punished) <= self.PUNISHED_USERS_MAX:
+                        break
+                    if not still_punished(key):
+                        punished.discard(key)
+                        removed += 1
+            if removed:
+                self.logger.log_info(
+                    f"PUNISHED USERS RECONCILED removed={removed} "
+                    f"remaining={len(punished)}"
+                )
+            return removed
+        except Exception as error:
+            try:
+                self.logger.log_error(
+                    f"PUNISHED USERS RECONCILE FAILED {error!r}")
+            except Exception:
+                pass
+            return 0
 
     def _make_client(self):
         """یک ``SoroushClient`` کاملاً جدید با سشنِ تازه می‌سازد.
