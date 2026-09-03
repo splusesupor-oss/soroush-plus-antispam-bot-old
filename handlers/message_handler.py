@@ -2325,8 +2325,10 @@ async def handle_fast_moderation_command(
             bot.logger.log_error(
                 f"USER HISTORY MUTE FAILED: {history_error}"
             )
+        # Bold با ** (Markdown پیش‌فرض). نام کاربری و در نبود
+        # آن، نام نمایشی از policy واحد format_user می‌آید.
         await event.reply(
-            f"🔕 کاربر 『 {_format_banned_user(target_user, target_user.id)} 』 سکوت شد"
+            f"「 {_format_banned_user(target_user, target_user.id)} 」**سکوت دائم شد** 🔊"
         )
 
     async def fast_mute_failed(_error):
@@ -6319,9 +6321,10 @@ async def handle_new_message(bot, event):
                 if add_admin(chat_id, admin_user.id, admin_username):
                     # Bold با ** (Markdown پیش‌فرض). نام کاربری و در نبود
                     # آن، نام نمایشی از policy واحد format_user می‌آید.
+                    # دو خط بدون فاصلهٔ خالی بینشان (طبق اسپک).
                     await event.reply(
                         f"کاربر : 「 {_format_admin_display(admin_user)} 」\n"
-                        f"\n↵ **ادمیـن ربات شد**"
+                        f"↵ **ادمیـن ربات شد**"
                     )
                 else:
                     await event.reply("⚠️ این کاربر قبلا ادمین ثبت شده است")
