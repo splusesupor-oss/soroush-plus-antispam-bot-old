@@ -2149,8 +2149,10 @@ async def handle_fast_owner_command(bot, event, text=None):
             _command_timing_log(
                 bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
             )
+            # Bold با ** (Markdown پیش‌فرض send_message). نام کاربری و
+            # در نبود آن، نام نمایشی از policy واحد format_user می‌آید.
             await event.reply(
-                f"مالـک ثبت شد ✅  「 {_format_group_member(target_user)}」‌𓆤"
+                f"**مالـک ثبت شد** 「 {_format_group_member(target_user)}」‌𓆤"
             )
         except Exception as error:
             logger = getattr(bot, "logger", None)
@@ -6229,7 +6231,7 @@ async def handle_new_message(bot, event):
 
                 set_group_owner(chat_id, target_user.id)
                 await event.reply(
-                    f"مالـک ثبت شد ✅  「 {_format_group_member(target_user)}」‌𓆤"
+                    f"**مالـک ثبت شد** 「 {_format_group_member(target_user)}」‌𓆤"
                 )
             except Exception as e:
                 bot.logger.log_error(f"خطا در ثبت مالک گروه: {e}")
@@ -6315,8 +6317,11 @@ async def handle_new_message(bot, event):
 
                 admin_username = getattr(admin_user, "username", None)
                 if add_admin(chat_id, admin_user.id, admin_username):
+                    # Bold با ** (Markdown پیش‌فرض). نام کاربری و در نبود
+                    # آن، نام نمایشی از policy واحد format_user می‌آید.
                     await event.reply(
-                        f"ادمـین ثبت شد ✅  「 {_format_admin_display(admin_user)}」‌𓆤"
+                        f"کاربر : 「 {_format_admin_display(admin_user)} 」\n"
+                        f"\n↵ **ادمیـن ربات شد**"
                     )
                 else:
                     await event.reply("⚠️ این کاربر قبلا ادمین ثبت شده است")
@@ -7092,8 +7097,10 @@ async def handle_new_message(bot, event):
                     except Exception as history_error:
                         bot.logger.log_error(
                             f"USER HISTORY MUTE FAILED: {history_error}")
+                    # Bold با ** (Markdown پیش‌فرض). نام کاربری و در نبود
+                    # آن، نام نمایشی از policy واحد format_user می‌آید.
                     await event.reply(
-                        f"🔕 کاربر 『 {_format_banned_user(target_user, target_user.id)} 』 سکوت شد"
+                        f"「 {_format_banned_user(target_user, target_user.id)} 」**سکوت دائم شد** 🔊"
                     )
 
                 async def mute_failed(_error):
