@@ -303,22 +303,37 @@ def _format_group_member(user):
     return format_user(user)
 
 
-async def _group_main_owner_display(bot, chat, fallback_user=None):
+async def _group_main_owner_display(bot, chat, fallback_user=None, chat_id=None):
     """نام نمایشی مالک اصلیِ خودِ گروه (سازندهٔ گروه در سروش).
 
     در این نسخهٔ SPlusthon entityِ Chat فاقد fieldِ owner_id است؛ سازندهٔ
     گروه اولین itemِ get_participants است (TL: chatParticipantCreator) و
     به‌عنوان User کامل برمی‌گردد. اگر شناسایی/دریافت نشد، به فرستندهٔ
     دستور (fallback_user) برمی‌گردد تا خطِ «مالک اصلی» هرگز خالی نماند.
+    هر دو شاخه در لاگ ثبت می‌شود (GROUP OWNER IDENTIFIED / FALLBACK).
     """
+    _logger = getattr(bot, "logger", None)
+
+    def _log(message):
+        try:
+            if _logger is not None:
+                _logger.log_info(message)
+        except Exception:
+            pass
+
     try:
         participants = await bot.client.get_participants(chat, limit=1)
         if participants:
             owner_user = participants[0]
             if owner_user is not None:
+                _log(
+                    "GROUP OWNER IDENTIFIED "
+                    f"chat_id={chat_id} owner_id={getattr(owner_user, 'id', None)} "
+                    f"username={getattr(owner_user, 'username', None)!r}")
                 return format_user(owner_user)
-    except Exception:
-        pass
+        _log(f"GROUP OWNER FALLBACK chat_id={chat_id} reason=participants_empty")
+    except Exception as error:
+        _log(f"GROUP OWNER FALLBACK chat_id={chat_id} reason={error!r}")
     return format_user(fallback_user)
 
 
@@ -2140,7 +2155,8 @@ async def handle_fast_owner_command(bot, event, text=None):
             )
             # مالک اصلی = مالک بومی خودِ گروه (نه فرستندهٔ دستور)؛ بدون
             # username → نام نمایشی. خطوط بدون فاصلهٔ خالی.
-            _owner_display = await _group_main_owner_display(bot, _chat, _sender)
+            _owner_display = await _group_main_owner_display(
+                bot, _chat, _sender, chat_id=chat_id)
             await event.reply(
                 f"↻- گروه\n\u200f「 {title} 」ثبت شد ☑️\n"
                 f"**مالک اصلی** : ❨ {_owner_display}❩"
@@ -6276,7 +6292,8 @@ async def handle_new_message(bot, event):
 
                 # مالک اصلی = مالک بومی خودِ گروه (نه فرستندهٔ دستور)؛ بدون
                 # username → نام نمایشی. خطوط بدون فاصلهٔ خالی.
-                _owner_display = await _group_main_owner_display(bot, chat, sender)
+                _owner_display = await _group_main_owner_display(
+                    bot, chat, sender, chat_id=gid)
                 await event.reply(
                     f"↻- گروه\n\u200f「 {title} 」ثبت شد ☑️\n"
                     f"**مالک اصلی** : ❨ {_owner_display}❩"
