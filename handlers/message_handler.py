@@ -2159,7 +2159,7 @@ async def handle_fast_owner_command(bot, event, text=None):
                 bot, _chat, _sender, chat_id=chat_id)
             await event.reply(
                 f"↻- گروه\n\u200f「 {title} 」ثبت شد ☑️\n"
-                f"**مالک اصلی** : ❨ {_owner_display}❩"
+                f"**مالک ربات** : ❨ {_owner_display}❩"
             )
         except Exception as error:
             await event.reply(f"❌ خطا در ثبت گروه: {error}")
@@ -6296,7 +6296,7 @@ async def handle_new_message(bot, event):
                     bot, chat, sender, chat_id=gid)
                 await event.reply(
                     f"↻- گروه\n\u200f「 {title} 」ثبت شد ☑️\n"
-                    f"**مالک اصلی** : ❨ {_owner_display}❩"
+                    f"**مالک ربات** : ❨ {_owner_display}❩"
                 )
 
             except Exception as e:
