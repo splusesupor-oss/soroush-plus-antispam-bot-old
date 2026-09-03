@@ -41,7 +41,7 @@ async def handle_group_word_command(bot, event, text, chat_id, user_id, username
 
         if word:
             if add_word(chat_id, word):
-                await event.reply(f"✅ کلمه «{word}» برای این گروه فیلتر شد")
+                await event.reply(f"☑️ کلمه «{word}» فیلتر شد")
             else:
                 await event.reply("⚠️ این کلمه قبلا برای این گروه ثبت شده")
 

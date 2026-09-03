@@ -2119,7 +2119,11 @@ async def handle_fast_owner_command(bot, event, text=None):
             _command_timing_log(
                 bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
             )
-            await event.reply(f"↻- گروه\n\n⏌ {title} ⎾ ثبت شد ☑️")
+            # «مالک اصلی» bold؛ بدون username → نام نمایشی.
+            await event.reply(
+                f"↻- گروه\n\n「 {title}」ثبت شد ☑️\n\n"
+                f"**مالک اصلی** : ❨ {_format_group_member(_sender)}❩"
+            )
         except Exception as error:
             await event.reply(f"❌ خطا در ثبت گروه: {error}")
         return await finish(True)
@@ -6249,7 +6253,11 @@ async def handle_new_message(bot, event):
                     title
                 )
 
-                await event.reply(f"↻- گروه\n\n⏌ {title} ⎾ ثبت شد ☑️")
+                # «مالک اصلی» bold؛ بدون username → نام نمایشی.
+                await event.reply(
+                    f"↻- گروه\n\n「 {title}」ثبت شد ☑️\n\n"
+                    f"**مالک اصلی** : ❨ {_format_group_member(sender)}❩"
+                )
 
             except Exception as e:
                 await event.reply(
@@ -6516,7 +6524,7 @@ async def handle_new_message(bot, event):
                     except Exception as history_error:
                         bot.logger.log_error(
                             f"USER HISTORY KICK FAILED: {history_error}")
-                    await event.reply("✅ کاربر اخراج شد")
+                    await event.reply("⟳ کاربر اخراج شد")
 
                 async def kick_failed(_error):
                     await event.reply("❌ اخراج کاربر انجام نشد")
@@ -6751,11 +6759,14 @@ async def handle_new_message(bot, event):
                         )
                         admin_tools.log_action(
                             _c, _s, "آزاد کردن کاربر", target=_u)
+                        # Bold/فرمت طبق اسپک؛ بدون username → نام نمایشی.
+                        _release_notice = (
+                            f"♻️ کاربر آزاد شد ᯓ⁪⁮ [ {format_user(_u)} ]")
                         _sender_ok = getattr(_b, "outgoing_sender", None)
                         if _sender_ok is not None:
-                            _sender_ok.enqueue_reply(_ev, "♻️ کاربر آزاد شد ✅")
+                            _sender_ok.enqueue_reply(_ev, _release_notice)
                         else:
-                            await _ev.reply("♻️ کاربر آزاد شد ✅")
+                            await _ev.reply(_release_notice)
                     except Exception as e:
                         try:
                             _sender_ok2 = getattr(_b, "outgoing_sender", None)
@@ -6918,7 +6929,9 @@ async def handle_new_message(bot, event):
                     )
                     admin_tools.log_action(
                         chat_id, sender, "آزاد کردن کاربر", target=user)
-                    await event.reply("♻️ کاربر آزاد شد ✅")
+                    # بدون username → نام نمایشی (format_user).
+                    await event.reply(
+                        f"♻️ کاربر آزاد شد ᯓ⁪ [ {format_user(user)} ]")
 
             except Exception as e:
                 await event.reply(f"❌ خطا در آزاد کردن:\n{e}")
