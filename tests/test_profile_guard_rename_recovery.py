@@ -241,3 +241,68 @@ def test_notice_text_is_the_shared_constant(isolated_guard):
         "⚠️ دسترسی شما از ربات حذف شد.")
     assert isolated_guard.RESTRICTION_NOTICE_BOLD_LENGTH == len(
         "⚠️ دسترسی شما از ربات حذف شد.")
+
+
+# ===========================================================================
+# رگرسیون باگ گزارش‌شده (کلمهٔ دقیقِ کاربر: «شاه»):
+# نام ممنوع → بلوک + اعلان → اصلاح نام → اعلان تکراری ممنوع
+# ===========================================================================
+def test_shah_rename_lifecycle_no_repeat_notice(isolated_guard):
+    async def scenario():
+        g = isolated_guard
+        user_id = 5550010
+        g.unblock(user_id)
+        bot = _make_bot(user_id)
+
+        # ۱) نام «شاه» → بلوک + اعلان
+        bad = MockEvent("ربات", user_id=user_id, first_name="شاه")
+        await handle_new_message(bot, bad)
+        assert g.is_blocked(user_id) is True
+        assert g.record_for(user_id)["reason"] == "شاه"
+        assert len(bad.replies) == 1
+        assert NOTICE in bad.replies[0]
+
+        # ۲) کاربر نامش را اصلاح می‌کند → پیام بعدی: بدون اعلان تکراری،
+        #    رکورد کهنه حذف، پردازش عادی
+        clean = MockEvent("ربات", user_id=user_id, first_name="رضا")
+        await handle_new_message(bot, clean)
+        await _settle()
+        assert g.is_blocked(user_id) is False
+        assert g.record_for(user_id) is None
+        assert all(NOTICE not in r for r in clean.replies)
+        assert any(NORMAL_REPLY_MARKER in r for r in clean.replies)
+
+        # ۳) «شاهین» قربانی «شاه» نمی‌شود (بدون false positive)
+        shahin = MockEvent("ربات", user_id=user_id, first_name="شاهین")
+        await handle_new_message(bot, shahin)
+        await _settle()
+        assert g.is_blocked(user_id) is False
+        assert all(NOTICE not in r for r in shahin.replies)
+
+        g.unblock(user_id)
+
+    asyncio.run(scenario())
+
+
+# ===========================================================================
+# رگرسیون ساختاری: مسیر پیام‌های معمولیِ core (process_incoming_message)
+# باید همان منبع واحد تصمیم‌گیری (sync_block_state) را استفاده کند و
+# هیچ‌گاه دلیلِ رکورد ذخیره‌شده را به‌عنوان دلیل فعلی تزریق نکند —
+# که دقیقاً ریشهٔ همین باگ بود: همان مسیر، رکورد کهنه را مجدداً اعمال
+# می‌کرد و کاربری که نامش را اصلاح کرده بود، برای همیشه با همان اعلان
+# تکراری بلوک می‌ماند (درحالی‌که مسیرهای اولویت‌دار و هندلر درست بودند).
+# ===========================================================================
+def test_core_ordinary_message_lane_uses_single_decision_source():
+    source = (ROOT / "core" / "bot_working_split_ok.py").read_text(
+        encoding="utf-8")
+    start = source.index("async def process_incoming_message(event):")
+    end = source.index("@self.client.on(events.NewMessage())", start)
+    lane = source[start:end]
+
+    # مسیر باید از sync_block_state استفاده کند (منبع واحد تصمیم‌گیری)
+    assert "access_profile_guard.sync_block_state(" in lane
+    # الگوی باگ: تزریق دلیل قدیمی از رکورد ذخیره‌شده — نباید باقی مانده باشد
+    assert "record_for(" not in lane, (
+        "مسیر process_incoming_message دوباره رکورد ذخیره‌شده را به‌عنوان "
+        "دلیل تشخیص می‌خواند — باگ بلوک ابدیِ کاربر تغییرنام‌داده برگشته است")
+    assert 'record.get("reason")' not in lane

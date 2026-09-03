@@ -1491,33 +1491,34 @@ class SoroushAntiSpamBot:
                             "PROFILE GUARD BIO UNAVAILABLE "
                             "reason=SoroushClient_User_entity_has_no_about_field"
                         )
-                    profile_reason = access_profile_guard.reason(profile_user, profile_bio) if profile_user else None
-                    if not profile_reason and access_profile_guard.is_blocked(profile_id):
-                        record = access_profile_guard.record_for(profile_id)
-                        profile_reason = record.get("reason") if record else "قوانین پروفایل"
-
-                    if profile_reason:
-                        access_profile_guard.block(profile_id, profile_reason)
+                    # 🔒 Profile Access Guard — مسیر پیام‌های معمولی.
+                    # همان منبع واحد تصمیم‌گیری که مسیر دستورهای اولویت‌دار
+                    # و هندلر استفاده می‌کنند: فقط چک زندهٔ reason() (نام/
+                    # یوزرنیم/بیوی *فعلی*) منبع تشخیص است و رکورد ذخیره‌شده
+                    # هرگز به‌عنوان دلیل تزریق نمی‌شود. بنابراین کاربری که
+                    # نامش را اصلاح کرده، در اولین پیام بعدی رکورد کهنه‌اش
+                    # حذف (unblock) و پردازش عادی ادامه می‌یابد؛ نه اینکه
+                    # برای همیشه با همان اعلان قدیمی دوباره بلوک شود
+                    # (جزئیات: sync_block_state).
+                    guard_status, profile_reason = access_profile_guard.sync_block_state(
+                        profile_user, profile_id, profile_bio)
+                    if guard_status == access_profile_guard.STATUS_BLOCKED:
                         self.logger.log_info(
                             f"PROFILE ACCESS RESTRICTION ACTIVE user_id={profile_id} "
-                            f"name={getattr(profile_user, 'first_name', '') if profile_user else ''!r} reason={profile_reason!r}"
+                            f"name={getattr(profile_user, 'first_name', '')!r} reason={profile_reason!r}"
                         )
-                        notice = "⚠️ دسترسی شما از ربات حذف شد.\n\nنام یا بیوگرافی شما با قوانین ربات مطابقت ندارد."
-                        try:
-                            from splusthon.tl.types import MessageEntityBold as _ProfileBold
-                            await event.reply(notice, formatting_entities=[_ProfileBold(offset=0, length=len("⚠️ دسترسی شما از ربات حذف شد."))])
-                        except Exception:
-                            try:
-                                await event.reply(notice)
-                            except Exception:
-                                try:
-                                    await self.client.send_message(getattr(event, "chat_id", None), notice)
-                                except Exception:
-                                    pass
+                        await access_profile_guard.send_restriction_notice(
+                            event, client=self.client,
+                            chat_id=getattr(event, "chat_id", None))
                         self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
-                    if access_profile_guard.is_blocked(profile_id):
-                        access_profile_guard.unblock(profile_id)
+                    if guard_status == access_profile_guard.STATUS_HELD:
+                        self.logger.log_info(
+                            f"PROFILE ACCESS RESTRICTION HELD user_id={profile_id} "
+                            f"reason=profile_unverifiable")
+                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
+                        return
+                    if guard_status == access_profile_guard.STATUS_RESTORED:
                         self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={profile_id}")
                 # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
                 # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
