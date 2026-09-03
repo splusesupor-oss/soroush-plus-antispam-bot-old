@@ -303,6 +303,23 @@ def _format_group_member(user):
     return format_user(user)
 
 
+async def _group_main_owner_display(bot, chat, fallback_user=None):
+    """نام نمایشی مالک اصلیِ خودِ گروه (owner بومی گروه در سروش).
+
+    اگر مالک شناسایی/دریافت نشد (owner_id خالی یا خطای RPC)، به فرستنده
+    دستور (fallback_user) برمی‌گردد تا خطِ «مالک اصلی» هرگز خالی نماند.
+    """
+    try:
+        owner_id = getattr(chat, "owner_id", None)
+        if owner_id:
+            owner_user = await bot.client.get_entity(owner_id)
+            if owner_user is not None:
+                return format_user(owner_user)
+    except Exception:
+        pass
+    return format_user(fallback_user)
+
+
 def _format_admin_display(user):
     return format_user(user)
 
@@ -2119,10 +2136,12 @@ async def handle_fast_owner_command(bot, event, text=None):
             _command_timing_log(
                 bot, f"COMMAND SAVED command={text} chat_id={chat_id}"
             )
-            # «مالک اصلی» bold؛ بدون username → نام نمایشی.
+            # مالک اصلی = مالک بومی خودِ گروه (نه فرستندهٔ دستور)؛ بدون
+            # username → نام نمایشی. خطوط بدون فاصلهٔ خالی.
+            _owner_display = await _group_main_owner_display(bot, _chat, _sender)
             await event.reply(
-                f"↻- گروه\n\n「 {title}」ثبت شد ☑️\n\n"
-                f"**مالک اصلی** : ❨ {_format_group_member(_sender)}❩"
+                f"↻- گروه\n「 {title} 」ثبت شد ☑️\n"
+                f"**مالک اصلی** : ❨ {_owner_display}❩"
             )
         except Exception as error:
             await event.reply(f"❌ خطا در ثبت گروه: {error}")
@@ -6253,10 +6272,12 @@ async def handle_new_message(bot, event):
                     title
                 )
 
-                # «مالک اصلی» bold؛ بدون username → نام نمایشی.
+                # مالک اصلی = مالک بومی خودِ گروه (نه فرستندهٔ دستور)؛ بدون
+                # username → نام نمایشی. خطوط بدون فاصلهٔ خالی.
+                _owner_display = await _group_main_owner_display(bot, chat, sender)
                 await event.reply(
-                    f"↻- گروه\n\n「 {title}」ثبت شد ☑️\n\n"
-                    f"**مالک اصلی** : ❨ {_format_group_member(sender)}❩"
+                    f"↻- گروه\n「 {title} 」ثبت شد ☑️\n"
+                    f"**مالک اصلی** : ❨ {_owner_display}❩"
                 )
 
             except Exception as e:
