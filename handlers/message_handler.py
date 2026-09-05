@@ -6645,7 +6645,7 @@ async def handle_new_message(bot, event):
                     if not _vip_lines:
                         _vip_lines = ["➛ 「」"]
                     await event.reply(
-                        "☴ \U0001D415\U0001D408\U0001D40F "
+                        "\u200f☴ \U0001D415\U0001D408\U0001D40F "
                         "\U0001D40B\U0001D408\U0001D412\U0001D413 #plus\n\n"
                         + "\n\n".join(_vip_lines)
                     )
@@ -6673,9 +6673,9 @@ async def handle_new_message(bot, event):
                     # «لغو vip» و «لیست vip» بولد — با entity صریح ساخته
                     # می‌شود (پارسر Markdown دو بولدِ مجزا را درست جفت نمی‌کند).
                     _vip_notice = (
-                        "☰ \U0001D415\U0001D408\U0001D40F , #plus\n\n"
+                        "\u200f☰ \U0001D415\U0001D408\U0001D40F , #plus\n"
                         f"🏔کاربر  「 {format_user(_vuser)} 」\n\n"
-                        "» لغو vip\n\n"
+                        "» لغو vip\n"
                         "» لیست vip"
                     )
                     _vip_ents = []
@@ -6695,7 +6695,7 @@ async def handle_new_message(bot, event):
                         await event.reply("⚠️ این کاربر vip نیست")
                         return
                     await event.reply(
-                        "☰ \U0001D415\U0001D408\U0001D40F , #plus\n\n"
+                        "\u200f☰ \U0001D415\U0001D408\U0001D40F , #plus\n"
                         f"🏔کاربر  「 {format_user(_vuser)} 」\n\n"
                         "❌ vip لغو شد"
                     )
