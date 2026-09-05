@@ -318,18 +318,51 @@ class AdminActions:
                 )
             )
 
-            await self.client.edit_permissions(
-                chat_peer,
-                user_peer,
-                send_messages=True,
-                send_media=True,
-                send_stickers=True,
-                send_gifs=True,
-                send_games=True,
-                send_inline=True,
-                send_polls=True,
-                until_date=None
+            # کانال‌ها (گروه‌های سروش): عین الگوی unban_user — مستقیم
+            # EditBannedRequest با همهٔ پرچب‌ها False (= مجاز). wrapper
+            # بالادستی edit_permissions در این fork پرچب‌ها را برای
+            # کانال درست اعمال نمی‌کرد و سکوت‌ها برمی‌نمی‌داشتند.
+            chat_peer_name = type(chat_peer).__name__
+            is_channel = (
+                chat_peer_name in {"InputPeerChannel", "InputChannel"}
+                or "Channel" in chat_peer_name
+                or getattr(chat_peer, "channel_id", None) is not None
             )
+            if is_channel and functions is not None and types is not None:
+                await self.client(
+                    functions.channels.EditBannedRequest(
+                        channel=chat_peer,
+                        participant=user_peer,
+                        banned_rights=types.ChatBannedRights(
+                            until_date=None,
+                            view_messages=False,
+                            send_messages=False,
+                            send_media=False,
+                            send_stickers=False,
+                            send_gifs=False,
+                            send_games=False,
+                            send_inline=False,
+                            embed_links=False,
+                            send_polls=False,
+                            change_info=False,
+                            invite_users=False,
+                            pin_messages=False
+                        )
+                    )
+                )
+            else:
+                await self.client.edit_permissions(
+                    chat_peer,
+                    user_peer,
+                    send_messages=True,
+                    send_media=True,
+                    send_stickers=True,
+                    send_gifs=True,
+                    send_games=True,
+                    send_inline=True,
+                    send_polls=True,
+                    until_date=None
+                )
             self.circuit_breaker.record_success(chat_id)
 
             self.logger.log_action("UNMUTE", user_id, chat_id)

@@ -2352,6 +2352,15 @@ async def handle_fast_moderation_command(
             await event.reply("❌ انجام سکوت ناموفق بود")
             return
         add_mute(chat_id)
+        # ثبت «سکوت دستی»: «آزاد» روی این سکوت عمل نمی‌کند و رفعش فقط
+        # با «رفع سکوت» است.
+        try:
+            from modules import manual_mute_storage
+            manual_mute_storage.add_manual_mute(
+                chat_id, target_user.id)
+        except Exception as mm_error:
+            bot.logger.log_error(
+                f"MANUAL MUTE MARK FAILED: {mm_error}")
         admin_tools.log_action(
             chat_id, sender, "سکوت کاربر", target=target_user
         )
@@ -6946,6 +6955,24 @@ async def handle_new_message(bot, event):
                     except Exception:
                         pass
 
+                # سکوت دستی با «آزاد» رفع نمی‌شود؛ فقط «رفع سکوت» می‌تواند
+                # آن را بردارد.
+                try:
+                    from modules import manual_mute_storage
+                    if manual_mute_storage.is_manual_muted(_c, _u.id):
+                        _mm_sender = getattr(_b, "outgoing_sender", None)
+                        _mm_notice = (
+                            "⚠️ این کاربر سکوت دستی دارد؛ برای رفعش روی پیامش "
+                            "ریپلای کنید و بنویسید: رفع سکوت"
+                        )
+                        if _mm_sender is not None:
+                            _mm_sender.enqueue_reply(_ev, _mm_notice)
+                        else:
+                            await _ev.reply(_mm_notice)
+                        return
+                except Exception:
+                    pass
+
                 _b.moderation_queue.enqueue(
                     _c, "unban",
                     user_id=_u.id,
@@ -7237,6 +7264,15 @@ async def handle_new_message(bot, event):
 
                 async def mute_succeeded(_result):
                     add_mute(chat_id)
+                    # ثبت «سکوت دستی»: «آزاد» روی این سکوت عمل نمی‌کند و
+                    # رفعش فقط با «رفع سکوت» است.
+                    try:
+                        from modules import manual_mute_storage
+                        manual_mute_storage.add_manual_mute(
+                            chat_id, target_user.id)
+                    except Exception as mm_error:
+                        bot.logger.log_error(
+                            f"MANUAL MUTE MARK FAILED: {mm_error}")
                     admin_tools.log_action(
                         chat_id, sender, "سکوت کاربر", target=target_user)
                     # 🗂 ثبت در سابقه‌ها (فایل جدا؛ سیستم سکوت دست‌نخورده).
@@ -7307,6 +7343,15 @@ async def handle_new_message(bot, event):
                 async def unmute_succeeded(_result):
                     target_id = getattr(target_user, "id", None)
                     target_key = f"{chat_id}:{target_id}"
+                    # برداشتن نشان «سکوت دستی»؛ از این لحظه «آزاد» هم
+                    # مثل قبل روی این کاربر کار می‌کند.
+                    try:
+                        from modules import manual_mute_storage
+                        manual_mute_storage.remove_manual_mute(
+                            chat_id, target_id)
+                    except Exception as mm_error:
+                        bot.logger.log_error(
+                            f"MANUAL MUTE UNMARK FAILED: {mm_error}")
                     if hasattr(bot, "clear_released_user_state"):
                         bot.clear_released_user_state(chat_id, target_id)
                     bot.clear_spam_lock((chat_id, target_id))
