@@ -6644,10 +6644,15 @@ async def handle_new_message(bot, event):
                             _vip_lines.append("➛ 「」")
                     if not _vip_lines:
                         _vip_lines = ["➛ 「」"]
+                    # متن این پیام فارسی ندارد؛ کلاینت جهت پیام را LTR
+                    # تشخیص می‌داد و عنوان سمت چپ می‌رفت. نشانه‌های RTL
+                    # نامرئی (RLM) جهت کل پیام را راست‌به‌چین می‌کنند.
                     await event.reply(
-                        "\u200f☴ \U0001D415\U0001D408\U0001D40F "
-                        "\U0001D40B\U0001D408\U0001D412\U0001D413 #plus\n\n"
+                        "\u200f" * 600
+                        + "\u200f☴ \U0001D5E9\U0001D5DC\U0001D5E3 "
+                        + "\U0001D5DF\U0001D5DC\U0001D5E6\U0001D5E7 #plus\n\n"
                         + "\n\n".join(_vip_lines)
+                        + "\u200f"
                     )
                     return
                 # vip / لغو vip — هر دو روی پیام کاربر
@@ -6673,7 +6678,7 @@ async def handle_new_message(bot, event):
                     # «لغو vip» و «لیست vip» بولد — با entity صریح ساخته
                     # می‌شود (پارسر Markdown دو بولدِ مجزا را درست جفت نمی‌کند).
                     _vip_notice = (
-                        "\u200f☰ \U0001D415\U0001D408\U0001D40F , #plus\n"
+                        "\u200f☰ \U0001D5E9\U0001D5DC\U0001D5E3 , #plus\n"
                         f"🏔کاربر  「 {format_user(_vuser)} 」\n\n"
                         "» لغو vip\n"
                         "» لیست vip"
@@ -6695,7 +6700,7 @@ async def handle_new_message(bot, event):
                         await event.reply("⚠️ این کاربر vip نیست")
                         return
                     await event.reply(
-                        "\u200f☰ \U0001D415\U0001D408\U0001D40F , #plus\n"
+                        "\u200f☰ \U0001D5E9\U0001D5DC\U0001D5E3 , #plus\n"
                         f"🏔کاربر  「 {format_user(_vuser)} 」\n\n"
                         "❌ vip لغو شد"
                     )
