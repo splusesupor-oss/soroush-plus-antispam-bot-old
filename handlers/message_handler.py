@@ -6639,20 +6639,19 @@ async def handle_new_message(bot, event):
                     for _vuid in _vip_ids:
                         try:
                             _vuser = await bot.client.get_entity(int(_vuid))
-                            _vip_lines.append(f"➛ 「 {format_user(_vuser)} 」")
+                            _vip_lines.append(
+                                f"\u200f➛ 「 {format_user(_vuser)} 」")
                         except Exception:
-                            _vip_lines.append("➛ 「」")
+                            _vip_lines.append("\u200f➛ 「」")
                     if not _vip_lines:
-                        _vip_lines = ["➛ 「」"]
-                    # متن این پیام فارسی ندارد؛ کلاینت جهت پیام را LTR
-                    # تشخیص می‌داد و عنوان سمت چپ می‌رفت. نشانه‌های RTL
-                    # نامرئی (RLM) جهت کل پیام را راست‌به‌چین می‌کنند.
+                        _vip_lines = ["\u200f➛ 「」"]
+                    # کلاینت جهت هر خط را با اولین نویسهٔ قوی همان خط
+                    # تعیین می‌کند؛ RLM نامرئی اول هر خط باعث می‌شود
+                    # عنوان و آیتم‌ها هم‌راستای راست قرار بگیرند.
                     await event.reply(
-                        "\u200f" * 600
-                        + "\u200f☴ \U0001D5E9\U0001D5DC\U0001D5E3 "
-                        + "\U0001D5DF\U0001D5DC\U0001D5E6\U0001D5E7 #plus\n\n"
+                        "\u200f☴ \U0001D5E9\U0001D5DC\U0001D5E3 "
+                        "\U0001D5DF\U0001D5DC\U0001D5E6\U0001D5E7 #plus\n\n"
                         + "\n\n".join(_vip_lines)
-                        + "\u200f"
                     )
                     return
                 # vip / لغو vip — هر دو روی پیام کاربر
@@ -6702,7 +6701,7 @@ async def handle_new_message(bot, event):
                     await event.reply(
                         "\u200f☰ \U0001D5E9\U0001D5DC\U0001D5E3 , #plus\n"
                         f"🏔کاربر  「 {format_user(_vuser)} 」\n\n"
-                        "❌ vip لغو شد"
+                        "\u200f❌ vip لغو شد"
                     )
             except Exception as e:
                 bot.logger.log_error(f"خطای vip: {e}")
