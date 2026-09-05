@@ -3780,7 +3780,7 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "تغییر اخطار", "تغییر مجازات", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "تغییر اخطار", "تغییر مجازات", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه", "vip", "لغو vip", "لیست vip"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -5574,6 +5574,12 @@ async def handle_new_message(bot, event):
                 "برکناری ادمین\n\n"
                 "یا\n\n"
                 "لغو ادمین\n\n"
+                "برای اینکه ربات به یک کاربری که ادمین نیست روش ریپلای کنید و بنویسید\n\n"
+                "vip\n\n"
+                "برای لغو ریپلای کنید بنویسی\n\n"
+                "لغو vip\n\n"
+                "برای دیدن لیست vip ها بنویسید\n\n"
+                "لیست vip\n\n"
                 "🛡️ حالت سختگیرانه:\n\n"
                 "فعال سازی:\n"
                 "فعال کلمات ممنوعه\n\n"
@@ -5864,13 +5870,40 @@ async def handle_new_message(bot, event):
                 "صفر کردن تخلفات توسط مالک اصلی ربات یا مالک گروه\n«روی کاربر ریپلای کنید و بنویسید \"صفر\"»",
                 "🗑️ حذف اخطار:\nبرای حذف اخطار داده‌شده به یک کاربر\n«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»",
             ]
-            for section in quote_sections:
+            # بخش vip: کل متن داخل یک نقل‌قول شیشه‌ای
+            vip_help_section = (
+                "برای اینکه ربات به یک کاربری که ادمین نیست روش ریپلای کنید و بنویسید\n\n"
+                "vip\n\n"
+                "برای لغو ریپلای کنید بنویسی\n\n"
+                "لغو vip\n\n"
+                "برای دیدن لیست vip ها بنویسید\n\n"
+                "لیست vip"
+            )
+            for section in quote_sections + [vip_help_section]:
                 pos = help_text.find(section)
                 if pos != -1:
                     entities.append(
                         MessageEntityBlockquote(
                             offset=u16(help_text[:pos]),
                             length=u16(section)
+                        )
+                    )
+
+            # دستورات vip: بولد در موقعیت دقیق تا «vip»ِ داخل «لغو vip» و
+            # «لیست vip» تکراری/هم‌پوشان نشود. anchor دقیقاً تا پایان
+            # کلمهٔ دستور تمام می‌شود.
+            for _vip_anchor, _vip_word in (
+                ("ریپلای کنید و بنویسید\n\nvip", "vip"),
+                ("ریپلای کنید بنویسی\n\nلغو vip", "لغو vip"),
+                ("بنویسید\n\nلیست vip", "لیست vip"),
+            ):
+                _vip_pos = help_text.find(_vip_anchor)
+                if _vip_pos != -1:
+                    _vip_start = _vip_pos + len(_vip_anchor) - len(_vip_word)
+                    entities.append(
+                        MessageEntityBold(
+                            offset=u16(help_text[:_vip_start]),
+                            length=u16(_vip_word),
                         )
                     )
 
@@ -6589,6 +6622,88 @@ async def handle_new_message(bot, event):
 
 
 # آزاد کردن کاربر محروم شده
+        # ===== vip: معاف از اخطار و حذف پیام (بدون نیاز به ادمین بودن هدف) =====
+        if clean_text in ("vip", "لغو vip", "لیست vip"):
+            try:
+                from modules import vip_storage
+                _vip_sender = await event.get_sender()
+                if not _has_group_management_permission(
+                    bot, chat_id, user_id,
+                    getattr(_vip_sender, "username", None),
+                ):
+                    await event.reply("❌ فقط ادمین‌ها اجازه استفاده از vip را دارند")
+                    return
+                if clean_text == "لیست vip":
+                    _vip_ids = vip_storage.list_vips(chat_id)[:20]
+                    _vip_lines = []
+                    for _vuid in _vip_ids:
+                        try:
+                            _vuser = await bot.client.get_entity(int(_vuid))
+                            _vip_lines.append(f"➛ 「 {format_user(_vuser)} 」")
+                        except Exception:
+                            _vip_lines.append("➛ 「」")
+                    if not _vip_lines:
+                        _vip_lines = ["➛ 「」"]
+                    await event.reply(
+                        "☴ \U0001D415\U0001D408\U0001D40F "
+                        "\U0001D40B\U0001D408\U0001D412\U0001D413 #plus\n\n"
+                        + "\n\n".join(_vip_lines)
+                    )
+                    return
+                # vip / لغو vip — هر دو روی پیام کاربر
+                if not event.reply_to:
+                    await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+                    return
+                _vmsg = await bot.client.get_messages(
+                    chat_id, ids=event.reply_to.reply_to_msg_id)
+                _vuser = await _vmsg.get_sender() if _vmsg else None
+                if not _vuser:
+                    await event.reply("❌ کاربر پیدا نشد")
+                    return
+                if clean_text == "vip":
+                    if is_admin(
+                        chat_id, _vuser.id,
+                        getattr(_vuser, "username", None),
+                    ):
+                        await event.reply("⚠️ این کاربر ادمین است و vip نشد")
+                        return
+                    if not vip_storage.add_vip(chat_id, _vuser.id):
+                        await event.reply("⚠️ این کاربر قبلا vip ثبت شده است")
+                        return
+                    # «لغو vip» و «لیست vip» بولد — با entity صریح ساخته
+                    # می‌شود (پارسر Markdown دو بولدِ مجزا را درست جفت نمی‌کند).
+                    _vip_notice = (
+                        "☰ \U0001D415\U0001D408\U0001D40F , #plus\n\n"
+                        f"🏔کاربر  「 {format_user(_vuser)} 」\n\n"
+                        "» لغو vip\n\n"
+                        "» لیست vip"
+                    )
+                    _vip_ents = []
+                    for _vw in ("لغو vip", "لیست vip"):
+                        _vp = _vip_notice.find("» " + _vw)
+                        if _vp != -1:
+                            _vs = _vp + 2
+                            _vip_ents.append(
+                                MessageEntityBold(
+                                    offset=len(_vip_notice[:_vs].encode("utf-16-le")) // 2,
+                                    length=len(_vw.encode("utf-16-le")) // 2,
+                                )
+                            )
+                    await event.reply(_vip_notice, formatting_entities=_vip_ents)
+                else:  # لغو vip
+                    if not vip_storage.remove_vip(chat_id, _vuser.id):
+                        await event.reply("⚠️ این کاربر vip نیست")
+                        return
+                    await event.reply(
+                        "☰ \U0001D415\U0001D408\U0001D40F , #plus\n\n"
+                        f"🏔کاربر  「 {format_user(_vuser)} 」\n\n"
+                        "❌ vip لغو شد"
+                    )
+            except Exception as e:
+                bot.logger.log_error(f"خطای vip: {e}")
+                await event.reply(f"❌ خطا: {e}")
+            return
+
         if clean_text == "آزاد" or clean_text.startswith("آزاد ") or clean_text.startswith("آزاد@"):
             if not _has_group_management_permission(
                 bot, chat_id, user_id, getattr(sender, "username", None)
@@ -7484,11 +7599,22 @@ async def handle_new_message(bot, event):
         # No separate check here; it will be checked in bot.detector.is_spam which internally checks is_enabled
         # If strict mode is off, check_banned_words will return False and log why
 
+        # کاربر vip از فیلتر خودکار (اخطار/حذف پیام/بن) معاف است؛ مثل
+        # مدیر/مالک ثبت‌شده اما بدون اینکه ادمین باشد.
+        _vip_exempt = False
+        if not (is_group_moderator or fast_command) and user_id:
+            try:
+                from modules import vip_storage
+                _vip_exempt = vip_storage.is_vip(chat_id, user_id)
+            except Exception:
+                _vip_exempt = False
         # مدیر/مالک ثبت‌شده از فیلتر خودکار و فیلتر کلمات گروه عبور می‌کند،
         # اما اجرای راهنما، بازی‌ها و فرمان‌های مدیریت باید ادامه داشته باشد.
-        if is_group_moderator or fast_command:
+        if is_group_moderator or fast_command or _vip_exempt:
             if is_group_moderator:
                 _debug_log(bot, f"✅ ADMIN BYPASS FILTER: {sender_username}")
+            elif _vip_exempt:
+                _debug_log(bot, f"✅ VIP BYPASS FILTER: {sender_username}")
             is_spam = False
             reason = ""
         elif public_username_spam:
