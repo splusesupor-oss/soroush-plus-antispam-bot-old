@@ -143,6 +143,7 @@ from modules import bot_detector
 from modules import ad_name_detector
 from modules import warning_threshold
 from modules import punishment_mode
+from modules import entertainment_control
 from modules.user_display import format_user
 from modules import message_tracker
 from modules import big_spam
@@ -2801,6 +2802,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "ثبت ادمین", "لغو ادمین", "برکناری ادمین", "ثبت مالک", "لغو مالک",
     "برکناری مالک", "ثبت گروه", "حذف گروه", "حذف اخطار", "حذف اخطارها",
     "تغییر اخطار", "تغییر مجازات",
+    "سرگرمی خاموش", "سرگرمی فعال",
     "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
     "وضعیت ربات", "پینگ ربات",
     "سایت بازی", "سایت", "لینک بازی", "/game", "/site",
@@ -4637,6 +4639,46 @@ async def handle_new_message(bot, event):
                 "                           ─━━━━━━⊱✿⊰━━━━━━─"
             )
             await event.reply(msg)
+            return
+
+        # ------------------------------------------------------------------
+        # 🎮 کنترل سرگرمی به تفکیک گروه — «سرگرمی خاموش» / «سرگرمی فعال».
+        # فقط مالک اصلی، مالک ثبت‌شدهٔ گروه یا ادمین ثبت‌شدهٔ همان گروه.
+        # ------------------------------------------------------------------
+        if clean_text in entertainment_control.COMMANDS:
+            bot.logger.log_info(
+                "HANDLER CALLED handler=entertainment_control "
+                f"command={clean_text!r} chat_id={chat_id} user_id={user_id}"
+            )
+            if event.is_private:
+                await event.reply("❌ این دستور فقط داخل گروه کار می‌کند.")
+                return
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, getattr(sender, "username", None)
+            ):
+                await event.reply(entertainment_control.PERMISSION_DENIED)
+                return
+            if clean_text == entertainment_control.COMMAND_DISABLE:
+                entertainment_control.disable(chat_id)
+                bot.logger.log_info(
+                    f"ENTERTAINMENT DISABLED chat_id={chat_id} user_id={user_id}")
+                await entertainment_control.send_disabled_notice(event)
+            else:
+                entertainment_control.enable(chat_id)
+                bot.logger.log_info(
+                    f"ENTERTAINMENT ENABLED chat_id={chat_id} user_id={user_id}")
+                await entertainment_control.send_enabled_notice(event)
+            return
+
+        # 🛡️ گاردِ مرکزیِ اجرای سرگرمی‌ها.  هر بازی داخلی (قدیمی یا Fox AI)
+        # از همین یک نقطه عبور می‌کند؛ اگر سرگرمی گروه خاموش باشد بازی
+        # اجرا نمی‌شود، state ساخته نمی‌شود و هیچ سکه/جایزه‌ای پرداخت
+        # نمی‌شود. «لیست بازی» عمداً guard نمی‌شود و همیشه نمایش داده می‌شود.
+        if await entertainment_control.guard(event, chat_id, clean_text):
+            bot.logger.log_info(
+                "ENTERTAINMENT BLOCKED "
+                f"chat_id={chat_id} user_id={user_id} command={clean_text!r}"
+            )
             return
 
         # ---- بازی‌های Fox AI (کاملاً مستقل، فقط از این نقطه وصل می‌شوند) ----

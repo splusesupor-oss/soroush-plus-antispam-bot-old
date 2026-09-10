@@ -12,6 +12,7 @@
     python tests/test_economy_routing.py
 """
 import asyncio
+import time
 import json
 import sys
 import tempfile
@@ -114,6 +115,39 @@ class Detector:
     def check_message(self, *args, **kwargs):
         return False, None
 
+    # هندلر واقعی این متدها را هم صدا می‌زند؛ همگی «اسپم نیست» برمی‌گردانند.
+    def check_banned_words(self, *args, **kwargs):
+        return False, None
+
+    def check_links(self, *args, **kwargs):
+        return False, None
+
+    def check_phone_numbers(self, *args, **kwargs):
+        return False, None
+
+    def check_usernames(self, *args, **kwargs):
+        return False, None
+
+    def is_whitelisted(self, *args, **kwargs):
+        return False
+
+    def has_public_username(self, *args, **kwargs):
+        return False
+
+    def __getattr__(self, name):
+        """هر بررسیِ تازه‌ای که به SpamDetector اضافه شود، خنثی می‌ماند."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name.startswith(("has_", "is_", "contains_")):
+            def _false(*args, **kwargs):
+                return False
+            return _false
+        if name.startswith(("check_", "detect_")):
+            def _neutral(*args, **kwargs):
+                return False, None
+            return _neutral
+        raise AttributeError(name)
+
 
 class Chat:
     def __init__(self, chat_id=CHAT, title="گروه تست"):
@@ -202,6 +236,46 @@ async def build_handler():
     bot.spammer_messages = {}
     bot.spam_burst_users = set()
     bot.detector = Detector()
+    # حالت‌هایی که معمولاً __init__ می‌سازد؛ چون اینجا __new__ استفاده شده
+    # باید صریح مقداردهی شوند تا run() روی نسخهٔ فعلی ربات هم بالا بیاید.
+    bot.reply_input_peer_cache = getattr(bot, "reply_input_peer_cache", {})
+    bot.spam_lock = getattr(bot, "spam_lock", {})
+    bot.delete_notice_lock = getattr(bot, "delete_notice_lock", {})
+    bot.repeat_messages = getattr(bot, "repeat_messages", {})
+    bot.flood_messages = getattr(bot, "flood_messages", {})
+    bot.user_messages = getattr(bot, "user_messages", {})
+    bot.spam_burst_tasks = getattr(bot, "spam_burst_tasks", {})
+    bot.rejoin_spam_state = getattr(bot, "rejoin_spam_state", {})
+    bot.forward_spam_counts = getattr(bot, "forward_spam_counts", {})
+    bot._temporary_state_touched = getattr(bot, "_temporary_state_touched", {})
+    bot._spammer_messages_touched = getattr(bot, "_spammer_messages_touched", {})
+    bot._temporary_state_cleanup_task = None
+    bot.started_at = time.time()
+    from modules.notice_cleanup import NoticeCleanup
+    from modules.moderation_queue import ModerationQueue
+    from modules.group_dispatch import GroupDispatcher
+    from modules.observability import MetricsCollector, PeriodicHealthMonitor
+    bot.notice_cleanup = NoticeCleanup(
+        str(Path(tempfile.mkdtemp()) / "notice_cleanup.json"),
+        logger=bot.logger, ttl_seconds=60,
+    )
+    bot.moderation_queue = ModerationQueue(bot.logger)
+    bot.group_dispatcher = GroupDispatcher(logger=bot.logger)
+    bot.metrics_collector = MetricsCollector.get_instance(bot.logger)
+    bot.health_monitor = PeriodicHealthMonitor(bot, bot.logger,
+                                               interval_seconds=600.0)
+    bot.rpc_governor = None
+    bot.outgoing_sender = None
+    bot.performance_monitor = None
+    bot.runtime_snapshot = None
+    bot.admin_actions = None
+    bot.group_actions = None
+    bot.bot_sent_messages = []
+    from modules.delete_queue import process_delete as _process_delete
+    bot.process_delete = _process_delete
+    bot._light_game_answer_active = (
+        __import__("handlers.message_handler", fromlist=["x"]).is_game_answer_active
+    )
 
     async def _noop(*args, **kwargs):
         return None
@@ -217,7 +291,36 @@ async def build_handler():
 
     handlers = [fn for fn in captured
                 if getattr(fn, "__name__", "") == "new_message_handler"]
-    return bot, (handlers[0] if handlers else None)
+    raw = handlers[0] if handlers else None
+    if raw is None:
+        return bot, None
+
+    async def handler(event):
+        """هندلر واقعی + انتظار برای صف‌های داخلی.
+
+        ``new_message_handler`` بخشی از کار را به ``GroupDispatcher`` می‌سپارد
+        و بلافاصله برمی‌گردد.  تست باید تا خالی شدن آن صف صبر کند وگرنه
+        پاسخ هنوز نرسیده است.
+        """
+        result = await raw(event)
+        for _ in range(200):
+            dispatcher = getattr(bot, "group_dispatcher", None)
+            pending = 0
+            if dispatcher is not None:
+                pending = sum(
+                    queue.qsize() for queue in dispatcher._queues.values()
+                )
+            others = [
+                task for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+                and "bot-watchdog" not in (task.get_name() or "")
+            ]
+            if pending == 0 and not others:
+                break
+            await asyncio.sleep(0.01)
+        return result
+
+    return bot, handler
 
 
 def fresh():
