@@ -111,6 +111,10 @@ class SharedSender:
         return trace
 
 
+# کامیت 220b925 لاگ‌های زمان‌سنجیِ ترمینال (QUEUE WAIT TIME / HANDLER TIME)
+# را debug-only کرد؛ در حالت عادی آستانه inf است و هیچ خطی چاپ نمی‌شود.
+# این بنچمارک دقیقاً همان خطوط را تحلیل می‌کند، پس dispatcher را با
+# debug_timing=True می‌سازد (رفتار زمان‌بندی تغییری نمی‌کند).
 def parse_queue_waits(infos):
     waits = []
     for line in infos:
@@ -128,7 +132,7 @@ def test_same_lane_rpc_blocks_next_job():
     async def scenario():
         sender = SharedSender()
         logger = Logger()
-        dispatcher = GroupDispatcher(logger=logger)
+        dispatcher = GroupDispatcher(logger=logger, debug_timing=True)
         marks = {}
 
         async def first():
@@ -190,7 +194,13 @@ def test_deletes_stall_reply_on_shared_sender():
                 return await sender.call("reply", rpc_ms=SLOW_RPC_MS)
 
         client = Client()
-        deletes = MessageDeleteQueue(client, logger, batch_size=15, inter_batch_delay=0)
+        # کامیت 4326f0d یک پنجرهٔ micro-buffering پیش‌فرض ۶۰ms به صف حذف
+        # اضافه کرد؛ چون این سناریو فقط ۵۰ms بعد reply را می‌فرستد، آن پنجره
+        # ترتیب را برعکس می‌کند و reply زودتر از deleteها به sender می‌رسد.
+        # سنجشِ موردنظر «رقابت روی sender مشترک» است، پس بافر صفر می‌شود.
+        deletes = MessageDeleteQueue(client, logger, batch_size=15,
+                                     inter_batch_delay=0,
+                                     micro_buffer_seconds=0.0)
         reply_started = []
         reply_trace = {}
 
@@ -280,7 +290,7 @@ def test_all_ops_share_one_sender():
         deletes.enqueue(-20, [1, 2, 3], priority=1)
         mods.enqueue(-20, "mute", mute, user_id=1)
         mods.enqueue(-20, "ban", ban, user_id=2)
-        dispatcher = GroupDispatcher(logger=logger)
+        dispatcher = GroupDispatcher(logger=logger, debug_timing=True)
         dispatcher.submit(-20, reply, priority=PRIORITY_COMMAND, kind="command")
         await dispatcher.join(timeout=5)
         await asyncio.sleep(2.2)
@@ -302,7 +312,7 @@ def test_busy_group_does_not_block_other_group_until_sender():
 
     async def scenario():
         sender = SharedSender()
-        dispatcher = GroupDispatcher(logger=Logger())
+        dispatcher = GroupDispatcher(logger=Logger(), debug_timing=True)
         b_started = []
 
         async def busy_a():
@@ -340,7 +350,7 @@ def test_queue_wait_is_internal_not_soroush():
     async def scenario():
         sender = SharedSender()
         logger = Logger()
-        dispatcher = GroupDispatcher(logger=logger)
+        dispatcher = GroupDispatcher(logger=logger, debug_timing=True)
         traces_by_job = []
 
         def make_job(name):
@@ -378,7 +388,7 @@ def test_split_explains_live_logs():
     async def scenario():
         sender = SharedSender()
         logger = Logger()
-        dispatcher = GroupDispatcher(logger=logger)
+        dispatcher = GroupDispatcher(logger=logger, debug_timing=True)
 
         async def command_with_reply():
             # handler itself is cheap; the await reply is the 4.4s.
@@ -410,7 +420,7 @@ def test_detach_reply_would_drop_queue_wait():
     async def scenario():
         sender = SharedSender()
         logger = Logger()
-        dispatcher = GroupDispatcher(logger=logger)
+        dispatcher = GroupDispatcher(logger=logger, debug_timing=True)
         started = []
 
         async def fire_and_forget_reply():

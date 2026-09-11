@@ -112,20 +112,29 @@ def test_threshold():
         ids, flagged = gsd.track_gif(CHAT, 1, mid)
         check(f"گیف {mid} هنوز حذف نمی‌شود", ids == [] and not flagged, f"-> {ids}")
     ids, flagged = gsd.track_gif(CHAT, 1, gsd.GIF_THRESHOLD)
-    check("در آستانه کل دسته برگردانده می‌شود",
-          len(ids) == gsd.GIF_THRESHOLD, f"-> {ids}")
+    # کامیت 52a1c7a عمداً «اولین GIF را به‌عنوان نماینده» نگه می‌دارد و فقط
+    # تکرارها را برای حذف صف می‌کند (کامنتِ صریح در کد). پس در آستانه،
+    # دسته منهای اولی برگردانده می‌شود.
+    check("در آستانه، همهٔ تکرارها (به‌جز نمایندهٔ اول) برگردانده می‌شوند",
+          len(ids) == gsd.GIF_THRESHOLD - 1, f"-> {ids}")
+    check("اولین گیف به‌عنوان نماینده باقی می‌ماند", 1 not in ids, f"-> {ids}")
     check("کاربر flagged شد", flagged and gsd.is_flagged(CHAT, 1))
 
 
 def test_no_gif_left_behind():
-    """هستهٔ باگ: هیچ GIFی نباید جا بماند."""
-    print("\n### هیچ GIF جا نمی‌ماند")
+    """هستهٔ باگ: هیچ GIF تکراری‌ای نباید جا بماند.
+
+    طبق کامیت 52a1c7a تنها استثنا، اولین GIF است که عمداً به‌عنوان
+    نمایندهٔ پیام باقی می‌ماند؛ بقیه باید بدون استثنا صف شوند.
+    """
+    print("\n### هیچ GIF تکراری جا نمی‌ماند")
     for count in (6, 7, 10, 12, 25, 50, 100, 137):
         gsd.reset_all()
         queued = send_burst(2000 + count, count)
-        left = [m for m in range(1, count + 1) if m not in queued]
-        check(f"{count} گیف: همه صف شدند", not left,
+        left = [m for m in range(2, count + 1) if m not in queued]
+        check(f"{count} گیف: همهٔ تکرارها صف شدند", not left,
               f"-> {len(left)} جامانده {left[:6]}")
+        check(f"{count} گیف: نمایندهٔ اول حذف نشد", 1 not in queued)
 
 
 def test_flag_persists_after_reset_history():
@@ -179,8 +188,9 @@ def test_flush_deletes_everything():
     check(f"همهٔ {len(queued)} پیام حذف شدند",
           set(client.deleted) == queued, f"-> {deleted}")
     check("صف خالی شد", gsd.pending_count(CHAT) == 0)
-    left = [m for m in range(1, count + 1) if m not in client.deleted]
-    check("هیچ گیفی در گروه نماند", not left, f"-> {left[:6]}")
+    # نمایندهٔ اول (پیام ۱) طبق کامیت 52a1c7a عمداً حذف نمی‌شود.
+    left = [m for m in range(2, count + 1) if m not in client.deleted]
+    check("هیچ گیفِ تکراری در گروه نماند", not left, f"-> {left[:6]}")
 
 
 def test_flush_retries_on_failure():
@@ -190,7 +200,8 @@ def test_flush_retries_on_failure():
     client = Client(fail_times=2)
     send_burst(5002, 10)
     asyncio.run(gsd.flush_deletes(client, CHAT, logger))
-    check("پس از دو خطا همه حذف شدند", len(client.deleted) == 10,
+    # نمایندهٔ اول (پیام ۱) طبق کامیت 52a1c7a عمداً حذف نمی‌شود.
+    check("پس از دو خطا همهٔ تکرارها حذف شدند", len(client.deleted) == 9,
           f"-> {len(client.deleted)}")
     check("خطاها لاگ شدند", len(logger.errors) >= 2, f"-> {len(logger.errors)}")
     check("صف خالی است", gsd.pending_count(CHAT) == 0)
@@ -202,7 +213,9 @@ def test_undeletable_message_isolated():
     client = Client(always_fail_ids={7})
     send_burst(5003, 10)
     asyncio.run(gsd.flush_deletes(client, CHAT, Logger()))
-    check("۹ پیام سالم حذف شدند", len(client.deleted) == 9,
+    # نمایندهٔ اول (پیام ۱) طبق کامیت 52a1c7a عمداً حذف نمی‌شود.
+    # از ۹ تکرارِ صف‌شده، پیام ۷ عمداً خراب است، پس ۸ تا حذف می‌شوند.
+    check("پیام‌های سالم حذف شدند", len(client.deleted) == 8,
           f"-> {len(client.deleted)}")
     check("پیام خراب حذف نشد", 7 not in client.deleted)
     check("پیام خراب برای تلاش بعدی در صف ماند",
@@ -285,9 +298,12 @@ def test_end_to_end_burst():
 
     for count in (6, 20, 60, 120):
         client = asyncio.run(scenario(count))
-        left = [m for m in range(1, count + 1) if m not in client.deleted]
-        check(f"رگبار {count} گیف: همه حذف شدند", not left,
+        # نمایندهٔ اول عمداً باقی می‌ماند (کامیت 52a1c7a).
+        left = [m for m in range(2, count + 1) if m not in client.deleted]
+        check(f"رگبار {count} گیف: همهٔ تکرارها حذف شدند", not left,
               f"-> {len(left)} جامانده {left[:6]}")
+        check(f"رگبار {count} گیف: نمایندهٔ اول نماند",
+              1 not in client.deleted)
 
 
 def main():

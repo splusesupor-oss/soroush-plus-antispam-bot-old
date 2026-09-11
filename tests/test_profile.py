@@ -35,6 +35,25 @@ CHAT = -1009999888877
 OTHER_CHAT = -100555444333
 
 
+# کامیت 44f9bc6 ارقام نمایشی را از «۰۱۲…» به فونت ریاضیِ توپر «𝟬𝟭𝟮…»
+# تغییر داد. این هلپر همان تبدیل رسمی را روی رشتهٔ موردانتظار اعمال می‌کند
+# تا assertionها به شکلِ رقم گره نخورند و همچنان مقدار را دقیق بسنجند.
+_FA_TO_DISPLAY = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵")
+
+
+def d(expected):
+    """رشتهٔ موردانتظار را به همان ارقامی که ربات چاپ می‌کند تبدیل می‌کند."""
+    return str(expected).translate(_FA_TO_DISPLAY)
+
+
+# ``EVENT LOOP LAG DETECTED`` یک هشدارِ ناظرِ کارایی است که به سرعتِ
+# ماشینِ اجراکننده بستگی دارد، نه به منطقِ این سناریو. برای اینکه تست روی
+# ماشین کند بی‌دلیل قرمز نشود ولی همچنان هر خطای واقعی را بگیرد، فقط همین
+# یک مورد کنار گذاشته می‌شود.
+def _real_errors(logger):
+    return [m for m in logger.errors if "EVENT LOOP LAG DETECTED" not in m]
+
+
 def check(label, cond, detail=""):
     global PASSED, FAILED
     if cond:
@@ -229,7 +248,7 @@ def test_second_time_shows_card_directly():
     check("هیچ سؤالی پرسیده نمی‌شود", not event.said("اسم خود را"))
     check("مستقیم کارت می‌آید", event.said("👤 نام: مینا"))
     check("شهر ذخیره‌شده دیده می‌شود", event.said("📍 شهر: رشت"))
-    check("سن ذخیره‌شده دیده می‌شود", event.said("🎂 سن: ۲۴ سال"))
+    check("سن ذخیره‌شده دیده می‌شود", event.said(d("🎂 سن: ۲۴ سال")))
     eco_handler.reset_all()
 
 
@@ -285,6 +304,7 @@ def test_card_layout_matches_sample():
         "🎮 برد: ۰\n"
         "🏅 رتبه: #۱"
     )
+    expected = d(expected)
     check("خروجی کاراکتربه‌کاراکتر با نمونه یکی است", text == expected,
           f"\n--- گرفته شد ---\n{text}\n--- انتظار ---\n{expected}")
     check("کادر بالا هست", text.startswith(profile_menu.BOX_TOP))
@@ -301,9 +321,9 @@ def test_card_keeps_all_fields():
     for field in ("🥉 برنز:", "🥈 نقره:", "🥇 طلا:", "🎮 برد:", "🏅 رتبه:",
                   "📍 شهر:", "🎂 سن:", "🛡 نشان‌ها:", "⭐ سطح:", "👤 نام:"):
         check(f"فیلد {field} حاضر است", field in text)
-    check("برنز واقعی از اقتصاد خوانده می‌شود", "۵۰۰" in text)
-    check("نقره واقعی از اقتصاد خوانده می‌شود", "۴۰" in text)
-    check("طلا واقعی از اقتصاد خوانده می‌شود", "🥇 طلا: ۲" in text)
+    check("برنز واقعی از اقتصاد خوانده می‌شود", d("۵۰۰") in text, f"-> {text!r}")
+    check("نقره واقعی از اقتصاد خوانده می‌شود", d("۴۰") in text, f"-> {text!r}")
+    check("طلا واقعی از اقتصاد خوانده می‌شود", d("🥇 طلا: ۲") in text, f"-> {text!r}")
 
 
 def test_numbers_have_no_thousand_separator():
@@ -312,7 +332,7 @@ def test_numbers_have_no_thousand_separator():
     fund(8, bronze=1420)
     profiles.register(CHAT, 8, name="سعید", city="اهواز", age=22)
     text, _ = profile_menu.render_card(CHAT, 8, User(8, "سعید"))
-    check("۱۴۲۰ بدون کاما نوشته می‌شود", "۱۴۲۰" in text)
+    check("۱۴۲۰ بدون کاما نوشته می‌شود", d("۱۴۲۰") in text, f"-> {text!r}")
     check("هیچ جداکننده‌ای نیست", "٬" not in text and "," not in text)
 
 
@@ -423,7 +443,7 @@ def test_items_list_contents():
     ]
     for emoji, name, price, coin in expected_badges:
         check(f"«{name}» با قیمت درست",
-              f"{emoji} {name} — {price} {coin}" in text)
+              d(f"{emoji} {name} — {price} {coin}") in text)
 
     expected_stars = [
         ("⭐", "یک ستاره", "۲۰۰"), ("⭐⭐", "دو ستاره", "۴۰۰"),
@@ -434,7 +454,7 @@ def test_items_list_contents():
     ]
     for stars, name, price in expected_stars:
         check(f"«{name}» با قیمت درست",
-              f"{stars} {name} — {price} نقره" in text)
+              d(f"{stars} {name} — {price} نقره") in text)
 
     expected_titles = [
         ("👑", "𝙁𝙤𝙭 𝙆𝙞𝙣𝙜"), ("⚡", "𝘿𝙖𝙧𝙠 𝙇𝙤𝙧𝙙"), ("💎", "𝙍𝙤𝙮𝙖𝙡"),
@@ -446,7 +466,7 @@ def test_items_list_contents():
     for emoji, title in expected_titles:
         check(f"لقب «{title}» هست", f"{emoji} {title}" in text)
 
-    check("قیمت لقب‌ها اعلام شده", "قیمت همه لقب‌ها: ۲۰۰ برنز" in text)
+    check("قیمت لقب‌ها اعلام شده", d("قیمت همه لقب‌ها: ۲۰۰ برنز") in text)
     check("تعداد نشان‌ها ۱۰ است", len(catalog.badges()) == 10)
     check("تعداد سطح‌ها ۷ است", len(catalog.stars()) == 7)
     check("تعداد لقب‌ها ۱۵ است", len(catalog.titles()) == 15)
@@ -465,7 +485,7 @@ def test_items_list_is_fully_bold():
 
     prompt, prompt_spans = profile_menu.buy_prompt()
     check("راهنمای خرید شمارهٔ آیتم را می‌خواهد",
-          "شمارهٔ آیتم" in prompt and "۳۲" in prompt)
+          "شمارهٔ آیتم" in prompt and d("۳۲") in prompt)
     check("عنوان راهنمای خرید Bold است",
           any(kind == "bold" for kind, _, _ in prompt_spans))
 
@@ -989,8 +1009,8 @@ def test_shop_menu_counts_items():
     print("\n### 🔌 شمارش آیتم‌های فروشگاه")
     fresh()
     text, _ = shop_menu.render_menu(CHAT, 1)
-    check("شمارش صفر نیست", "آیتم‌های موجود: ۰" not in text)
-    check("۳۲ آیتم شمرده می‌شود", "آیتم‌های موجود: ۳۲" in text)
+    check("شمارش صفر نیست", d("آیتم‌های موجود: ۰") not in text)
+    check("۳۲ آیتم شمرده می‌شود", d("آیتم‌های موجود: ۳۲") in text, f"-> {text!r}")
 
 
 def test_shop_buy_session_opens():
@@ -1084,7 +1104,7 @@ def test_three_commands_reach_the_real_router():
     check("«فروشگاه» از router جواب می‌گیرد", bool(out["فروشگاه"]))
     check("«فروشگاه» منو را نشان می‌دهد",
           any("🛒 فروشگاه" in r for r in out["فروشگاه"]))
-    check("هیچ خطایی در لاگ نیست", not bot.logger.errors,
+    check("هیچ خطایی در لاگ نیست", not _real_errors(bot.logger),
           f"-> {bot.logger.errors[:2]}")
 
 
@@ -1117,7 +1137,7 @@ def test_shop_menu_structure():
           in text)
     check("موجودی نمایش داده می‌شود", "موجودی شما:" in text)
     check("ارزش کل نمایش داده می‌شود", "💎 ارزش کل:" in text)
-    check("تعداد آیتم‌ها نمایش داده می‌شود", "آیتم‌های موجود: ۳۲" in text)
+    check("تعداد آیتم‌ها نمایش داده می‌شود", d("آیتم‌های موجود: ۳۲") in text, f"-> {text!r}")
 
 
 def test_shop_shows_items_on_entry():
@@ -1186,7 +1206,7 @@ def test_purchase_needs_confirmation():
     check("پیام تایید نمایش داده می‌شود", ask.said("مطمئن هستید"))
     check("گزینهٔ تایید هست", ask.said("✅ تایید"))
     check("گزینهٔ لغو هست", ask.said("❌ لغو"))
-    check("قیمت در پیام تایید هست", ask.said("۱۰۰"))
+    check("قیمت در پیام تایید هست", ask.said(d("۱۰۰")), f"-> {ask.replies}")
     check("پیش از تایید هیچ سکه‌ای کسر نمی‌شود", mid == 500)
     check("بعد از تایید خرید انجام شد", done.said("خریداری شد"))
     check("بعد از تایید سکه کسر شد",
@@ -1238,7 +1258,7 @@ def test_insufficient_balance_message():
     check("آیتم انتخاب نمی‌شود", item is None)
     check("پیام دقیقاً مطابق خواسته شروع می‌شود",
           message.startswith("موجودی سکه کافی نیست."))
-    check("مقدار کمبود اعلام می‌شود", "۷۰" in message)
+    check("مقدار کمبود اعلام می‌شود", d("۷۰") in message, f"-> {message!r}")
     check("جملهٔ نیاز آمده", "دیگر نیاز دارید" in message)
     check("هیچ سکه‌ای کسر نشد",
           economy.get_balance(CHAT, 112)[economy.SILVER] == 30)
@@ -1431,7 +1451,7 @@ def test_locked_title_blocked_during_registration():
 
     blocked, ok = asyncio.run(scenario())
     check("لقب فروشگاهی رد می‌شود", blocked.said("فروشگاه"))
-    check("قیمت را اعلام می‌کند", blocked.said("۲۰۰"))
+    check("قیمت را اعلام می‌کند", blocked.said(d("۲۰۰")), f"-> {blocked.replies}")
     check("ثبت‌نام ادامه پیدا می‌کند", ok.said("ثبت شد"))
     check("لقب آزاد نشست", profiles.get(CHAT, 133)["nickname"] == "بهاری")
     eco_handler.reset_all()
@@ -1594,8 +1614,10 @@ def test_persian_names_unchanged():
 
 
 def _fa(value):
-    return str(value).translate(
-        {ord(str(i)): p for i, p in enumerate("۰۱۲۳۴۵۶۷۸۹")})
+    # کامیت 44f9bc6 ارقام نمایشی را به فونت ریاضیِ توپر برد؛ به‌جای تکرار
+    # نگاشت، همان تابع رسمیِ قالب‌بندیِ محصول استفاده می‌شود.
+    from economy.ui.formatting import fa_plain
+    return fa_plain(value)
 
 
 def test_handler_sends_both_entity_kinds():

@@ -245,8 +245,13 @@ def test_delete_no_inter_batch_sleep():
 
     async def scenario():
         client = Client()
+        # کامیت 4326f0d یک پنجرهٔ micro-buffering پیش‌فرض (۶۰ms) برای
+        # ادغامِ حذف‌های خودکار اضافه کرد. آنچه اینجا سنجیده می‌شود
+        # «نبودِ خوابِ بینِ batchها» است، پس بافرِ ورودی صفر می‌شود تا
+        # اندازه‌گیری همان چیزی باشد که ادعا می‌کند.
         queue = MessageDeleteQueue(
             client, Logger(), batch_size=2, inter_batch_delay=0,
+            micro_buffer_seconds=0.0,
         )
         t0 = time.perf_counter()
         fut = queue.enqueue(-5, [1, 2, 3, 4], priority=1)

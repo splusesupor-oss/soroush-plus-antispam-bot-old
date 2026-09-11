@@ -6,6 +6,7 @@
 """
 import asyncio
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +31,42 @@ if "splusthon" not in sys.modules:
     tl_types.MessageEntityBlockquote = _Ent
     tl.types = tl_types
     tl.functions = types.ModuleType("splusthon.tl.functions")
+    # زیرماژول‌هایی که کد واقعی از آن‌ها import می‌کند (مثلاً
+    # ``from splusthon.tl.functions.channels import EditTitleRequest``).
+    # بدون این‌ها، stub فقط بخشی از کد را قابل import می‌کرد.
+    for _sub in ("channels", "messages", "users", "contacts"):
+        _module = types.ModuleType(f"splusthon.tl.functions.{_sub}")
+
+        class _Request:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+        for _name in (
+            "EditPhotoRequest", "EditTitleRequest", "EditBannedRequest",
+            "GetParticipantRequest", "GetParticipantsRequest",
+            "GetFullChannelRequest", "DeleteMessagesRequest",
+            "EditChatDefaultBannedRightsRequest", "GetUsersRequest",
+        ):
+            setattr(_module, _name, _Request)
+        _module.__getattr__ = lambda name, _r=_Request: _r
+        setattr(tl.functions, _sub, _module)
+        sys.modules[f"splusthon.tl.functions.{_sub}"] = _module
+
+    _errors = types.ModuleType("splusthon.errors")
+
+    class _RpcError(Exception):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args)
+
+    for _name in (
+        "ChatAdminRequiredError", "UserAdminInvalidError", "RPCError",
+        "FloodWaitError", "MessageIdInvalidError",
+    ):
+        setattr(_errors, _name, type(_name, (_RpcError,), {}))
+    fake.errors = _errors
+    sys.modules["splusthon.errors"] = _errors
+
     fake.tl = tl
     sys.modules["splusthon"] = fake
     sys.modules["splusthon.tl"] = tl
@@ -89,6 +126,56 @@ def test_bot_detection_flow():
     import handlers.message_handler as mh
     tac = _load_harness()
 
+    # از کامیت 65b0462 خاموش‌سازیِ خودکار در حضور رباتِ دیگر opt-in است
+    # (پیش‌فرض خاموش، تا یک ربات مهمان کل گروه را بی‌پاسخ نکند). این تست
+    # دقیقاً همان قابلیت را می‌سنجد، پس فلگ را صریح روشن می‌کند.
+    previous_flag = os.environ.get("BOT_DISABLE_FOR_OTHER_BOTS")
+    os.environ["BOT_DISABLE_FOR_OTHER_BOTS"] = "1"
+    try:
+        _run_bot_detection_flow(mh, tac)
+    finally:
+        if previous_flag is None:
+            os.environ.pop("BOT_DISABLE_FOR_OTHER_BOTS", None)
+        else:
+            os.environ["BOT_DISABLE_FOR_OTHER_BOTS"] = previous_flag
+
+
+def test_other_bot_ignored_when_flag_disabled():
+    """پیش‌فرضِ امن: بدون فلگ، رباتِ دیگر گروه را خاموش نمی‌کند."""
+    import handlers.message_handler as mh
+    tac = _load_harness()
+
+    previous_flag = os.environ.get("BOT_DISABLE_FOR_OTHER_BOTS")
+    os.environ.pop("BOT_DISABLE_FOR_OTHER_BOTS", None)
+    bd._FILE.unlink(missing_ok=True)
+    try:
+        def __init__(self, uid, name="علی", username=None, bot=False):
+            self.id = uid
+            self.first_name = name
+            self.last_name = None
+            self.username = username
+            self.bot = bot
+        tac.User.__init__ = __init__
+
+        other_bot = tac.User(777001, name="ربات", username="otherbot2", bot=True)
+        harness_bot = tac.build_bot()
+        event = tac.Event("سلام", tac._owner_id())
+
+        async def gs():
+            return other_bot
+        event.get_sender = gs
+        asyncio.run(mh.handle_new_message(harness_bot, event))
+        check("بدون فلگ، گروه خاموش نمی‌شود", not bd.is_disabled(tac.CHAT))
+    finally:
+        if previous_flag is not None:
+            os.environ["BOT_DISABLE_FOR_OTHER_BOTS"] = previous_flag
+        bd._FILE.unlink(missing_ok=True)
+        bd._KNOWN_BOT_IDS.clear()
+        bd._KNOWN_HUMAN_IDS.clear()
+
+
+def _run_bot_detection_flow(mh, tac):
+
     # User را برای شبیه‌سازیِ فیلدِ bot آماده کن
     def __init__(self, uid, name="علی", username=None, bot=False):
         self.id = uid
@@ -132,8 +219,20 @@ def test_bot_detection_flow():
     bot2 = tac.build_bot()
     ev2 = tac.Event("پیام دیگر", owner)
     asyncio.run(handle(bot2, ev2, other_bot))
-    check("پس از غیرفعال، هیچ پاسخی داده نمی‌شود", len(ev2.replies) == 0,
-          f"{ev2.replies}")
+    # کامیت 65b0462 («Prevent other-bot detector from silencing groups»)
+    # عمداً «سکوتِ دائمیِ گروه» را برداشت: وضعیت کهنه پاک می‌شود و پیام
+    # بعدی عادی پردازش می‌گردد. آنچه باید تضمین شود این است که گروه در
+    # حالت خاموشِ چسبنده گیر نکند.
+    # پیامِ دوباره از همان ربات، وضعیت را دوباره برقرار می‌کند (هنوز خاموش)
+    check("پیامِ دوبارهٔ همان ربات وضعیت را نگه می‌دارد", bd.is_disabled(CHAT),
+          f"disabled={bd.is_disabled(CHAT)}")
+    # اما پیامِ یک کاربرِ انسانی وضعیت کهنه را پاک می‌کند و گروه گیر نمی‌افتد
+    bot2b = tac.build_bot()
+    ev2b = tac.Event("سلام", owner)
+    asyncio.run(handle(bot2b, ev2b,
+                       tac.User(112, name="زهرا", username="zahra")))
+    check("پیام کاربرِ انسانی وضعیت خاموش را پاک می‌کند",
+          not bd.is_disabled(CHAT), f"disabled={bd.is_disabled(CHAT)}")
 
     # --- ۳) کاربرِ عادی هرگز ربات تشخیص داده نمی‌شود ---
     bd._FILE.unlink(missing_ok=True)
@@ -152,14 +251,16 @@ def test_bot_detection_flow():
     asyncio.run(handle(bot4, ev4, fox_self))
     check("حسابِ خودِ روباه هدف نمی‌شود", not bd.is_disabled(CHAT))
 
-    # --- ۵) فعال‌سازیِ دوباره توسط مالک ---
+    # --- ۵) بازگشتِ خودکار به حالت فعال ---
+    # از کامیت 65b0462 دیگر دستور دستیِ «فعال کردن روباه» لازم نیست:
+    # اولین پیامِ بعدی خودش وضعیت کهنه را پاک می‌کند. همان تضمینِ نهایی
+    # (گروه دوباره فعال می‌شود) اینجا سنجیده می‌شود.
     bd.disable_for_bot(CHAT, other_bot)
+    check("وضعیت خاموش ثبت شد", bd.is_disabled(CHAT))
     bot5 = tac.build_bot()
-    ev5 = tac.Event(bd.REENABLE_COMMAND, owner)
+    ev5 = tac.Event("سلام", owner)
     asyncio.run(handle(bot5, ev5, tac.User(owner, name="مالک", username="osine1")))
-    check("فعال‌سازیِ دوباره پاسخ داد",
-          any("دوباره فعال شد" in r for r in ev5.replies), f"{ev5.replies}")
-    check("بعد از فعال‌سازی دیگر غیرفعال نیست", not bd.is_disabled(CHAT))
+    check("بعد از پیام بعدی دیگر غیرفعال نیست", not bd.is_disabled(CHAT))
 
     # پاک‌سازیِ وضعیت
     bd._FILE.unlink(missing_ok=True)
@@ -203,13 +304,14 @@ def test_partial_entity_bot_none_resolved_via_get_entity():
         config_manager=types.SimpleNamespace(get=lambda k, d=None: d),
         tracker=types.SimpleNamespace(get_count=lambda *a: 0, increment=lambda *a: 0,
                                       reset_count=lambda *a: None, decrement=lambda *a: 0),
-        detector=types.SimpleNamespace(is_spam=lambda *a: (False, None),
-                                       check_message=lambda *a: (False, None)),
+        detector=tac.Detector(),
         group_timer_tasks={}, bot_account_id=555, punished_users=set(),
         spam_burst_messages={}, spammer_messages={}, spam_burst_users=set(),
         moderation_queue=types.SimpleNamespace(enqueue=lambda *a: True),
         admin_actions=types.SimpleNamespace(), group_actions=GA(),
         cleanup_tasks={})
+    # همان قفل اسپم/state واقعی که هندلر انتظارش را دارد.
+    tac._bind_real_bot_state(bot)
 
     bd._FILE.unlink(missing_ok=True)
     bd._KNOWN_BOT_IDS.clear()
@@ -240,6 +342,7 @@ class _Logger:
 def main():
     test_hot_path_resolve_skips_get_entity()
     test_bot_detection_flow()
+    test_other_bot_ignored_when_flag_disabled()
     test_partial_entity_bot_none_resolved_via_get_entity()
     print(f"\n=== bot_detector: PASSED={PASSED} FAILED={FAILED} ===")
     return 1 if FAILED else 0

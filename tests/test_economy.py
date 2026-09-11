@@ -702,7 +702,44 @@ def test_independence():
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.add(node.module.split(".")[0])
 
-    forbidden = {"modules", "handlers", "core", "splusthon"}
+    # کامیت 456a261 ذخیره‌سازی را روی دو ابزارِ برگِ مشترک نشاند:
+    # ``modules.runtime_paths`` (مسیر دادهٔ هر instance) و
+    # ``modules.atomic_write`` (نوشتن اتمیک). این‌ها منطق بازی/ربات ندارند،
+    # پس قید واقعی «استقلال از بازی‌ها» را نمی‌شکنند — اما برای اینکه این
+    # استثنا به یک درِ باز تبدیل نشود، هر دو صریح فهرست می‌شوند و
+    # stdlib-only بودنشان هم آزموده می‌شود.
+    ALLOWED_LEAF_UTILS = {"modules.runtime_paths", "modules.atomic_write"}
+
+    modules_used = set()
+    for path in sorted(Path(ROOT / "economy").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".")[0] == "modules":
+                    modules_used.add(node.module)
+            elif isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name.split(".")[0] == "modules":
+                        modules_used.add(a.name)
+
+    check("اقتصاد فقط ابزارهای برگِ مجاز را از modules می‌گیرد",
+          modules_used <= ALLOWED_LEAF_UTILS,
+          f"-> {sorted(modules_used - ALLOWED_LEAF_UTILS)}")
+
+    for leaf in sorted(modules_used):
+        leaf_path = ROOT / (leaf.replace(".", "/") + ".py")
+        leaf_imports = set()
+        leaf_tree = ast.parse(leaf_path.read_text(encoding="utf-8"))
+        for node in ast.walk(leaf_tree):
+            if isinstance(node, ast.Import):
+                leaf_imports.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                leaf_imports.add(node.module.split(".")[0])
+        check(f"{leaf} خودش هیچ ماژول بازی/ربات نمی‌آورد",
+              not (leaf_imports & {"handlers", "core", "splusthon", "economy"}),
+              f"-> {sorted(leaf_imports)}")
+
+    forbidden = {"handlers", "core", "splusthon"}
     leaked = imported & forbidden
     check("اقتصاد هیچ ماژول بازی/ربات را import نمی‌کند", not leaked,
           f"-> {sorted(leaked)}")
@@ -711,11 +748,15 @@ def test_independence():
                        "copy", "datetime", "pathlib", "time", "zoneinfo",
                        # فیلتر نام: فقط کتابخانهٔ استاندارد.
                        "re", "unicodedata", "importlib",
+                       # ابزارهای برگِ مجاز (بالا صریح آزموده شدند).
+                       "modules", "hashlib", "shutil",
                        # game_progress نوشتن روی دیسک را به thread
                        # می‌سپارد تا حلقهٔ رویداد بلاک نشود؛ asyncio هم
                        # کتابخانهٔ استاندارد است و قید «نداشتن وابستگی
                        # بیرونی» را نمی‌شکند.
-                       "asyncio"},
+                       # backend سQLite (کامیت 456a261) — هر دو stdlib.
+                       "sqlite3", "logging",
+                       "asyncio", "__future__"},
           f"-> {sorted(imported)}")
 
     check("فایل دادهٔ اقتصاد جداست",

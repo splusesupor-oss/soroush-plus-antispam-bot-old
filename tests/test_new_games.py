@@ -139,8 +139,13 @@ async def _test_maemma_owner_only():
     ev3 = Event()
     r = await send(bot, ev3, CHAT, 1, q["answer"], name="A")
     check("معما: پاسخ A مصرف شد", r is True)
+    # کامیت 439ebd1 («show display names for correct game answers») متنِ
+    # موفقیت را از «پاسخ صحیح بود» به «<نام> پاسخ درست داد!» تغییر داد.
     check("معما: فقط پیام موفقیت نمایش داده شد",
-          any("پاسخ صحیح بود" in m for m in ev3.out), f"{ev3.out}")
+          any("پاسخ درست داد" in m for m in ev3.out), f"{ev3.out}")
+    check("معما: نام برنده در پیام آمده",
+          any("A" in m and "پاسخ درست داد" in m for m in ev3.out),
+          f"{ev3.out}")
     check("معما: سوال بعدی خودکار ارسال نشد",
           not any("سوال" in m and "از" in m for m in ev3.out), f"{ev3.out}")
     check("معما: پیام «زمان تمام شد» بعد از جواب درست نیامد",
@@ -759,8 +764,21 @@ async def _test_restart_isolation():
     check("بهترین جواب پس از ری‌استارت شروع شد", r is True)
     await send(Bot(), Event(), CHAT, 3, "معما", name="B")
     check("معما پس از ری‌استارت شروع شد", maemma.is_active(CHAT, 3))
+    # کامیت 7749785 سقفِ «حداکثر دو بازی همزمان در هر گروه» را اضافه کرد.
+    # پس از «بهترین جواب» و «معما»، بازی سوم عمداً رد می‌شود.
+    ev_limit = Event()
+    await send(Bot(), ev_limit, CHAT, 4, "نبرد", name="Q1")
+    check("بازی سوم به‌خاطر سقف دو بازیِ همزمان شروع نشد",
+          battle.phase(CHAT) == "none", f"-> {battle.phase(CHAT)}")
+    check("پیام سقف به کاربر گفته شد",
+          any("دو بازی فعال" in m for m in ev_limit.out), f"{ev_limit.out}")
+
+    # با آزاد شدن ظرفیت، نبرد عادی شروع می‌شود.
+    maemma.reset_all(CHAT)
+    best_answer.reset_all(CHAT)
     await send(Bot(), Event(), CHAT, 4, "نبرد", name="Q1")
-    check("نبرد پس از ری‌استارت شروع شد", battle.phase(CHAT) == "joining")
+    check("نبرد پس از آزاد شدن ظرفیت شروع شد",
+          battle.phase(CHAT) == "joining", f"-> {battle.phase(CHAT)}")
 
     router.reset_all()
     rd.reset_user(50)

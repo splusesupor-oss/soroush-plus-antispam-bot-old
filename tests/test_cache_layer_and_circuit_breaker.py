@@ -13,6 +13,19 @@ from modules.cache_manager import (
 from modules.admin_actions import AdminActions, ChatAdminRequiredError
 
 
+def chat_admin_required(message="Chat admin required"):
+    """یک ``ChatAdminRequiredError`` بساز، مستقل از امضای کتابخانه.
+
+    در SPlusthon واقعی این خطا از ``RPCError`` ارث می‌برد و آرگومان
+    اجباری ``request`` دارد؛ در fallback داخلی ``modules.admin_actions``
+    یک ``Exception`` ساده است.  تست نباید به هیچ‌کدام گره بخورد.
+    """
+    try:
+        return ChatAdminRequiredError(message)
+    except TypeError:
+        return ChatAdminRequiredError(request=None)
+
+
 class FakeClient:
     def __init__(self, rpc_delay=0.01):
         self.rpc_delay = rpc_delay
@@ -35,7 +48,7 @@ class FakeClient:
         if self.rpc_delay:
             await asyncio.sleep(self.rpc_delay)
         if self.should_fail_admin:
-            raise ChatAdminRequiredError("Chat admin required")
+            raise chat_admin_required()
         return True
 
     async def edit_permissions(self, chat, user, **kwargs):
@@ -43,14 +56,14 @@ class FakeClient:
         if self.rpc_delay:
             await asyncio.sleep(self.rpc_delay)
         if self.should_fail_admin:
-            raise ChatAdminRequiredError("Chat admin required")
+            raise chat_admin_required()
         return True
 
     async def __call__(self, request):
         if self.rpc_delay:
             await asyncio.sleep(self.rpc_delay)
         if self.should_fail_admin:
-            raise ChatAdminRequiredError("Chat admin required")
+            raise chat_admin_required()
         return True
 
 
@@ -119,7 +132,7 @@ def test_permission_circuit_breaker_lifecycle():
     assert not cb.is_open(chat_id)
 
     # 2. Trip on failure -> OPEN
-    cb.record_failure(chat_id, ChatAdminRequiredError())
+    cb.record_failure(chat_id, chat_admin_required())
     assert cb.is_open(chat_id) is True
     assert cb.can_execute(chat_id) is False  # Blocked fast!
 
@@ -134,7 +147,7 @@ def test_permission_circuit_breaker_lifecycle():
     assert cb.can_execute(chat_id) is True
 
     # 5. Manual reset
-    cb.record_failure(chat_id, ChatAdminRequiredError())
+    cb.record_failure(chat_id, chat_admin_required())
     assert cb.is_open(chat_id) is True
     cb.reset(chat_id)
     assert cb.is_open(chat_id) is False

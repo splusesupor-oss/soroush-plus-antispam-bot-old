@@ -66,8 +66,27 @@ class Tracker:
 
 
 class Detector:
+    """آشکارسازِ خنثی: هیچ پیامی اسپم نیست.
+
+    هندلر واقعی مجموعه‌ای از بررسی‌ها را روی detector صدا می‌زند
+    (``check_banned_words``, ``has_public_username``, …).  به‌جای شمردنِ
+    دستیِ آن‌ها — که با اضافه شدن هر بررسی تازه دوباره می‌شکست — هر
+    بررسیِ ناشناخته هم به‌صورت «اسپم نیست» پاسخ می‌دهد.
+    """
+
     def is_spam(self, *a, **k): return False, None
     def check_message(self, *a, **k): return False, None
+    def check_banned_words(self, *a, **k): return False, None
+    def has_public_username(self, *a, **k): return False
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name.startswith(("has_", "is_", "contains_")):
+            return lambda *a, **k: False
+        if name.startswith(("check_", "detect_")):
+            return lambda *a, **k: (False, None)
+        raise AttributeError(name)
 
 
 class User:
@@ -156,6 +175,47 @@ def build_bot(reply_sender=None):
         lock_group=lambda *a, **k: None,
         unlock_group=lambda *a, **k: None)
     bot.cleanup_tasks = {}
+    _bind_real_bot_state(bot)
+    return bot
+
+
+def _bind_real_bot_state(bot):
+    """متدها/حالت‌های واقعی ``SoroushAntiSpamBot`` را به bot تستی وصل می‌کند.
+
+    ``build_bot`` یک ``SimpleNamespace`` می‌سازد، ولی هندلر واقعی روی
+    قفل اسپم و state موقتِ خودِ کلاس حساب می‌کند
+    (``is_spam_locked``/``set_spam_lock``/…).  به‌جای شبیه‌سازیِ تقریبی،
+    همان پیاده‌سازی واقعی bind می‌شود تا تست دقیقاً رفتار production را
+    ببیند.
+    """
+    from core.bot_working_split_ok import SoroushAntiSpamBot as _Bot
+
+    for name in (
+        "spam_lock", "delete_notice_lock", "repeat_messages",
+        "flood_messages", "user_messages", "spam_burst_tasks",
+        "rejoin_spam_state", "forward_spam_counts",
+        "_temporary_state_touched", "_spammer_messages_touched",
+        "reply_input_peer_cache",
+    ):
+        if not hasattr(bot, name):
+            setattr(bot, name, {})
+    for name in (
+        "SPAM_LOCK_TTL", "DELETE_NOTICE_LOCK_TTL", "BURST_STATE_TTL",
+        "FORWARD_STATE_TTL", "REJOIN_STATE_TTL", "SPAMMER_MESSAGES_TTL",
+        "PUNISHED_USERS_MAX",
+    ):
+        setattr(bot, name, getattr(_Bot, name))
+    for name in (
+        "_state_now", "_spam_state_key", "set_spam_lock", "is_spam_locked",
+        "clear_spam_lock", "touch_temporary_state", "debug_message_log",
+        "clear_released_user_state",
+    ):
+        method = getattr(_Bot, name)
+        underlying = getattr(method, "__func__", method)
+        if isinstance(_Bot.__dict__.get(name), staticmethod):
+            setattr(bot, name, underlying)
+        else:
+            setattr(bot, name, underlying.__get__(bot, type(bot)))
     return bot
 
 

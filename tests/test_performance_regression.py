@@ -174,17 +174,28 @@ def test_hot_path_does_not_block_event_loop():
     نوشتن روی دیسک نباید پردازش پیام را متوقف کند."""
     print("\n### 💾 مسیر داغ حلقهٔ رویداد را بلاک نمی‌کند")
     blocking = {"n": 0}
-    original = _storage._write
+    # کامیت 456a261 (Optimize runtime storage…) تابع یکپارچهٔ ``_write`` را به
+    # دو مسیرِ backend-محور شکست: ``_json_write`` و ``_persist_rows``. برای
+    # همان سنجش (نوشتنِ همگام روی thread حلقهٔ رویداد) هر دو مسیر شمرده
+    # می‌شوند تا مستقل از backend فعال، تست معتبر بماند.
+    write_names = [n for n in ("_json_write", "_persist_rows")
+                   if hasattr(_storage, n)]
+    assert write_names, "economy.storage هیچ مسیر نوشتنِ شناخته‌شده‌ای ندارد"
+    originals = {n: getattr(_storage, n) for n in write_names}
     main_thread = threading.get_ident()
 
-    def counting(data):
-        # فقط نوشتنی که *روی همان thread حلقهٔ رویداد* رخ دهد بلاک‌کننده است.
-        if threading.get_ident() == main_thread:
-            blocking["n"] += 1
-        return original(data)
+    def _make_counter(original):
+        def counting(*args, **kwargs):
+            # فقط نوشتنی که *روی همان thread حلقهٔ رویداد* رخ دهد
+            # بلاک‌کننده است.
+            if threading.get_ident() == main_thread:
+                blocking["n"] += 1
+            return original(*args, **kwargs)
+        return counting
 
     async def scenario():
-        _storage._write = counting
+        for name, original in originals.items():
+            setattr(_storage, name, _make_counter(original))
         try:
             mc.reset_all()
             blocking["n"] = 0
@@ -193,7 +204,8 @@ def test_hot_path_does_not_block_event_loop():
                 mc.answer_question(-9001, str(item["answer"]), 6000 + uid)
             await asyncio.sleep(0.05)   # فرصت به نوشتن پس‌زمینه
         finally:
-            _storage._write = original
+            for name, original in originals.items():
+                setattr(_storage, name, original)
 
     asyncio.run(scenario())
     check("۱۰ سوال کامل هیچ نوشتن بلاک‌کننده‌ای نداشت", blocking["n"] == 0,

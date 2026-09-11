@@ -142,6 +142,26 @@ class FakeClient:
         raise RuntimeError("native admin should not run for this test")
 
 
+class _Detector:
+    """کمینه‌ترین detector سازگار با APIای که هندلر واقعی مصرف می‌کند."""
+
+    def is_spam(self, *args, **kwargs):
+        return (False, None)
+
+    def check_banned_words(self, *args, **kwargs):
+        return (False, None)
+
+    def has_public_username(self, *args, **kwargs):
+        return False
+
+    def __getattr__(self, name):
+        if name.startswith(("has_", "is_", "contains_")):
+            return lambda *a, **k: False
+        if name.startswith(("check_", "detect_")):
+            return lambda *a, **k: (False, None)
+        raise AttributeError(name)
+
+
 class FakeBot:
     def __init__(self):
         self.client = FakeClient()
@@ -157,10 +177,11 @@ class FakeBot:
             banned_users={},
             muted_users={},
         )
-        self.detector = types.SimpleNamespace(
-            is_spam=lambda *a, **k: (False, None),
-            has_public_username=lambda *a, **k: False,
-        )
+        # detector باید همان سطحِ APIای را داشته باشد که هندلر واقعی صدا
+        # می‌زند (مثلاً ``check_banned_words``). یک SimpleNamespace ناقص
+        # باعث می‌شد هندلر با AttributeError بیفتد و ثبتِ دفترچهٔ یوزرنیم
+        # هرگز اجرا نشود.
+        self.detector = _Detector()
         self.bot_account_id = 555
         self.punished_users = set()
         self.spam_burst_messages = {}

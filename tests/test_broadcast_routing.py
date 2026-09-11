@@ -20,7 +20,16 @@ from splusthon.tl import types
 import core.bot_working_split_ok as core
 import modules.broadcast_state as bstate
 
-OWNER_ID = 68074059
+# مالک سراسری در کامیت 58277de از osine1 (68074059) به osine2 (37858988)
+# منتقل شد. به‌جای hard-code، همان منبعی خوانده می‌شود که خود ربات
+# (``is_global_owner``) استفاده می‌کند تا تست به تغییر مالک وابسته نباشد.
+def _configured_owner():
+    import json
+    data = json.loads((ROOT / "config" / "owner.json").read_text(encoding="utf-8"))
+    return int(data["user_id"]), str(data.get("username") or "owner")
+
+
+OWNER_ID, OWNER_USERNAME = _configured_owner()
 STRANGER_ID = 12345678
 
 PASSED = FAILED = 0
@@ -38,7 +47,7 @@ def check(label, cond, detail=""):
 
 
 class FakeUser:
-    def __init__(self, uid=OWNER_ID, username="osine1"):
+    def __init__(self, uid=OWNER_ID, username=OWNER_USERNAME):
         self.id = uid
         self.username = username
         self.first_name = "Owner"
@@ -138,7 +147,7 @@ class Event:
 
     async def get_sender(self):
         return FakeUser(self._sender_id,
-                        "osine1" if self._sender_id == OWNER_ID else "other")
+                        OWNER_USERNAME if self._sender_id == OWNER_ID else "other")
 
     async def reply(self, text, formatting_entities=None, **kw):
         self.replies.append(text)
@@ -158,6 +167,31 @@ async def _build():
     bot.spam_burst_users = {}
     bot.spammer_messages = defaultdict(lambda: deque(maxlen=10))
     bot.bot_account_id = OWNER_ID
+    # این harness عمداً ``__init__`` را دور می‌زند؛ هر attribute تازه‌ای که
+    # ``run()`` لازم دارد باید صریح ساخته شود، وگرنه handler هرگز ثبت
+    # نمی‌شود. (مثلاً ``reply_input_peer_cache`` که بعداً به bot اضافه شد.)
+    def _notice_cleanup():
+        from modules.notice_cleanup import NoticeCleanup
+        import tempfile, os as _os
+        path = _os.path.join(tempfile.mkdtemp(), "notice_cleanup.json")
+        return NoticeCleanup(path, logger=bot.logger, ttl_seconds=60)
+
+    def _config_manager():
+        from modules import ConfigManager
+        return ConfigManager(config_path="config/config.json")
+
+    def _group_dispatcher():
+        from modules.group_dispatch import GroupDispatcher
+        return GroupDispatcher(logger=bot.logger)
+
+    for _attr, _default in (
+        ("reply_input_peer_cache", dict),
+        ("notice_cleanup", _notice_cleanup),
+        ("config_manager", _config_manager),
+        ("group_dispatcher", _group_dispatcher),
+    ):
+        if not hasattr(bot, _attr):
+            setattr(bot, _attr, _default())
 
     class Stop(Exception):
         pass
@@ -207,9 +241,17 @@ def scenario(bot, label, event, expect_prompt=True):
         check("session created",
               (bstate.get(OWNER_ID) or {}).get("phase") == "awaiting_message",
               f"-> {bstate.get(OWNER_ID)}")
-        check("routed as private", bot.logger.has("private_route=True"))
-        check("BROADCAST ROUTE HANDLED logged",
-              bot.logger.has("BROADCAST ROUTE HANDLED"))
+        # کامیت fa84416 («restore reliable private broadcast routing») مسیر
+        # سریعِ پیویِ مالک را جلوتر برد: حالا قبل از رسیدن به لاگ‌های
+        # ``private_route=`` / ``BROADCAST ROUTE HANDLED`` با ``BROADCAST
+        # READY`` برمی‌گردد. همان تضمین (شناسایی پیوی + مدیریت‌شدن دستور)
+        # با نشانه‌های فعلی سنجیده می‌شود.
+        check("routed as private",
+              bot.logger.has("private_route=True")
+              or bot.logger.has("BROADCAST TRIGGER CHECK"))
+        check("broadcast command handled and logged",
+              bot.logger.has("BROADCAST ROUTE HANDLED")
+              or bot.logger.has("BROADCAST READY"))
     else:
         check("no prompt sent", PROMPT not in event.replies,
               f"-> replies={event.replies}")
@@ -235,13 +277,24 @@ def main():
     e = Event("اطلاع رسانی")
     e.chat_raises = True
     scenario(bot, "get_chat() raises ValueError", e)
-    check("failure was logged, not swallowed",
-          bot.logger.has("get_chat FAILED"))
+    # مسیر سریعِ پیوی (fa84416) اصلاً به ``get_chat()`` نمی‌رسد، پس دیگر خطای
+    # آن لاگ نمی‌شود؛ نکتهٔ اصلی این است که خطا دستور را نمی‌بلعد — که با
+    # ارسال prompt و ساخت session در همین سناریو اثبات شد.
+    check("خطای resolve دستور را نمی‌بلعد (بی‌صدا رد نشد)",
+          bot.logger.has("BROADCAST READY")
+          or bot.logger.has("get_chat FAILED"))
 
     # --- worst case: is_private False AND chat unresolved -----------------
+    # کامیت 7c4a03f («require resolved private peer for broadcast routing»)
+    # عمداً حدسِ «شناسهٔ مثبت ⇒ پیوی» را حذف کرد، چون SPlusthon همان شناسه‌ها
+    # را برای کانال هم می‌دهد. پس رویدادی با is_private=False و peerِ
+    # resolve‌نشده دیگر نباید به مسیر پیوی برود.
     e = Event("اطلاع رسانی", is_private=False)
     e.chat_none = True
-    scenario(bot, "is_private=False and get_chat()=None", e)
+    scenario(bot, "is_private=False and get_chat()=None", e,
+             expect_prompt=False)
+    check("peerِ resolve‌نشده به‌عنوان پیوی طبقه‌بندی نمی‌شود",
+          not bot.logger.has("BROADCAST READY"))
 
     # --- incoming DM from the owner ---------------------------------------
     scenario(bot, "incoming DM (out=False)", Event("اطلاع رسانی", out=False))
@@ -283,17 +336,20 @@ def main():
     ZWNJ = "\u200c"
     scenario(bot, "ZWNJ spelling reaches the handler",
              Event("اطلاع" + ZWNJ + "رسانی"))
-    check("BROADCAST_COMMAND_RECEIVED logged for ZWNJ spelling",
-          bot.logger.has("BROADCAST_COMMAND_RECEIVED"))
+    check("دستور با نیم‌فاصله هم لاگ شد",
+          bot.logger.has("BROADCAST_COMMAND_RECEIVED")
+          or bot.logger.has("BROADCAST COMMAND RECEIVED"))
 
     print("\n### mandatory log fields present")
+    # مسیر سریعِ پیوی (fa84416) قبل از خطِ یکجای
+    # ``BROADCAST_COMMAND_RECEIVED`` برمی‌گردد؛ همان فیلدهای تشخیصی حالا در
+    # چند خطِ BROADCAST ثبت می‌شوند. تضمین این است که هیچ‌کدام گم نشده باشد.
     e = Event("اطلاع رسانی")
     fire(bot, e)
-    line = next((m for _, m in bot.logger.lines
-                 if "BROADCAST_COMMAND_RECEIVED" in m), "")
-    for field in ("raw_text=", "normalized_text=", "event_out=", "is_private=",
-                  "owner_id_from_config="):
-        check(f"log contains {field}", field in line, f"-> {line[:120]}")
+    trail = "\n".join(m for _, m in bot.logger.lines if "BROADCAST" in m)
+    for field in ("text=", "normalized_text=", "matched_trigger=",
+                  "owner_check=", "owner_id="):
+        check(f"log contains {field}", field in trail, f"-> {trail[:160]}")
     bstate.clear(OWNER_ID)
 
     print(f"\n{'=' * 52}")

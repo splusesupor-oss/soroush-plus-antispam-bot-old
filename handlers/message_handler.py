@@ -135,7 +135,7 @@ from modules.outgoing_profiler import (
 )
 from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
-from modules.group_dispatch import PRIORITY_ADMIN, classify_priority
+from modules.group_dispatch import PRIORITY_ADMIN, PRIORITY_COMMAND, classify_priority
 # 🗂 سیستم سابقه‌ها و 🏆 سطح گروه — دو قابلیتِ مستقل با فایل و ماژولِ جدا.
 from modules import user_history
 from modules import group_level
@@ -735,12 +735,30 @@ _BIG_SPAM_REPEAT_WINDOW_SECONDS = big_spam.REPEAT_WINDOW_SECONDS
 _BIG_SPAM_REPEAT_MESSAGES = big_spam.SIMILAR_MESSAGE_THRESHOLD
 
 
+def _is_recognized_bot_command(text):
+    """True for a text the bot itself routes as an admin/command lane message."""
+    value = normalize_command(text)
+    if value[:1] in {".", "/", "!"}:
+        value = value.lstrip("./!").strip()
+        if not value:
+            return False
+    priority, _kind = classify_priority(value)
+    return int(priority) <= PRIORITY_COMMAND
+
+
 def _big_repeated_spam(chat_id, user_id, text):
     """Detect a promotional wave on the second similar message, or one packed box."""
     rows = message_tracker.get_user_recent_messages(chat_id, user_id)
+    # Generic identical-flood detection must never fire on the bot's own
+    # commands: asking for «موجودی» or «راهنما» a few times in a row is normal
+    # usage, and banning for it silently swallows every later command from
+    # that user. Targeted promotional/decorative detection still applies.
     return big_spam.detect_big_spam(
         text, rows,
-        allow_generic=not is_game_answer_active(chat_id, user_id),
+        allow_generic=(
+            not is_game_answer_active(chat_id, user_id)
+            and not _is_recognized_bot_command(text)
+        ),
     )
 
 

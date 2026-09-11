@@ -29,6 +29,10 @@ class ProfileError(Exception):
 
 _DIGIT_MAP = {ord(p): str(i) for i, p in enumerate("𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵")}
 _DIGIT_MAP.update({ord(a): str(i) for i, a in enumerate("٠١٢٣٤٥٦٧٨٩")})
+# ارقام فارسیِ استاندارد (۰-۹) هم باید نرمال شوند. بدون این، کاربری که
+# برای «رد کردن لقب» عددِ «۰» می‌فرستد، آن را به‌عنوان یک لقبِ واقعی
+# ثبت‌شده می‌دید.
+_DIGIT_MAP.update({ord(p): str(i) for i, p in enumerate("۰۱۲۳۴۵۶۷۸۹")})
 
 
 def _now():

@@ -310,9 +310,13 @@ def test_balance_menu_opens():
     consumed, event = asyncio.run(scenario())
     check("دستور «موجودی» مصرف شد", consumed is True)
     check("منو نمایش داده شد", event.said("کیف پول شما"))
-    check("برنز نمایش داده شد", event.said("۱۵۲"))
-    check("نقره نمایش داده شد", event.said("۳۴"))
-    check("طلا نمایش داده شد", event.said("۸"))
+    # کامیت 44f9bc6 عمداً ارقام نمایشی را به فونت ریاضیِ توپر (𝟬-𝟵) تغییر
+    # داد. عدد را با همان تابع رسمیِ قالب‌بندی (economy.ui.formatting.fa)
+    # می‌سازیم تا تست به شکلِ ارقام گره نخورد و همچنان مقدار را بسنجد.
+    from economy.ui.formatting import fa as _fa
+    check("برنز نمایش داده شد", event.said(_fa(152)), f"-> {event.out}")
+    check("نقره نمایش داده شد", event.said(_fa(34)), f"-> {event.out}")
+    check("طلا نمایش داده شد", event.said(_fa(8)), f"-> {event.out}")
     check("ارزش کل نمایش داده شد", event.said("ارزش کل"))
     check("همهٔ گزینه‌ها در یک منو هستند",
           all(event.said(x) for x in

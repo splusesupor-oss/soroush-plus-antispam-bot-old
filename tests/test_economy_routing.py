@@ -70,13 +70,25 @@ class FakeClient:
 
     async def send_message(self, target, text, **kwargs):
         self.sent.append((target, text))
-        return True
+        # سروش پلاسِ واقعی یک شیء پیام با ``id`` برمی‌گرداند. برگرداندن
+        # ``True`` باعث می‌شد ``notice_cleanup`` نتواند شناسه را استخراج کند
+        # و خطای «NOTICE CLEANUP ID MISSING» در لاگ بنشیند.
+        self._sent_id = getattr(self, "_sent_id", 50_000) + 1
+        return _SentMessage(self._sent_id, target)
 
     async def run_until_disconnected(self):
         raise SystemExit
 
     def add_event_handler(self, *args, **kwargs):
         return None
+
+
+class _SentMessage:
+    """کمینه‌ترین شکلِ پیامِ ارسال‌شده که لایه‌های ربات از آن ``id`` می‌خوانند."""
+
+    def __init__(self, message_id, chat_id=None):
+        self.id = int(message_id)
+        self.chat_id = chat_id
 
 
 class Logger:
@@ -677,8 +689,12 @@ def test_entity_rejection_falls_back_to_plain():
     bot, event = asyncio.run(scenario())
     check("کاربر همچنان پاسخ می‌گیرد", bool(event.replies),
           "*** هیچ خروجی نیامد ***")
+    # کامیت 44f9bc6 ارقام نمایشی را به فونت ریاضیِ توپر برد؛ عدد را با همان
+    # تابع رسمیِ قالب‌بندی می‌سازیم تا تست به شکلِ رقم گره نخورد.
+    from economy.ui.formatting import fa as _fa
     check("متن کامل منو ارسال شد",
-          event.said("کیف پول شما") and event.said("۱۵۲"))
+          event.said("کیف پول شما") and event.said(_fa(152)),
+          f"-> {event.replies}")
     check("بازگشت به متن ساده لاگ شد",
           bot.logger.has("retrying plain"))
 
@@ -690,7 +706,11 @@ def test_unexpected_error_is_reported():
     import economy.ui.balance_menu as bm
     original = bm.render_menu
 
-    def boom(user_id):
+    # امضای واقعی ``render_menu`` در کامیت e68e29d به
+    # ``(chat_id, user_id, *, balance=None, rank=None)`` تغییر کرد؛ جایگزینِ
+    # تست باید همان امضا را بپذیرد وگرنه به‌جای خطای شبیه‌سازی‌شده،
+    # TypeError در مسیر دیگری بالا می‌رود.
+    def boom(*args, **kwargs):
         raise RuntimeError("db unavailable")
 
     bm.render_menu = boom

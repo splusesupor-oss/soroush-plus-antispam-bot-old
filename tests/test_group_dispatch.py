@@ -172,7 +172,11 @@ def test_overflow_keeps_admin_and_command():
     print("\n### سقف ۴۰ فقط عادی را drop می‌کند نه سکوت/راهنما")
 
     async def scenario():
+    # کامیت 0791436 حداقلِ سقفِ صفِ عادی را روی ۲۰ گذاشت
+    # (``max(20, min(500, ...))``)، پس مقدارهای کوچک‌تر بی‌اثرند. برای
+    # آزمودنِ همان رفتار، صف تا سقفِ واقعی پر می‌شود.
         dispatcher = GroupDispatcher(max_pending_normal=1, logger=Logger())
+        cap = dispatcher.max_pending_normal
         hold = asyncio.Event()
         ran = []
 
@@ -183,6 +187,8 @@ def test_overflow_keeps_admin_and_command():
         dispatcher.submit(12, hold_job, priority=PRIORITY_NORMAL, kind="normal")
         await asyncio.sleep(0)
         queued = dispatcher.submit(12, lambda: ran.append("n1"), priority=PRIORITY_NORMAL, kind="normal")
+        for _ in range(cap):
+            dispatcher.submit(12, lambda: None, priority=PRIORITY_NORMAL, kind="normal")
         dropped = dispatcher.submit(12, lambda: None, priority=PRIORITY_NORMAL, kind="normal")
         ok_admin = dispatcher.submit(12, lambda: ran.append("بن"), priority=PRIORITY_ADMIN, kind="admin")
         ok_cmd = dispatcher.submit(12, lambda: ran.append("جک"), priority=PRIORITY_COMMAND, kind="command")
@@ -201,7 +207,11 @@ def test_overflow_drops_normal_keeps_admin():
     print("\n### سقف per-group فقط پیام عادی را دور می‌ریزد")
 
     async def scenario():
+    # کامیت 0791436 حداقلِ سقفِ صفِ عادی را روی ۲۰ گذاشت
+    # (``max(20, min(500, ...))``)، پس مقدارهای کوچک‌تر بی‌اثرند. برای
+    # آزمودنِ همان رفتار، صف تا سقفِ واقعی پر می‌شود.
         dispatcher = GroupDispatcher(max_pending_normal=2, logger=Logger())
+        cap = dispatcher.max_pending_normal
         hold = asyncio.Event()
         ran = []
         overflowed = []
@@ -217,6 +227,9 @@ def test_overflow_drops_normal_keeps_admin():
         await asyncio.sleep(0)
         ok1 = dispatcher.submit(11, lambda: named("n1"), priority=PRIORITY_NORMAL)
         ok2 = dispatcher.submit(11, lambda: named("n2"), priority=PRIORITY_NORMAL)
+        # صف را تا سقفِ واقعی پر کن تا شغل بعدی حتماً overflow شود.
+        for _ in range(cap):
+            dispatcher.submit(11, lambda: None, priority=PRIORITY_NORMAL)
         ok3 = dispatcher.submit(
             11, lambda: named("n3"), priority=PRIORITY_NORMAL,
             on_overflow=lambda: overflowed.append("n3"),

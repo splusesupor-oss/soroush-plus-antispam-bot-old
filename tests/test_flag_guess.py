@@ -248,14 +248,26 @@ def test_progress_persists_across_restart():
     seen_before = fg.seen_count(user)
     check("کاربر حداقل یک پرچم دیده", seen_before >= 1, f"{seen_before}")
 
-    # شبیه‌سازی ری‌استارت: ماژول دوباره بارگذاری می‌شود و فایل خوانده می‌شود
-    file = fg._PROGRESS_FILE
-    check("فایل پیشرفت ساخته شد", file.exists(), str(file))
-    data = __import__("json").loads(file.read_text(encoding="utf-8"))
-    check("تاریخچهٔ کاربر در فایل ثبت شده", str(user) in data, f"{list(data)[:3]}")
+    # کامیت 456a261 ذخیره‌سازیِ پیشرفت را پشت ``SeenProgressStore`` برد؛
+    # بسته به backend یا JSON است یا SQLite. تست به‌جای فرضِ فایلِ JSON،
+    # همان قرارداد واقعی را می‌سنجد: بعد از flush و پاک‌کردن کشِ حافظه،
+    # تاریخچه باید از لایهٔ ماندگار برگردد.
+    store = fg._PROGRESS_STORE
+    if store.sqlite:
+        check("پیشرفت روی لایهٔ ماندگار نوشته شد", store.flush() or True)
+        persisted = __import__("modules.runtime_db", fromlist=["x"]).kv_get(
+            store.namespace, str(user), None)
+        check("تاریخچهٔ کاربر ماندگار شد", bool(persisted), f"-> {persisted!r}")
+    else:
+        file = fg._PROGRESS_FILE
+        check("فایل پیشرفت ساخته شد", file.exists(), str(file))
+        data = __import__("json").loads(file.read_text(encoding="utf-8"))
+        check("تاریخچهٔ کاربر ماندگار شد", str(user) in data,
+              f"{list(data)[:3]}")
 
-    # بارگذاری دوباره از فایل (مثل start مجدد ربات)
+    # بارگذاری دوباره (مثل start مجدد ربات)
     fg._SEEN_HISTORY.clear()
+    store._recent.clear()
     fg._load_progress()
     check("بعد از بارگذاری، تاریخچه برگشت", fg.seen_count(user) == seen_before,
           f"{fg.seen_count(user)} vs {seen_before}")

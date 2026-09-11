@@ -5,22 +5,38 @@ import modules.name_family as game
 
 class NameFamilyValidationTests(unittest.TestCase):
     def setUp(self):
-        self.original_add = game.add
+        # ماژول دیگر تابع ``add`` ندارد: امتیاز دور را خودِ ``submit``
+        # داخل state ثبت می‌کند و سکه جداگانه توسط هندلر از راه API
+        # اقتصاد پرداخت می‌شود.  برای همان معنای قبلی (هر ثبتِ موفقِ
+        # امتیاز = یک award) روی ``submit`` جاسوسی می‌کنیم؛ ثبت‌های
+        # ناموفق (پیام نامرتبط یا ارسال تکراری) ``None`` برمی‌گردانند و
+        # مثل قبل هیچ awardی نمی‌سازند.
+        self.original_submit = game.submit
         self.original_learning = game.record_learning
         self.awards = []
         self.learning = []
-        game.add = lambda chat_id, user_id, name, points: self.awards.append(
-            (chat_id, user_id, points)
-        )
+
+        def spy_submit(chat_id, user_id, name, text, *args, **kwargs):
+            points = self.original_submit(
+                chat_id, user_id, name, text, *args, **kwargs
+            )
+            if points is not None:
+                self.awards.append((chat_id, user_id, points))
+            return points
+
+        game.submit = spy_submit
         game.record_learning = lambda *args, **kwargs: (
             self.learning.append((args, kwargs)) or {"status": "learning"}
         )
-        game._ACTIVE.clear()
+        # پاک کردن فقط ``_ACTIVE`` کافی نیست: دورهای تمام‌شده و کیسهٔ
+        # حروف باقی‌مانده بین تست‌ها نشت می‌کردند و ``start`` را در تستِ
+        # قرعهٔ حروف ``None`` می‌کرد.  helper رسمی خود ماژول همه را پاک می‌کند.
+        game.reset_all()
 
     def tearDown(self):
-        game.add = self.original_add
+        game.submit = self.original_submit
         game.record_learning = self.original_learning
-        game._ACTIVE.clear()
+        game.reset_all()
 
     @staticmethod
     def valid_answers():
@@ -74,11 +90,23 @@ class NameFamilyValidationTests(unittest.TestCase):
 
     def test_p_inputs_are_scored_per_category_and_emit_raw_normalized_logs(self):
         class Logger:
+            """جمع‌کنندهٔ خطوط «NAME FAMILY VALIDATION».
+
+            ماژول امروز خطوط تشخیصی دیگری هم می‌نویسد (ENTER/SCORE/
+            EXTERNAL BATCH/STORE). این تست‌ها دربارهٔ گزارشِ اعتبارسنجیِ
+            هر دسته‌اند و به ترتیب همان هفت خط تکیه می‌کنند، پس فقط
+            همان‌ها در ``lines`` نگه داشته می‌شوند؛ بقیه در ``all_lines``
+            می‌مانند تا چیزی از دست نرود.
+            """
+
             def __init__(self):
                 self.lines = []
+                self.all_lines = []
 
             def log_info(self, line):
-                self.lines.append(line)
+                self.all_lines.append(line)
+                if "NAME FAMILY VALIDATION" in str(line):
+                    self.lines.append(line)
 
         first = ("پریا", "پروینی", "پل دختر", "پرتقال", "پر", "پشه", "نمیدونم")
         second = ("پونه", "پناهی", "پاریس", "پرتغالی", "پارو", "پشه", "پالت")
@@ -133,11 +161,23 @@ class NameFamilyValidationTests(unittest.TestCase):
 
     def test_zah_example_scores_twenty_without_zeroing_other_categories(self):
         class Logger:
+            """جمع‌کنندهٔ خطوط «NAME FAMILY VALIDATION».
+
+            ماژول امروز خطوط تشخیصی دیگری هم می‌نویسد (ENTER/SCORE/
+            EXTERNAL BATCH/STORE). این تست‌ها دربارهٔ گزارشِ اعتبارسنجیِ
+            هر دسته‌اند و به ترتیب همان هفت خط تکیه می‌کنند، پس فقط
+            همان‌ها در ``lines`` نگه داشته می‌شوند؛ بقیه در ``all_lines``
+            می‌مانند تا چیزی از دست نرود.
+            """
+
             def __init__(self):
                 self.lines = []
+                self.all_lines = []
 
             def log_info(self, line):
-                self.lines.append(line)
+                self.all_lines.append(line)
+                if "NAME FAMILY VALIDATION" in str(line):
+                    self.lines.append(line)
 
         logger = Logger()
         game._ACTIVE[100] = {
@@ -184,11 +224,23 @@ class NameFamilyValidationTests(unittest.TestCase):
 
     def test_vahids_partial_answers_score_thirty_and_log_each_category(self):
         class Logger:
+            """جمع‌کنندهٔ خطوط «NAME FAMILY VALIDATION».
+
+            ماژول امروز خطوط تشخیصی دیگری هم می‌نویسد (ENTER/SCORE/
+            EXTERNAL BATCH/STORE). این تست‌ها دربارهٔ گزارشِ اعتبارسنجیِ
+            هر دسته‌اند و به ترتیب همان هفت خط تکیه می‌کنند، پس فقط
+            همان‌ها در ``lines`` نگه داشته می‌شوند؛ بقیه در ``all_lines``
+            می‌مانند تا چیزی از دست نرود.
+            """
+
             def __init__(self):
                 self.lines = []
+                self.all_lines = []
 
             def log_info(self, line):
-                self.lines.append(line)
+                self.all_lines.append(line)
+                if "NAME FAMILY VALIDATION" in str(line):
+                    self.lines.append(line)
 
         logger = Logger()
         game._ACTIVE[100] = {
@@ -208,11 +260,23 @@ class NameFamilyValidationTests(unittest.TestCase):
 
     def test_unknown_answer_is_pending_and_defaults_to_zero(self):
         class Logger:
+            """جمع‌کنندهٔ خطوط «NAME FAMILY VALIDATION».
+
+            ماژول امروز خطوط تشخیصی دیگری هم می‌نویسد (ENTER/SCORE/
+            EXTERNAL BATCH/STORE). این تست‌ها دربارهٔ گزارشِ اعتبارسنجیِ
+            هر دسته‌اند و به ترتیب همان هفت خط تکیه می‌کنند، پس فقط
+            همان‌ها در ``lines`` نگه داشته می‌شوند؛ بقیه در ``all_lines``
+            می‌مانند تا چیزی از دست نرود.
+            """
+
             def __init__(self):
                 self.lines = []
+                self.all_lines = []
 
             def log_info(self, line):
-                self.lines.append(line)
+                self.all_lines.append(line)
+                if "NAME FAMILY VALIDATION" in str(line):
+                    self.lines.append(line)
 
         logger = Logger()
         game._ACTIVE[100] = {"round_id": 1, "letter": "ن", "answers": {}}
@@ -256,7 +320,23 @@ class NameFamilyValidationTests(unittest.TestCase):
             for category, answer in zip(game.CATEGORIES, self.valid_answers().splitlines())
         )
         self.assertIsNone(game._parse_answers(labelled))
-        self.assertIsNone(game._parse_answers(self.valid_answers() + "\n"))
+        # از کامیت bbe4cbc («tolerant parsing») فاصله/خط خالیِ صفحه‌کلید
+        # موبایل عمداً پذیرفته می‌شود؛ پیش‌تر همین باعث می‌شد پاسخ‌های
+        # معتبر بی‌صدا ثبت نشوند.  آنچه باید رد شود، تعدادِ غلطِ پاسخ است.
+        self.assertEqual(
+            game._parse_answers(self.valid_answers() + "\n"),
+            self.valid_answers().splitlines(),
+        )
+        self.assertEqual(
+            game._parse_answers(self.valid_answers().replace("\n", "\n\n")),
+            self.valid_answers().splitlines(),
+        )
+        self.assertIsNone(
+            game._parse_answers("\n".join(self.valid_answers().splitlines()[:6]))
+        )
+        self.assertIsNone(
+            game._parse_answers(self.valid_answers() + "\nفیروزه")
+        )
 
     def test_unrelated_messages_do_not_create_a_submission(self):
         self.force_round(1)

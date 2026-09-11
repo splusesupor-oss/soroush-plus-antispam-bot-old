@@ -226,7 +226,10 @@ def _id_aliases(value):
     except (TypeError, ValueError):
         pass
     try:
-        from economy.coins.accounts import chat_aliases
+        # ``chat_aliases`` بخشی از API عمومی economy است؛ دسترسی مستقیم به
+        # ماژول داخلی ``economy.coins.accounts`` لازم نیست و لایه‌بندی را
+        # می‌شکند (رفتار یکسان است).
+        from economy import chat_aliases
         aliases.update(chat_aliases(value))
     except Exception:
         pass

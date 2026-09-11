@@ -457,7 +457,9 @@ def test_vampire_timeout_reveals():
         text = vp.format_reveal(revealed[0])
         check("متن پایان درست است", "⏰ زمان تمام شد." in text
               and "🧛 خون‌آشام:" in text)
-        check("یوزرنیم نمایش داده شد", "(@u" in text, f"-> {text}")
+        # با سیاستِ username-first (کامیت b4c8acd) نامِ نمایشی خودش همان
+        # «@u..» است، پس پسوندِ تکراری عمداً حذف می‌شود.
+        check("یوزرنیم نمایش داده شد", "@u" in text, f"-> {text}")
     router.reset_all()
 
 
@@ -491,11 +493,16 @@ def test_vampire_minimum_players():
 def test_vampire_display_names():
     print("\n### 🧛 نام نمایشی")
     from modules.fox_games.session_core import display_name
-    check("Display Name اولویت دارد",
-          display_name(User(1, "علی", "ali_x")) == "علی")
+    # کامیت b4c8acd سیاستِ نمایش را عمداً «username-first» کرد تا شناسهٔ
+    # عددی هرگز به کاربر نشان داده نشود؛ پس یوزرنیم بر نام نمایشی مقدم است
+    # و در نبودِ هر دو، متنِ جایگزینِ بدونِ شناسه برگردانده می‌شود.
+    check("یوزرنیم اولویت دارد",
+          display_name(User(1, "علی", "ali_x")) == "@ali_x",
+          f'-> {display_name(User(1, "علی", "ali_x"))!r}')
     check("در نبود نام، یوزرنیم", display_name(User(2, None, "ali_x")) == "@ali_x")
-    check("در نبود هر دو، جایگزین مناسب",
-          display_name(User(3, None, None)) == "بازیکن 3")
+    check("در نبود هر دو، جایگزینِ بدونِ شناسهٔ عددی",
+          display_name(User(3, None, None)) == "کاربر ناشناس",
+          f"-> {display_name(User(3, None, None))!r}")
 
 
 # ==========================================================================
@@ -508,17 +515,25 @@ def test_isolation_between_fox_games():
         router.reset_all()
         lb.reset_all(clear_quota=True)
         bot, event = Bot(), Event()
+        # کامیت 7749785 سقفِ «حداکثر دو بازی همزمان در هر گروه» را اضافه
+        # کرد، پس چهار بازی را نمی‌توان هم‌زمان باز نگه داشت. استقلالِ
+        # بازی‌ها جفت‌به‌جفت آزموده می‌شود: هر جفت باید بدون تداخل با هم
+        # فعال بمانند و بعد از آزادسازی، جفت بعدی هم همین‌طور.
         await send(bot, event, 1, "بخند یا بباز")
         await send(bot, event, 2, "بقا")
+        first_pair = (ll.is_active(CHAT), sv.is_active(CHAT))
+        router.reset_all()
+        lb.reset_all(clear_quota=True)
         await send(bot, event, 3, "خون آشام")
         await send(bot, event, 4, "جعبه شانسی")
-        return (ll.is_active(CHAT), sv.is_active(CHAT),
-                vp.is_active(CHAT), lb.is_active(CHAT))
+        second_pair = (vp.is_active(CHAT), lb.is_active(CHAT))
+        return first_pair + second_pair
 
     laugh, survive, vamp, box = asyncio.run(scenario())
-    check("هر چهار بازی هم‌زمان مستقل فعال‌اند",
-          laugh and survive and vamp and box,
-          f"-> {laugh} {survive} {vamp} {box}")
+    check("جفت اول هم‌زمان و مستقل فعال شدند",
+          laugh and survive, f"-> {laugh} {survive}")
+    check("جفت دوم هم‌زمان و مستقل فعال شدند",
+          vamp and box, f"-> {vamp} {box}")
 
     stores = [id(ll._STORE), id(sv._STORE), id(lb._STORE), id(vp._STORE)]
     check("هر بازی SessionStore جدا دارد", len(set(stores)) == 4)

@@ -304,7 +304,15 @@ def test_confirmation_message():
     check("blockquote و bold روی یک بازه‌اند",
           fragments[0] == fragments[1] and fragments[2] == fragments[3])
     check("تاریخ فعال‌سازی و انقضا متفاوت‌اند", fragments[0] != fragments[2])
-    check("ارقام فارسی هستند", any(d in fragments[0] for d in "۰۱۲۳۴۵۶۷۸۹"))
+    # کامیت 44f9bc6 ارقام نمایشی را از «۰۱۲…» به فونت ریاضیِ توپر «𝟬𝟭𝟮…»
+    # تغییر داد. نکتهٔ اصلی این است که هیچ رقم ASCII بدون قالب‌بندی نماند.
+    check("ارقام غیرِ ASCII (قالب‌بندی‌شده) هستند",
+          any(d in fragments[0] for d in "۰۱۲۳۴۵۶۷۸۹")
+          or any(d in fragments[0] for d in "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"),
+          f"-> {fragments[0]!r}")
+    check("هیچ رقم خام انگلیسی نمانده",
+          not any(d in fragments[0] for d in "0123456789"),
+          f"-> {fragments[0]!r}")
 
 
 def test_expired_message():
@@ -480,7 +488,17 @@ def test_watcher_survives_send_failure():
     check("گروه با وجود شکست ارسال، غیرفعال شد", len(deactivated) == 1)
     check("گروه شمرده شد", closed == 1)
     check("شکست ارسال لاگ شد", bot.logger.has("NOTICE FAILED"))
-    check("گروه دوباره اعلام نمی‌شود", ge.was_notified(CHAT))
+    # کامیت fa6531d («make group expiry watcher reliable») عمداً
+    # ``mark_notified`` را از *قبلِ* ارسال به *بعد از ارسالِ موفق* منتقل کرد:
+    # اگر ارسال شکست بخورد گروه نباید «اعلام‌شده» ثبت شود، وگرنه اعلان برای
+    # همیشه گم می‌شود. پس رفتار درست، تلاش دوباره در دور بعدی است.
+    check("شکستِ ارسال، اعلان را «انجام‌شده» ثبت نمی‌کند",
+          not ge.was_notified(CHAT))
+
+    # و در تلاش بعدی که ارسال موفق است، دقیقاً یک بار علامت می‌خورد.
+    bot_ok = Bot(Client())
+    asyncio.run(geh.check_once(bot_ok, lambda c, t: None, logger=bot_ok.logger))
+    check("پس از ارسال موفق، اعلان ثبت می‌شود", ge.was_notified(CHAT))
 
 
 def test_watcher_loop_runs():
@@ -597,8 +615,11 @@ def test_full_independence():
           f"-> {sorted(imported)}")
     import re as _re
     _internal = _re.findall(r"from\s+modules\.([\w.]+)\s+import", source)
-    check("تنها ماژولِ داخلیِ پروژه time_utils (مرکزیِ زمان) است",
-          set(_internal) <= {"time_utils"}, f"-> {_internal}")
+    # کامیت 456a261 مسیرِ فایلِ داده را به ``modules.runtime_paths`` سپرد تا
+    # هر instance دایرکتوری خودش را داشته باشد؛ این هم مثل time_utils یک
+    # ابزارِ برگِ بدون‌منطقِ دامنه است.
+    check("تنها ماژول‌های داخلیِ مجاز، ابزارهای برگ‌اند",
+          set(_internal) <= {"time_utils", "runtime_paths"}, f"-> {_internal}")
 
     check("فایل ذخیره‌سازی اختصاصی است",
           ge.FILE.name == "group_expiry.json"
