@@ -23,11 +23,16 @@ from modules.group_expiry import (
     EXPIRED_MESSAGE,
     build_confirmation,
     build_expired_message,
+    build_remaining_message,
     due_groups,
+    format_remaining,
     is_expired,
     mark_notified,
     match_command,
+    match_remaining_command,
+    seconds_left,
     set_expiry,
+    update_title as update_expiry_title,
 )
 from modules.owner_check import is_global_owner
 
@@ -107,6 +112,107 @@ async def _safe_chat(event):
         return await event.get_chat()
     except Exception:
         return None
+
+
+# پیام دسترسی برای دستور خبری «مهلت گروه».
+REMAINING_DENIED = (
+    "❌ فقط مالک یا ادمین گروه اجازه استفاده از این دستور را دارد"
+)
+
+
+def _remaining_allowed(chat_id, sender):
+    """دسترسی «مهلت گروه»: مالک اصلی ربات، مالک گروه یا ادمین ثبت‌شده."""
+    if is_global_owner(sender):
+        return True
+    try:
+        from modules import admin_tools
+        return bool(admin_tools.has_admin_permission(
+            chat_id,
+            getattr(sender, "id", None),
+            (getattr(sender, "username", None) or "").lstrip("@"),
+        ))
+    except Exception:
+        return False
+
+
+def _stored_title(chat_id):
+    """نام ذخیره‌شدهٔ گروه: اول groups.json، بعد رکورد انقضا."""
+    try:
+        from modules import group_storage
+        data = group_storage.load_groups()
+        key = group_storage._group_key(data, chat_id)
+        group = data.get(key)
+        if isinstance(group, dict):
+            title = str(group.get("title") or "").strip()
+            if title:
+                return title
+    except Exception:
+        pass
+    try:
+        from modules.group_expiry import get_record
+        record = get_record(chat_id)
+        if record:
+            title = str(record.get("title") or "").strip()
+            if title:
+                return title
+    except Exception:
+        pass
+    return ""
+
+
+async def handle_remaining(bot, event, chat_id, sender, text, logger=None):
+    """📋 دستور «مهلت گروه» — مهلت باقی‌ماندهٔ واقعیِ همان گروه.
+
+    این دستور تاریخ انقضا را تغییر نمی‌دهد؛ فقط رکورد انقضای موجود را
+    می‌خواند و مدت باقی‌مانده را از روی تاریخ انقضای واقعی محاسبه می‌کند.
+    گروه با ID خودش شناخته می‌شود، پس تغییر نام هرگز گروه جدیدی نمی‌سازد.
+
+    ``True`` یعنی پیام مصرف شد و هندلر اصلی نباید ادامه دهد.
+    """
+    if match_remaining_command(text) is None:
+        return False
+
+    if not _remaining_allowed(chat_id, sender):
+        _log(logger, "GROUP REMAINING DENIED "
+                     f"chat_id={chat_id} user_id={getattr(sender, 'id', None)}")
+        try:
+            await event.reply(REMAINING_DENIED)
+        except Exception:
+            pass
+        return True
+
+    # نام «فعلی» گروه: اول از خود چت (با اولین پیام بعد از تغییر نام،
+    # اسم جدید گرفته و ذخیره می‌شود)، بعد از ذخیره‌سازی‌های موجود.
+    title = getattr(await _safe_chat(event), "title", "") or ""
+    title = str(title).strip()
+    if title:
+        try:
+            from modules.group_storage import update_group_title
+            update_group_title(chat_id, title)
+        except Exception:
+            pass
+        try:
+            update_expiry_title(chat_id, title)
+        except Exception:
+            pass
+    if not title:
+        title = _stored_title(chat_id)
+
+    # مهلت باقی‌مانده همیشه از تاریخ انقضای واقعیِ ذخیره‌شده محاسبه
+    # می‌شود؛ نه مقدار ثابت، نه کپی قدیمی.
+    remaining_text = format_remaining(seconds_left(chat_id))
+    text_out, spans = build_remaining_message(title, remaining_text)
+    try:
+        await event.reply(text_out, formatting_entities=_entities(spans))
+    except Exception as error:
+        _log_error(logger, f"GROUP REMAINING SEND FAILED "
+                           f"chat_id={chat_id} error={error!r}")
+        return True
+    _log(logger, "GROUP REMAINING SENT "
+                 f"chat_id={chat_id} title={title!r} "
+                 f"remaining={remaining_text!r} "
+                 f"user_id={getattr(sender, 'id', None)}")
+    return True
 
 
 def blocks_message(chat_id, sender):

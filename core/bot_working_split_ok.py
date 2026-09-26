@@ -16,9 +16,14 @@ from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
 from modules.owner_private import remember_owner_peer
 from modules.group_expiry import match_command as expiry_command
+from modules.group_expiry import match_remaining_command as remaining_expiry_command
+from modules.group_expiry import update_title as update_expiry_record_title
 from modules.expiry_report import build_report as build_expiry_report
+from modules.expiry_report import sync_expiry_list
+from modules import admin_tools
 from modules.admin_tools import run_cleanup_watcher
 from handlers.group_expiry_handler import (
+    blocks_message as group_expiry_blocks,
     run_expiry_watcher as run_group_expiry_watcher,
 )
 from modules.banned_storage import (
@@ -1133,6 +1138,32 @@ class SoroushAntiSpamBot:
 
         asyncio.create_task(group_expiry_loop())
 
+        # 📋 همگام‌سازی دوره‌ای «لیست انقضا» — حداقل هر ۲۴ ساعت یک‌بار
+        # دادهٔ گزارش با وضعیت واقعی گروه‌ها هماهنگ می‌شود: گروه‌های
+        # تمدیدشده با تاریخ جدید دیده می‌شوند و گروه‌هایی که چرخهٔ انقضایشان
+        # کامل شده دیگر در لیست نمی‌مانند.
+        # ⚠️ این همگام‌سازی فقط برای «لیست انقضا» است؛ منقضی شدن واقعی هر
+        # گروه سر زمان واقعی انقضا توسط ناظر بالا انجام می‌شود و هرگز
+        # منتظر این حلقه نمی‌ماند.
+        async def expiry_list_sync_loop():
+            await asyncio.sleep(30)  # اولین اجرا کمی بعد از شروع ربات
+            while True:
+                try:
+                    summary = sync_expiry_list(logger=self.logger)
+                    self.logger.log_info(
+                        "EXPIRY LIST SYNC "
+                        f"removed_expired={summary.get('removed_expired', 0)} "
+                        f"refreshed_titles={summary.get('refreshed_titles', 0)} "
+                        f"total_records={summary.get('total_records', 0)}"
+                    )
+                except Exception as error:
+                    self.logger.log_error(
+                        f"EXPIRY LIST SYNC FAILED error={error!r}"
+                    )
+                await asyncio.sleep(24 * 60 * 60)
+
+        asyncio.create_task(expiry_list_sync_loop())
+
         # 🧹 ناظر پاکسازی خودکار — در ساعتِ تنظیم‌شده، پیام‌های گروه را پاک می‌کند.
         if not hasattr(self, "cleanup_tasks"):
             self.cleanup_tasks = {}
@@ -1243,6 +1274,12 @@ class SoroushAntiSpamBot:
                         "GROUP TITLE SYNC "
                         f"chat_id={chat_id} new_title={str(new_title)[:60]!r}"
                     )
+                    # نام رکورد انقضا هم تازه می‌ماند تا «لیست انقضا» و
+                    # «مهلت گروه» هرگز نام کهنه نشان ندهند.
+                    try:
+                        update_expiry_record_title(chat_id, new_title)
+                    except Exception:
+                        pass
             except Exception as error:
                 self.logger.log_error(f"GROUP TITLE SYNC FAILED: {error!r}")
 
@@ -1414,6 +1451,25 @@ class SoroushAntiSpamBot:
                     )
                 chat_id = getattr(event, "chat_id", None)
 
+                # ⏳ «مهلت گروه» — گزارش مهلت باقی‌مانده برای مالک/ادمین
+                # گروه. این دستور فقط‌خواندنی است و حتی در گروه غیرفعال یا
+                # منقضی‌شده هم باید پاسخ بگیرد؛ گروه را دوباره فعال نمی‌کند.
+                if (
+                    chat_id is not None
+                    and remaining_expiry_command(text) is not None
+                    and admin_tools.has_admin_permission(
+                        chat_id, sender_id,
+                        getattr(sender, "username", None),
+                    )
+                ):
+                    self.logger.log_info(
+                        "GROUP REMAINING QUERY ROUTED "
+                        f"chat_id={chat_id} sender_id={sender_id} "
+                        f"active={is_active(chat_id)}"
+                    )
+                    await handle_new_message(self, event)
+                    return
+
                 if chat_id is None or not is_active(chat_id):
                     _log_inactive_gate(self, chat_id, text)
                     if (
@@ -1421,6 +1477,13 @@ class SoroushAntiSpamBot:
                         and is_global_owner(sender_id)
                     ):
                         await process_incoming_message(event)
+                    return
+                # ⏳ گیت سختِ انقضا: در فاصلهٔ لحظهٔ انقضا تا غیرفعال‌سازی
+                # توسط ناظر، هیچ دستور عادی یا مدیریتی اجرا نمی‌شود؛ فقط
+                # مالک اصلی (برای تمدید) عبور می‌کند. مسیر «مهلت گروه»
+                # بالای همین گیت تعیین تکلیف شد.
+                if group_expiry_blocks(chat_id, sender):
+                    _log_inactive_gate(self, chat_id, text)
                     return
                 if is_fast_moderation_command(text):
                     if await handle_fast_moderation_command(
@@ -1566,6 +1629,7 @@ class SoroushAntiSpamBot:
                     "ثبت مالک", "لغو مالک", "برکناری مالک",
                     "ثبت گروه", "حذف گروه",
                     "۵ روز", "یک هفته", "دو هفته", "یک ماه",
+                    "مهلت گروه", "لیست انقضا",
                 }
                 self.debug_message_log(
                     "COMMAND PRIORITY CHECK "
@@ -2015,10 +2079,26 @@ class SoroushAntiSpamBot:
                             )
                             self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1119' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
+                        # ⏳ «مهلت گروه» — گزارش مهلت باقی‌مانده برای
+                        # مالک/ادمین گروه. در گروه غیرفعال نباید فعال‌سازی
+                        # انجام شود؛ پیام فقط باید به هندلر برسد و همان‌جا
+                        # پاسخ بگیرد.
+                        if (
+                            remaining_expiry_command(text) is not None
+                            and admin_tools.has_admin_permission(
+                                lock_id, sender_id,
+                                getattr(sender_lock, "username", None),
+                            )
+                        ):
+                            self.logger.log_info(
+                                "GROUP REMAINING QUERY ALLOWED (INACTIVE) "
+                                f"chat_id={lock_id} sender_id={sender_id} "
+                                f"command={text!r}"
+                            )
                         # ⏳ گروهی که با پایان مهلت بسته شده باید بتواند دوباره
                         # باز شود. بدون این استثنا، سه دستور انقضا هرگز به
                         # هندلر نمی‌رسیدند و گروه برای همیشه قفل می‌ماند.
-                        if (
+                        elif (
                             expiry_command(text) is not None
                             and can_change_group_mode
                         ):

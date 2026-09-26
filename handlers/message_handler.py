@@ -8,6 +8,8 @@ from modules.fill_blank import check_fill, get_token as get_fill_token
 from modules.riddles import check_answer
 from modules.group_stats import add_message, get_stats
 from modules.group_storage import activate_group, deactivate_group, is_active
+from modules.group_storage import update_group_title as refresh_group_title
+from modules.group_expiry import update_title as refresh_expiry_record_title
 from modules.owner_check import get_owner, is_global_owner
 from modules.spam_history import save_history_message
 from modules.spam_history import is_repeat
@@ -58,6 +60,7 @@ from handlers.group_expiry_handler import (
     EXPIRED_NOTICE as GROUP_EXPIRED_NOTICE,
     blocks_message as group_expiry_blocks,
     handle as handle_group_expiry,
+    handle_remaining as handle_group_remaining,
 )
 from modules.expiry_report import build_group_list
 from modules.name_family import (
@@ -2821,6 +2824,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "برکناری مالک", "ثبت گروه", "حذف گروه", "حذف اخطار", "حذف اخطارها",
     "تغییر اخطار", "تغییر مجازات",
     "سرگرمی خاموش", "سرگرمی فعال",
+    "مهلت گروه", "لیست انقضا",
     "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
     "وضعیت ربات", "پینگ ربات",
     "سایت بازی", "سایت", "لینک بازی", "/game", "/site",
@@ -3105,6 +3109,29 @@ async def handle_new_message(bot, event):
             event_chat = await event.get_chat()
         chat_id = getattr(event_chat, "id", event.chat_id) if event_chat else event.chat_id
         _warm_reply_input_chat(bot, event, event_chat)
+        # 🔄 همگام‌سازی نام گروه با «اولین پیام» بعد از تغییر نام: عنوان
+        # فعلی چت با عنوان ذخیره‌شده مقایسه و در صورت تفاوت به‌روز می‌شود
+        # تا «مهلت گروه» و «لیست انقضا» همیشه نام فعلی را نشان دهند.
+        # فقط گروه‌های ازقبل ثبت‌شده به‌روز می‌شوند؛ رکورد جدیدی ساخته
+        # نمی‌شود و شکست این مسیر هرگز پیام را متوقف نمی‌کند.
+        if (not getattr(event, "is_private", False)
+                and event_chat is not None and chat_id is not None):
+            try:
+                _fresh_title = getattr(event_chat, "title", None)
+                if _fresh_title and refresh_group_title(chat_id, _fresh_title):
+                    bot.logger.log_info(
+                        "GROUP TITLE REFRESH "
+                        f"chat_id={chat_id} new_title={str(_fresh_title)[:60]!r}"
+                    )
+                    try:
+                        refresh_expiry_record_title(chat_id, _fresh_title)
+                    except Exception:
+                        pass
+            except Exception as _title_sync_error:
+                bot.logger.log_error(
+                    f"GROUP TITLE REFRESH FAILED chat_id={chat_id} "
+                    f"error={_title_sync_error!r}"
+                )
         sender = (getattr(event, "_bot_cached_sender", None)
                   or getattr(event, "sender", None))
         if sender is None:
@@ -3378,6 +3405,7 @@ async def handle_new_message(bot, event):
             "ثبت مالک", "لغو مالک", "برکناری مالک",
             "ثبت گروه", "حذف گروه",
             "۵ روز", "یک هفته", "دو هفته", "یک ماه",
+            "مهلت گروه", "لیست انقضا",
         }
         if (sender and not event.is_private and not command_priority
                 and not is_global_owner(user_id)
@@ -3713,6 +3741,14 @@ async def handle_new_message(bot, event):
         # ------------------------------------------------------------------
         if not event.is_private:
             if await handle_group_expiry(
+                bot, event, chat_id, sender, clean_text, bot.logger
+            ):
+                return
+            # ⏳ «مهلت گروه» — گزارش مهلت باقی‌مانده برای مالک/ادمین گروه.
+            # عمداً پیش از گیت انقضا می‌آید تا حتی در گروه منقضی‌شده هم
+            # مالک/ادمین بتواند وضعیت واقعی مهلت را ببیند؛ هیچ قابلیت
+            # عادی‌ای را فعال نمی‌کند.
+            if await handle_group_remaining(
                 bot, event, chat_id, sender, clean_text, bot.logger
             ):
                 return
@@ -5700,6 +5736,11 @@ async def handle_new_message(bot, event):
                 "سرگرمی خاموش\n\n"
                 "🎮 برای روشن کردن بازی های روباه\n\n"
                 "سرگرمی فعال\n\n"
+                # ⏳ مهلت گروه — کل متن بخش (هر سه خط) یکپارچه Bold است و
+                # داخل یک نقل‌قول شیشه‌ای قرار می‌گیرد.
+                "⏳ برای دیدن مهلت باقی مانده گروه\n"
+                "بنویسید مهلت گروه\n"
+                "فقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد\n\n"
                 "🤖 سیستم هوش مصنوعی گوگل ربات\n\n"
                 "برای فعال کردن: هوش مصنوعی فعال\n"
                 "برای خاموش کردن: هوش مصنوعی خاموش\n"
@@ -5871,6 +5912,9 @@ async def handle_new_message(bot, event):
                 # 🎮 کنترل سرگرمی — فقط دو خط عنوان Bold می‌شوند.
                 "🎮 برای خاموش کردن بازی های عمومی",
                 "🎮 برای روشن کردن بازی های روباه",
+                # ⏳ مهلت گروه — بنا به درخواست، «تمام» متن این بخش
+                # (توضیح، خود دستور و خط دسترسی) به‌صورت یکجا Bold است.
+                "⏳ برای دیدن مهلت باقی مانده گروه\nبنویسید مهلت گروه\nفقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد",
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -5953,6 +5997,10 @@ async def handle_new_message(bot, event):
                 "سرگرمی خاموش\n\n"
                 "🎮 برای روشن کردن بازی های روباه\n\n"
                 "سرگرمی فعال",
+                # ⏳ کل بخش مهلت گروه در یک نقل‌قول شیشه‌ای یکپارچه.
+                "⏳ برای دیدن مهلت باقی مانده گروه\n"
+                "بنویسید مهلت گروه\n"
+                "فقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد",
             ]
             # بخش vip: کل متن داخل یک نقل‌قول شیشه‌ای
             vip_help_section = (

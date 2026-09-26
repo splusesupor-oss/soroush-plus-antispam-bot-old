@@ -22,6 +22,15 @@ def _log_error(logger, message):
         pass
 
 
+def _log_info(logger, message):
+    if logger is None:
+        return
+    try:
+        logger.log_info(message)
+    except Exception:
+        pass
+
+
 def _digits(value):
     return str(value).translate(_PERSIAN_DIGITS)
 
@@ -135,3 +144,81 @@ def build_group_list(logger=None, now=None):
     if not listed:
         return _HEADER + "\n\nℹ️ هیچ تاریخ انقضایی ثبت نشده است."
     return "\n\n".join(rows)
+
+
+def _find_group(groups, expiry_key):
+    """یافتن رکورد گروه با هر شکل ممکن شناسه (کوتاه، -۱۰۰… یا منفی ساده)."""
+    if not isinstance(groups, dict):
+        return None
+    key = str(expiry_key)
+    for candidate in (key, f"-{key}", f"-100{key}"):
+        if candidate in groups:
+            value = groups[candidate]
+            return value if isinstance(value, dict) else None
+    return None
+
+
+def sync_expiry_list(logger=None, now=None):
+    """🔄 همگام‌سازی دوره‌ای (حداقل هر ۲۴ ساعت) دادهٔ «لیست انقضا».
+
+    این تابع فقط دادهٔ گزارش را با وضعیت واقعی گروه‌ها هماهنگ می‌کند؛
+    منقضی شدن واقعی گروه سر زمان واقعی انقضا توسط ناظر (watcher) انجام
+    می‌شود و هرگز منتظر این به‌روزرسانی نمی‌ماند.
+
+    • گروه‌هایی که مهلتشان کاملاً تمام شده (منقضی + پیام غیرفعال‌سازی
+      ارسال‌شده + گروه غیرفعال) از ذخیره‌سازی انقضا حذف می‌شوند تا گروه
+      منقضی‌شده برای همیشه در لیست انقضا باقی نماند. رکوردی که هنوز اعلام
+      نشده باشد حفظ می‌شود تا ناظر بتواند کارش را تمام کند.
+    • گروه‌های تمدیدشده دست نمی‌خورند؛ تاریخ جدیدشان همین حالا در لیست
+      دیده می‌شود چون گزارش همیشه از تاریخ انقضای واقعی خوانده می‌شود.
+    • نام گروه‌ها روی رکورد انقضا با نام فعلی در groups.json به‌روز می‌شود.
+    """
+    moment = _moment(now)
+    groups, expiry_records = _sources(logger)
+    removed_expired = 0
+    refreshed_titles = 0
+
+    for key, record in expiry_records.items():
+        try:
+            expires = group_expiry.expires_at(key)
+        except Exception as error:
+            _log_error(logger, f"EXPIRY SYNC PARSE FAILED group_id={key!r} "
+                               f"error={error!r}")
+            continue
+        group = _find_group(groups, key)
+        group_active = bool(group and group.get("active"))
+        expired = expires is not None and moment >= expires
+
+        # پاک‌سازی فقط وقتی امن است که چرخهٔ انقضا کامل شده باشد:
+        # منقضی + اعلام‌شده + غیرفعال. تمدید دوباره رکورد تازه می‌سازد.
+        if expired and record.get("notified") and not group_active:
+            try:
+                if group_expiry.clear_expiry(key):
+                    removed_expired += 1
+                    _log_info(logger, f"EXPIRY SYNC REMOVED group_id={key!r} "
+                                      f"expires_at={record.get('expires_at')!r}")
+            except Exception as error:
+                _log_error(logger, f"EXPIRY SYNC REMOVE FAILED group_id={key!r} "
+                                   f"error={error!r}")
+            continue
+
+        fresh_title = str(group.get("title") or "").strip() if group else ""
+        if fresh_title and fresh_title != str(record.get("title") or "").strip():
+            try:
+                if group_expiry.update_title(key, fresh_title):
+                    refreshed_titles += 1
+                    _log_info(logger, "EXPIRY SYNC TITLE REFRESHED "
+                                      f"group_id={key!r} title={fresh_title!r}")
+            except Exception as error:
+                _log_error(logger, f"EXPIRY SYNC TITLE FAILED group_id={key!r} "
+                                   f"error={error!r}")
+
+    try:
+        total_records = len(group_expiry.all_records())
+    except Exception:
+        total_records = 0
+    return {
+        "removed_expired": removed_expired,
+        "refreshed_titles": refreshed_titles,
+        "total_records": total_records,
+    }
