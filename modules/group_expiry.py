@@ -45,6 +45,10 @@ DURATIONS = {
 }
 COMMANDS = frozenset(DURATIONS)
 
+# دستور خبری «مهلت گروه» — تاریخ انقضا را تنظیم نمی‌کند، فقط مهلت
+# باقی‌ماندهٔ واقعیِ همین گروه را از روی همان رکورد انقضای موجود می‌خواند.
+REMAINING_COMMAND = "مهلت گروه"
+
 # --- پیام‌ها ------------------------------------------------------------
 EXPIRED_MESSAGE = (
     "⛔ مدت زمان فعال بودن گروه به پایان رسید و گروه به‌صورت خودکار غیرفعال شد"
@@ -86,6 +90,16 @@ def match_command(text):
     """
     normalized = normalize_command(text)
     return normalized if normalized in DURATIONS else None
+
+
+def match_remaining_command(text):
+    """اگر متن *دقیقاً* دستور «مهلت گروه» باشد آن را برمی‌گرداند.
+
+    مثل دستورهای ثبت مهلت، تطبیق کامل است: «مهلت گروه من» یا «گروه مهلت»
+    تطبیق نمی‌کنند تا هیچ تداخلی با مسیرهای دیگر پیش نیاید.
+    """
+    normalized = normalize_command(text)
+    return REMAINING_COMMAND if normalized == REMAINING_COMMAND else None
 
 
 def duration_days(command):
@@ -318,6 +332,31 @@ def clear_expiry(group_id):
     return True
 
 
+def update_title(group_id, title):
+    """نام گروه را فقط روی رکورد انقضای «ازقبل موجود» به‌روز می‌کند.
+
+    برای گروهی که رکورد انقضا ندارد هیچ رکوردی ساخته نمی‌شود و هیچ فیلد
+    دیگری (تاریخ‌ها، پرچم اعلام، مدت) دست نمی‌خورد. خروجی: True فقط اگر
+    عنوان واقعاً تغییر کرد.
+    """
+    title = str(title or "").strip()
+    if not title:
+        return False
+    data = _load()
+    key = _group_key(group_id)
+    record = data.get(key)
+    if not isinstance(record, dict):
+        return False
+    if str(record.get("title") or "").strip() == title:
+        return False
+    data = dict(data)
+    updated = dict(record)
+    updated["title"] = title
+    data[key] = updated
+    _save(data)
+    return True
+
+
 def was_notified(group_id):
     record = get_record(group_id)
     return bool(record and record.get("notified"))
@@ -394,3 +433,64 @@ def build_expired_message():
     """متن غیرفعال‌سازی خودکار، کاملاً Bold."""
     text = EXPIRED_MESSAGE
     return text, [("bold", 0, _u16(text))]
+
+
+# ---------------------------------------------------------------------------
+# پیام «مهلت گروه» — نمایش مهلت باقی‌ماندهٔ واقعی
+# ---------------------------------------------------------------------------
+_PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+REMAINING_NO_RECORD = "ثبت نشده"
+REMAINING_EXPIRED = "منقضی شده"
+RENEW_LINE = "برای تمدید اشتراک : 𝄞 @aifox_bot"
+
+
+def format_remaining(seconds):
+    """مدت باقی‌مانده را به فارسی خوانا تبدیل می‌کند.
+
+    ``None`` یعنی گروه اصلاً تاریخ انقضا ندارد؛ عدد <= ۰ یعنی مهلت تمام
+    شده است. قالب با گزارش «لیست انقضا» یکسان است: روز/ساعت با «و»، و
+    دقیقه فقط وقتی روز و ساعت صفر باشند.
+    """
+    if seconds is None:
+        return REMAINING_NO_RECORD
+    total = int(seconds)
+    if total <= 0:
+        return REMAINING_EXPIRED
+    days, remainder = divmod(total, 24 * 60 * 60)
+    hours, remainder = divmod(remainder, 60 * 60)
+    minutes = remainder // 60
+    parts = []
+    if days:
+        parts.append(f"{days} روز")
+    if hours or days:
+        parts.append(f"{hours} ساعت")
+    if not days and not hours:
+        parts.append(f"{minutes} دقیقه" if minutes else "کمتر از ۱ دقیقه")
+    return " و ".join(parts).translate(_PERSIAN_DIGITS)
+
+
+def build_remaining_message(title, remaining_text):
+    """متن و entity های دستور «مهلت گروه».
+
+    خروجی دقیقاً سه خط است و فقط دو برچسب «گروه» و «مهلت باقی مانده»
+    Bold هستند؛ نام گروه، مدت و خط تمدید عادی می‌مانند و هیچ نقل‌قول
+    شیشه‌ای استفاده نمی‌شود. خروجی ``(text, [(kind, offset, length)])``.
+    """
+    title = str(title or "").strip() or "گروه بدون نام"
+    line1 = f"↻- گروه : {title}"
+    line2 = f"مهلت باقی مانده : {remaining_text}"
+    text = f"{line1}\n{line2}\n{RENEW_LINE}"
+
+    spans = []
+    # برچسب «گروه» در خط اول همیشه قبل از نام گروه می‌آید، پس اولین
+    # جایگاه، همان برچسب است. خط دوم هم با برچسب «مهلت باقی مانده» شروع
+    # می‌شود. محاسبه بر اساس خطوط، حتی اگر نام گروه این کلمه‌ها را داشته
+    # باشد، جای درستی را می‌دهد.
+    label1 = "گروه"
+    label1_start = line1.index(label1)
+    spans.append(("bold", _u16(line1[:label1_start]), _u16(label1)))
+    label2 = "مهلت باقی مانده"
+    offset2 = _u16(line1) + 1  # +1 برای «\n» بین دو خط
+    spans.append(("bold", offset2, _u16(label2)))
+    return text, spans
