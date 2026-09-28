@@ -104,6 +104,22 @@ def remove_message_ids(chat_id, user_id, message_ids):
     return removed
 
 
+def known_chats_for_user(user_id):
+    """گروه‌هایی که فرستنده در آن‌ها پیامِ ردیابی‌شدهٔ اخیر دارد.
+
+    برای بررسی «تغییر نام» استفاده می‌شود: وقتی نام تبلیغاتی جدید کاربر
+    دیده می‌شود، مجازات فقط برای گروه‌هایی اعمال می‌شود که ردیاب او را
+    به‌تازگی دیده است (همان گروه‌هایی که پاکسازی پیام در آن‌ها ممکن است).
+    """
+    target = str(user_id)
+    chats = []
+    for (group_id, member_id), rows in list(_HISTORY.items()):
+        if member_id != target or not rows:
+            continue
+        chats.append(rows[-1].get("chat_id", group_id))
+    return chats
+
+
 def clear_user_history(chat_id, user_id):
     _HISTORY.pop(_key(chat_id, user_id), None)
 

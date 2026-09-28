@@ -8,6 +8,8 @@ from modules.admin_storage import is_admin, add_admin, remove_admin
 from modules.riddles import new_riddle, check_answer, get_answer
 from modules.spam_history import get_user_history, clear_user as clear_spam_history
 from modules import message_tracker
+from modules import ad_name_detector
+from modules import ad_name_enforcement
 from modules.group_id import normalize_group_id
 from modules.group_stats import add_message, add_deleted, add_kick, add_mute, make_report
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
@@ -1380,6 +1382,120 @@ class SoroushAntiSpamBot:
 
             except Exception as e:
                 print(f"join ban check error: {e}")
+
+
+        @self.client.on(events.ChatAction())
+        async def ad_name_join_check(event):
+            """ورود عضو با نام/آیدی تبلیغاتی → پاکسازی پیام‌ها + مجازات.
+
+            همان سیاست مسیر پیام است (تشخیص با ad_name_detector، سپس حذف
+            پیام‌های قابل‌دسترس، سپس بن یا سکوت دائمی طبق «تغییر مجازات»)
+            و از همان ماژول مشترک استفاده می‌کند؛ هیچ RPC جدیدی اضافه
+            نمی‌شود. گیت‌ها هم با مسیر پیام یکی‌اند: گروه غیرفعال، مالک
+            اصلی، ادمین ثبت‌شده و ادمین نیتیو هرگز مجازات نمی‌شوند.
+            """
+            try:
+                if not event.user_joined and not event.user_added:
+                    return
+
+                chat_id = event.chat_id
+                if not is_active(chat_id):
+                    return
+
+                user = await event.get_user()
+                if not user:
+                    return
+
+                user_id = getattr(user, "id", None)
+                if user_id is None or is_global_owner(user_id):
+                    return
+                if str(user_id) == str(getattr(self, "bot_account_id", None)):
+                    return
+
+                username = getattr(user, "username", None)
+                ad_reason = ad_name_detector.reason(user)
+                if not ad_reason:
+                    return
+
+                if admin_tools.has_admin_permission(chat_id, user_id, username):
+                    self.logger.log_info(
+                        "AD NAME JOIN SKIPPED ADMIN "
+                        f"chat_id={chat_id} user_id={user_id}"
+                    )
+                    return
+
+                chat = getattr(event, "chat", None)
+                if chat is None:
+                    try:
+                        chat = await event.get_chat()
+                    except Exception:
+                        chat = None
+                from handlers.message_handler import _is_native_group_admin
+                if await _is_native_group_admin(
+                        self, chat_id, user_id, user, chat):
+                    self.logger.log_info(
+                        "AD NAME JOIN SKIPPED NATIVE ADMIN "
+                        f"chat_id={chat_id} user_id={user_id}"
+                    )
+                    return
+
+                ad_name_enforcement.enforce(
+                    self, chat_id, user_id, user,
+                    source="join", ad_reason=ad_reason,
+                )
+            except Exception as error:
+                self.logger.log_error(f"AD NAME JOIN CHECK FAILED: {error!r}")
+
+
+        _UpdateUserName = getattr(types, "UpdateUserName", None)
+        if _UpdateUserName is not None:
+            @self.client.on(events.Raw(_UpdateUserName))
+            async def ad_name_change_check(update):
+                """تغییر نام به نام تبلیغاتی → همان جریان مجازات.
+
+                خودِ آپدیت نام‌ها را دارد و هیچ RPC اضافی لازم نیست. چون
+                عضویت کاربر در گروه‌ها را نمی‌دانیم، فقط گروه‌هایی هدف
+                می‌گیرند که ردیابِ پیام، او را به‌تازگی در آن‌ها دیده است
+                (همان محدوده‌ای که پاکسازی پیام هم طبق قابلیت فعلی ممکن
+                است). کاربر فعّال نیز در اولین پیام بعدِ تغییر نام توسط
+                مسیر پیام گرفته می‌شود؛ این مسیر مکمل است.
+                """
+                try:
+                    from types import SimpleNamespace as _NS
+                    user_id = getattr(update, "user_id", None)
+                    if user_id is None or is_global_owner(user_id):
+                        return
+                    if str(user_id) == str(getattr(self, "bot_account_id", None)):
+                        return
+
+                    probe = _NS(
+                        id=user_id,
+                        first_name=getattr(update, "first_name", None) or None,
+                        last_name=getattr(update, "last_name", None) or None,
+                        username=getattr(update, "username", None) or None,
+                    )
+                    ad_reason = ad_name_detector.reason(probe)
+                    if not ad_reason:
+                        return
+
+                    from handlers.message_handler import _is_native_group_admin
+                    for chat_id in message_tracker.known_chats_for_user(user_id):
+                        if not is_active(chat_id):
+                            continue
+                        if admin_tools.has_admin_permission(
+                                chat_id, user_id, getattr(update, "username", None)):
+                            continue
+                        if await _is_native_group_admin(
+                                self, chat_id, user_id, probe, None):
+                            continue
+                        ad_name_enforcement.enforce(
+                            self, chat_id, user_id, probe,
+                            source="name_change", ad_reason=ad_reason,
+                        )
+                except Exception as error:
+                    self.logger.log_error(
+                        f"AD NAME CHANGE CHECK FAILED: {error!r}"
+                    )
 
 
         async def process_priority_command(event):
