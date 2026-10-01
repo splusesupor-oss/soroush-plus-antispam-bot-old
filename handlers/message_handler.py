@@ -62,6 +62,9 @@ from handlers.group_expiry_handler import (
     handle as handle_group_expiry,
     handle_remaining as handle_group_remaining,
 )
+# 📮 کپی بورد (حافظهٔ روباهی) — قابلیتی مستقل با مسیر پردازش جدا.
+from handlers.clipboard_handler import handle as handle_clipboard
+from modules.clipboard import HELP_SECTION as CLIPBOARD_HELP_SECTION
 from modules.expiry_report import build_group_list
 from modules.name_family import (
     cancel_round as cancel_name_family_round,
@@ -3758,6 +3761,22 @@ async def handle_new_message(bot, event):
                 return
 
         # ------------------------------------------------------------------
+        # 📮 کپی بورد — پیش از فیلترها و شاخه‌های دستوری دیگر.
+        #
+        # متنی که ادمین با Reply روی پیام راهنما می‌فرستد ممکن است لینک
+        # یا اعلان گروه باشد؛ اگر این بررسی بعد از مسیر هرزنامه می‌آمد،
+        # همان پیام پیش از ذخیره شدن حذف می‌شد. تطبیق دستور دقیق است و
+        # مسیر ذخیره فقط با Reply به پیام راهنمای همین گروه باز می‌شود،
+        # پس هیچ پیام دیگری را مصرف نمی‌کند.
+        # ------------------------------------------------------------------
+        if not event.is_private:
+            if await handle_clipboard(
+                bot, event, chat_id, user_id, sender, clean_text,
+                message_text, bot.logger,
+            ):
+                return
+
+        # ------------------------------------------------------------------
         # 🔎 جستجوی گوگل گروه — فقط مدیریت ادمین یا reply مجاز به پیام ربات.
         # درخواست HTTPS خودش در task جدا اجرا می‌شود.
         # ------------------------------------------------------------------
@@ -5741,6 +5760,9 @@ async def handle_new_message(bot, event):
                 "⏳ برای دیدن مهلت باقی مانده گروه\n"
                 "بنویسید مهلت گروه\n"
                 "فقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد\n\n"
+                # 📮 کپی بورد — کل متن بخش یکپارچه Bold است و داخل یک
+                # نقل‌قول شیشه‌ای قرار می‌گیرد.
+                f"{CLIPBOARD_HELP_SECTION}\n\n"
                 "🤖 سیستم هوش مصنوعی گوگل ربات\n\n"
                 "برای فعال کردن: هوش مصنوعی فعال\n"
                 "برای خاموش کردن: هوش مصنوعی خاموش\n"
@@ -5915,6 +5937,8 @@ async def handle_new_message(bot, event):
                 # ⏳ مهلت گروه — بنا به درخواست، «تمام» متن این بخش
                 # (توضیح، خود دستور و خط دسترسی) به‌صورت یکجا Bold است.
                 "⏳ برای دیدن مهلت باقی مانده گروه\nبنویسید مهلت گروه\nفقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد",
+                # 📮 کپی بورد — کل متن بخش یکجا Bold است.
+                CLIPBOARD_HELP_SECTION,
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -6001,6 +6025,8 @@ async def handle_new_message(bot, event):
                 "⏳ برای دیدن مهلت باقی مانده گروه\n"
                 "بنویسید مهلت گروه\n"
                 "فقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد",
+                # 📮 کل بخش کپی بورد در یک نقل‌قول شیشه‌ای یکپارچه.
+                CLIPBOARD_HELP_SECTION,
             ]
             # بخش vip: کل متن داخل یک نقل‌قول شیشه‌ای
             vip_help_section = (
