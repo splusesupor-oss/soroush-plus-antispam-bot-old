@@ -419,6 +419,68 @@ def test_gate_runs_before_early_returns():
           f"-> {source.count('await _enforce_ad_name(')}")
 
 
+# ===========================================================================
+# ۹. end-to-end روی خودِ handle_new_message واقعی
+# ===========================================================================
+def test_end_to_end_real_pipeline():
+    print("\n### 9️⃣ end-to-end: handle_new_message واقعی")
+    use_temp_files()
+    register_filter(CHAT_A, "حسین")
+
+    class RealEvent(Event):
+        def __init__(self, text="سلام"):
+            super().__init__(text)
+            self.chat_id = CHAT_A
+            self.sender = User(OFFENDER_ID, "حسین")
+            self.sender_id = OFFENDER_ID
+            self.out = False
+            self.chat = types.SimpleNamespace(id=CHAT_A, title="گروه تست")
+            self.message.file = None
+            self.message.media = None
+            self.message.fwd_from = None
+
+        async def get_chat(self):
+            return self.chat
+
+        async def get_sender(self):
+            return self.sender
+
+    bot = Bot()
+    bot.bot_account_id = None
+    bot.reply_input_peer_cache = {}
+    bot.config_manager = types.SimpleNamespace(get=lambda key, default=None: default)
+
+    event = RealEvent("سلام بچه‌ها")
+    asyncio.run(handler.handle_new_message(bot, event))
+
+    check("pipeline واقعی گیت را زد", bot.logger.has("NAME FILTER HIT"))
+    check("pipeline واقعی پیام را حذف کرد",
+          bot.message_delete_queue.calls
+          and bot.message_delete_queue.calls[0][1] == [event.message.id],
+          f"-> {bot.message_delete_queue.calls}")
+    check("pipeline واقعی مجازات را صف کرد",
+          len(bot.moderation_queue.jobs) == 1
+          and bot.moderation_queue.jobs[0]["user_id"] == OFFENDER_ID,
+          f"-> {bot.moderation_queue.jobs}")
+
+    clean = Bot()
+    clean.bot_account_id = None
+    clean.reply_input_peer_cache = {}
+    clean.config_manager = types.SimpleNamespace(
+        get=lambda key, default=None: default)
+
+    class CleanEvent(RealEvent):
+        def __init__(self):
+            super().__init__("سلام")
+            self.sender = User(314159, "مریم")
+            self.sender_id = 314159
+
+    asyncio.run(handler.handle_new_message(clean, CleanEvent()))
+    check("کاربر بی‌ربط مجازات نشد",
+          not clean.moderation_queue.jobs,
+          f"-> {clean.moderation_queue.jobs}")
+
+
 def main():
     print("=" * 60)
     print("🚫 تست enforcement فیلتر اسم")
@@ -431,6 +493,7 @@ def main():
     test_group_isolation_enforcement()
     test_global_ad_name_still_works()
     test_gate_runs_before_early_returns()
+    test_end_to_end_real_pipeline()
     print("\n" + "=" * 60)
     print(f"PASSED={PASSED}  FAILED={FAILED}")
     print("=" * 60)
