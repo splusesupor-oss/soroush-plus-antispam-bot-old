@@ -511,8 +511,15 @@ def test_help_section():
           lines[1] == "بنویسید فیلتر اسم بعد نام را بنویسید")
     check("خط سوم درست است", lines[2] == "برای لغو بنویسید")
     check("خط چهارم درست است", lines[3] == "لغو اسم بعد اسم را بنویسید")
+    check("خط پنجم درست است", lines[4] == "برای دیدن لیست اسم ها",
+          f"-> {lines[4]!r}")
+    check("خط ششم درست است", lines[5] == "لیست فیلتر اسم",
+          f"-> {lines[5]!r}")
     check("بین جمله‌ها خط خالی نیست",
-          "\n\n" not in section and len(lines) == 4)
+          "\n\n" not in section and len(lines) == 6)
+    check("دستور لیست بلافاصله بعد از همان بلوک است",
+          section.index("برای دیدن لیست اسم ها")
+          > section.index("لغو اسم بعد اسم را بنویسید"))
     check("کل متن Bold است", ("bold", 0, nf.u16_len(section)) in spans)
     check("کل متن داخل نقل‌قول است",
           ("blockquote", 0, nf.u16_len(section)) in spans)
