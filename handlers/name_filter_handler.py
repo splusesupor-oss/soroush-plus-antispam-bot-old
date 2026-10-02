@@ -28,6 +28,7 @@ except ImportError:  # محیط تست/CI بدون splusthon
 
 from modules import name_filters
 from modules.admin_tools import has_admin_permission
+from modules.group_id import normalize_group_id
 
 
 def _entities(spans):
@@ -97,7 +98,12 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     if action == name_filters.ACTION_LIST:
         body, spans = name_filters.build_list_message(chat_id)
         await _safe_reply(event, body, spans, logger)
-        _log(logger, f"NAME FILTER LIST chat_id={chat_id} user_id={user_id}")
+        _log(logger, "NAME FILTER LIST "
+                     f"chat_id={chat_id} "
+                     f"storage_key={normalize_group_id(chat_id)!r} "
+                     f"user_id={user_id} "
+                     f"terms={name_filters.list_terms(chat_id)!r} "
+                     f"file={name_filters.FILE}")
         return True
 
     if action == name_filters.ACTION_ADD:
@@ -110,7 +116,11 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
             return True
         body, spans = name_filters.build_added_message(display)
         _log(logger, "NAME FILTER ADDED "
-                     f"chat_id={chat_id} user_id={user_id} term={display!r}")
+                     f"chat_id={chat_id} "
+                     f"storage_key={normalize_group_id(chat_id)!r} "
+                     f"user_id={user_id} term={display!r} "
+                     f"now={name_filters.list_terms(chat_id)!r} "
+                     f"file={name_filters.FILE}")
         await _safe_reply(event, body, spans, logger)
         return True
 
@@ -123,7 +133,10 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         return True
     body, spans = name_filters.build_removed_message(display)
     _log(logger, "NAME FILTER REMOVED "
-                 f"chat_id={chat_id} user_id={user_id} term={display!r}")
+                 f"chat_id={chat_id} "
+                 f"storage_key={normalize_group_id(chat_id)!r} "
+                 f"user_id={user_id} term={display!r} "
+                 f"now={name_filters.list_terms(chat_id)!r}")
     await _safe_reply(event, body, spans, logger)
     return True
 

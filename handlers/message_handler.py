@@ -2874,6 +2874,15 @@ def _is_known_internal_command(clean_text, chat_id, user_id):
 
 
 
+def _group_storage_key(chat_id):
+    """کلیدی که فیلترهای این گروه با آن ذخیره/خوانده می‌شوند."""
+    try:
+        from modules.group_id import normalize_group_id
+        return normalize_group_id(chat_id)
+    except Exception:
+        return str(chat_id)
+
+
 def _name_filter_hit(bot, chat_id, user_id, sender):
     """عبارتِ «فیلتر اسم» که با نام نمایشی این کاربر خورده، یا ``None``.
 
@@ -2934,7 +2943,9 @@ def _name_filter_hit(bot, chat_id, user_id, sender):
     try:
         bot.logger.log_info(
             "NAME FILTER CHECK "
-            f"chat_id={chat_id} user_id={user_id} "
+            f"chat_id={chat_id} "
+            f"storage_key={_group_storage_key(chat_id)!r} "
+            f"user_id={user_id} "
             f"display={display!r} username={username!r} "
             f"terms={terms!r} "
             f"skipped={skipped!r} matched={matched!r}"
