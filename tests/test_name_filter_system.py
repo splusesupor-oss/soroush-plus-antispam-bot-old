@@ -666,26 +666,35 @@ def test_diagnostic_command():
 # ۹. نام نمایشیِ ناقص («ناشناخته») — همان باگ واقعی گروه
 # ===========================================================================
 def test_unresolved_display_name():
-    print("\n### 9️⃣ نام نمایشی ناقص → resolve دوباره")
+    print("\n### 9️⃣ نام غیرعادی و نام خالی")
     fresh()
     bot = Bot()
     owner = User(OWNER_ID, "مالک")
-    command(bot, CHAT_A, owner, "فیلتر اسم سجاد")
 
-    check("«ناشناخته» جای‌نگهدار شناخته می‌شود",
-          nf.is_unresolved("ناشناخته"))
-    check("نام خالی هم جای‌نگهدار است", nf.is_unresolved(""))
-    check("Unknown هم جای‌نگهدار است", nf.is_unresolved("Unknown"))
-    check("Deleted Account هم جای‌نگهدار است",
-          nf.is_unresolved("Deleted Account"))
-    check("نام واقعی جای‌نگهدار نیست", not nf.is_unresolved("سجاد"))
-    check("نام واقعی لاتین هم جای‌نگهدار نیست",
-          not nf.is_unresolved("Hector"))
+    print("  — «ناشناخته» یک نام واقعی است، نه جای‌نگهدار")
+    check("«ناشناخته» نامِ قابل فیلتر است",
+          not nf.is_unresolved("ناشناخته"))
+    check("Unknown هم نامِ قابل فیلتر است", not nf.is_unresolved("Unknown"))
+    check("فقط نام خالی حل‌نشده است", nf.is_unresolved(""))
+    check("فاصلهٔ خالی هم حل‌نشده است", nf.is_unresolved("   "))
 
-    broken = User(OFFENDER_ID, "ناشناخته", username="Oiiew")
-    check("با نام ناقص هیچ فیلتری نمی‌خورد",
-          nf.match_name(CHAT_A, broken) is None)
+    command(bot, CHAT_A, owner, "فیلتر اسم ناشناخته")
+    odd = User(OFFENDER_ID, "ناشناخته", username="Oiiew")
+    check("کاربری که سروش نامش را «ناشناخته» می‌دهد گرفته می‌شود",
+          nf.match_name(CHAT_A, odd) == "ناشناخته")
 
+    bot_odd = Bot()
+    event = deliver(bot_odd, CHAT_A, odd)
+    check("اولین پیامش حذف شد",
+          bot_odd.message_delete_queue.calls
+          and bot_odd.message_delete_queue.calls[0][1] == [event.message.id],
+          f"-> {bot_odd.message_delete_queue.calls}")
+    check("مجازاتش صف شد", len(bot_odd.moderation_queue.jobs) == 1)
+
+    print("  — نام واقعاً خالی → تلاش برای resolve")
+    fresh()
+    bot2 = Bot()
+    command(bot2, CHAT_A, owner, "فیلتر اسم سجاد")
     real = User(OFFENDER_ID, "سجاد", username="Oiiew")
 
     class ResolvingClient:
@@ -696,39 +705,35 @@ def test_unresolved_display_name():
             self.calls.append(probe)
             return real
 
-    bot.client = ResolvingClient()
-    event = Event("سلام", CHAT_A, broken)
-    asyncio.run(handler.handle_new_message(bot, event))
-
-    check("entity دوباره گرفته شد", bot.client.calls, f"-> {bot.client.calls}")
-    check("resolve لاگ شد", bot.logger.has("NAME FILTER RESOLVED"))
-    check("بعد از resolve فیلتر خورد", bot.logger.has("NAME FILTER HIT"))
+    bot2.client = ResolvingClient()
+    blank = User(OFFENDER_ID, "", username="Oiiew")
+    event2 = deliver(bot2, CHAT_A, blank)
+    check("entity دوباره گرفته شد", bot2.client.calls,
+          f"-> {bot2.client.calls}")
+    check("resolve لاگ شد", bot2.logger.has("NAME FILTER RESOLVED"))
+    check("بعد از resolve فیلتر خورد", bot2.logger.has("NAME FILTER HIT"))
     check("پیامش حذف شد",
-          bot.message_delete_queue.calls
-          and bot.message_delete_queue.calls[0][1] == [event.message.id],
-          f"-> {bot.message_delete_queue.calls}")
-    check("مجازاتش صف شد", len(bot.moderation_queue.jobs) == 1,
-          f"-> {bot.moderation_queue.jobs}")
+          bot2.message_delete_queue.calls
+          and bot2.message_delete_queue.calls[0][1] == [event2.message.id])
 
     print("  — وقتی resolve هم جواب نمی‌دهد")
     fresh()
-    bot2 = Bot()
-    command(bot2, CHAT_A, owner, "فیلتر اسم سجاد")
+    bot3 = Bot()
+    command(bot3, CHAT_A, owner, "فیلتر اسم سجاد")
 
     class FailingClient:
         async def get_entity(self, probe):
             raise RuntimeError("NOT_FOUND")
 
-    bot2.client = FailingClient()
+    bot3.client = FailingClient()
     asyncio.run(handler.handle_new_message(
-        bot2, Event("سلام", CHAT_A, User(424242, "ناشناخته", username="x"))))
-    check("ربات کرش نمی‌کند و ادامه می‌دهد",
-          bot2.logger.has("NAME FILTER RESOLVE FAILED"))
-    check("کسی بی‌دلیل مجازات نمی‌شود", not bot2.moderation_queue.jobs)
+        bot3, Event("سلام", CHAT_A, User(424242, "", username="x"))))
+    check("ربات کرش نمی‌کند", bot3.logger.has("NAME FILTER RESOLVE FAILED"))
+    check("کسی بی‌دلیل مجازات نمی‌شود", not bot3.moderation_queue.jobs)
 
     print("  — گروه بدون فیلتر هیچ RPC اضافه نمی‌زند")
     fresh()
-    bot3 = Bot()
+    bot4 = Bot()
 
     class CountingClient:
         def __init__(self):
@@ -738,21 +743,27 @@ def test_unresolved_display_name():
             self.calls += 1
             return real
 
-    bot3.client = CountingClient()
+    bot4.client = CountingClient()
     asyncio.run(handler.handle_new_message(
-        bot3, Event("سلام", CHAT_B, User(5, "ناشناخته"))))
-    check("هیچ get_entity ای صدا زده نشد", bot3.client.calls == 0,
-          f"-> {bot3.client.calls}")
+        bot4, Event("سلام", CHAT_B, User(5, ""))))
+    check("هیچ get_entity ای صدا زده نشد", bot4.client.calls == 0,
+          f"-> {bot4.client.calls}")
 
-    print("  — گزارش «تست فیلتر اسم» هشدار می‌دهد")
-    body, _spans = nf.build_test_message(CHAT_A, broken)
-    check("گزارش هشدار نام ناقص دارد",
-          "قابل خواندن نیست" in body, f"-> {body!r}")
+    print("  — گزارش تست، دستور آماده پیشنهاد می‌دهد")
+    fresh()
+    bot5 = Bot()
+    command(bot5, CHAT_A, owner, "فیلتر اسم حسین")
+    body, _spans = nf.build_test_message(CHAT_A, odd)
+    check("پیشنهاد فیلتر با نام نمایشی می‌دهد",
+          "فیلتر اسم ناشناخته" in body, f"-> {body!r}")
+    check("پیشنهاد فیلتر با یوزرنیم می‌دهد",
+          "فیلتر اسم Oiiew" in body, f"-> {body!r}")
+    blank_body, _s = nf.build_test_message(
+        CHAT_A, User(7, "", username="ghost"))
+    check("برای نام خالی هشدار می‌دهد",
+          "هیچ نامی نمی‌دهد" in blank_body, f"-> {blank_body!r}")
 
 
-# ===========================================================================
-# ۱۰. راه‌حل عملی وقتی نام نمایشی اصلاً خوانده نمی‌شود: یوزرنیم
-# ===========================================================================
 def test_username_fallback_and_debug():
     print("\n### 🔟 فیلتر با یوزرنیم + دستور دیباگ")
     fresh()

@@ -138,22 +138,17 @@ def is_emoji_only(value):
     return all(not char.isalnum() for char in text)
 
 
-# نام‌هایی که یعنی «کتابخانه نتوانست پروفایل را resolve کند» — نه نام
-# واقعی کاربر. وقتی چنین چیزی دیده شد باید entity دوباره گرفته شود،
-# وگرنه هیچ فیلتری روی آن کاربر نمی‌خورد.
-UNRESOLVED_NAMES = (
-    "ناشناخته", "نامشخص", "کاربر ناشناس", "بدون نام", "نامعلوم",
-    "unknown", "unknown user", "no name", "deleted account",
-    "deleted", "none", "null",
-)
+# ⚠️ عمداً کوتاه است. سروش برای بعضی کاربران واقعاً «ناشناخته» را
+# به‌عنوان نامِ پروفایل برمی‌گرداند — این یک جای‌نگهدار نیست، نامِ خودِ
+# کاربر است و باید مثل هر نام دیگری قابل فیلتر باشد. پس فقط نامِ
+# واقعاً خالی «حل‌نشده» حساب می‌شود، وگرنه فیلتر «ناشناخته» هرگز
+# روی کسی نمی‌خورد.
+UNRESOLVED_NAMES = ()
 
 
 def is_unresolved(name):
-    """آیا این «نام نمایشی» در واقع یک جای‌نگهدار است؟"""
-    value = normalize(name)
-    if not value:
-        return True
-    return value in _UNRESOLVED_KEYS
+    """فقط نامِ خالی. هر رشتهٔ دیگری نامِ واقعیِ قابل‌فیلتر است."""
+    return not normalize(name)
 
 
 def display_name(user):
@@ -161,9 +156,6 @@ def display_name(user):
     first = getattr(user, "first_name", None) or ""
     last = getattr(user, "last_name", None) or ""
     return " ".join(f"{first} {last}".split())
-
-
-_UNRESOLVED_KEYS = frozenset(normalize(item) for item in UNRESOLVED_NAMES)
 
 
 def _keys(term):
@@ -477,8 +469,8 @@ def build_test_message(chat_id, user, raw_name=None):
         "",
     ]
     if is_unresolved(shown):
-        lines.append("⚠️ نام نمایشی این کاربر قابل خواندن نیست")
-        lines.append("(سروش پروفایل را ناقص داده است)")
+        lines.append("⚠️ سروش برای این کاربر هیچ نامی نمی‌دهد")
+        lines.append("فقط با یوزرنیم می‌شود فیلترش کرد.")
         lines.append("")
 
     if matched:
@@ -489,6 +481,15 @@ def build_test_message(chat_id, user, raw_name=None):
         lines.append("فیلترها را در همین گروه ثبت کن، نه گروه دیگر.")
     else:
         lines.append("نتیجه : ❌ با هیچ فیلتری نمی‌خورد")
+        suggestions = []
+        if shown:
+            suggestions.append(f"فیلتر اسم {shown}")
+        if username:
+            suggestions.append(f"فیلتر اسم {username}")
+        if suggestions:
+            lines.append("")
+            lines.append("برای فیلتر همین کاربر یکی از این‌ها را بنویس:")
+            lines.extend(suggestions)
 
     text = "\n".join(lines)
     return text, [("bold", 0, u16_len(title))]
