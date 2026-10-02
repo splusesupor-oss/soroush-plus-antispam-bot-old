@@ -750,6 +750,54 @@ def test_unresolved_display_name():
           "قابل خواندن نیست" in body, f"-> {body!r}")
 
 
+# ===========================================================================
+# ۱۰. راه‌حل عملی وقتی نام نمایشی اصلاً خوانده نمی‌شود: یوزرنیم
+# ===========================================================================
+def test_username_fallback_and_debug():
+    print("\n### 🔟 فیلتر با یوزرنیم + دستور دیباگ")
+    fresh()
+    bot = Bot()
+    owner = User(OWNER_ID, "مالک")
+
+    command(bot, CHAT_A, owner, "فیلتر اسم Oiiew")
+    broken = User(OFFENDER_ID, "ناشناخته", username="Oiiew")
+    check("کاربر با نام ناخوانا، از روی یوزرنیم گرفته می‌شود",
+          nf.match_name(CHAT_A, broken) == "Oiiew")
+    check("یوزرنیم بزرگ/کوچک فرقی ندارد",
+          nf.match_name(CHAT_A, User(2, "ناشناخته", username="oIIEW"))
+          == "Oiiew")
+    check("@ ابتدای یوزرنیم مشکلی نمی‌سازد",
+          nf.match_name(CHAT_A, User(3, "ناشناخته", username="@Oiiew"))
+          == "Oiiew")
+    check("کاربر دیگر گرفته نمی‌شود",
+          nf.match_name(CHAT_A, User(4, "ناشناخته", username="other")) is None)
+
+    bot2 = Bot()
+    event = deliver(bot2, CHAT_A, broken)
+    check("اولین پیامش حذف شد",
+          bot2.message_delete_queue.calls
+          and bot2.message_delete_queue.calls[0][1] == [event.message.id],
+          f"-> {bot2.message_delete_queue.calls}")
+    check("مجازاتش صف شد", len(bot2.moderation_queue.jobs) == 1)
+
+    check("دستور دیباگ شناخته می‌شود",
+          nf.match_command("دیباگ فیلتر اسم") == ("debug", ""))
+    check("دستور دیباگ با «فیلتر اسم …» قاطی نمی‌شود",
+          nf.match_command("فیلتر اسم دیباگ") == ("add", "دیباگ"))
+
+    _done, replies = command(bot, CHAT_A, owner, "دیباگ فیلتر اسم")
+    body = replies[0] if replies else ""
+    check("دیباگ جواب می‌دهد", "دیباگ خواندن نام نمایشی" in body,
+          f"-> {body[:120]!r}")
+    check("دیباگ فیلدهای فرستنده را نشان می‌دهد",
+          "first_name" in body or "username" in body, f"-> {body[:200]!r}")
+
+    stranger = User(BYSTANDER_ID, "رهگذر")
+    _done, replies = command(bot, CHAT_A, stranger, "دیباگ فیلتر اسم")
+    check("کاربر عادی دیباگ نمی‌گیرد",
+          replies and "فقط مالک" in replies[0], f"-> {replies}")
+
+
 def main():
     print("=" * 62)
     print("🚫 سیستم مستقل فیلتر اسم")
@@ -763,6 +811,7 @@ def main():
     test_independence()
     test_diagnostic_command()
     test_unresolved_display_name()
+    test_username_fallback_and_debug()
     print("\n" + "=" * 62)
     print(f"PASSED={PASSED}  FAILED={FAILED}")
     print("=" * 62)

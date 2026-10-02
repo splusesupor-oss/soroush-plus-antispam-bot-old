@@ -44,11 +44,13 @@ ADD_PREFIX = "فیلتر اسم"
 REMOVE_PREFIXES = ("حذف فیلتر اسم", "لغو اسم")
 LIST_COMMAND = "لیست فیلتر اسم"
 TEST_COMMANDS = ("تست فیلتر اسم", "بررسی فیلتر اسم", "چک فیلتر اسم")
+DEBUG_COMMANDS = ("دیباگ فیلتر اسم", "خام فیلتر اسم", "اطلاعات اسم")
 
 ACTION_ADD = "add"
 ACTION_REMOVE = "remove"
 ACTION_LIST = "list"
 ACTION_TEST = "test"
+ACTION_DEBUG = "debug"
 
 # سقف‌ها: جلوی رشد بی‌پایان فایل و عبارت‌های بی‌معنی را می‌گیرد.
 MAX_TERMS_PER_GROUP = 200
@@ -215,7 +217,13 @@ def match_command(text):
     if value == LIST_COMMAND:
         return ACTION_LIST, None
 
-    # «تست فیلتر اسم» پیش از «فیلتر اسم …» دیده می‌شود.
+    # دستورهای تشخیصی پیش از «فیلتر اسم …» دیده می‌شوند.
+    for prefix in DEBUG_COMMANDS:
+        if value == prefix:
+            return ACTION_DEBUG, ""
+        if value.startswith(prefix + " "):
+            return ACTION_DEBUG, value[len(prefix) + 1:].strip()
+
     for prefix in TEST_COMMANDS:
         if value == prefix:
             return ACTION_TEST, ""

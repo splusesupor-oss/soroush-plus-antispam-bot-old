@@ -79,6 +79,111 @@ async def _reply(event, text, spans=None):
         text, formatting_entities=_entities(spans) if spans else None)
 
 
+
+_PROBE_FIELDS = (
+    "first_name", "last_name", "username", "title", "name",
+    "deleted", "bot", "fake", "scam", "id",
+)
+
+
+def _describe(obj):
+    """خلاصهٔ فیلدهای نام‌دارِ یک آبجکت، برای فهمیدن شکل واقعی داده."""
+    if obj is None:
+        return "None"
+    parts = [type(obj).__name__]
+    for field in _PROBE_FIELDS:
+        try:
+            value = getattr(obj, field, None)
+        except Exception as error:
+            value = f"<err {error!r}>"
+        if value in (None, "", False):
+            continue
+        text = str(value)
+        if len(text) > 40:
+            text = text[:40] + "…"
+        parts.append(f"{field}={text}")
+    return " | ".join(parts)
+
+
+async def _dump_sources(bot, event, sender):
+    """هر منبعی که ممکن است نام واقعی کاربر را داشته باشد را می‌آزماید."""
+    lines = []
+    client = getattr(bot, "client", None)
+    replied = None
+    try:
+        replied = await event.get_reply_message()
+    except Exception as error:
+        lines.append(f"get_reply_message → خطا {error!r}")
+
+    target_id = None
+    handle = None
+
+    if replied is not None:
+        for field in ("sender_id", "post_author", "from_id"):
+            try:
+                value = getattr(replied, field, None)
+            except Exception:
+                value = None
+            if value not in (None, ""):
+                lines.append(f"message.{field} = {str(value)[:50]}")
+        cached = getattr(replied, "sender", None)
+        lines.append(f"message.sender → {_describe(cached)}")
+        if cached is None:
+            try:
+                cached = await replied.get_sender()
+                lines.append(f"get_sender() → {_describe(cached)}")
+            except Exception as error:
+                lines.append(f"get_sender() → خطا {error!r}")
+        target_id = getattr(cached, "id", None) or getattr(
+            replied, "sender_id", None)
+        handle = (getattr(cached, "username", None) or "").lstrip("@")
+    else:
+        lines.append(f"فرستندهٔ دستور → {_describe(sender)}")
+        target_id = getattr(sender, "id", None)
+        handle = (getattr(sender, "username", None) or "").lstrip("@")
+
+    if client is not None and target_id:
+        try:
+            lines.append(
+                f"get_entity(id) → {_describe(await client.get_entity(target_id))}")
+        except Exception as error:
+            lines.append(f"get_entity(id) → خطا {error!r}")
+    if client is not None and handle:
+        try:
+            lines.append(
+                f"get_entity(@) → {_describe(await client.get_entity(handle))}")
+        except Exception as error:
+            lines.append(f"get_entity(@) → خطا {error!r}")
+
+    if client is not None and target_id:
+        try:
+            from splusthon.tl.functions.users import GetFullUserRequest
+
+            full = await client(GetFullUserRequest(target_id))
+            users = getattr(full, "users", None)
+            if users:
+                lines.append(f"GetFullUser.users[0] → {_describe(users[0])}")
+            else:
+                inner = getattr(full, "user", None) or getattr(
+                    full, "full_user", None)
+                lines.append(f"GetFullUser → {_describe(inner)}")
+        except Exception as error:
+            lines.append(f"GetFullUser → خطا {error!r}")
+
+    if client is not None and target_id:
+        try:
+            from splusthon.tl.functions.channels import GetParticipantRequest
+
+            part = await client(GetParticipantRequest(
+                getattr(event, "chat_id", None), target_id))
+            users = getattr(part, "users", None)
+            if users:
+                lines.append(f"GetParticipant.users[0] → {_describe(users[0])}")
+        except Exception as error:
+            lines.append(f"GetParticipant → خطا {error!r}")
+
+    return lines
+
 async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     """``True`` یعنی پیام مصرف شد و هندلر اصلی نباید ادامه دهد."""
     matched = name_filters.match_command(text)
@@ -104,6 +209,22 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                      f"user_id={user_id} "
                      f"terms={name_filters.list_terms(chat_id)!r} "
                      f"file={name_filters.FILE}")
+        return True
+
+    if action == name_filters.ACTION_DEBUG:
+        lines = ["🧪 دیباگ خواندن نام نمایشی", ""]
+        try:
+            lines.extend(await _dump_sources(bot, event, sender))
+        except Exception as error:
+            lines.append(f"دامپ شکست خورد: {error!r}")
+        body = "\n".join(lines)
+        _log(logger, "NAME FILTER DEBUG "
+                     f"chat_id={chat_id} user_id={user_id} "
+                     f"lines={len(lines)}")
+        _log(logger, "NAME FILTER DEBUG BODY " + body.replace("\n", " ~ "))
+        await _safe_reply(event, body[:3500],
+                          [("bold", 0, name_filters.u16_len(lines[0]))],
+                          logger)
         return True
 
     if action == name_filters.ACTION_TEST:
