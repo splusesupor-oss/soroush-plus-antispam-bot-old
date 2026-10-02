@@ -3,6 +3,7 @@ from collections import Counter, deque
 from datetime import date
 import os
 import time
+import time as _time
 
 from modules.fill_blank import check_fill, get_token as get_fill_token
 from modules.riddles import check_answer
@@ -2874,6 +2875,106 @@ def _is_known_internal_command(clean_text, chat_id, user_id):
 
 
 
+
+# کش resolve نام نمایشی: جلوی طوفان RPC را می‌گیرد. مقدار موفق ۱۰ دقیقه
+# و شکست ۲ دقیقه نگه داشته می‌شود.
+_NAME_RESOLVE_CACHE = {}
+_NAME_RESOLVE_TTL_OK = 600.0
+_NAME_RESOLVE_TTL_FAIL = 120.0
+_NAME_RESOLVE_MAX = 2048
+
+
+def _name_resolve_cached(user_id):
+    entry = _NAME_RESOLVE_CACHE.get(user_id)
+    if not entry:
+        return False, None
+    expires_at, value = entry
+    if _time.monotonic() >= expires_at:
+        _NAME_RESOLVE_CACHE.pop(user_id, None)
+        return False, None
+    return True, value
+
+
+def _name_resolve_store(user_id, value):
+    if len(_NAME_RESOLVE_CACHE) >= _NAME_RESOLVE_MAX:
+        _NAME_RESOLVE_CACHE.clear()
+    ttl = _NAME_RESOLVE_TTL_OK if value is not None else _NAME_RESOLVE_TTL_FAIL
+    _NAME_RESOLVE_CACHE[user_id] = (_time.monotonic() + ttl, value)
+
+
+async def _resolve_display_sender(bot, event, user_id, sender):
+    """اگر نام نمایشی «ناشناخته/خالی» بود، entity را دوباره می‌گیرد.
+
+    سروش گاهی فرستنده را به‌صورت ناقص تحویل می‌دهد و ``first_name``
+    جای‌نگهداری مثل «ناشناخته» دارد. بدون این بازیابی، هیچ «فیلتر اسم»ی
+    روی آن کاربر نمی‌خورد — دقیقاً همان چیزی که در گروه دیده می‌شد.
+
+    نتیجه کش می‌شود تا این مسیر به RPC storm تبدیل نشود.
+    """
+    try:
+        current = name_filters.display_name(sender)
+        if sender is not None and not name_filters.is_unresolved(current):
+            return sender
+        if not user_id:
+            return sender
+
+        hit, cached = _name_resolve_cached(user_id)
+        if hit:
+            return cached if cached is not None else sender
+
+        client = getattr(bot, "client", None)
+        if client is None:
+            return sender
+
+        probes = [user_id]
+        handle = (getattr(sender, "username", None) or "").lstrip("@")
+        if handle:
+            probes.append(handle)
+
+        for probe in probes:
+            try:
+                fresh = await client.get_entity(probe)
+            except Exception:
+                continue
+            if fresh is None:
+                continue
+            fresh_name = name_filters.display_name(fresh)
+            if name_filters.is_unresolved(fresh_name):
+                continue
+            try:
+                event._bot_cached_sender = fresh
+            except Exception:
+                pass
+            _name_resolve_store(user_id, fresh)
+            try:
+                bot.logger.log_info(
+                    "NAME FILTER RESOLVED "
+                    f"user_id={user_id} before={current!r} "
+                    f"after={fresh_name!r} probe={probe!r}"
+                )
+            except Exception:
+                pass
+            return fresh
+
+        _name_resolve_store(user_id, None)
+        try:
+            bot.logger.log_info(
+                "NAME FILTER RESOLVE FAILED "
+                f"user_id={user_id} name={current!r} "
+                f"username={handle!r}"
+            )
+        except Exception:
+            pass
+    except Exception as error:
+        try:
+            bot.logger.log_error(
+                f"NAME FILTER RESOLVE ERROR user_id={user_id} error={error!r}"
+            )
+        except Exception:
+            pass
+    return sender
+
+
 def _group_storage_key(chat_id):
     """کلیدی که فیلترهای این گروه با آن ذخیره/خوانده می‌شوند."""
     try:
@@ -3376,6 +3477,16 @@ async def handle_new_message(bot, event):
         # Advertising Name Moderation فعلی از طریق ``_enforce_ad_name``.
         # ------------------------------------------------------------------
         if not getattr(event, "is_private", False):
+            # resolve فقط وقتی لازم است که این گروه اصلاً فیلتری دارد،
+            # تا برای گروه‌های بدون فیلتر هیچ RPC اضافه‌ای نرود.
+            try:
+                _nf_has_filters = bool(name_filters.list_terms(chat_id))
+            except Exception:
+                _nf_has_filters = False
+            if _nf_has_filters:
+                sender = await _resolve_display_sender(
+                    bot, event, user_id, sender
+                )
             _nf_term = _name_filter_hit(bot, chat_id, user_id, sender)
             if _nf_term:
                 bot.logger.log_info(

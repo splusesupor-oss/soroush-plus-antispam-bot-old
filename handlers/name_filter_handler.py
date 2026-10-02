@@ -121,6 +121,29 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         raw = term or None
         if target is None and not raw:
             target = sender
+        # اگر پروفایل ناقص آمده بود، یک بار دوباره entity را می‌گیریم تا
+        # گزارش، همان چیزی را نشان دهد که enforcement می‌بیند.
+        if target is not None and name_filters.is_unresolved(
+            name_filters.display_name(target)
+        ):
+            client = getattr(bot, "client", None)
+            probes = [getattr(target, "id", None),
+                      (getattr(target, "username", None) or "").lstrip("@")]
+            for probe in probes:
+                if not probe or client is None:
+                    continue
+                try:
+                    fresh = await client.get_entity(probe)
+                except Exception:
+                    continue
+                if fresh is not None and not name_filters.is_unresolved(
+                    name_filters.display_name(fresh)
+                ):
+                    _log(logger, "NAME FILTER TEST RESOLVED "
+                                 f"probe={probe!r} "
+                                 f"name={name_filters.display_name(fresh)!r}")
+                    target = fresh
+                    break
         body, spans = name_filters.build_test_message(chat_id, target, raw)
         _log(logger, "NAME FILTER TEST "
                      f"chat_id={chat_id} "

@@ -136,11 +136,32 @@ def is_emoji_only(value):
     return all(not char.isalnum() for char in text)
 
 
+# نام‌هایی که یعنی «کتابخانه نتوانست پروفایل را resolve کند» — نه نام
+# واقعی کاربر. وقتی چنین چیزی دیده شد باید entity دوباره گرفته شود،
+# وگرنه هیچ فیلتری روی آن کاربر نمی‌خورد.
+UNRESOLVED_NAMES = (
+    "ناشناخته", "نامشخص", "کاربر ناشناس", "بدون نام", "نامعلوم",
+    "unknown", "unknown user", "no name", "deleted account",
+    "deleted", "none", "null",
+)
+
+
+def is_unresolved(name):
+    """آیا این «نام نمایشی» در واقع یک جای‌نگهدار است؟"""
+    value = normalize(name)
+    if not value:
+        return True
+    return value in _UNRESOLVED_KEYS
+
+
 def display_name(user):
     """نام نمایشی کاربر — نام + نام خانوادگی، بدون وابستگی بیرونی."""
     first = getattr(user, "first_name", None) or ""
     last = getattr(user, "last_name", None) or ""
     return " ".join(f"{first} {last}".split())
+
+
+_UNRESOLVED_KEYS = frozenset(normalize(item) for item in UNRESOLVED_NAMES)
 
 
 def _keys(term):
@@ -447,6 +468,11 @@ def build_test_message(chat_id, user, raw_name=None):
         f"نام نرمال‌شده : {normalize(shown) or '— خالی —'}",
         "",
     ]
+    if is_unresolved(shown):
+        lines.append("⚠️ نام نمایشی این کاربر قابل خواندن نیست")
+        lines.append("(سروش پروفایل را ناقص داده است)")
+        lines.append("")
+
     if matched:
         lines.append(f"نتیجه : ✅ با فیلتر «{matched}» می‌خورد")
         lines.append("این کاربر با اولین پیام حذف و مجازات می‌شود.")
