@@ -106,6 +106,32 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
                      f"file={name_filters.FILE}")
         return True
 
+    if action == name_filters.ACTION_TEST:
+        # هدف: کاربرِ پیامِ ریپلای‌شده، وگرنه متنِ بعد از دستور،
+        # وگرنه خودِ فرستنده.
+        target = None
+        try:
+            replied = await event.get_reply_message()
+            if replied is not None:
+                target = getattr(replied, "sender", None)
+                if target is None:
+                    target = await replied.get_sender()
+        except Exception as error:
+            _log_error(logger, f"NAME FILTER TEST REPLY FAILED: {error!r}")
+        raw = term or None
+        if target is None and not raw:
+            target = sender
+        body, spans = name_filters.build_test_message(chat_id, target, raw)
+        _log(logger, "NAME FILTER TEST "
+                     f"chat_id={chat_id} "
+                     f"storage_key={normalize_group_id(chat_id)!r} "
+                     f"user_id={user_id} "
+                     f"target={name_filters.display_name(target)!r} "
+                     f"raw={raw!r} "
+                     f"terms={name_filters.list_terms(chat_id)!r}")
+        await _safe_reply(event, body, spans, logger)
+        return True
+
     if action == name_filters.ACTION_ADD:
         ok, problem, display = name_filters.add(chat_id, term, user_id=user_id)
         if not ok:

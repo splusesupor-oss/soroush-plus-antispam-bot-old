@@ -115,6 +115,9 @@ class Event:
     async def get_sender(self):
         return self.sender
 
+    async def get_reply_message(self):
+        return getattr(self, "replied", None)
+
     async def reply(self, text, formatting_entities=None, **_kw):
         self.replies.append(text)
         return types.SimpleNamespace(id=1)
@@ -215,6 +218,15 @@ def command(bot, chat_id, sender, text):
     done = asyncio.run(handle_name_filter(
         bot, event, chat_id, sender.id, sender, text, logger=bot.logger))
     return done, event.replies
+
+
+def command_reply(bot, chat_id, sender, text, target):
+    """دستور را با «ریپلای» روی پیام یک کاربر دیگر اجرا می‌کند."""
+    event = Event(text, chat_id, sender)
+    event.replied = types.SimpleNamespace(sender=target)
+    asyncio.run(handle_name_filter(
+        bot, event, chat_id, sender.id, sender, text, logger=bot.logger))
+    return event.replies
 
 
 def deliver(bot, chat_id, sender, text="سلام"):
@@ -592,6 +604,64 @@ def test_independence():
           isinstance(payload, dict) and len(payload) == 1, f"-> {payload}")
 
 
+# ===========================================================================
+# ۸. دستور تشخیصی «تست فیلتر اسم»
+# ===========================================================================
+def test_diagnostic_command():
+    print("\n### 8️⃣ دستور «تست فیلتر اسم»")
+    fresh()
+    bot = Bot()
+    owner = User(OWNER_ID, "مالک")
+
+    _done, replies = command(bot, CHAT_A, owner, "تست فیلتر اسم")
+    body = replies[0] if replies else ""
+    check("روی گروه بدون فیلتر هشدار می‌دهد",
+          "هیچ فیلتری ندارد" in body, f"-> {body!r}")
+    check("شناسهٔ گروه را نشان می‌دهد", "شناسهٔ گروه" in body, f"-> {body!r}")
+
+    command(bot, CHAT_A, owner, "فیلتر اسم نازگل")
+    command(bot, CHAT_A, owner, "فیلتر اسم 😌")
+
+    target = User(70250954, "نازگل", username="nazgol_01")
+    replies = command_reply(bot, CHAT_A, owner, "تست فیلتر اسم", target)
+    body = replies[0] if replies else ""
+    check("روی ریپلای، نام نمایشی را نشان می‌دهد",
+          "نام نمایشی : نازگل" in body, f"-> {body!r}")
+    check("یوزرنیم را هم نشان می‌دهد",
+          "nazgol_01" in body, f"-> {body!r}")
+    check("تطبیق را اعلام می‌کند",
+          "✅" in body and "نازگل" in body, f"-> {body!r}")
+    check("فیلترهای گروه را فهرست می‌کند",
+          "نازگل" in body and "😌" in body, f"-> {body!r}")
+
+    clean = User(999, "Hector", username="hfiytc")
+    replies = command_reply(bot, CHAT_A, owner, "تست فیلتر اسم", clean)
+    body = replies[0] if replies else ""
+    check("کاربر سالم ❌ می‌گیرد", "❌" in body, f"-> {body!r}")
+    check("نام نرمال‌شده نمایش داده می‌شود",
+          "hector" in body, f"-> {body!r}")
+
+    _done, replies = command(bot, CHAT_A, owner, "تست فیلتر اسم نازگل")
+    body = replies[0] if replies else ""
+    check("با نام متنی هم کار می‌کند", "✅" in body, f"-> {body!r}")
+
+    _done, replies = command(bot, CHAT_A, owner, "لیست فیلتر اسم")
+    check("لیست هم شناسهٔ گروه را دارد",
+          replies and "شناسهٔ این گروه" in replies[0], f"-> {replies}")
+
+    stranger = User(BYSTANDER_ID, "رهگذر")
+    _done, replies = command(bot, CHAT_A, stranger, "تست فیلتر اسم")
+    check("کاربر عادی اجازه ندارد",
+          replies and "فقط مالک" in replies[0], f"-> {replies}")
+
+    check("دستور با «فیلتر اسم …» قاطی نمی‌شود",
+          nf.match_command("تست فیلتر اسم نازگل") == ("test", "نازگل")
+          and nf.match_command("فیلتر اسم نازگل") == ("add", "نازگل"))
+    check("چیزی به فیلترها اضافه نشد",
+          sorted(nf.list_terms(CHAT_A)) == sorted(["نازگل", "😌"]),
+          f"-> {nf.list_terms(CHAT_A)}")
+
+
 def main():
     print("=" * 62)
     print("🚫 سیستم مستقل فیلتر اسم")
@@ -603,6 +673,7 @@ def main():
     test_list_filters()
     test_group_isolation()
     test_independence()
+    test_diagnostic_command()
     print("\n" + "=" * 62)
     print(f"PASSED={PASSED}  FAILED={FAILED}")
     print("=" * 62)

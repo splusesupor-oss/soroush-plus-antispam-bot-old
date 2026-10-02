@@ -294,7 +294,11 @@ def test_list_command():
     empty, consumed = send(bot, CHAT_A, owner, "لیست فیلتر اسم")
     check("پیام مصرف شد", consumed is True)
     check("لیست خالی پیام مناسب دارد",
-          empty.out == [nf.EMPTY_LIST_MESSAGE], f"-> {empty.out}")
+          len(empty.out) == 1
+          and empty.out[0].startswith(nf.EMPTY_LIST_MESSAGE),
+          f"-> {empty.out}")
+    check("لیست خالی شناسهٔ گروه را نشان می‌دهد",
+          "شناسهٔ این گروه" in empty.out[0], f"-> {empty.out}")
 
     send(bot, CHAT_A, owner, "فیلتر اسم حسین")
     send(bot, CHAT_A, owner, "فیلتر اسم 🍆")

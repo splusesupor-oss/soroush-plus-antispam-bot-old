@@ -43,10 +43,12 @@ FILE = runtime_config_file("name_filters.json")
 ADD_PREFIX = "فیلتر اسم"
 REMOVE_PREFIXES = ("حذف فیلتر اسم", "لغو اسم")
 LIST_COMMAND = "لیست فیلتر اسم"
+TEST_COMMANDS = ("تست فیلتر اسم", "بررسی فیلتر اسم", "چک فیلتر اسم")
 
 ACTION_ADD = "add"
 ACTION_REMOVE = "remove"
 ACTION_LIST = "list"
+ACTION_TEST = "test"
 
 # سقف‌ها: جلوی رشد بی‌پایان فایل و عبارت‌های بی‌معنی را می‌گیرد.
 MAX_TERMS_PER_GROUP = 200
@@ -191,6 +193,13 @@ def match_command(text):
 
     if value == LIST_COMMAND:
         return ACTION_LIST, None
+
+    # «تست فیلتر اسم» پیش از «فیلتر اسم …» دیده می‌شود.
+    for prefix in TEST_COMMANDS:
+        if value == prefix:
+            return ACTION_TEST, ""
+        if value.startswith(prefix + " "):
+            return ACTION_TEST, value[len(prefix) + 1:].strip()
 
     for prefix in REMOVE_PREFIXES:
         if value == prefix:
@@ -390,12 +399,65 @@ def build_removed_message(display):
 
 def build_list_message(chat_id):
     terms = list_terms(chat_id)
+    key = normalize_group_id(chat_id)
     if not terms:
-        return EMPTY_LIST_MESSAGE, []
+        text = f"{EMPTY_LIST_MESSAGE}\nشناسهٔ این گروه: {key}"
+        return text, []
     lines = [LIST_TITLE, ""]
     lines.extend(f"• {term}" for term in terms)
+    lines.append("")
+    lines.append(f"شناسهٔ این گروه: {key}")
     text = "\n".join(lines)
     return text, [("bold", 0, u16_len(LIST_TITLE))]
+
+
+def build_test_message(chat_id, user, raw_name=None):
+    """گزارش «تست فیلتر اسم» — چرا یک نام می‌خورد یا نمی‌خورد.
+
+    اگر ``user`` داده شود نام نمایشی و یوزرنیم واقعی او بررسی می‌شود؛
+    وگرنه ``raw_name`` به‌عنوان یک نام فرضی سنجیده می‌شود.
+    """
+    key = normalize_group_id(chat_id)
+    terms = list_terms(chat_id)
+
+    if user is not None:
+        shown = display_name(user)
+        username = (getattr(user, "username", None) or "").lstrip("@")
+        matched = match_name(chat_id, user)
+    else:
+        shown = " ".join(str(raw_name or "").split())
+        username = ""
+
+        class _Probe:
+            id = 0
+            first_name = shown
+            last_name = None
+
+        matched = match_name(chat_id, _Probe)
+
+    title = "🔎 تست فیلتر اسم"
+    lines = [
+        title,
+        "",
+        f"شناسهٔ گروه : {key}",
+        f"فیلترها : {('، '.join(terms)) if terms else '— هیچ —'}",
+        "",
+        f"نام نمایشی : {shown or '— خالی —'}",
+        f"یوزرنیم : {username or '— ندارد —'}",
+        f"نام نرمال‌شده : {normalize(shown) or '— خالی —'}",
+        "",
+    ]
+    if matched:
+        lines.append(f"نتیجه : ✅ با فیلتر «{matched}» می‌خورد")
+        lines.append("این کاربر با اولین پیام حذف و مجازات می‌شود.")
+    elif not terms:
+        lines.append("نتیجه : ❌ این گروه هیچ فیلتری ندارد")
+        lines.append("فیلترها را در همین گروه ثبت کن، نه گروه دیگر.")
+    else:
+        lines.append("نتیجه : ❌ با هیچ فیلتری نمی‌خورد")
+
+    text = "\n".join(lines)
+    return text, [("bold", 0, u16_len(title))]
 
 
 def build_help_section():
