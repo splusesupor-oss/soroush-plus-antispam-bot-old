@@ -345,33 +345,40 @@ def test_matching_uses_existing_normalization():
 
 
 def test_detector_integration():
-    print("\n### 🔗 اتصال به موتور نام تبلیغاتی (enforcement مشترک)")
+    print("\n### 🔗 استقلال کامل از موتور نام تبلیغاتی")
     use_temp_files()
     bot = Bot()
     owner = User(OWNER_ID, "مالک")
     send(bot, CHAT_A, owner, "فیلتر اسم حسین")
 
     user = User(STRANGER_ID, "حسین")
-    reason = ad_name_detector.reason(user, CHAT_A)
-    check("reason برای کاربر فیلترشده مقدار دارد", bool(reason),
-          f"-> {reason!r}")
-    check("دلیل به فیلتر اسم اشاره می‌کند",
-          reason and "فیلتر اسم" in reason, f"-> {reason!r}")
-    check("بدون chat_id رفتار قبلی حفظ می‌شود",
-          ad_name_detector.reason(user) is None)
-    check("کاربر عادی دست‌نخورده می‌ماند",
-          ad_name_detector.reason(User(1, "رضا"), CHAT_A) is None)
+    check("سیستم مستقل، کاربر فیلترشده را می‌گیرد",
+          nf.match_name(CHAT_A, user) == "حسین")
+    check("موتور نام تبلیغاتی دیگر درگیر نیست",
+          ad_name_detector.reason(user, CHAT_A) is None,
+          f"-> {ad_name_detector.reason(user, CHAT_A)!r}")
+    check("name_filters هیچ import ی از ad_name_detector ندارد",
+          "from modules import ad_name_detector"
+          not in (ROOT / "modules" / "name_filters.py").read_text(
+              encoding="utf-8"))
+    check("ad_name_detector هیچ import ی از name_filters ندارد",
+          "from modules import name_filters"
+          not in (ROOT / "modules" / "ad_name_detector.py").read_text(
+              encoding="utf-8"))
+    check("نرمال‌سازی داخل خود ماژول است",
+          callable(nf.normalize) and callable(nf.collapse)
+          and nf.normalize("حســیــن") == "حسین")
 
-    print("  — رگرسیون: الگوهای سراسری نام تبلیغاتی")
-    for label, user in (("بیو چک", User(20, "بیو چک")),
-                        ("🔞", User(21, "سلام 🔞")),
-                        ("فیلم پی", User(22, "فیلم پی وی"))):
+    print("  — رگرسیون: الگوهای سراسری نام تبلیغاتی دست‌نخورده‌اند")
+    for label, suspect in (("بیو چک", User(20, "بیو چک")),
+                           ("🔞", User(21, "سلام 🔞")),
+                           ("فیلم پی", User(22, "فیلم پی وی"))):
         check(f"«{label}» همچنان تبلیغاتی است",
-              ad_name_detector.reason(user) is not None)
-        check(f"«{label}» با chat_id هم تبلیغاتی است",
-              ad_name_detector.reason(user, CHAT_A) is not None)
+              ad_name_detector.reason(suspect) is not None)
     check("نام سالم همچنان سالم است",
           ad_name_detector.reason(User(23, "مریم")) is None)
+    check("فیلتر اسم روی نام سالم اثر ندارد",
+          nf.match_name(CHAT_A, User(24, "مریم")) is None)
 
 
 def test_first_message_enforcement():
@@ -381,28 +388,23 @@ def test_first_message_enforcement():
     owner = User(OWNER_ID, "مالک")
     send(bot, CHAT_A, owner, "فیلتر اسم حسین")
 
-    # این دقیقاً همان گیتی است که message_handler اجرا می‌کند:
-    # کاربر ادمین نیست → reason با chat_id گرفته می‌شود → مسیر مجازات
-    # نام تبلیغاتی (حذف پیام + سکوت/اخراج طبق تنظیمات فعلی).
     offender = User(STRANGER_ID, "حسین")
     check("ادمین نیست",
           not admin_storage.is_admin(CHAT_A, offender.id, None))
-    check("همان اولین پیام باعث enforcement می‌شود",
-          ad_name_detector.reason(offender, CHAT_A) is not None)
+    check("همان اولین پیام match می‌شود",
+          nf.match_name(CHAT_A, offender) == "حسین")
 
-    # مسیر enforcement تغییر نکرده است: همان کد نام تبلیغاتی.
     source = (ROOT / "handlers" / "message_handler.py").read_text(
         encoding="utf-8")
-    check("message_handler همان reason را با chat_id صدا می‌زند",
-          "ad_name_detector.reason(sender, chat_id)" in source)
-    check("مسیر مجازات نام تبلیغاتی دست‌نخورده است",
+    check("گیت مستقل فیلتر اسم در message_handler هست",
+          "_name_filter_hit(" in source
+          and "name_filters.match_name(chat_id, sender)" in source)
+    check("گیت مستقل از name_filters استفاده می‌کند، نه ad_name_detector",
+          "from modules import name_filters" in source)
+    check("فقط برای مجازات از enforcement موجود استفاده می‌شود",
           "AD NAME BAN QUEUED" in source
           and "punishment_mode.is_mute(chat_id)" in source)
 
-
-# ===========================================================================
-# دسترسی و جداسازی گروه
-# ===========================================================================
 def test_permissions():
     print("\n### 🔐 دسترسی: فقط مالک ثبت‌شده و ادمین ثبت‌شده")
     use_temp_files()

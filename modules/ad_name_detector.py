@@ -66,12 +66,14 @@ def display_name(user):
 
 
 def reason(user, chat_id=None):
-    """دلیل تبلیغاتی‌بودن نام کاربر، یا ``None``.
+    """دلیل تبلیغاتی‌بودن نام کاربر طبق الگوهای داخلی، یا ``None``.
 
-    اگر ``chat_id`` داده شود، پس از الگوهای سراسری، فیلترهای اسمِ
-    دلخواهِ *همان گروه* (دستور «فیلتر اسم») هم بررسی می‌شوند. خروجی به
-    همان مسیر مجازات موجود می‌رود؛ هیچ enforcement جداگانه‌ای وجود
-    ندارد.
+    این تابع فقط الگوهای سراسری همین ماژول را می‌بیند. «فیلتر اسم»
+    گروه یک سیستم کاملاً مستقل است (``modules/name_filters``) با
+    ذخیره‌سازی، نرمال‌سازی و تطبیق خودش، و گیت جداگانهٔ خودش در
+    ``handlers/message_handler``؛ اینجا هیچ ارجاعی به آن نیست.
+
+    ``chat_id`` فقط برای سازگاری با امضای قبلی نگه داشته شده است.
     """
     username = _norm(getattr(user, "username", None))
     first = getattr(user, "first_name", None) or ""
@@ -86,18 +88,4 @@ def reason(user, chat_id=None):
             for pattern in _PATTERNS:
                 if pattern.search(candidate):
                     return pattern.pattern
-
-    if chat_id is not None:
-        # import تنبل: name_filters خودش از همین ماژول نرمال‌سازی را
-        # می‌گیرد، پس import بالادستی حلقه می‌ساخت.
-        try:
-            from modules import name_filters
-        except Exception:
-            return None
-        try:
-            matched = name_filters.match_name(chat_id, user)
-        except Exception:
-            return None
-        if matched:
-            return f"فیلتر اسم: {matched}"
     return None

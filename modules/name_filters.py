@@ -1,26 +1,37 @@
-"""🚫 فیلتر اسم — افزودن عبارت‌های دلخواه به فیلتر نام، به تفکیک گروه.
+"""🚫 فیلتر اسم — سیستم **مستقل** فیلتر نام کاربران، به تفکیک گروه.
 
-این ماژول **سیستم جدیدی نمی‌سازد**. فقط فهرست عبارت‌های دلخواهِ هر
-گروه را نگه می‌دارد و تشخیص را به ``modules/ad_name_detector`` تحویل
-می‌دهد: همان نرمال‌سازی (حذف نیم‌فاصله، کشیده، حرکات، علائم، یکسان‌سازی
-ی/ک عربی) و همان جمع‌کردن حروف تکراری استفاده می‌شود، پس «حســیــن» و
-«حسییییین» هم گرفته می‌شوند.
+این ماژول خودکفاست: ذخیره‌سازی، نرمال‌سازی، تطبیق ایموجی و تطبیق نام
+همگی همین‌جا پیاده شده‌اند. هیچ import یا وابستگی‌ای به
+``modules/ad_name_detector`` (سامانهٔ نام تبلیغاتی) ندارد؛ نه برای
+تشخیص و نه برای ذخیره‌سازی. تنها نقطهٔ اشتراک، *اجرای مجازات* است که
+عمداً از enforcement موجود ربات استفاده می‌کند تا سیستم تنبیه دوم
+ساخته نشود.
 
-مجازات هم همان مجازات نام تبلیغاتی فعلی است؛ اینجا هیچ enforcement
-جداگانه‌ای وجود ندارد. ``ad_name_detector.reason(user, chat_id)`` بعد
-از الگوهای داخلی، فهرست همین ماژول را هم بررسی می‌کند و خروجی‌اش به
-همان مسیر موجود در ``handlers/message_handler`` می‌رسد.
+دستورها::
 
-ایموجی هم پشتیبانی می‌شود: نرمال‌سازی ad_name_detector ایموجی را حذف
-نمی‌کند، پس «فیلتر اسم 🍆» دقیقاً همان ایموجی را فیلتر می‌کند.
+    فیلتر اسم حسین
+    فیلتر اسم 🍆
+    لغو اسم حسین
+    حذف فیلتر اسم حسین
+    لیست فیلتر اسم
 
-ذخیره‌سازی در ``runtime_config_file("name_filters.json")`` است و کلید
-هر رکورد شناسهٔ نرمال‌شدهٔ گروه، پس گروه‌ها کاملاً جدا می‌مانند و
-نمونه‌های مختلف ربات (BOT_INSTANCE) داده‌هایشان قاطی نمی‌شود.
+نرمال‌سازی داخلی:
+
+* کوچک‌کردن حروف لاتین
+* یکسان‌سازی «ي/ك» عربی با «ی/ک» فارسی و «ة→ه»، «أإآ→ا»
+* تبدیل ارقام فارسی/عربی به لاتین
+* حذف کشیده (ـ) و حرکات
+* تبدیل نیم‌فاصله، نشانه‌های جهت و علائم نگارشی به فاصله
+* **حفظ کامل ایموجی** تا «فیلتر اسم 🍆» واقعاً کار کند
+* حذف Variation Selector (U+FE0F) و تن‌رنگ‌ها تا 🍆 و 🍆️ یکی شوند
+* نسخهٔ دوم بدون حروف تکراری («حســیییین» → «حسین»)
+
+ذخیره‌سازی در ``runtime_config_file("name_filters.json")`` با کلید
+شناسهٔ نرمال‌شدهٔ گروه، پس گروه‌ها کاملاً جدا می‌مانند.
 """
 import json
+import re
 
-from modules import ad_name_detector
 from modules.atomic_write import write_json
 from modules.group_id import normalize_group_id
 from modules.runtime_paths import runtime_config_file
@@ -65,23 +76,83 @@ HELP_SECTION = (
 # ---------------------------------------------------------------------------
 # یکسان‌سازی — عیناً همان موتور فیلتر نام تبلیغاتی
 # ---------------------------------------------------------------------------
+# یکسان‌سازی حرف‌به‌حرف؛ عمداً جدول خودمان است و از جای دیگری نمی‌آید.
+_CHAR_MAP = {
+    "\u064a": "\u06cc",  # ي عربی → ی
+    "\u0649": "\u06cc",  # ى
+    "\u0643": "\u06a9",  # ك عربی → ک
+    "\u0629": "\u0647",  # ة → ه
+    "\u0623": "\u0627",  # أ → ا
+    "\u0625": "\u0627",  # إ → ا
+    "\u0622": "\u0627",  # آ → ا
+    "\u0624": "\u0648",  # ؤ → و
+    "\u0626": "\u06cc",  # ئ → ی
+}
+# ارقام فارسی و عربی → لاتین
+for _base in ("\u06f0", "\u0660"):
+    for _digit in range(10):
+        _CHAR_MAP[chr(ord(_base) + _digit)] = str(_digit)
+
+# کشیده و حرکات: کاملاً حذف می‌شوند (نه تبدیل به فاصله).
+_DROP_RE = re.compile(r"[\u0640\u064b-\u065f\u0670\ufe00-\ufe0f\U0001f3fb-\U0001f3ff]")
+
+# جداکننده‌ها → فاصله. ایموجی در این مجموعه **نیست** و دست‌نخورده می‌ماند.
+_SEPARATOR_RE = re.compile(
+    r"[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u00a0\s"
+    r"\-_.,/\\;:!?؟،؛|()\[\]{}<>+=*&^%$#@~\"'`«»…]+"
+)
+
+_REPEAT_RE = re.compile(r"(.)\1+")
+
+
 def normalize(value):
-    """نرمال‌سازی مشترک با ``ad_name_detector``."""
-    return ad_name_detector._norm(value)
+    """نرمال‌سازی مستقل این سیستم. ایموجی حفظ می‌شود."""
+    if not value:
+        return ""
+    text = str(value).lower()
+    text = "".join(_CHAR_MAP.get(char, char) for char in text)
+    text = _DROP_RE.sub("", text)
+    text = _SEPARATOR_RE.sub(" ", text)
+    return " ".join(text.split())
 
 
 def collapse(value):
-    """جمع کردن حروف تکراری، مثل همان ماژول."""
-    return ad_name_detector._collapse(value)
+    """جمع کردن حروف تکراری: «حســیییین» → «حسین»، «🍆🍆» → «🍆»."""
+    return _REPEAT_RE.sub(r"\1", str(value or ""))
+
+
+def strip_spaces(value):
+    """نسخهٔ بی‌فاصله — برای نامی مثل «ح س ی ن» یا «علی 🍆 خان»."""
+    return str(value or "").replace(" ", "")
+
+
+def is_emoji_only(value):
+    """آیا عبارت فقط از ایموجی/نماد ساخته شده است؟"""
+    text = normalize(value).replace(" ", "")
+    if not text:
+        return False
+    return all(not char.isalnum() for char in text)
+
+
+def display_name(user):
+    """نام نمایشی کاربر — نام + نام خانوادگی، بدون وابستگی بیرونی."""
+    first = getattr(user, "first_name", None) or ""
+    last = getattr(user, "last_name", None) or ""
+    return " ".join(f"{first} {last}".split())
 
 
 def _keys(term):
-    """کلیدهای تطبیق یک عبارت: شکل عادی و شکل بدون حروف تکراری."""
+    """کلیدهای تطبیق یک عبارت.
+
+    سه شکل ذخیره می‌شود تا نوشتارهای مختلفِ همان نام گرفته شوند:
+    شکل نرمال، شکل بدون حروف تکراری، و شکل بی‌فاصله.
+    """
     normalized = normalize(term)
     if not normalized:
         return ()
-    collapsed = collapse(normalized)
-    return tuple(dict.fromkeys((normalized, collapsed)))
+    forms = [normalized, collapse(normalized), strip_spaces(normalized)]
+    forms.append(collapse(strip_spaces(normalized)))
+    return tuple(dict.fromkeys(form for form in forms if form))
 
 
 def u16_len(value):
@@ -268,24 +339,27 @@ def clear(chat_id):
 # تطبیق نام کاربر
 # ---------------------------------------------------------------------------
 def match_name(chat_id, user):
-    """اگر نام نمایشی/یوزرنیم کاربر با فیلتری از همین گروه بخورد، همان را برمی‌گرداند."""
+    """عبارتِ فیلترشدهٔ همین گروه که با نام کاربر می‌خورد، یا ``None``.
+
+    تطبیق کاملاً داخلی است و هیچ موتور بیرونی‌ای صدا زده نمی‌شود.
+    نام نمایشی (نام + نام خانوادگی) و یوزرنیم، هرکدام در چهار شکل
+    نرمال/بی‌تکرار/بی‌فاصله بررسی می‌شوند و تطبیق «شامل‌بودن» است، پس
+    «حسین» کاربرِ «حسین احمدی» را هم می‌گیرد و «🍆» کاربرِ «علی🍆» را.
+    """
     entries = _entries(chat_id)
     if not entries:
         return None
 
-    username = normalize(getattr(user, "username", None))
-    first = getattr(user, "first_name", None) or ""
-    last = getattr(user, "last_name", None) or ""
-    name = normalize(f"{first} {last}".strip())
-
+    sources = (display_name(user), getattr(user, "username", None))
     candidates = []
-    for value in (username, name):
-        if not value:
+    for source in sources:
+        base = normalize(source)
+        if not base:
             continue
-        candidates.append(value)
-        collapsed = collapse(value)
-        if collapsed != value:
-            candidates.append(collapsed)
+        for form in (base, collapse(base), strip_spaces(base),
+                     collapse(strip_spaces(base))):
+            if form and form not in candidates:
+                candidates.append(form)
     if not candidates:
         return None
 
