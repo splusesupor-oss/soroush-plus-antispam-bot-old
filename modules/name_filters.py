@@ -145,6 +145,20 @@ def is_emoji_only(value):
 # روی کسی نمی‌خورد.
 UNRESOLVED_NAMES = ()
 
+# نام‌هایی که سروش برای کاربرانِ resolve‌نشده هم می‌فرستد. فیلترکردنشان
+# مجاز است، ولی می‌تواند افرادِ کاملاً بی‌ربط را هم بگیرد، پس هنگام ثبت
+# هشدار داده می‌شود.
+RISKY_TERMS = (
+    "ناشناخته", "نامشخص", "کاربر ناشناس", "بدون نام", "نامعلوم",
+    "unknown", "no name", "deleted account",
+)
+
+
+def is_risky_term(term):
+    """آیا این عبارت همان نامی است که سروش برای همهٔ ناشناس‌ها می‌دهد؟"""
+    value = normalize(term)
+    return bool(value) and value in _RISKY_KEYS
+
 
 def is_unresolved(name):
     """فقط نامِ خالی. هر رشتهٔ دیگری نامِ واقعیِ قابل‌فیلتر است."""
@@ -156,6 +170,15 @@ def display_name(user):
     first = getattr(user, "first_name", None) or ""
     last = getattr(user, "last_name", None) or ""
     return " ".join(f"{first} {last}".split())
+
+
+_RISKY_KEYS = frozenset(normalize(item) for item in RISKY_TERMS)
+
+RISKY_WARNING = (
+    "⚠️ هشدار : سروش همین نام را برای کاربرانی که پروفایلشان را "
+    "نمی‌دهد هم می‌فرستد، پس ممکن است افراد بی‌ربط را هم بگیرد. "
+    "اگر چنین شد بنویس : لغو اسم "
+)
 
 
 def _keys(term):

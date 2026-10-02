@@ -105,84 +105,141 @@ def _describe(obj):
     return " | ".join(parts)
 
 
+async def _raw_dict(obj, limit=900):
+    """خودِ دیکشنری خام آبجکت — تا هیچ فیلدی از قلم نیفتد."""
+    if obj is None:
+        return "None"
+    try:
+        data = obj.to_dict()
+    except Exception:
+        try:
+            data = dict(vars(obj))
+        except Exception:
+            return repr(obj)[:limit]
+    text = str(data)
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
 async def _dump_sources(bot, event, sender):
-    """هر منبعی که ممکن است نام واقعی کاربر را داشته باشد را می‌آزماید."""
+    """هر مسیری که ممکن است نامِ واقعی را بدهد، از جمله مسیرهایی که
+    کش محلی session را دور می‌زنند."""
     lines = []
     client = getattr(bot, "client", None)
+    chat_id = getattr(event, "chat_id", None)
+
     replied = None
     try:
         replied = await event.get_reply_message()
     except Exception as error:
         lines.append(f"get_reply_message → خطا {error!r}")
 
-    target_id = None
-    handle = None
-
+    base = None
     if replied is not None:
-        for field in ("sender_id", "post_author", "from_id"):
+        base = getattr(replied, "sender", None)
+        if base is None:
             try:
-                value = getattr(replied, field, None)
+                base = await replied.get_sender()
             except Exception:
-                value = None
-            if value not in (None, ""):
-                lines.append(f"message.{field} = {str(value)[:50]}")
-        cached = getattr(replied, "sender", None)
-        lines.append(f"message.sender → {_describe(cached)}")
-        if cached is None:
-            try:
-                cached = await replied.get_sender()
-                lines.append(f"get_sender() → {_describe(cached)}")
-            except Exception as error:
-                lines.append(f"get_sender() → خطا {error!r}")
-        target_id = getattr(cached, "id", None) or getattr(
-            replied, "sender_id", None)
-        handle = (getattr(cached, "username", None) or "").lstrip("@")
-    else:
-        lines.append(f"فرستندهٔ دستور → {_describe(sender)}")
-        target_id = getattr(sender, "id", None)
-        handle = (getattr(sender, "username", None) or "").lstrip("@")
+                base = None
+    if base is None:
+        base = sender
 
-    if client is not None and target_id:
+    target_id = getattr(base, "id", None) or getattr(
+        replied, "sender_id", None)
+    handle = (getattr(base, "username", None) or "").lstrip("@")
+    lines.append(f"id={target_id} username={handle!r}")
+    lines.append("")
+
+    lines.append("‹۱› خام message.sender:")
+    lines.append(await _raw_dict(base))
+    lines.append("")
+
+    async def probe(label, coro_factory):
         try:
-            lines.append(
-                f"get_entity(id) → {_describe(await client.get_entity(target_id))}")
+            result = await coro_factory()
         except Exception as error:
-            lines.append(f"get_entity(id) → خطا {error!r}")
+            lines.append(f"{label} → خطا {str(error)[:90]}")
+            return None
+        return result
+
+    def _users_of(result):
+        users = getattr(result, "users", None)
+        if users:
+            return users[0]
+        return result
+
     if client is not None and handle:
         try:
-            lines.append(
-                f"get_entity(@) → {_describe(await client.get_entity(handle))}")
+            from splusthon.tl.functions.contacts import ResolveUsernameRequest
+
+            got = await probe(
+                "‹۲› ResolveUsername",
+                lambda: client(ResolveUsernameRequest(handle)))
+            if got is not None:
+                lines.append("‹۲› ResolveUsername خام:")
+                lines.append(await _raw_dict(_users_of(got)))
+                lines.append("")
         except Exception as error:
-            lines.append(f"get_entity(@) → خطا {error!r}")
+            lines.append(f"‹۲› ResolveUsername → import خطا {error!r}")
+
+    if client is not None and handle:
+        try:
+            from splusthon.tl.functions.contacts import SearchRequest
+
+            got = await probe(
+                "‹۳› contacts.Search",
+                lambda: client(SearchRequest(q=handle, limit=3)))
+            if got is not None:
+                lines.append("‹۳› contacts.Search خام:")
+                lines.append(await _raw_dict(_users_of(got), 600))
+                lines.append("")
+        except Exception as error:
+            lines.append(f"‹۳› contacts.Search → import خطا {error!r}")
+
+    if client is not None and chat_id is not None:
+        got = await probe(
+            "‹۴› get_participants",
+            lambda: client.get_participants(
+                chat_id, search=handle or None, limit=5))
+        if got:
+            for person in list(got)[:3]:
+                lines.append("‹۴› participant خام:")
+                lines.append(await _raw_dict(person, 500))
+            lines.append("")
+
+    if client is not None and chat_id is not None and target_id:
+        try:
+            from splusthon.tl.functions.channels import GetParticipantsRequest
+            from splusthon.tl.types import ChannelParticipantsSearch
+
+            got = await probe(
+                "‹۵› channels.GetParticipants",
+                lambda: client(GetParticipantsRequest(
+                    channel=chat_id,
+                    filter=ChannelParticipantsSearch(handle or ""),
+                    offset=0, limit=5, hash=0)))
+            if got is not None:
+                lines.append("‹۵› GetParticipants خام:")
+                lines.append(await _raw_dict(_users_of(got), 600))
+                lines.append("")
+        except Exception as error:
+            lines.append(f"‹۵› GetParticipants → import خطا {error!r}")
 
     if client is not None and target_id:
         try:
             from splusthon.tl.functions.users import GetFullUserRequest
 
-            full = await client(GetFullUserRequest(target_id))
-            users = getattr(full, "users", None)
-            if users:
-                lines.append(f"GetFullUser.users[0] → {_describe(users[0])}")
-            else:
-                inner = getattr(full, "user", None) or getattr(
-                    full, "full_user", None)
-                lines.append(f"GetFullUser → {_describe(inner)}")
+            got = await probe(
+                "‹۶› GetFullUser",
+                lambda: client(GetFullUserRequest(target_id)))
+            if got is not None:
+                lines.append("‹۶› GetFullUser خام:")
+                lines.append(await _raw_dict(got, 900))
         except Exception as error:
-            lines.append(f"GetFullUser → خطا {error!r}")
-
-    if client is not None and target_id:
-        try:
-            from splusthon.tl.functions.channels import GetParticipantRequest
-
-            part = await client(GetParticipantRequest(
-                getattr(event, "chat_id", None), target_id))
-            users = getattr(part, "users", None)
-            if users:
-                lines.append(f"GetParticipant.users[0] → {_describe(users[0])}")
-        except Exception as error:
-            lines.append(f"GetParticipant → خطا {error!r}")
+            lines.append(f"‹۶› GetFullUser → import خطا {error!r}")
 
     return lines
+
 
 async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     """``True`` یعنی پیام مصرف شد و هندلر اصلی نباید ادامه دهد."""
@@ -285,6 +342,10 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
             await _safe_reply(event, problem, None, logger)
             return True
         body, spans = name_filters.build_added_message(display)
+        if name_filters.is_risky_term(display):
+            await _safe_reply(event, body, spans, logger)
+            body = name_filters.RISKY_WARNING + display
+            spans = None
         _log(logger, "NAME FILTER ADDED "
                      f"chat_id={chat_id} "
                      f"storage_key={normalize_group_id(chat_id)!r} "

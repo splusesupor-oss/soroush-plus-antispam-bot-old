@@ -749,6 +749,23 @@ def test_unresolved_display_name():
     check("هیچ get_entity ای صدا زده نشد", bot4.client.calls == 0,
           f"-> {bot4.client.calls}")
 
+    print("  — هشدار نام‌های پرخطر")
+    check("«ناشناخته» پرخطر است", nf.is_risky_term("ناشناخته"))
+    check("Unknown پرخطر است", nf.is_risky_term("unknown"))
+    check("نام عادی پرخطر نیست", not nf.is_risky_term("حسین"))
+    fresh()
+    bot_risky = Bot()
+    _done, replies = command(bot_risky, CHAT_A, owner, "فیلتر اسم ناشناخته")
+    check("ثبت انجام می‌شود", nf.list_terms(CHAT_A) == ["ناشناخته"],
+          f"-> {nf.list_terms(CHAT_A)}")
+    check("ولی هشدار هم داده می‌شود",
+          any("هشدار" in r for r in replies), f"-> {replies}")
+    check("راه لغو را نشان می‌دهد",
+          any("لغو اسم ناشناخته" in r for r in replies), f"-> {replies}")
+    _done, replies = command(bot_risky, CHAT_B, owner, "فیلتر اسم حسین")
+    check("نام عادی هشدار نمی‌گیرد",
+          not any("هشدار" in r for r in replies), f"-> {replies}")
+
     print("  — گزارش تست، دستور آماده پیشنهاد می‌دهد")
     fresh()
     bot5 = Bot()
