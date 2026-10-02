@@ -3041,7 +3041,11 @@ def _name_filter_hit(bot, chat_id, user_id, sender):
         except Exception:
             pass
 
+    # ⚠️ لاگ فقط وقتی نوشته می‌شود که این گروه واقعاً فیلتر داشته باشد.
+    # قبلاً برای هر پیامِ هر گروه یک خط می‌رفت و لاگ را باد می‌کرد.
     try:
+        if skipped == "no_filters_for_group":
+            return matched
         bot.logger.log_info(
             "NAME FILTER CHECK "
             f"chat_id={chat_id} "
