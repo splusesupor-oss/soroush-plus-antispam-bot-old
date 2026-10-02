@@ -68,6 +68,7 @@ from modules.clipboard import HELP_SECTION as CLIPBOARD_HELP_SECTION
 # 🚫 فیلتر اسم — دستورهایش مستقل‌اند، ولی مجازاتش همان مسیر نام تبلیغاتی است.
 from handlers.name_filter_handler import handle as handle_name_filter
 from modules.name_filters import HELP_SECTION as NAME_FILTER_HELP_SECTION
+from modules import name_filters
 from modules.expiry_report import build_group_list
 from modules.name_family import (
     cancel_round as cancel_name_family_round,
@@ -2871,6 +2872,168 @@ def _is_known_internal_command(clean_text, chat_id, user_id):
     )
 
 
+
+
+def _name_filter_hit(bot, chat_id, user_id, sender):
+    """عبارتِ «فیلتر اسم» که با نام این کاربر خورده است، یا ``None``.
+
+    مالک اصلی ربات، مالک ثبت‌شدهٔ گروه و ادمین ثبت‌شده هرگز فیلتر
+    نمی‌شوند. تطبیق خودش در ``modules/name_filters`` و با همان
+    normalization موتور نام تبلیغاتی انجام می‌شود.
+    """
+    if sender is None:
+        return None
+    try:
+        if is_global_owner(user_id):
+            return None
+    except Exception:
+        pass
+    username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+    try:
+        if admin_tools.has_admin_permission(chat_id, user_id, username):
+            return None
+    except Exception:
+        pass
+    try:
+        return name_filters.match_name(chat_id, sender)
+    except Exception as error:
+        try:
+            bot.logger.log_error(
+                "NAME FILTER MATCH FAILED "
+                f"chat_id={chat_id} user_id={user_id} error={error!r}"
+            )
+        except Exception:
+            pass
+        return None
+
+
+async def _enforce_ad_name(bot, event, chat_id, user_id, sender, ad_reason):
+    """نقطهٔ ورود *واحد* به Advertising Name Moderation فعلی.
+
+    هر دو گیت از همین تابع استفاده می‌کنند:
+
+    * الگوهای سراسری نام تبلیغاتی (``ad_name_detector``)
+    * فیلترهای اسمِ دلخواهِ همان گروه (دستور «فیلتر اسم»)
+
+    هیچ سیستم مجازات جدیدی اینجا نیست: همان ``punished_users``، همان
+    ``moderation_queue``، همان ``admin_actions.ban_user`` که خودش طبق
+    ``punishment_mode`` بین اخراج و سکوت دائم تصمیم می‌گیرد، و همان
+    اعلان. تنها افزوده، حذف فوری خودِ پیامِ متخلف است.
+
+    ``True`` یعنی رویداد مصرف شد و caller باید ``return`` کند.
+    """
+    # Claim the incident before any await. A burst can produce
+    # several NewMessage events before the kick RPC completes;
+    # only its first event may queue the ban or later notify.
+    punish_key = _punishment_key(chat_id, user_id)
+    if punish_key in bot.punished_users:
+        bot.logger.log_info(
+            "AD NAME INCIDENT DUPLICATE SKIPPED "
+            f"chat_id={chat_id} user_id={user_id} "
+            f"message_id={getattr(event.message, 'id', None)}"
+        )
+        return True
+    bot.punished_users.add(punish_key)
+    # خودِ پیامِ متخلف بلافاصله در صف حذف می‌رود و هرگز منتظر RPC
+    # مجازات نمی‌ماند.
+    try:
+        _offending_id = getattr(event.message, "id", None)
+        if _offending_id is not None:
+            _queue_message_deletes(bot, chat_id, [_offending_id])
+            bot.logger.log_info(
+                "AD NAME MESSAGE DELETE QUEUED "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"message_id={_offending_id}"
+            )
+    except Exception as _delete_error:
+        bot.logger.log_error(
+            "AD NAME MESSAGE DELETE FAILED "
+            f"chat_id={chat_id} user_id={user_id} error={_delete_error!r}"
+        )
+    shown_name = ad_name_detector.display_name(sender)
+    if punishment_mode.is_mute(chat_id):
+        ad_action_line = "به دلیل داشتن نام تبلیغاتی و لینک سکوت دائم شد."
+    else:
+        ad_action_line = "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
+    notice = (
+        "⚠️ کاربر\n"
+        f"{shown_name}\n\n"
+        f"{ad_action_line}"
+    )
+
+    async def ad_name_ban_succeeded(_result):
+        # The announcement is deliberately after the real ban
+        # succeeds, and is owned by this one incident only.
+        sender3 = getattr(bot, "outgoing_sender", None)
+        if sender3 is not None:
+            # Use outgoing queue so this notice does not block moderation worker
+            try:
+                name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
+                name_len = len(shown_name.encode("utf-16-le")) // 2
+                bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
+                entities = [
+                    MessageEntityBold(offset=0, length=bold_len),
+                    MessageEntityBlockquote(offset=name_start, length=name_len),
+                ]
+                sender3.enqueue_reply(event, notice, formatting_entities=entities, on_done=lambda sent: capture_sent(bot, chat_id, sent))
+            except Exception:
+                sender3.enqueue_reply(event, notice, on_done=lambda sent: capture_sent(bot, chat_id, sent))
+        else:
+            try:
+                name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
+                name_len = len(shown_name.encode("utf-16-le")) // 2
+                bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
+                sent = await event.reply(notice, formatting_entities=[
+                    MessageEntityBold(offset=0, length=bold_len),
+                    MessageEntityBlockquote(
+                        offset=name_start, length=name_len
+                    ),
+                ])
+            except Exception:
+                sent = await event.reply(notice)
+            capture_sent(bot, chat_id, sent)
+        bot.logger.log_info(
+            "AD NAME BAN FINISHED "
+            f"chat_id={chat_id} user_id={user_id} "
+            f"reason={ad_reason!r} notification_sent=True"
+        )
+
+    async def ad_name_ban_failed(error):
+        # A failed RPC must be retryable by a later event; it
+        # must not leave a permanent in-memory incident lock.
+        bot.punished_users.discard(punish_key)
+        bot.logger.log_error(
+            "AD NAME BAN FAILED "
+            f"chat_id={chat_id} user_id={user_id} error={error!r}"
+        )
+
+    queued = bot.moderation_queue.enqueue(
+        chat_id,
+        "ban",
+        user_id=user_id,
+        timeout_seconds=45,
+        operation=lambda: bot.admin_actions.ban_user(
+            chat_id, user_id, reason="نام تبلیغاتی",
+            user=sender,
+        ),
+        on_success=ad_name_ban_succeeded,
+        on_failure=ad_name_ban_failed,
+    )
+    if not queued:
+        bot.punished_users.discard(punish_key)
+        bot.logger.log_info(
+            "AD NAME INCIDENT QUEUE DUPLICATE "
+            f"chat_id={chat_id} user_id={user_id}"
+        )
+    else:
+        bot.logger.log_info(
+            "AD NAME BAN QUEUED "
+            f"chat_id={chat_id} user_id={user_id} "
+            f"name={shown_name!r} reason={ad_reason!r}"
+        )
+    return True
+
+
 def _search_reply_message_id(event):
     message = getattr(event, "message", None)
     message_reply = getattr(message, "reply_to", None)
@@ -3153,6 +3316,32 @@ async def handle_new_message(bot, event):
             except Exception:
                 pass
 
+        # ------------------------------------------------------------------
+        # 🚫 فیلتر اسم — زودترین نقطهٔ ممکن در پردازش پیام گروه.
+        #
+        # عمداً *پیش از* همهٔ return های زودهنگام است: مدیای بدون متن،
+        # فوروارد، موج اسپم و قفل اسپم همگی پایین‌تر return می‌کنند، پس
+        # اگر این بررسی آنجا می‌ماند «اولین پیام» کاربرِ فیلترشده
+        # می‌توانست کاملاً از قلم بیفتد.
+        #
+        # enforcement هیچ کد تازه‌ای ندارد: همان
+        # Advertising Name Moderation فعلی از طریق ``_enforce_ad_name``.
+        # ------------------------------------------------------------------
+        if not getattr(event, "is_private", False):
+            _nf_term = _name_filter_hit(bot, chat_id, user_id, sender)
+            if _nf_term:
+                bot.logger.log_info(
+                    "NAME FILTER HIT "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"term={_nf_term!r} "
+                    f"message_id={getattr(event.message, 'id', None)}"
+                )
+                await _enforce_ad_name(
+                    bot, event, chat_id, user_id, sender,
+                    f"فیلتر اسم: {_nf_term}",
+                )
+                return
+
         # Big-spam incidents are the sole opt-in per-message ID registry.
         # Capture before any later return/lock branch can race this event.
         _capture_big_spam_message(
@@ -3422,99 +3611,9 @@ async def handle_new_message(bot, event):
                 # اعمال شوند.
                 ad_reason = ad_name_detector.reason(sender, chat_id)
                 if ad_reason:
-                    # Claim the incident before any await. A burst can produce
-                    # several NewMessage events before the kick RPC completes;
-                    # only its first event may queue the ban or later notify.
-                    punish_key = _punishment_key(chat_id, user_id)
-                    if punish_key in bot.punished_users:
-                        bot.logger.log_info(
-                            "AD NAME INCIDENT DUPLICATE SKIPPED "
-                            f"chat_id={chat_id} user_id={user_id} "
-                            f"message_id={getattr(event.message, 'id', None)}"
-                        )
-                        return
-                    bot.punished_users.add(punish_key)
-                    shown_name = ad_name_detector.display_name(sender)
-                    if punishment_mode.is_mute(chat_id):
-                        ad_action_line = "به دلیل داشتن نام تبلیغاتی و لینک سکوت دائم شد."
-                    else:
-                        ad_action_line = "به دلیل داشتن نام تبلیغاتی و لینک اخراج شد."
-                    notice = (
-                        "⚠️ کاربر\n"
-                        f"{shown_name}\n\n"
-                        f"{ad_action_line}"
+                    await _enforce_ad_name(
+                        bot, event, chat_id, user_id, sender, ad_reason
                     )
-
-                    async def ad_name_ban_succeeded(_result):
-                        # The announcement is deliberately after the real ban
-                        # succeeds, and is owned by this one incident only.
-                        sender3 = getattr(bot, "outgoing_sender", None)
-                        if sender3 is not None:
-                            # Use outgoing queue so this notice does not block moderation worker
-                            try:
-                                name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
-                                name_len = len(shown_name.encode("utf-16-le")) // 2
-                                bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
-                                entities = [
-                                    MessageEntityBold(offset=0, length=bold_len),
-                                    MessageEntityBlockquote(offset=name_start, length=name_len),
-                                ]
-                                sender3.enqueue_reply(event, notice, formatting_entities=entities, on_done=lambda sent: capture_sent(bot, chat_id, sent))
-                            except Exception:
-                                sender3.enqueue_reply(event, notice, on_done=lambda sent: capture_sent(bot, chat_id, sent))
-                        else:
-                            try:
-                                name_start = len("⚠️ کاربر\n".encode("utf-16-le")) // 2
-                                name_len = len(shown_name.encode("utf-16-le")) // 2
-                                bold_len = len("⚠️ کاربر".encode("utf-16-le")) // 2
-                                sent = await event.reply(notice, formatting_entities=[
-                                    MessageEntityBold(offset=0, length=bold_len),
-                                    MessageEntityBlockquote(
-                                        offset=name_start, length=name_len
-                                    ),
-                                ])
-                            except Exception:
-                                sent = await event.reply(notice)
-                            capture_sent(bot, chat_id, sent)
-                        bot.logger.log_info(
-                            "AD NAME BAN FINISHED "
-                            f"chat_id={chat_id} user_id={user_id} "
-                            f"reason={ad_reason!r} notification_sent=True"
-                        )
-
-                    async def ad_name_ban_failed(error):
-                        # A failed RPC must be retryable by a later event; it
-                        # must not leave a permanent in-memory incident lock.
-                        bot.punished_users.discard(punish_key)
-                        bot.logger.log_error(
-                            "AD NAME BAN FAILED "
-                            f"chat_id={chat_id} user_id={user_id} error={error!r}"
-                        )
-
-                    queued = bot.moderation_queue.enqueue(
-                        chat_id,
-                        "ban",
-                        user_id=user_id,
-                        timeout_seconds=45,
-                        operation=lambda: bot.admin_actions.ban_user(
-                            chat_id, user_id, reason="نام تبلیغاتی",
-                            user=sender,
-                        ),
-                        on_success=ad_name_ban_succeeded,
-                        on_failure=ad_name_ban_failed,
-                    )
-                    if not queued:
-                        bot.punished_users.discard(punish_key)
-                        bot.logger.log_info(
-                            "AD NAME INCIDENT QUEUE DUPLICATE "
-                            f"chat_id={chat_id} user_id={user_id}"
-                        )
-                    else:
-                        bot.logger.log_info(
-                            "AD NAME BAN QUEUED "
-                            f"chat_id={chat_id} user_id={user_id} "
-                            f"name={shown_name!r} reason={ad_reason!r}"
-                        )
                     return
         # حساب سشن نباید وارد activity، فیلتر یا مجازات شود. با این حال، در
         # معماری userbot مالک همان حساب برای صدور فرمان عمومی استفاده می‌کند.
