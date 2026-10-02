@@ -65,7 +65,14 @@ def display_name(user):
     return format_user(user)
 
 
-def reason(user):
+def reason(user, chat_id=None):
+    """دلیل تبلیغاتی‌بودن نام کاربر، یا ``None``.
+
+    اگر ``chat_id`` داده شود، پس از الگوهای سراسری، فیلترهای اسمِ
+    دلخواهِ *همان گروه* (دستور «فیلتر اسم») هم بررسی می‌شوند. خروجی به
+    همان مسیر مجازات موجود می‌رود؛ هیچ enforcement جداگانه‌ای وجود
+    ندارد.
+    """
     username = _norm(getattr(user, "username", None))
     first = getattr(user, "first_name", None) or ""
     last = getattr(user, "last_name", None) or ""
@@ -79,4 +86,18 @@ def reason(user):
             for pattern in _PATTERNS:
                 if pattern.search(candidate):
                     return pattern.pattern
+
+    if chat_id is not None:
+        # import تنبل: name_filters خودش از همین ماژول نرمال‌سازی را
+        # می‌گیرد، پس import بالادستی حلقه می‌ساخت.
+        try:
+            from modules import name_filters
+        except Exception:
+            return None
+        try:
+            matched = name_filters.match_name(chat_id, user)
+        except Exception:
+            return None
+        if matched:
+            return f"فیلتر اسم: {matched}"
     return None

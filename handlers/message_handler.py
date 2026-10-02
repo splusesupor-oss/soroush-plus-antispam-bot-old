@@ -65,6 +65,9 @@ from handlers.group_expiry_handler import (
 # 📮 کپی بورد (حافظهٔ روباهی) — قابلیتی مستقل با مسیر پردازش جدا.
 from handlers.clipboard_handler import handle as handle_clipboard
 from modules.clipboard import HELP_SECTION as CLIPBOARD_HELP_SECTION
+# 🚫 فیلتر اسم — دستورهایش مستقل‌اند، ولی مجازاتش همان مسیر نام تبلیغاتی است.
+from handlers.name_filter_handler import handle as handle_name_filter
+from modules.name_filters import HELP_SECTION as NAME_FILTER_HELP_SECTION
 from modules.expiry_report import build_group_list
 from modules.name_family import (
     cancel_round as cancel_name_family_round,
@@ -3414,7 +3417,10 @@ async def handle_new_message(bot, event):
                 and not is_global_owner(user_id)
                 and not native_admin_warn_only):
             if not admin_tools.has_admin_permission(chat_id, user_id, sender_username):
-                ad_reason = ad_name_detector.reason(sender)
+                # chat_id داده می‌شود تا فیلترهای اسمِ دلخواهِ همین گروه
+                # (دستور «فیلتر اسم») هم در همین مسیر و با همین مجازات
+                # اعمال شوند.
+                ad_reason = ad_name_detector.reason(sender, chat_id)
                 if ad_reason:
                     # Claim the incident before any await. A burst can produce
                     # several NewMessage events before the kick RPC completes;
@@ -3773,6 +3779,19 @@ async def handle_new_message(bot, event):
             if await handle_clipboard(
                 bot, event, chat_id, user_id, sender, clean_text,
                 message_text, bot.logger,
+            ):
+                return
+
+        # ------------------------------------------------------------------
+        # 🚫 فیلتر اسم — فقط دستورهای مدیریتی این قابلیت.
+        #
+        # خودِ اعمال فیلتر اینجا نیست: تطبیق نام و مجازات در همان گیت
+        # «نام تبلیغاتی» بالاتر انجام می‌شود، پس اولین پیام کاربرِ
+        # فیلترشده دقیقاً با همان enforcement فعلی برخورد می‌کند.
+        # ------------------------------------------------------------------
+        if not event.is_private:
+            if await handle_name_filter(
+                bot, event, chat_id, user_id, sender, clean_text, bot.logger
             ):
                 return
 
@@ -5763,6 +5782,9 @@ async def handle_new_message(bot, event):
                 # 📮 کپی بورد — کل متن بخش یکپارچه Bold است و داخل یک
                 # نقل‌قول شیشه‌ای قرار می‌گیرد.
                 f"{CLIPBOARD_HELP_SECTION}\n\n"
+                # 🚫 فیلتر اسم — کل متن بخش یکپارچه Bold داخل یک
+                # نقل‌قول شیشه‌ای؛ بین جمله‌ها خط خالی نیست.
+                f"{NAME_FILTER_HELP_SECTION}\n\n"
                 "🤖 سیستم هوش مصنوعی گوگل ربات\n\n"
                 "برای فعال کردن: هوش مصنوعی فعال\n"
                 "برای خاموش کردن: هوش مصنوعی خاموش\n"
@@ -5939,6 +5961,8 @@ async def handle_new_message(bot, event):
                 "⏳ برای دیدن مهلت باقی مانده گروه\nبنویسید مهلت گروه\nفقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد",
                 # 📮 کپی بورد — کل متن بخش یکجا Bold است.
                 CLIPBOARD_HELP_SECTION,
+                # 🚫 فیلتر اسم — کل متن بخش یکجا Bold است.
+                NAME_FILTER_HELP_SECTION,
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -6027,6 +6051,8 @@ async def handle_new_message(bot, event):
                 "فقط مدیر یا مالک گروه اجازه استفاده از این دستور را دارد",
                 # 📮 کل بخش کپی بورد در یک نقل‌قول شیشه‌ای یکپارچه.
                 CLIPBOARD_HELP_SECTION,
+                # 🚫 کل بخش فیلتر اسم در یک نقل‌قول شیشه‌ای یکپارچه.
+                NAME_FILTER_HELP_SECTION,
             ]
             # بخش vip: کل متن داخل یک نقل‌قول شیشه‌ای
             vip_help_section = (
