@@ -2875,28 +2875,54 @@ def _is_known_internal_command(clean_text, chat_id, user_id):
 
 
 def _name_filter_hit(bot, chat_id, user_id, sender):
-    """عبارتِ «فیلتر اسم» که با نام این کاربر خورده است، یا ``None``.
+    """عبارتِ «فیلتر اسم» که با نام نمایشی این کاربر خورده، یا ``None``.
 
-    مالک اصلی ربات، مالک ثبت‌شدهٔ گروه و ادمین ثبت‌شده هرگز فیلتر
-    نمی‌شوند. تطبیق خودش در ``modules/name_filters`` و با همان
-    normalization موتور نام تبلیغاتی انجام می‌شود.
+    سیستم مستقل است: تطبیق، نرمال‌سازی و ایموجی همگی در
+    ``modules/name_filters`` هستند و هیچ ارتباطی با موتور نام تبلیغاتی
+    ندارند. مالک اصلی ربات و ادمین/مالک ثبت‌شدهٔ گروه معاف‌اند.
+
+    این تابع برای **هر پیام گروه یک خط لاگ** می‌نویسد
+    (``NAME FILTER CHECK``) تا اگر چیزی کار نکرد، با یک grep معلوم شود
+    دقیقاً کجا ایستاده: نام نمایشی چه دیده شده، چند فیلتر برای این
+    گروه ثبت است، و چرا کاربر رد یا معاف شده است.
     """
-    if sender is None:
-        return None
+    display = ""
+    username = ""
+    terms = []
+    skipped = None
+    matched = None
     try:
-        if is_global_owner(user_id):
-            return None
-    except Exception:
-        pass
-    username = (getattr(sender, "username", None) or "").lstrip("@").lower()
-    try:
-        if admin_tools.has_admin_permission(chat_id, user_id, username):
-            return None
-    except Exception:
-        pass
-    try:
-        return name_filters.match_name(chat_id, sender)
+        if sender is None:
+            skipped = "sender_none"
+        else:
+            display = name_filters.display_name(sender)
+            username = (
+                getattr(sender, "username", None) or ""
+            ).lstrip("@").lower()
+            try:
+                terms = name_filters.list_terms(chat_id)
+            except Exception as list_error:
+                skipped = f"list_failed:{list_error!r}"
+            if skipped is None and not terms:
+                skipped = "no_filters_for_group"
+            if skipped is None:
+                try:
+                    if is_global_owner(user_id):
+                        skipped = "global_owner"
+                except Exception:
+                    pass
+            if skipped is None:
+                try:
+                    if admin_tools.has_admin_permission(
+                        chat_id, user_id, username
+                    ):
+                        skipped = "registered_admin"
+                except Exception:
+                    pass
+            if skipped is None:
+                matched = name_filters.match_name(chat_id, sender)
     except Exception as error:
+        skipped = f"error:{error!r}"
         try:
             bot.logger.log_error(
                 "NAME FILTER MATCH FAILED "
@@ -2904,7 +2930,18 @@ def _name_filter_hit(bot, chat_id, user_id, sender):
             )
         except Exception:
             pass
-        return None
+
+    try:
+        bot.logger.log_info(
+            "NAME FILTER CHECK "
+            f"chat_id={chat_id} user_id={user_id} "
+            f"display={display!r} username={username!r} "
+            f"terms={terms!r} "
+            f"skipped={skipped!r} matched={matched!r}"
+        )
+    except Exception:
+        pass
+    return matched
 
 
 async def _enforce_ad_name(bot, event, chat_id, user_id, sender, ad_reason):
