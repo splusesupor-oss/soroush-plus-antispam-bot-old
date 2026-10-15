@@ -45,9 +45,25 @@ def _instance_name() -> str:
     در مجاورت همان مسیر، دایرکتوری مستقل می‌گیرد:
     ``~/.local/share/soroush-bot-<instance>/``
     """
-    raw = os.environ.get("BOT_INSTANCE", "main").strip() or "main"
+    # ترتیب: متغیر محیطی → نشانگر `.bot_instance` کنار main.py → پیش‌فرض main
+    # نشانگر باعث می‌شود خودِ clone مرجع باشد؛ پس اجرای مستقیم main.py یا
+    # run.sh/watchdog.py (که BOT_INSTANCE را ست نمی‌کنند) هرگز اشتباهی داخل
+    # دایرکتوری داده‌ی ربات دیگری ننویسد.
+    raw = os.environ.get("BOT_INSTANCE", "").strip()
+    if not raw:
+        raw = _marker_instance() or "main"
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[:32]
     return slug or "main"
+
+
+def _marker_instance() -> str:
+    """مقدار فایل نشانگر ``.bot_instance`` همین clone (خالی اگر نبود)."""
+    try:
+        text = (PROJECT_ROOT / ".bot_instance").read_text(
+            encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return text
 
 
 INSTANCE_NAME = _instance_name()

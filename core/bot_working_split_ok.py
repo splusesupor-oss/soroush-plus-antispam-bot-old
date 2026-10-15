@@ -174,6 +174,20 @@ def _log_inactive_gate(bot, chat_id, text):
         pass
 
 
+_SESSION_HELP = (
+    "\n"
+    + "=" * 62 + "\n"
+    " ⛔ SESSION MISSING — refusing to start\n"
+    "    کلیدهای بررسی‌شده (به همین ترتیب):\n"
+    "      SOROUSH_SESSION_STRING_<INSTANCE>\n"
+    "      SOROUSH_SESSION_STRING\n"
+    "      config_manager.session_string\n"
+    "    هیچ سشنی پیدا نشد، پس هیچ اتصالی زده نمی‌شود. مقدارها هرگز چاپ\n"
+    "    نمی‌شوند. فایل .env همین clone را کامل کنید (نمونه: .env.example).\n"
+    + "=" * 62
+)
+
+
 class SoroushAntiSpamBot:
     def __init__(self, config_path="config/config.json"):
         print("🚀 در حال بارگذاری تنظیمات...")
@@ -609,10 +623,26 @@ class SoroushAntiSpamBot:
         api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
         api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
 
-        if session_str:
+        # ⛔ سشن ناموجود = خطای روشن، نه سشن خالیِ تصادفی.
+        # پیش‌تر در این حالت یک ``StringSession()`` تازه ساخته می‌شد و ربات
+        # بی‌سشن تلاش می‌کرد وصل شود؛ نتیجه‌اش خطای گمراه‌کنندهٔ
+        # «Connection to SoroushPlus failed» بود. حالا علت واقعی و کلیدهای
+        # بررسی‌شده (بدون هیچ مقدار محرمانه) چاپ می‌شود.
+        if not session_str:
+            raise RuntimeError(_SESSION_HELP)
+        try:
             session = StringSession(session_str)
-        else:
-            session = StringSession()
+        except Exception as error:
+            # ⛔ سشن نامعتبر هم خطای روشن می‌دهد (قبلاً traceback خام base64
+            # بالا می‌آمد). خودِ مقدار هرگز چاپ نمی‌شود، فقط نوع خطا.
+            raise RuntimeError(
+                "\n" + "=" * 62 + "\n"
+                " ⛔ SESSION INVALID — refusing to start\n"
+                f"    رشتهٔ سشن قابل خواندن نبود (type={type(error).__name__}).\n"
+                "    مقدار چاپ نمی‌شود. رشته را از منبع اصلی دوباره کپی کنید.\n"
+                + "=" * 62
+            ) from None
+        session = StringSession(session_str)
 
         if api_id and api_hash:
             client = SoroushClient(session, api_id, api_hash)

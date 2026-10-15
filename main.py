@@ -5,12 +5,40 @@ import atexit
 # launcher این instance: main — BOT_INSTANCE باید قبل از هر import پروجه
 # (و قبل از لود شدن .env) قط‌ی شود: modules/runtime_paths در زمان
 # import مقدارهای INSTANCE_NAME/DATA_DIR را از حمین متگیر می‌سازد.
-os.environ.setdefault("BOT_INSTANCE", "main")
+#
+# اگر BOT_INSTANCE ست نشده باشد، نام instance از فایل نشانگر `.bot_instance`
+# کنار همین فایل خوانده می‌شود تا اجرای مستقیم `python3 main.py` یا
+# `./run.sh` هرگز به runtime ربات دیگری برنگردد.
+def _default_instance():
+    marker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          ".bot_instance")
+    try:
+        with open(marker, "r", encoding="utf-8") as fh:
+            name = fh.read().strip()
+        if name:
+            return name
+    except OSError:
+        pass
+    return "main"
+
+
+os.environ.setdefault("BOT_INSTANCE", _default_instance())
 
 # .env باید قبل از هر import پروجه لود شود (override=False معنی
 # متگیرهای محیتهای فعلی — از جمله BOT_INSTANCE بالا — بر .env برتری دارند).
 from dotenv import load_dotenv
 load_dotenv(override=False)
+
+from modules import instance_guard  # noqa: E402  (بعد از تعیین instance)
+
+# گارد جداسازی: تناقض بین محیط/لانچر/نشانگر = توقف روشن، نه ادامه‌ی خطرناک.
+# اگر BOT_INSTANCE با نشانگر این clone نخواند، هیچ‌چیز استارت نمی‌شود و هیچ
+# داده‌ای از ربات دیگر خوانده/نوشته نمی‌شود.
+try:
+    _INSTANCE = instance_guard.resolve("main.py")
+except instance_guard.InstanceConflict as _conflict:
+    sys.stderr.write(str(_conflict) + "\n")
+    sys.exit(2)
 
 from core.bot_working_split_ok import SoroushAntiSpamBot
 from modules.time_utils import TEHRAN, now_local
