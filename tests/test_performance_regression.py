@@ -215,6 +215,9 @@ def test_hot_path_does_not_block_event_loop():
 
 def test_progress_still_persists_after_flush():
     print("\n### 💾 داده با flush دوره‌ای واقعاً ذخیره می‌شود")
+    # 🔒 انتخاب پشتیبان ذخیره سراسری است؛ تست‌های دیگر همان worker آن را عوض
+    # می‌کنند، پس اینجا دوباره مسیر اختصاصی همین فایل قفل می‌شود.
+    _storage.use_file(_STORE_DIR / "economy.json")
     mc.reset_all()
     item = mc.start_question(-9002, 6100)
     mc.clear_question(-9002, item["token"])
@@ -222,7 +225,9 @@ def test_progress_still_persists_after_flush():
     check("flush_now نوشت", saved is True)
 
     import json
-    raw = json.loads((_STORE_DIR / "economy.json").read_text(encoding="utf-8"))
+    store_file = _STORE_DIR / "economy.json"
+    assert store_file.exists(), "فایل ذخیرهٔ این تست ساخته نشد"
+    raw = json.loads(store_file.read_text(encoding="utf-8"))
     # کلید گروه توسط ``accounts.chat_key`` نرمال می‌شود (منفی حذف
     # می‌شود)، پس نباید شناسهٔ خام را فرض کرد.
     chat_key = progress._chat(-9002)
@@ -283,6 +288,8 @@ def test_read_path_beats_snapshot_as_data_grows():
 def test_question_cost_is_flat():
     """قلب گزارش کاربر: سرعت نباید با گذشت زمان افت کند."""
     print("\n### 📊 هزینهٔ هر سوال با رشد داده ثابت می‌ماند")
+    # 🔒 همان دلیل بالا: مسیر ذخیره را خودِ تست تعیین می‌کند.
+    _storage.use_file(_STORE_DIR / "economy.json")
     mc.reset_all()
     samples = []
     uid = 7000
@@ -293,7 +300,8 @@ def test_question_cost_is_flat():
                     progress.mark_seen(-9600 - grow * 10 - chat, user,
                                        "emoji", stage)
         _storage.flush()
-        size = (_STORE_DIR / "economy.json").stat().st_size / 1024
+        store_file = _STORE_DIR / "economy.json"
+        size = store_file.stat().st_size / 1024 if store_file.exists() else 0.0
 
         async def burst(start_uid):
             local = start_uid
