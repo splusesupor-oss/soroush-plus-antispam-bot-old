@@ -1,5 +1,6 @@
 """Indexed permanent-ban storage with JSON rollback compatibility."""
 from __future__ import annotations
+from modules.log_policy import VERBOSE
 
 import hashlib
 import json
@@ -353,9 +354,10 @@ def is_banned(group_id, user_id, username=None, data=None):
     records = get_matching_ban_records(group_id, user_id, username, data)
     banned = bool(records)
     if banned and os.environ.get("BOT_VERBOSE_LOGS", "").lower() in {"1", "true", "on"}:
-        print("BANNED STORAGE MATCH "
-              f"user_id={user_id} username={username} group_id={group_id} "
-              f"records_count={len(records)}")
+        if VERBOSE:
+            print("BANNED STORAGE MATCH "
+                  f"user_id={user_id} username={username} group_id={group_id} "
+                  f"records_count={len(records)}")
     return banned
 
 

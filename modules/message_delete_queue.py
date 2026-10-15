@@ -1,4 +1,5 @@
 """Per-group asynchronous queue for automatic message deletions."""
+from modules.log_policy import diagnostics_enabled
 import asyncio
 try:
     from modules.group_id import normalize_group_id
@@ -231,11 +232,12 @@ class MessageDeleteQueue:
             int(priority), self._seq, ids, result, time.perf_counter(), rpc_peer,
         ))
         if queue.qsize() > 1 or int(priority) == 0:
-            self.logger.log_info(
-                "DELETE QUEUE SIZE "
-                f"chat_id={chat_id} queued_ids={len(ids)} pending={queue.qsize()} "
-                f"priority={priority}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    "DELETE QUEUE SIZE "
+                    f"chat_id={chat_id} queued_ids={len(ids)} pending={queue.qsize()} "
+                    f"priority={priority}"
+                )
         worker = self._workers.get(_chat_key(chat_id))
         if worker is None or worker.done():
             self._workers[_chat_key(chat_id)] = asyncio.create_task(
@@ -262,9 +264,10 @@ class MessageDeleteQueue:
             # Yield so a pending admin reply can take the shared sender
             # before this chat's next delete batch.
             await asyncio.sleep(0)
-            self.logger.log_info(
-                f"BATCH DELETE START chat_id={chat_id} count={len(batch)}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    f"BATCH DELETE START chat_id={chat_id} count={len(batch)}"
+                )
             succeeded = False
             last_error = None
             # A failed automatic delete is disposable; retrying it for tens of
@@ -282,11 +285,12 @@ class MessageDeleteQueue:
                     self._automatic_pause_until.pop(k_chat, None)
                     if cb is not None:
                         cb.record_success(chat_id)
-                    self.logger.log_info(
-                        "DELETE MESSAGE RPC TIME "
-                        f"chat_id={chat_id} count={len(batch)} attempt={attempt} "
-                        f"rpc_ms={(time.perf_counter() - started) * 1000:.2f}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "DELETE MESSAGE RPC TIME "
+                            f"chat_id={chat_id} count={len(batch)} attempt={attempt} "
+                            f"rpc_ms={(time.perf_counter() - started) * 1000:.2f}"
+                        )
                     break
                 except asyncio.CancelledError:
                     raise
@@ -332,9 +336,10 @@ class MessageDeleteQueue:
                         continue
                     break
             if succeeded:
-                self.logger.log_info(
-                    f"BATCH DELETE FINISHED chat_id={chat_id} count={len(batch)}"
-                )
+                if diagnostics_enabled(self.logger):
+                    self.logger.log_info(
+                        f"BATCH DELETE FINISHED chat_id={chat_id} count={len(batch)}"
+                    )
                 if self.inter_batch_delay:
                     await asyncio.sleep(self.inter_batch_delay)
                 else:
@@ -373,11 +378,12 @@ class MessageDeleteQueue:
                     )
                     deleted += 1
                     item_ok = True
-                    self.logger.log_info(
-                        "DELETE MESSAGE RPC TIME "
-                        f"chat_id={chat_id} count=1 attempt=1 "
-                        f"rpc_ms={(time.perf_counter() - started) * 1000:.2f}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "DELETE MESSAGE RPC TIME "
+                            f"chat_id={chat_id} count=1 attempt=1 "
+                            f"rpc_ms={(time.perf_counter() - started) * 1000:.2f}"
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
@@ -397,7 +403,8 @@ class MessageDeleteQueue:
         return deleted, remaining
 
     async def _worker(self, chat_id, queue):
-        self.logger.log_info(f"DELETE TASK START chat_id={chat_id}")
+        if diagnostics_enabled(self.logger):
+            self.logger.log_info(f"DELETE TASK START chat_id={chat_id}")
 
         def _unpack(item):
             rpc_peer = None
@@ -447,12 +454,13 @@ class MessageDeleteQueue:
                 except Exception:
                     pass
                 if queue_wait_ms >= 50:
-                    self.logger.log_info(
-                        "QUEUE WAIT TIME "
-                        f"chat_id={chat_id} lane=delete priority={jobs[0][0]} "
-                        f"queue_wait_ms={queue_wait_ms:.1f} "
-                        f"ids={merged} merged_jobs={len(jobs)}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "QUEUE WAIT TIME "
+                            f"chat_id={chat_id} lane=delete priority={jobs[0][0]} "
+                            f"queue_wait_ms={queue_wait_ms:.1f} "
+                            f"ids={merged} merged_jobs={len(jobs)}"
+                        )
 
                 all_ids = list(dict.fromkeys(
                     message_id for _p, ids, _r, _e, _peer in jobs

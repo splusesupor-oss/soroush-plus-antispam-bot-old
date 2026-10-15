@@ -1,4 +1,5 @@
 """صف moderation با هم‌زمانی محدود برای کاربران مستقل هر گروه."""
+from modules.log_policy import diagnostics_enabled
 import asyncio
 import os
 try:
@@ -143,10 +144,11 @@ class ModerationQueue:
             raise RuntimeError("moderation queue is closed")
         key = (_chat_key(chat_id), user_id, action)
         if key in self._pending_keys:
-            self.logger.log_info(
-                "MODERATION QUEUE DUPLICATE SKIPPED "
-                f"chat_id={chat_id} action={action} user_id={user_id}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    "MODERATION QUEUE DUPLICATE SKIPPED "
+                    f"chat_id={chat_id} action={action} user_id={user_id}"
+                )
             return False
 
         k = _chat_key(chat_id)
@@ -176,12 +178,13 @@ class ModerationQueue:
             workers = []
             self._workers[k] = workers
         workers[:] = [worker for worker in workers if not worker.done()]
-        self.logger.log_info(
-            "MODERATION QUEUE ENQUEUED "
-            f"chat_id={chat_id} action={action} user_id={user_id} "
-            f"pending={queue.qsize()} active_workers={len(workers)} "
-            f"per_chat_limit={self.per_chat_limit}"
-        )
+        if diagnostics_enabled(self.logger):
+            self.logger.log_info(
+                "MODERATION QUEUE ENQUEUED "
+                f"chat_id={chat_id} action={action} user_id={user_id} "
+                f"pending={queue.qsize()} active_workers={len(workers)} "
+                f"per_chat_limit={self.per_chat_limit}"
+            )
         # One new worker per accepted job, up to the strict per-chat cap.
         # This removes the old 1–2 second wait behind an unrelated user while
         # never allowing one noisy group to consume the whole connection.
@@ -204,7 +207,8 @@ class ModerationQueue:
         return True
 
     async def _worker(self, chat_id, queue):
-        self.logger.log_info(f"MODERATION WORKER START chat_id={chat_id}")
+        if diagnostics_enabled(self.logger):
+            self.logger.log_info(f"MODERATION WORKER START chat_id={chat_id}")
         key = _chat_key(chat_id)
         try:
             while True:
@@ -262,11 +266,12 @@ class ModerationQueue:
         started_wall = time.time()
         result = "failed"
         try:
-            self.logger.log_info(
-                "MODERATION RPC START "
-                f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
-                f"queue_wait_ms={queue_wait_ms:.2f} rpc_started_at={started_wall:.3f}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    "MODERATION RPC START "
+                    f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
+                    f"queue_wait_ms={queue_wait_ms:.2f} rpc_started_at={started_wall:.3f}"
+                )
             if job.action in {"ban", "punish", "kick", "auto_mute"}:
                 async with self._automatic_actions:
                     value = await self._run_job(chat_id, job)
@@ -304,16 +309,17 @@ class ModerationQueue:
             finished_wall = time.time()
             rpc_ms = (time.perf_counter() - rpc_started_at) * 1000
             self._record_completed(queue_wait_ms, rpc_ms)
-            self.logger.log_info(
-                "MODERATION RPC FINISHED "
-                f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
-                f"queue_wait_ms={queue_wait_ms:.2f} "
-                f"rpc_started_at={started_wall:.3f} "
-                f"rpc_finished_at={finished_wall:.3f} "
-                f"rpc_ms={rpc_ms:.2f} result={result} "
-                f"avg_queue_wait_ms={self._queue_wait_total_ms / self._completed:.2f} "
-                f"avg_rpc_ms={self._rpc_total_ms / self._completed:.2f}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    "MODERATION RPC FINISHED "
+                    f"chat_id={chat_id} action={job.action} user_id={job.user_id} "
+                    f"queue_wait_ms={queue_wait_ms:.2f} "
+                    f"rpc_started_at={started_wall:.3f} "
+                    f"rpc_finished_at={finished_wall:.3f} "
+                    f"rpc_ms={rpc_ms:.2f} result={result} "
+                    f"avg_queue_wait_ms={self._queue_wait_total_ms / self._completed:.2f} "
+                    f"avg_rpc_ms={self._rpc_total_ms / self._completed:.2f}"
+                )
 
     async def _run_job(self, chat_id, job):
         """deadline هر کوشش و تنها یک retry پس از FloodWait در همان worker."""

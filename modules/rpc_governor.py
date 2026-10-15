@@ -13,6 +13,7 @@ success, error, timeout or cancellation.  Retry/FloodWait sleeps performed by
 our queues happen after ``_call`` has returned/raised and therefore hold no
 permit.
 """
+from modules.log_policy import diagnostics_enabled
 
 import asyncio
 import os
@@ -617,23 +618,25 @@ class RpcGovernor:
         if wait_ms >= self.wait_log_ms:
             self.stats["waited"] += 1
             if self.logger is not None:
-                self.logger.log_info(
-                    "RPC GOVERNOR WAIT "
-                    f"request={admission.request_name} "
-                    f"priority={_PRIORITY_LABELS[admission.priority]} "
-                    f"bucket={admission.bucket} chat={admission.chat_key} "
-                    f"wait_ms={wait_ms:.1f} active={self._active_total} "
-                    f"waiting={self._waiting}"
-                )
-                self.logger.log_info(
-                    "GOVERNOR ACQUIRE "
-                    f"request={admission.request_name} "
-                    f"bucket={admission.bucket} "
-                    f"wait_ms={wait_ms:.1f} "
-                    f"active={self._active_total} "
-                    f"active_by_bucket={self.format_active_by_bucket() or '-'} "
-                    f"waiting={self._waiting}"
-                )
+                if diagnostics_enabled(self.logger):
+                    self.logger.log_info(
+                        "RPC GOVERNOR WAIT "
+                        f"request={admission.request_name} "
+                        f"priority={_PRIORITY_LABELS[admission.priority]} "
+                        f"bucket={admission.bucket} chat={admission.chat_key} "
+                        f"wait_ms={wait_ms:.1f} active={self._active_total} "
+                        f"waiting={self._waiting}"
+                    )
+                if diagnostics_enabled(self.logger):
+                    self.logger.log_info(
+                        "GOVERNOR ACQUIRE "
+                        f"request={admission.request_name} "
+                        f"bucket={admission.bucket} "
+                        f"wait_ms={wait_ms:.1f} "
+                        f"active={self._active_total} "
+                        f"active_by_bucket={self.format_active_by_bucket() or '-'} "
+                        f"waiting={self._waiting}"
+                    )
         return permit
 
     def format_waiting_by_bucket(self):
@@ -700,16 +703,19 @@ class RpcGovernor:
         burst_ms = (time.perf_counter() - started) * 1000.0
         if burst_ms < GOVERNOR_BLOCKED_MS and burst_max < 2:
             return
+        if not diagnostics_enabled(self.logger):
+            return
         ping_age, sender_pending, by_type = self._pending_brief()
         try:
-            self.logger.log_info(
-                "GOVERNOR DRAIN "
-                f"waiting=0 burst_ms={burst_ms:.1f} "
-                f"max_waiting={burst_max} active={self._active_total} "
-                f"active_by_bucket={self.format_active_by_bucket() or '-'} "
-                f"sender_pending={sender_pending} ping_age_ms={ping_age:.0f} "
-                f"pending_by_type={by_type}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    "GOVERNOR DRAIN "
+                    f"waiting=0 burst_ms={burst_ms:.1f} "
+                    f"max_waiting={burst_max} active={self._active_total} "
+                    f"active_by_bucket={self.format_active_by_bucket() or '-'} "
+                    f"sender_pending={sender_pending} ping_age_ms={ping_age:.0f} "
+                    f"pending_by_type={by_type}"
+                )
         except Exception:
             pass
 
@@ -795,7 +801,7 @@ class RpcGovernor:
         if self._active_by_bucket.get(bucket, 0) > 0:
             self._active_by_bucket[bucket] -= 1
         self.stats["released"] += 1
-        if hold_ms >= GOVERNOR_BLOCKED_MS and self.logger is not None:
+        if hold_ms >= GOVERNOR_BLOCKED_MS and self.logger is not None and diagnostics_enabled(self.logger):
             name = holder.request_name if holder is not None else "?"
             ping_age, sender_pending, by_type = self._pending_brief()
             self.logger.log_info(

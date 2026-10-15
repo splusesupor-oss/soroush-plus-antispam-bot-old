@@ -47,6 +47,8 @@ cancel می‌کند. اجرای واقعی نشان داد:
 درخواست‌های معلق را لغو و کل کلاینت را دوباره connect می‌کند.
 """
 
+from modules.log_policy import diagnostics_enabled
+
 import asyncio
 import time
 
@@ -551,6 +553,8 @@ def live_keepalive_count(sender, stale_after=STALE_LOG_SECONDS):
 
 def log_ping_lifecycle(logger, ping_id, state, **fields):
     """Diagnostic state transitions for one keepalive ping_id."""
+    if state in {"CREATED", "SENT", "RESPONSE", "COMPLETED", "QUEUED", "WRITE"} and not diagnostics_enabled(logger):
+        return
     if logger is None:
         return
     extra = " ".join(

@@ -22,6 +22,7 @@ so it cannot fill the normal message queue.
 
 Classification is text-only: no await, no RPC, no file I/O.
 """
+from modules.log_policy import diagnostics_enabled
 import asyncio
 import contextvars
 import inspect
@@ -398,9 +399,10 @@ class GroupDispatcher:
 
     async def _worker(self, chat_id, lane, queue):
         if self.logger is not None:
-            self.logger.log_info(
-                f"GROUP DISPATCH WORKER START chat_id={chat_id} lane={lane}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    f"GROUP DISPATCH WORKER START chat_id={chat_id} lane={lane}"
+                )
         key = self._lane_key(chat_id, lane)
         try:
             while True:
@@ -473,25 +475,28 @@ class GroupDispatcher:
                             queue_wait_threshold = float("inf")
                             handler_threshold = float("inf")
                         if queue_wait_ms >= queue_wait_threshold:
-                            self.logger.log_info(
-                                "QUEUE WAIT TIME "
-                                f"chat_id={chat_id} lane={lane} kind={kind} "
-                                f"queue_wait_ms={queue_wait_ms:.1f} "
-                                f"yield_ms={yield_ms:.1f}"
-                            )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "QUEUE WAIT TIME "
+                                    f"chat_id={chat_id} lane={lane} kind={kind} "
+                                    f"queue_wait_ms={queue_wait_ms:.1f} "
+                                    f"yield_ms={yield_ms:.1f}"
+                                )
                         if elapsed_ms >= handler_threshold or (
                             self.debug_timing and lane != LANE_NORMAL
                         ):
-                            self.logger.log_info(
-                                "HANDLER TIME "
-                                f"chat_id={chat_id} lane={lane} kind={kind} "
-                                f"handler_ms={elapsed_ms:.1f}"
-                            )
-                            self.logger.log_info(
-                                "GROUP DISPATCH JOB "
-                                f"chat_id={chat_id} lane={lane} kind={kind} "
-                                f"priority={priority} ms={elapsed_ms:.1f}"
-                            )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "HANDLER TIME "
+                                    f"chat_id={chat_id} lane={lane} kind={kind} "
+                                    f"handler_ms={elapsed_ms:.1f}"
+                                )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "GROUP DISPATCH JOB "
+                                    f"chat_id={chat_id} lane={lane} kind={kind} "
+                                    f"priority={priority} ms={elapsed_ms:.1f}"
+                                )
                 if queue.empty():
                     # Give a tiny window for a burst that is still being
                     # enqueued in this same tick.  Without this, a 15-message

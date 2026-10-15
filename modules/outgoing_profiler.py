@@ -7,6 +7,7 @@ Splits each traced RPC into:
 * ``post_rpc_ms`` — leftover time in the high-level wrapper after ``_call``
 * ``total_rpc_ms`` — full high-level or ``_call`` span
 """
+from modules.log_policy import diagnostics_enabled
 import asyncio
 import contextvars
 import functools
@@ -119,6 +120,8 @@ def mark_rpc_on_wire():
 
 def _log_conn_trace(logger, event, **fields):
     if logger is None:
+        return
+    if event in {"SOCKET SEND", "AWAIT START", "RESPONSE"} and not diagnostics_enabled(logger):
         return
     parts = [f"CONN TRACE {event}"]
     for key, value in fields.items():
@@ -302,6 +305,8 @@ def _log_rpc_budget(logger, owner, operation, phases, extra=None):
     rpc_await = float(phases.get("rpc_await_ms") or 0.0)
     total = queue_wait + governor_wait + sender_wait + rpc_await
     phases["total_ms"] = total
+    if total < _RPC_SLOW_MS or (total < _RPC_CRITICAL_MS and not diagnostics_enabled(logger)):
+        return
     sender = getattr(owner, "_sender", None) if owner is not None else None
     snapshot = pending_rpc_snapshot(sender)
     sender_pending = int(snapshot.get("sender_pending") or 0)
@@ -333,7 +338,8 @@ def _log_rpc_budget(logger, owner, operation, phases, extra=None):
         logger.log_error(f"OUTGOING RPC CRITICAL {line}")
         _force_runtime_snapshot(owner, "rpc_critical")
     elif total >= _RPC_SLOW_MS:
-        logger.log_info(f"OUTGOING RPC SLOW {line}")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"OUTGOING RPC SLOW {line}")
 
 
 def _format_request_ids(snapshot):
@@ -524,6 +530,8 @@ def _format_trace(fields):
 
 
 def _log_trace(logger, fields):
+    if not str(fields.get("result", "")).startswith("failed") and not diagnostics_enabled(logger):
+        return
     line = _format_trace(fields)
     if str(fields.get("result", "")).startswith("failed"):
         logger.log_error(line)
@@ -667,11 +675,12 @@ def _ensure_reconnect_hooks(client, logger):
                     )
                 except Exception:
                     pass
-                logger.log_info(
-                    "KEEPALIVE PING SENT "
-                    f"ping_id={rnd_id} pending_rpc={snapshot['count']} "
-                    f"sender_pending={snapshot['sender_pending']}"
-                )
+                if diagnostics_enabled(logger):
+                    logger.log_info(
+                        "KEEPALIVE PING SENT "
+                        f"ping_id={rnd_id} pending_rpc={snapshot['count']} "
+                        f"sender_pending={snapshot['sender_pending']}"
+                    )
                 try:
                     result = original(rnd_id)
                 except asyncio.CancelledError:
@@ -784,11 +793,12 @@ def _ensure_reconnect_hooks(client, logger):
     def pong_factory(original):
         async def hooked(message):
             pong = getattr(message, "obj", message)
-            logger.log_info(
-                "KEEPALIVE PONG RECEIVED "
-                f"ping_id={getattr(pong, 'ping_id', None)} "
-                f"msg_id={getattr(pong, 'msg_id', None)}"
-            )
+            if diagnostics_enabled(logger):
+                logger.log_info(
+                    "KEEPALIVE PONG RECEIVED "
+                    f"ping_id={getattr(pong, 'ping_id', None)} "
+                    f"msg_id={getattr(pong, 'msg_id', None)}"
+                )
             try:
                 return await original(message)
             finally:
@@ -809,11 +819,12 @@ def _ensure_reconnect_hooks(client, logger):
         if not asyncio.iscoroutinefunction(original):
             def sync_hooked(message):
                 pong = getattr(message, "obj", message)
-                logger.log_info(
-                    "KEEPALIVE PONG RECEIVED "
-                    f"ping_id={getattr(pong, 'ping_id', None)} "
-                    f"msg_id={getattr(pong, 'msg_id', None)}"
-                )
+                if diagnostics_enabled(logger):
+                    logger.log_info(
+                        "KEEPALIVE PONG RECEIVED "
+                        f"ping_id={getattr(pong, 'ping_id', None)} "
+                        f"msg_id={getattr(pong, 'msg_id', None)}"
+                    )
                 try:
                     return original(message)
                 finally:
@@ -1270,7 +1281,7 @@ def _wrap(owner, attribute, operation, logger):
             "last_return": None,
         }
         op_token = _OP_STATE.set(state)
-        source = _caller_source()
+        source = _caller_source() if _RPC_DEBUG else ""
         if _RPC_DEBUG and operation in {"send_message", "reply"}:
             logger.log_info(
                 f"SEND START source={source} chat_id={chat_id}"
@@ -1305,7 +1316,7 @@ def _wrap(owner, attribute, operation, logger):
                 _RESPONSE_RPC_MS.set(_RESPONSE_RPC_MS.get() + elapsed_ms)
             _OP_STATE.reset(op_token)
             _RPC_DEPTH.reset(depth_token)
-            if operation in _TRACED_OPS and "RpcOverloadError" not in result:
+            if (result.startswith("failed") or diagnostics_enabled(logger)) and operation in _TRACED_OPS and "RpcOverloadError" not in result:
                 _log_trace(logger, {
                     "request_id": request_id,
                     "operation": operation,
@@ -1328,12 +1339,13 @@ def _wrap(owner, attribute, operation, logger):
                     f"SEND END source={source} ms={elapsed_ms:.0f}"
                 )
             if elapsed_ms >= 250:
-                logger.log_info(
-                    "RPC TIME "
-                    f"operation={operation} chat_id={chat_id} "
-                    f"rpc_ms={elapsed_ms:.1f} result={result}"
-                )
-            if elapsed_ms > _RPC_SLOW_WARNING_MS:
+                if diagnostics_enabled(logger):
+                    logger.log_info(
+                        "RPC TIME "
+                        f"operation={operation} chat_id={chat_id} "
+                        f"rpc_ms={elapsed_ms:.1f} result={result}"
+                    )
+            if elapsed_ms > _RPC_SLOW_WARNING_MS and (result.startswith("failed") or diagnostics_enabled(logger)):
                 line = (
                     "OUTGOING RPC WARNING "
                     f"request_id={request_id} operation={operation} "

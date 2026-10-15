@@ -1,4 +1,5 @@
 """Name & Family group state with a curated category-specific word database."""
+from modules.log_policy import diagnostics_enabled
 import json
 import random
 import re
@@ -186,10 +187,12 @@ def is_active(chat_id):
 def start(chat_id, logger=None):
     global _ROUND_SEQUENCE
     if logger is not None:
-        logger.log_info(f"NAME FAMILY START ENTER chat_id={chat_id} active_exists={chat_id in _ACTIVE} remaining_letters={len(_REMAINING_LETTERS.get(chat_id) or [])}")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY START ENTER chat_id={chat_id} active_exists={chat_id in _ACTIVE} remaining_letters={len(_REMAINING_LETTERS.get(chat_id) or [])}")
     if chat_id in _ACTIVE:
         if logger is not None:
-            logger.log_info(f"NAME FAMILY START BLOCK reason=already_active chat_id={chat_id} round_id={_ACTIVE[chat_id].get('round_id')}")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY START BLOCK reason=already_active chat_id={chat_id} round_id={_ACTIVE[chat_id].get('round_id')}")
         return None
     remaining = _REMAINING_LETTERS.get(chat_id)
     if not remaining:
@@ -385,15 +388,18 @@ def _external_confirms_category(category, answer, normalized_answer, logger=None
     now = time.monotonic()
     if cached and now - cached[0] < _EXTERNAL_CACHE_SECONDS:
         if logger is not None:
-            logger.log_info(f"NAME FAMILY EXTERNAL CACHE HIT category={category} answer={answer} normalized={normalized_answer} source={cached[1]}")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY EXTERNAL CACHE HIT category={category} answer={answer} normalized={normalized_answer} source={cached[1]}")
         return cached[1]
     if logger is not None:
-        logger.log_info(f"NAME FAMILY EXTERNAL START category={category} answer={answer} normalized={normalized_answer}")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY EXTERNAL START category={category} answer={answer} normalized={normalized_answer}")
     start_t = time.monotonic()
     source = _wikidata_confirms_category(category, answer, normalized_answer)
     if source:
         if logger is not None:
-            logger.log_info(f"NAME FAMILY EXTERNAL WIKIDATA HIT category={category} answer={answer} elapsed={time.monotonic()-start_t:.3f}s")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY EXTERNAL WIKIDATA HIT category={category} answer={answer} elapsed={time.monotonic()-start_t:.3f}s")
         _cache_external(cache_key, now, source)
         return source
     mid_t = time.monotonic()
@@ -401,16 +407,19 @@ def _external_confirms_category(category, answer, normalized_answer, logger=None
         source = _wikipedia_confirms_category(category, answer, normalized_answer)
         if source:
             if logger is not None:
-                logger.log_info(f"NAME FAMILY EXTERNAL WIKIPEDIA HIT category={category} answer={answer} elapsed={time.monotonic()-mid_t:.3f}s total={time.monotonic()-start_t:.3f}s")
+                if diagnostics_enabled(logger):
+                    logger.log_info(f"NAME FAMILY EXTERNAL WIKIPEDIA HIT category={category} answer={answer} elapsed={time.monotonic()-mid_t:.3f}s total={time.monotonic()-start_t:.3f}s")
             _cache_external(cache_key, now, source)
             return source
     if not source:
         source = _web_confirms_category(category, answer, normalized_answer)
         if logger is not None:
-            logger.log_info(f"NAME FAMILY EXTERNAL WEB result={source} category={category} answer={answer} total_elapsed={time.monotonic()-start_t:.3f}s")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY EXTERNAL WEB result={source} category={category} answer={answer} total_elapsed={time.monotonic()-start_t:.3f}s")
     _cache_external(cache_key, now, source)
     if logger is not None and not source:
-        logger.log_info(f"NAME FAMILY EXTERNAL MISS category={category} answer={answer} total_elapsed={time.monotonic()-start_t:.3f}s")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY EXTERNAL MISS category={category} answer={answer} total_elapsed={time.monotonic()-start_t:.3f}s")
     return source
 
 
@@ -528,14 +537,16 @@ def submit(
 ):
     t_submit_start = time.monotonic()
     if logger is not None:
-        logger.log_info(f"NAME FAMILY SUBMIT ENTER chat_id={chat_id} user_id={user_id} name={name!r} text_len={len(str(text or ''))} active_exists={chat_id in _ACTIVE}")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY SUBMIT ENTER chat_id={chat_id} user_id={user_id} name={name!r} text_len={len(str(text or ''))} active_exists={chat_id in _ACTIVE}")
     state = _ACTIVE.get(chat_id)
     if not state:
         if logger is not None:
-            logger.log_info(
-                "NAME FAMILY TRACE SUBMIT_BLOCK "
-                f"reason=no_active_round chat_id={chat_id} user_id={user_id} elapsed={time.monotonic()-t_submit_start:.3f}s"
-            )
+            if diagnostics_enabled(logger):
+                logger.log_info(
+                    "NAME FAMILY TRACE SUBMIT_BLOCK "
+                    f"reason=no_active_round chat_id={chat_id} user_id={user_id} elapsed={time.monotonic()-t_submit_start:.3f}s"
+                )
         return None
     user_key = str(user_id)
     # A round accepts exactly one score per participant. This prevents the persistent
@@ -544,27 +555,30 @@ def submit(
     if existing is not None:
         # Do not signal a second successful submission or mutate persistent points.
         if logger is not None:
-            logger.log_info(
-                "NAME FAMILY TRACE SUBMIT_BLOCK "
-                f"reason=duplicate_submission chat_id={chat_id} user_id={user_id}"
-            )
+            if diagnostics_enabled(logger):
+                logger.log_info(
+                    "NAME FAMILY TRACE SUBMIT_BLOCK "
+                    f"reason=duplicate_submission chat_id={chat_id} user_id={user_id}"
+                )
         return None
 
     parts = _parse_answers(text)
     t_parse = time.monotonic()
     if parts is None:
         if logger is not None:
-            logger.log_info(
-                "NAME FAMILY TRACE SUBMIT_BLOCK "
-                f"reason=parse_failed chat_id={chat_id} user_id={user_id} "
-                f"line_count={len(str(text or '').splitlines())} elapsed={t_parse - t_submit_start:.3f}s"
-            )
+            if diagnostics_enabled(logger):
+                logger.log_info(
+                    "NAME FAMILY TRACE SUBMIT_BLOCK "
+                    f"reason=parse_failed chat_id={chat_id} user_id={user_id} "
+                    f"line_count={len(str(text or '').splitlines())} elapsed={t_parse - t_submit_start:.3f}s"
+                )
         return None
     if logger is not None:
-        logger.log_info(
-            "NAME FAMILY TRACE SUBMIT_PARSED "
-            f"chat_id={chat_id} user_id={user_id} line_count={len(parts)} elapsed={t_parse - t_submit_start:.3f}s"
-        )
+        if diagnostics_enabled(logger):
+            logger.log_info(
+                "NAME FAMILY TRACE SUBMIT_PARSED "
+                f"chat_id={chat_id} user_id={user_id} line_count={len(parts)} elapsed={t_parse - t_submit_start:.3f}s"
+            )
     points = 0
     seen_answers = set()
     letter = state["letter"]
@@ -600,7 +614,8 @@ def submit(
         pending_external.append((category, answer, normalized))
     if pending_external:
         if logger is not None:
-            logger.log_info(f"NAME FAMILY EXTERNAL BATCH start count={len(pending_external)} fast_elapsed={time.monotonic()-t_fast_start:.3f}s")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY EXTERNAL BATCH start count={len(pending_external)} fast_elapsed={time.monotonic()-t_fast_start:.3f}s")
         import concurrent.futures as _cf
         def _ext_task(item):
             cat, ans, norm = item
@@ -623,16 +638,18 @@ def submit(
     for category, answer, score, source, reason, normalized in results:
         points += score
         if logger is not None:
-            logger.log_info(
-                "NAME FAMILY VALIDATION "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"category={category} raw_answer={answer} "
-                f"normalized_answer={normalized} letter={letter} "
-                f"source={source} reason={reason} "
-                f"valid={source in {'database', 'learned', 'wikidata', 'wikipedia', 'web'}} score={score}"
-            )
+            if diagnostics_enabled(logger):
+                logger.log_info(
+                    "NAME FAMILY VALIDATION "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"category={category} raw_answer={answer} "
+                    f"normalized_answer={normalized} letter={letter} "
+                    f"source={source} reason={reason} "
+                    f"valid={source in {'database', 'learned', 'wikidata', 'wikipedia', 'web'}} score={score}"
+                )
     if logger is not None:
-        logger.log_info(f"NAME FAMILY SUBMIT SCORE total_points={points} elapsed={time.monotonic()-t_submit_start:.3f}s")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY SUBMIT SCORE total_points={points} elapsed={time.monotonic()-t_submit_start:.3f}s")
     state["answers"][user_key] = {
         "user_id": user_key,
         "name": name,
@@ -640,7 +657,8 @@ def submit(
         "round_id": state["round_id"],
     }
     if logger is not None:
-        logger.log_info(f"NAME FAMILY STORE SUCCESS chat_id={chat_id} user_id={user_id} name={name!r} points={points} round_id={state['round_id']} total_players={len(state['answers'])} elapsed={time.monotonic()-t_submit_start:.3f}s")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY STORE SUCCESS chat_id={chat_id} user_id={user_id} name={name!r} points={points} round_id={state['round_id']} total_players={len(state['answers'])} elapsed={time.monotonic()-t_submit_start:.3f}s")
     # امتیاز اسم فامیل «امتیاز دور» است، نه سکه. سکه جداگانه و فقط برای
     # نمرهٔ ۷۰ به بالا، توسط هندلر از راه API اقتصاد پرداخت می‌شود.
     return points
@@ -653,19 +671,23 @@ def finish(chat_id, round_id=None, logger=None):
     freshly started one.
     """
     if logger is not None:
-        logger.log_info(f"NAME FAMILY FINISH ENTER chat_id={chat_id} round_id={round_id} active_exists={chat_id in _ACTIVE} finished_contains={round_id in _FINISHED_ROUNDS if round_id else False}")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY FINISH ENTER chat_id={chat_id} round_id={round_id} active_exists={chat_id in _ACTIVE} finished_contains={round_id in _FINISHED_ROUNDS if round_id else False}")
     state = _ACTIVE.get(chat_id)
     if not state:
         if logger is not None:
-            logger.log_info(f"NAME FAMILY FINISH BLOCK reason=no_active chat_id={chat_id} round_id={round_id}")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY FINISH BLOCK reason=no_active chat_id={chat_id} round_id={round_id}")
         return []
     if round_id is not None and state["round_id"] != round_id:
         if logger is not None:
-            logger.log_info(f"NAME FAMILY FINISH BLOCK reason=round_id_mismatch chat_id={chat_id} expected={state['round_id']} got={round_id}")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY FINISH BLOCK reason=round_id_mismatch chat_id={chat_id} expected={state['round_id']} got={round_id}")
         return []
     if state["round_id"] in _FINISHED_ROUNDS:
         if logger is not None:
-            logger.log_info(f"NAME FAMILY FINISH BLOCK reason=already_finished chat_id={chat_id} round_id={round_id}")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY FINISH BLOCK reason=already_finished chat_id={chat_id} round_id={round_id}")
         return []
     _ACTIVE.pop(chat_id, None)
     _FINISHED_ROUNDS.add(state["round_id"])
@@ -678,7 +700,8 @@ def finish(chat_id, round_id=None, logger=None):
         reverse=True,
     )
     if logger is not None:
-        logger.log_info(f"NAME FAMILY FINISH SUCCESS chat_id={chat_id} round_id={round_id} players={len(ranking)} ranking={ranking!r}")
+        if diagnostics_enabled(logger):
+            logger.log_info(f"NAME FAMILY FINISH SUCCESS chat_id={chat_id} round_id={round_id} players={len(ranking)} ranking={ranking!r}")
     return ranking
 
 
@@ -732,35 +755,40 @@ async def run_round(chat_id, round_id, on_results, logger=None, seconds=None):
     except _aio.CancelledError:
         cancelled = True
         if logger is not None:
-            logger.log_info(
-                f"NAME FAMILY TIMER CANCELLED chat_id={chat_id} round_id={round_id} "
-                "-> results will still be delivered"
-            )
+            if diagnostics_enabled(logger):
+                logger.log_info(
+                    f"NAME FAMILY TIMER CANCELLED chat_id={chat_id} round_id={round_id} "
+                    "-> results will still be delivered"
+                )
     finally:
         _ROUND_TASKS.pop(chat_id, None)
         if logger is not None:
-            logger.log_info(
-                f"NAME FAMILY TIMER END chat_id={chat_id} round_id={round_id} "
-                f"cancelled={cancelled}"
-            )
+            if diagnostics_enabled(logger):
+                logger.log_info(
+                    f"NAME FAMILY TIMER END chat_id={chat_id} round_id={round_id} "
+                    f"cancelled={cancelled}"
+                )
         state = _ACTIVE.get(chat_id)
         already_done = state is None or state["round_id"] != round_id
         if logger is not None:
-            logger.log_info(f"NAME FAMILY TIMER CHECK chat_id={chat_id} round_id={round_id} already_done={already_done} state_exists={state is not None}")
+            if diagnostics_enabled(logger):
+                logger.log_info(f"NAME FAMILY TIMER CHECK chat_id={chat_id} round_id={round_id} already_done={already_done} state_exists={state is not None}")
         if not already_done:
             ranking = finish(chat_id, round_id, logger=logger)
             if logger is not None:
-                logger.log_info(
-                    f"NAME FAMILY RESULTS START chat_id={chat_id} "
-                    f"round_id={round_id} players={len(ranking)}"
-                )
+                if diagnostics_enabled(logger):
+                    logger.log_info(
+                        f"NAME FAMILY RESULTS START chat_id={chat_id} "
+                        f"round_id={round_id} players={len(ranking)}"
+                    )
             try:
                 await on_results(ranking)
                 if logger is not None:
-                    logger.log_info(
-                        f"NAME FAMILY RESULTS SENT chat_id={chat_id} "
-                        f"round_id={round_id} players={len(ranking)}"
-                    )
+                    if diagnostics_enabled(logger):
+                        logger.log_info(
+                            f"NAME FAMILY RESULTS SENT chat_id={chat_id} "
+                            f"round_id={round_id} players={len(ranking)}"
+                        )
             except Exception as error:
                 if logger is not None:
                     logger.log_error(

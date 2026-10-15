@@ -1,3 +1,4 @@
+from modules.log_policy import VERBOSE
 
 import asyncio
 
@@ -10,7 +11,8 @@ async def delete_messages_batch(bot, chat_id, ids, batch_size=100):
     if not ids:
         return
 
-    print(f"🗑️ HISTORY CLEANER START: {len(ids)} messages")
+    if VERBOSE:
+        print(f"🗑️ HISTORY CLEANER START: {len(ids)} messages")
 
     for i in range(0, len(ids), batch_size):
         batch = ids[i:i+batch_size]
@@ -21,10 +23,11 @@ async def delete_messages_batch(bot, chat_id, ids, batch_size=100):
                 batch
             )
 
-            print(
-                f"✅ deleted batch {i//batch_size + 1} "
-                f"({len(batch)} messages)"
-            )
+            if VERBOSE:
+                print(
+                    f"✅ deleted batch {i//batch_size + 1} "
+                    f"({len(batch)} messages)"
+                )
 
         except Exception as e:
             print("❌ batch delete error:", e)
@@ -48,7 +51,8 @@ async def clean_user_history(bot, chat_id, user_id, get_ids, clear_func):
             user_id
         )
 
-        print("✅ history cleared")
+        if VERBOSE:
+            print("✅ history cleared")
 
     except Exception as e:
         print("❌ history cleaner error:", e)

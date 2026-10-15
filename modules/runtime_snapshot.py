@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from modules.log_policy import diagnostics_enabled
+
 import asyncio
 import os
 import time
@@ -963,7 +965,8 @@ class RuntimeSnapshotMonitor:
         )
         if not due:
             return
-        self._log(format_accumulation_report(snapshot, self.accumulation_previous))
+        if diagnostics_enabled(self.logger):
+            self._log(format_accumulation_report(snapshot, self.accumulation_previous))
         for line in detect_accumulation(snapshot, self.accumulation_previous):
             self._log(line, error=True)
         self.accumulation_previous = dict(snapshot)
@@ -971,7 +974,8 @@ class RuntimeSnapshotMonitor:
 
     async def emit(self, *, title: str = "PERFORMANCE SNAPSHOT") -> Dict[str, Any]:
         snapshot = await collect(self.bot, lag_probe_seconds=self.lag_probe_seconds)
-        self._log(format_snapshot(snapshot, title=title))
+        if diagnostics_enabled(self.logger):
+            self._log(format_snapshot(snapshot, title=title))
         for line in detect_issues(snapshot, self.previous):
             self._log(line, error=True)
         if self.baseline is None:

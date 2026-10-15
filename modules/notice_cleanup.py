@@ -8,6 +8,7 @@ group A cannot delay the 60-second delete in group B.  The incoming-message
 dispatcher is never used: ``schedule`` is synchronous and only wakes that
 group's worker.  Persistence is flushed by the worker, not the sender.
 """
+from modules.log_policy import diagnostics_enabled
 import asyncio
 import json
 import os
@@ -198,11 +199,12 @@ class NoticeCleanup:
         """Launch workers for any persisted notices. Safe to call once."""
         self._started = True
         if self.logger is not None:
-            self.logger.log_info(
-                "NOTICE CLEANUP START "
-                f"ttl_s={self.ttl_seconds:g} "
-                f"pending_groups={len(self._items)}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    "NOTICE CLEANUP START "
+                    f"ttl_s={self.ttl_seconds:g} "
+                    f"pending_groups={len(self._items)}"
+                )
         for chat_id, rows in list(self._items.items()):
             if rows:
                 self._ensure_worker(chat_id)
@@ -256,19 +258,22 @@ class NoticeCleanup:
         if event is not None and not event.is_set():
             event.set()
         if self.logger is not None:
-            self.logger.log_info(
-                f"AUTO_NOTICE_CREATED chat_id={chat_id} message_id={message_id} "
-                f"ttl_seconds={ttl_s:g} expires_at={expires_at:.2f}"
-            )
-            self.logger.log_info(
-                f"AUTO_NOTICE_TIMER_STARTED chat_id={chat_id} message_id={message_id} "
-                f"expires_at={expires_at:.2f} delay_seconds={ttl_s:g}"
-            )
-            self.logger.log_info(
-                "NOTICE CLEANUP QUEUED "
-                f"chat_id={chat_id} message_id={message_id} "
-                f"expires_in_s={ttl_s:g} pending={len(rows)}"
-            )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    f"AUTO_NOTICE_CREATED chat_id={chat_id} message_id={message_id} "
+                    f"ttl_seconds={ttl_s:g} expires_at={expires_at:.2f}"
+                )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    f"AUTO_NOTICE_TIMER_STARTED chat_id={chat_id} message_id={message_id} "
+                    f"expires_at={expires_at:.2f} delay_seconds={ttl_s:g}"
+                )
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(
+                    "NOTICE CLEANUP QUEUED "
+                    f"chat_id={chat_id} message_id={message_id} "
+                    f"expires_in_s={ttl_s:g} pending={len(rows)}"
+                )
         return True
 
     def pending(self, chat_id):
@@ -417,7 +422,8 @@ class NoticeCleanup:
     async def _worker(self, chat_id):
         event = self._events[chat_id]
         if self.logger is not None:
-            self.logger.log_info(f"NOTICE CLEANUP START chat_id={chat_id}")
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(f"NOTICE CLEANUP START chat_id={chat_id}")
         try:
             while self._started:
                 rows = self._items.get(chat_id) or []
@@ -447,13 +453,15 @@ class NoticeCleanup:
                 due = [int(row["message_id"]) for row in due_rows]
                 if due:
                     if self.logger is not None:
-                        self.logger.log_info(
-                            f"AUTO_NOTICE_DELETE_TRIGGERED chat_id={chat_id} message_ids={due!r}"
-                        )
-                        self.logger.log_info(
-                            "NOTICE CLEANUP DUE "
-                            f"chat_id={chat_id} message_ids={due!r}"
-                        )
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info(
+                                f"AUTO_NOTICE_DELETE_TRIGGERED chat_id={chat_id} message_ids={due!r}"
+                            )
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info(
+                                "NOTICE CLEANUP DUE "
+                                f"chat_id={chat_id} message_ids={due!r}"
+                            )
                     result = self._enqueue_delete(chat_id, due, rpc_chat=rpc_chat)
                     deleted, remaining = 0, list(due)
                     try:
@@ -471,15 +479,17 @@ class NoticeCleanup:
                             )
                     else:
                         if self.logger is not None:
-                            self.logger.log_info(
-                                f"AUTO_NOTICE_DELETE_RESULT chat_id={chat_id} message_ids={due!r} "
-                                f"deleted={deleted} remaining={len(remaining or ())}"
-                            )
-                            self.logger.log_info(
-                                "NOTICE CLEANUP DELETED "
-                                f"chat_id={chat_id} message_ids={due!r} "
-                                f"deleted={deleted} remaining={len(remaining or ())}"
-                            )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    f"AUTO_NOTICE_DELETE_RESULT chat_id={chat_id} message_ids={due!r} "
+                                    f"deleted={deleted} remaining={len(remaining or ())}"
+                                )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "NOTICE CLEANUP DELETED "
+                                    f"chat_id={chat_id} message_ids={due!r} "
+                                    f"deleted={deleted} remaining={len(remaining or ())}"
+                                )
                     due_set = set(due)
                     current_rows = self._items.get(chat_id, [])
                     kept_rows = [
@@ -503,10 +513,11 @@ class NoticeCleanup:
                     continue
                 delay = max(0.01, next_at - now)
                 if self.logger is not None:
-                    self.logger.log_info(
-                        f"AUTO_NOTICE_TIMER_STARTED chat_id={chat_id} "
-                        f"expires_at={next_at:.2f} delay_seconds={delay:.2f}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            f"AUTO_NOTICE_TIMER_STARTED chat_id={chat_id} "
+                            f"expires_at={next_at:.2f} delay_seconds={delay:.2f}"
+                        )
                 event.clear()
                 try:
                     await asyncio.wait_for(event.wait(), timeout=delay)

@@ -15,6 +15,7 @@ RPC is executed directly.
 
 Priority: 0 = admin/moderation/urgent, 1 = normal chat.
 """
+from modules.log_policy import diagnostics_enabled
 import asyncio
 import contextvars
 import inspect
@@ -319,7 +320,8 @@ class OutgoingSender:
     async def _worker(self, qkey, chat_id, queue):
         key = qkey
         if self.logger:
-            self.logger.log_info(f"OUTGOING SEND WORKER START chat_id={chat_id} key={key} kind={'notif' if 'notif' in str(key) else 'normal'}")
+            if diagnostics_enabled(self.logger):
+                self.logger.log_info(f"OUTGOING SEND WORKER START chat_id={chat_id} key={key} kind={'notif' if 'notif' in str(key) else 'normal'}")
         try:
             while True:
                 try:
@@ -344,7 +346,8 @@ class OutgoingSender:
                 except Exception:
                     pass
                 if queue_wait_ms >= 50 and self.logger:
-                    self.logger.log_info(f"OUTGOING SEND QUEUE_WAIT chat_id={chat_id} queue_wait_ms={queue_wait_ms:.1f} priority={priority}")
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(f"OUTGOING SEND QUEUE_WAIT chat_id={chat_id} queue_wait_ms={queue_wait_ms:.1f} priority={priority}")
                 started = time.perf_counter()
                 result = None
                 # The low-level request wrapper is the single owner of the
@@ -406,7 +409,8 @@ class OutgoingSender:
                     if self.logger:
                         elapsed = (time.perf_counter() - started) * 1000
                         if elapsed >= 200:
-                            self.logger.log_info(f"OUTGOING SEND TIME chat_id={chat_id} priority={priority} send_ms={elapsed:.1f} gate_wait_ms={gate_wait_ms:.1f}")
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(f"OUTGOING SEND TIME chat_id={chat_id} priority={priority} send_ms={elapsed:.1f} gate_wait_ms={gate_wait_ms:.1f}")
                 if queue.empty():
                     await asyncio.sleep(0)
                     if queue.empty():
@@ -666,11 +670,12 @@ def _wrap_call_with_gate(client, logger, governor=None):
                 except Exception:
                     pass
                 if gate_wait >= 20 and logger:
-                    logger.log_info(
-                        "OUTGOING RPC GATE "
-                        f"request={name} wait_ms={gate_wait:.1f} "
-                        f"inflight_low={gate.inflight}"
-                    )
+                    if diagnostics_enabled(logger):
+                        logger.log_info(
+                            "OUTGOING RPC GATE "
+                            f"request={name} wait_ms={gate_wait:.1f} "
+                            f"inflight_low={gate.inflight}"
+                        )
 
             if (
                 governor is not None

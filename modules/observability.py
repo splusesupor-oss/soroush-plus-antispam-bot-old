@@ -11,6 +11,7 @@
 """
 
 from __future__ import annotations
+from modules.log_policy import diagnostics_enabled
 
 import asyncio
 import os
@@ -294,11 +295,12 @@ class PeriodicHealthMonitor:
         while not self._closed:
             try:
                 await asyncio.sleep(self.interval_seconds)
-                report = self.collector.format_diagnostic_report(self.bot)
-                if self.logger:
-                    self.logger.log_info(
-                        f"HEALTH_HEARTBEAT_REPORT\n{report}"
-                    )
+                report = self.collector.format_diagnostic_report(self.bot) if diagnostics_enabled(self.logger) else None
+                if self.logger and report is not None:
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            f"HEALTH_HEARTBEAT_REPORT\n{report}"
+                        )
             except asyncio.CancelledError:
                 break
             except Exception as e:

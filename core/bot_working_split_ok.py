@@ -1,3 +1,5 @@
+from modules.log_policy import VERBOSE
+from modules.log_policy import diagnostics_enabled
 from modules.security.security_manager import check_security, remove_message
 from modules.security.attack_guard import check_attack, clear_attack
 from modules.security import attack_guard as security_attack_guard
@@ -276,7 +278,7 @@ class SoroushAntiSpamBot:
         return time.monotonic()
 
     def debug_message_log(self, message):
-        if self.config_manager.get("debug_message_pipeline", False):
+        if bool(getattr(self.logger, "verbose_logs", False)) or self.config_manager.get("debug_message_pipeline", False):
             self.logger.log_info(message)
 
     def touch_temporary_state(self, bucket, key, now=None):
@@ -745,9 +747,10 @@ class SoroushAntiSpamBot:
 
     async def check_group_word_commands(self, event, text, chat_id, user_id):
         try:
-            self.debug_message_log(
-                f"FILTER ARGS: {text!r} {type(text)} {chat_id} {user_id}"
-            )
+            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                self.debug_message_log(
+                    f"FILTER ARGS: {text!r} {type(text)} {chat_id} {user_id}"
+                )
             return await handle_group_word_command(
                 self,
                 event,
@@ -937,11 +940,12 @@ class SoroushAntiSpamBot:
         # ACCUMULATION REPORT. Does not change queues, governor, or RPC.
         self.runtime_snapshot = RuntimeSnapshotMonitor(self, self.logger)
         self.runtime_snapshot.start()
-        self.logger.log_info(
-            "NOTICE CLEANUP STARTED "
-            f"ttl_s={self.notice_cleanup.ttl_seconds:g} "
-            f"pending_groups={len(self.notice_cleanup._items)}"
-        )
+        if diagnostics_enabled(self.logger):
+            self.logger.log_info(
+                "NOTICE CLEANUP STARTED "
+                f"ttl_s={self.notice_cleanup.ttl_seconds:g} "
+                f"pending_groups={len(self.notice_cleanup._items)}"
+            )
 
         async def temporary_state_cleanup_loop():
             while True:
@@ -1095,7 +1099,8 @@ class SoroushAntiSpamBot:
                     first_flush = False
                     await asyncio.sleep(300)
                 started = time.perf_counter()
-                self.debug_message_log("FLUSH START")
+                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                    self.debug_message_log("FLUSH START")
                 try:
                     await asyncio.to_thread(flush_group_stats)
                     await asyncio.to_thread(flush_user_activity)
@@ -1103,10 +1108,12 @@ class SoroushAntiSpamBot:
                     await asyncio.to_thread(flush_economy)
                     await asyncio.to_thread(self.tracker.save, True)
                     cost = time.perf_counter() - started
-                    self.debug_message_log(f"FLUSH END ms={cost * 1000:.0f}")
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(f"FLUSH END ms={cost * 1000:.0f}")
                 except Exception as error:
                     cost = time.perf_counter() - started
-                    self.debug_message_log(f"FLUSH END ms={cost * 1000:.0f}")
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(f"FLUSH END ms={cost * 1000:.0f}")
                     self.logger.log_error(f"خطا در ذخیرهٔ دوره‌ای: {error}")
 
                 # فاصله هرگز کمتر از پنج دقیقه نمی‌شود؛ اگر ذخیره‌سازی گران
@@ -1183,10 +1190,11 @@ class SoroushAntiSpamBot:
                 state = getattr(result, "participant", None)
                 state_name = state.__class__.__name__ if state else "Unknown"
                 restricted = "Banned" in state_name
-                self.logger.log_info(
-                    f"MANUAL RELEASE CHECK user_id={getattr(user, 'id', None)} "
-                    f"state={state_name} restricted={restricted}"
-                )
+                if diagnostics_enabled(self.logger):
+                    self.logger.log_info(
+                        f"MANUAL RELEASE CHECK user_id={getattr(user, 'id', None)} "
+                        f"state={state_name} restricted={restricted}"
+                    )
                 return restricted
             except Exception as error:
                 self.logger.log_error(
@@ -1305,20 +1313,21 @@ class SoroushAntiSpamBot:
                 burst_key = (runtime_group, runtime_user)
                 history = get_user_history(chat_id, user_id)
                 rejoin_state = self.rejoin_spam_state.get(burst_key, {})
-                self.logger.log_info(
-                    "SPLUS REJOIN STATE DEBUG\n"
-                    f"user_id={user_id}\n"
-                    f"chat_id={chat_id}\n"
-                    f"previously_banned={rejoin_state.get('previously_banned', False)}\n"
-                    f"previous_violations={rejoin_state.get('previous_violations', 0)}\n"
-                    "new_spam_detected=False\n"
-                    "ban_triggered=False\n"
-                    f"punish_key={punish_key}\n"
-                    f"in_punished_users={punish_key in self.punished_users}\n"
-                    f"in_spam_burst_users={burst_key in self.spam_burst_users}\n"
-                    f"history_count={len(history) if history is not None else 0}\n"
-                    f"spam_count={self.tracker.get_count(chat_id, user_id)}"
-                )
+                if diagnostics_enabled(self.logger):
+                    self.logger.log_info(
+                        "SPLUS REJOIN STATE DEBUG\n"
+                        f"user_id={user_id}\n"
+                        f"chat_id={chat_id}\n"
+                        f"previously_banned={rejoin_state.get('previously_banned', False)}\n"
+                        f"previous_violations={rejoin_state.get('previous_violations', 0)}\n"
+                        "new_spam_detected=False\n"
+                        "ban_triggered=False\n"
+                        f"punish_key={punish_key}\n"
+                        f"in_punished_users={punish_key in self.punished_users}\n"
+                        f"in_spam_burst_users={burst_key in self.spam_burst_users}\n"
+                        f"history_count={len(history) if history is not None else 0}\n"
+                        f"spam_count={self.tracker.get_count(chat_id, user_id)}"
+                    )
 
                 banned_data = load_banned()
                 banned = is_banned(
@@ -1327,16 +1336,18 @@ class SoroushAntiSpamBot:
                 matching_records = get_matching_ban_records(
                     chat_id, user_id, username, data=banned_data
                 )
-                self.logger.log_info(
-                    "JOIN BAN CHECK "
-                    f"user_id={user_id} username={username} is_banned={banned} "
-                    f"file={BANNED_STORAGE_FILE} records={matching_records}"
-                )
-                print(
-                    "JOIN BAN DEBUG "
-                    f"user_id={user_id} username={username} "
-                    f"source={BANNED_STORAGE_FILE} records={matching_records}"
-                )
+                if diagnostics_enabled(self.logger):
+                    self.logger.log_info(
+                        "JOIN BAN CHECK "
+                        f"user_id={user_id} username={username} is_banned={banned} "
+                        f"file={BANNED_STORAGE_FILE} records={matching_records}"
+                    )
+                if VERBOSE:
+                    print(
+                        "JOIN BAN DEBUG "
+                        f"user_id={user_id} username={username} "
+                        f"source={BANNED_STORAGE_FILE} records={matching_records}"
+                    )
                 if banned:
                     if not await is_currently_restricted(chat_id, user):
                         display_name = " ".join(
@@ -1462,11 +1473,12 @@ class SoroushAntiSpamBot:
                         getattr(sender, "username", None),
                     )
                 ):
-                    self.logger.log_info(
-                        "GROUP REMAINING QUERY ROUTED "
-                        f"chat_id={chat_id} sender_id={sender_id} "
-                        f"active={is_active(chat_id)}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "GROUP REMAINING QUERY ROUTED "
+                            f"chat_id={chat_id} sender_id={sender_id} "
+                            f"active={is_active(chat_id)}"
+                        )
                     await handle_new_message(self, event)
                     return
 
@@ -1517,51 +1529,58 @@ class SoroushAntiSpamBot:
                         "debug_message_pipeline", False) else float("inf")
                 )
                 if elapsed_ms >= _timing_threshold_ms:
-                    self.logger.log_info(
-                        "HANDLER TIME "
-                        f"chat_id={getattr(event, 'chat_id', None)} "
-                        f"path=priority handler_ms={elapsed_ms:.1f} "
-                        f"text={text!r}"
-                    )
-                    self.logger.log_info(
-                        "TOTAL COMMAND TIME "
-                        f"chat_id={getattr(event, 'chat_id', None)} "
-                        f"elapsed_ms={elapsed_ms:.1f} text={text!r}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "HANDLER TIME "
+                            f"chat_id={getattr(event, 'chat_id', None)} "
+                            f"path=priority handler_ms={elapsed_ms:.1f} "
+                            f"text={text!r}"
+                        )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "TOTAL COMMAND TIME "
+                            f"chat_id={getattr(event, 'chat_id', None)} "
+                            f"elapsed_ms={elapsed_ms:.1f} text={text!r}"
+                        )
 
         async def process_incoming_message(event):
             started_message_handler = time.perf_counter()
             # === SPAM DEBUG INCOMING — اولین خط NewMessage ===
-            try:
-                _sd_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
-                _sd_chat = getattr(event, 'chat_id', None)
-                _sd_mid = getattr(getattr(event, 'message', None), 'id', None)
-                _sd_sid_try = getattr(event, 'sender_id', None)
-                if _sd_sid_try is None:
-                    _sd_sender_obj = getattr(event, 'sender', None)
-                    _sd_sid_try = getattr(_sd_sender_obj, 'id', None) if _sd_sender_obj else None
-                import hashlib as _sd_hl
-                _sd_hash = _sd_hl.md5(str(_sd_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _sd_raw else "empty"
-                _sd_len = len(str(_sd_raw))
-                self.debug_message_log(f"SPAM DEBUG INCOMING chat_id={_sd_chat} message_id={_sd_mid} sender_id={_sd_sid_try} text_hash={_sd_hash} text_length={_sd_len}")
-            except Exception as _sd_e:
-                try: self.logger.log_error(f"SPAM DEBUG INCOMING failed { _sd_e!r}")
-                except: pass
+            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                try:
+                    _sd_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
+                    _sd_chat = getattr(event, 'chat_id', None)
+                    _sd_mid = getattr(getattr(event, 'message', None), 'id', None)
+                    _sd_sid_try = getattr(event, 'sender_id', None)
+                    if _sd_sid_try is None:
+                        _sd_sender_obj = getattr(event, 'sender', None)
+                        _sd_sid_try = getattr(_sd_sender_obj, 'id', None) if _sd_sender_obj else None
+                    import hashlib as _sd_hl
+                    _sd_hash = _sd_hl.md5(str(_sd_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _sd_raw else "empty"
+                    _sd_len = len(str(_sd_raw))
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(f"SPAM DEBUG INCOMING chat_id={_sd_chat} message_id={_sd_mid} sender_id={_sd_sid_try} text_hash={_sd_hash} text_length={_sd_len}")
+                except Exception as _sd_e:
+                    try: self.logger.log_error(f"SPAM DEBUG INCOMING failed { _sd_e!r}")
+                    except: pass
             # === SPAM FLOW TRACE: CORE ENTRY INSTANCE CHECK ===
-            try:
-                _core_trace_chat = getattr(event, 'chat_id', None)
-                _core_trace_msg = getattr(getattr(event, 'message', None), 'id', None)
+            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                try:
+                    _core_trace_chat = getattr(event, 'chat_id', None)
+                    _core_trace_msg = getattr(getattr(event, 'message', None), 'id', None)
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(
+                            f"SPAM FLOW TRACE chat_id={_core_trace_chat} user_id=unknown message_id={_core_trace_msg} stage=CORE_RAW_ENTRY bot_id={id(self)} lock_id={id(getattr(self, 'spam_lock', set()))} lock_size={len(getattr(self, 'spam_lock', set()))} lock_keys={list(getattr(self, 'spam_lock', set()))[:5]!r}"
+                        )
+                except Exception as _core_trace_err:
+                    self.logger.log_error(f"SPAM FLOW TRACE CORE entry failed { _core_trace_err!r}")
+            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
                 self.debug_message_log(
-                    f"SPAM FLOW TRACE chat_id={_core_trace_chat} user_id=unknown message_id={_core_trace_msg} stage=CORE_RAW_ENTRY bot_id={id(self)} lock_id={id(getattr(self, 'spam_lock', set()))} lock_size={len(getattr(self, 'spam_lock', set()))} lock_keys={list(getattr(self, 'spam_lock', set()))[:5]!r}"
+                    "RAW MESSAGE EVENT RECEIVED "
+                    f"chat_id={getattr(event, 'chat_id', None)} "
+                    f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
+                    f"event_out={getattr(event, 'out', None)}"
                 )
-            except Exception as _core_trace_err:
-                self.logger.log_error(f"SPAM FLOW TRACE CORE entry failed { _core_trace_err!r}")
-            self.debug_message_log(
-                "RAW MESSAGE EVENT RECEIVED "
-                f"chat_id={getattr(event, 'chat_id', None)} "
-                f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
-                f"event_out={getattr(event, 'out', None)}"
-            )
             # ⛑️ نگهبان سراسری هندلر پیام.
             #
             # کل بدنهٔ این تابع بدون try بود؛ هر استثنا در همان خطوط اول
@@ -1598,16 +1617,17 @@ class SoroushAntiSpamBot:
                             ),
                             name="owner-peer:remember",
                         )
-                    self.debug_message_log(
-                        "BOT EVENT ENTRY DEBUG\n"
-                        f"event_out={getattr(event, 'out', None)}\n"
-                        f"is_private={getattr(event, 'is_private', None)}\n"
-                        f"chat_id={getattr(event, 'chat_id', None)}\n"
-                        f"sender_id={getattr(_entry_sender, 'id', None)}\n"
-                        f"sender_username={getattr(_entry_sender, 'username', None)!r}\n"
-                        f"sender_type={_entry_sender.__class__.__name__ if _entry_sender else 'None'}\n"
-                        f"sender_bot={getattr(_entry_sender, 'bot', None)!r}"
-                    )
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(
+                            "BOT EVENT ENTRY DEBUG\n"
+                            f"event_out={getattr(event, 'out', None)}\n"
+                            f"is_private={getattr(event, 'is_private', None)}\n"
+                            f"chat_id={getattr(event, 'chat_id', None)}\n"
+                            f"sender_id={getattr(_entry_sender, 'id', None)}\n"
+                            f"sender_username={getattr(_entry_sender, 'username', None)!r}\n"
+                            f"sender_type={_entry_sender.__class__.__name__ if _entry_sender else 'None'}\n"
+                            f"sender_bot={getattr(_entry_sender, 'bot', None)!r}"
+                        )
                 except Exception as _entry_error:
                     self.logger.log_error(
                         "BOT EVENT ENTRY DEBUG FAILED "
@@ -1631,11 +1651,12 @@ class SoroushAntiSpamBot:
                     "۵ روز", "یک هفته", "دو هفته", "یک ماه",
                     "مهلت گروه", "لیست انقضا",
                 }
-                self.debug_message_log(
-                    "COMMAND PRIORITY CHECK "
-                    f"text={raw_text!r} normalized={command_priority_text!r} "
-                    f"priority={command_priority}"
-                )
+                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                    self.debug_message_log(
+                        "COMMAND PRIORITY CHECK "
+                        f"text={raw_text!r} normalized={command_priority_text!r} "
+                        f"priority={command_priority}"
+                    )
                 # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
                 # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
                 # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
@@ -1644,17 +1665,19 @@ class SoroushAntiSpamBot:
                 # before any broadcast/private/group condition so a missing
                 # command can be localized to event delivery or matching.
                 _broadcast_detected = is_broadcast_command(raw_text)
-                self.debug_message_log(
-                    "PRIVATE COMMAND DEBUG\n"
-                    f"text={raw_text!r}\n"
-                    f"normalized={text!r}\n"
-                    f"is_broadcast_command={_broadcast_detected}"
-                )
-                if _broadcast_detected:
-                    self.logger.log_info(
-                        "BROADCAST COMMAND DETECTED "
-                        f"text={raw_text!r} normalized={text!r}"
+                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                    self.debug_message_log(
+                        "PRIVATE COMMAND DEBUG\n"
+                        f"text={raw_text!r}\n"
+                        f"normalized={text!r}\n"
+                        f"is_broadcast_command={_broadcast_detected}"
                     )
+                if _broadcast_detected:
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "BROADCAST COMMAND DETECTED "
+                            f"text={raw_text!r} normalized={text!r}"
+                        )
                 # Restore the original reliable private route: do not wait for
                 # get_chat(), peer classification, or event.out. A DM is
                 # routed using event.is_private and its actual sender exactly
@@ -1665,12 +1688,13 @@ class SoroushAntiSpamBot:
                 # explicit private event; unresolved peers are classified
                 # strictly after get_chat()/peer resolution below.
                 private_event = bool(getattr(event, "is_private", False))
-                self.debug_message_log(
-                    "PRIVATE BROADCAST DEBUG\n"
-                    f"event_is_private={getattr(event, 'is_private', None)}\n"
-                    f"chat_id={event_chat_id_hint}\n"
-                    f"private_event={private_event}"
-                )
+                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                    self.debug_message_log(
+                        "PRIVATE BROADCAST DEBUG\n"
+                        f"event_is_private={getattr(event, 'is_private', None)}\n"
+                        f"chat_id={event_chat_id_hint}\n"
+                        f"private_event={private_event}"
+                    )
                 # Owner-first: privacy flags are advisory only for this
                 # workflow because the live SPlusthon stream has emitted
                 # private owner messages with is_private=False.
@@ -1684,30 +1708,33 @@ class SoroushAntiSpamBot:
                     matched_trigger = match_broadcast_trigger(raw_text)
                     private_state = get_broadcast_state(private_sender_id)
                     private_trigger = is_broadcast_command(raw_text)
-                    self.logger.log_info(
-                        "BROADCAST TRIGGER CHECK\n"
-                        f"text={raw_text!r}\n"
-                        f"normalized_text={normalized_trigger_text!r}\n"
-                        f"matched_trigger={matched_trigger!r}\n"
-                        f"owner_check={private_is_owner}"
-                    )
-                    self.debug_message_log(
-                        "PRIVATE BROADCAST DEBUG\n"
-                        f"user_id={private_sender_id}\n"
-                        f"text={raw_text!r}\n"
-                        f"matched={private_trigger}\n"
-                        "handler_called=False\n"
-                        f"is_private={getattr(event, 'is_private', None)}\n"
-                        f"owner_check={private_is_owner}"
-                    )
-                    self.logger.log_info(
-                        "PRIVATE OWNER CHECK\n"
-                        f"user_id={private_sender_id}\n"
-                        f"username={getattr(private_sender, 'username', None)!r}\n"
-                        f"is_owner={private_is_owner}\n"
-                        f"matched_command={private_trigger}\n"
-                        "handler_called=False"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "BROADCAST TRIGGER CHECK\n"
+                            f"text={raw_text!r}\n"
+                            f"normalized_text={normalized_trigger_text!r}\n"
+                            f"matched_trigger={matched_trigger!r}\n"
+                            f"owner_check={private_is_owner}"
+                        )
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(
+                            "PRIVATE BROADCAST DEBUG\n"
+                            f"user_id={private_sender_id}\n"
+                            f"text={raw_text!r}\n"
+                            f"matched={private_trigger}\n"
+                            "handler_called=False\n"
+                            f"is_private={getattr(event, 'is_private', None)}\n"
+                            f"owner_check={private_is_owner}"
+                        )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "PRIVATE OWNER CHECK\n"
+                            f"user_id={private_sender_id}\n"
+                            f"username={getattr(private_sender, 'username', None)!r}\n"
+                            f"is_owner={private_is_owner}\n"
+                            f"matched_command={private_trigger}\n"
+                            "handler_called=False"
+                        )
                     self.logger.log_info(
                         "BROADCAST COMMAND RECEIVED\n"
                         f"owner_id={private_sender_id}\n"
@@ -1724,26 +1751,29 @@ class SoroushAntiSpamBot:
                         handled = await handle_private_broadcast(
                             self, event, private_sender_id, raw_text
                         )
-                        self.debug_message_log(
-                            "PRIVATE BROADCAST DEBUG\n"
-                            f"user_id={private_sender_id}\n"
-                            f"text={raw_text!r}\n"
-                            f"matched={private_trigger}\n"
-                            "handler_called=True\n"
-                            f"handled={handled}"
-                        )
+                        if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                            self.debug_message_log(
+                                "PRIVATE BROADCAST DEBUG\n"
+                                f"user_id={private_sender_id}\n"
+                                f"text={raw_text!r}\n"
+                                f"matched={private_trigger}\n"
+                                "handler_called=True\n"
+                                f"handled={handled}"
+                            )
                         if handled:
                             self.logger.log_info(
                                 "BROADCAST READY "
                                 f"owner_id={private_sender_id} text={raw_text!r}"
                             )
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if handled:' chat_id={_sd_chat} message_id={_sd_mid}")
+                            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if handled:' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
-                        self.logger.log_info(
-                            "BROADCAST ROUTE SKIP "
-                            f"owner_id={private_sender_id} text={raw_text!r} "
-                            "reason=handler_not_broadcast"
-                        )
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info(
+                                "BROADCAST ROUTE SKIP "
+                                f"owner_id={private_sender_id} text={raw_text!r} "
+                                "reason=handler_not_broadcast"
+                            )
 
                 # BROADCAST TRACE: قبل از هر await ثبت می‌شود تا اگر یکی از
                 # فراخوانی‌های بعدی استثنا داد، بدانیم پیام اصلاً رسیده بود.
@@ -1753,17 +1783,18 @@ class SoroushAntiSpamBot:
                         _owner_cfg = get_owner()
                     except Exception as _owner_error:
                         _owner_cfg = {"error": repr(_owner_error)}
-                    self.logger.log_info(
-                        "BROADCAST_COMMAND_RECEIVED "
-                        f"raw_text={raw_text!r} "
-                        f"normalized_text={text!r} "
-                        f"event_out={getattr(event, 'out', None)} "
-                        f"is_private={getattr(event, 'is_private', None)} "
-                        f"event_chat_id={getattr(event, 'chat_id', None)} "
-                        f"owner_id_from_config={_owner_cfg} "
-                        f"message_id={getattr(event.message, 'id', None)} "
-                        f"entity_count={len(getattr(event.message, 'entities', None) or [])}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "BROADCAST_COMMAND_RECEIVED "
+                            f"raw_text={raw_text!r} "
+                            f"normalized_text={text!r} "
+                            f"event_out={getattr(event, 'out', None)} "
+                            f"is_private={getattr(event, 'is_private', None)} "
+                            f"event_chat_id={getattr(event, 'chat_id', None)} "
+                            f"owner_id_from_config={_owner_cfg} "
+                            f"message_id={getattr(event.message, 'id', None)} "
+                            f"entity_count={len(getattr(event.message, 'entities', None) or [])}"
+                        )
                 # get_chat() نیازمند resolve شدن peer است و روی session تازه (کش
                 # entity خالی) می‌تواند خطا بدهد. چون هیچ try/except بیرونی وجود
                 # ندارد، آن خطا کل handler را بی‌صدا از بین می‌برد و دستور کاربر
@@ -1821,65 +1852,69 @@ class SoroushAntiSpamBot:
                     or (peer_is_user and not routing_is_group_entity)
                     or positive_chat_id
                 )
-                self.debug_message_log(
-                    "PRIVATE ROUTE RESOLUTION DEBUG\n"
-                    f"event_is_private={getattr(event, 'is_private', None)}\n"
-                    f"event_chat_id={event_chat_id}\n"
-                    f"chat_type={routing_type}\n"
-                    f"peer_is_user={peer_is_user}\n"
-                    f"private_route={is_private_splus}"
-                )
+                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                    self.debug_message_log(
+                        "PRIVATE ROUTE RESOLUTION DEBUG\n"
+                        f"event_is_private={getattr(event, 'is_private', None)}\n"
+                        f"event_chat_id={event_chat_id}\n"
+                        f"chat_type={routing_type}\n"
+                        f"peer_is_user={peer_is_user}\n"
+                        f"private_route={is_private_splus}"
+                    )
                 _trace_sender = _entry_sender
                 if _trace_sender is None:
                     _trace_sender = await event.get_sender()
                 _trace_sender_id = getattr(_trace_sender, "id", None)
                 _trace_owner_id = get_owner().get("user_id") if isinstance(get_owner(), dict) else None
                 _trace_owner = is_global_owner(_trace_sender_id)
-                self.debug_message_log(
-                    "PRIVATE BROADCAST TRACE "
-                    f"event_is_private={getattr(event, 'is_private', None)} "
-                    f"chat_type={routing_type} "
-                    f"sender_id={_trace_sender_id} "
-                    f"owner_id={_trace_owner_id} "
-                    f"is_owner={_trace_owner} "
-                    f"text={raw_text!r} "
-                    f"trigger={is_broadcast_command(raw_text)} "
-                    f"handler_called=False "
-                    f"private_route={is_private_splus}"
-                )
+                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                    self.debug_message_log(
+                        "PRIVATE BROADCAST TRACE "
+                        f"event_is_private={getattr(event, 'is_private', None)} "
+                        f"chat_type={routing_type} "
+                        f"sender_id={_trace_sender_id} "
+                        f"owner_id={_trace_owner_id} "
+                        f"is_owner={_trace_owner} "
+                        f"text={raw_text!r} "
+                        f"trigger={is_broadcast_command(raw_text)} "
+                        f"handler_called=False "
+                        f"private_route={is_private_splus}"
+                    )
                 # Temporary targeted trace for the owner-only expiry command.
                 # It is intentionally emitted before the private-route branch
                 # so a misclassified SPlusthon DM remains diagnosable.
                 if text == "لیست انقضا":
                     message_peer = getattr(getattr(event, "message", None), "peer_id", None)
                     event_peer = getattr(event, "_chat_peer", None)
-                    self.logger.log_info(
-                        "EXPIRY COMMAND DEBUG\n"
-                        f"raw_text={raw_text!r}\n"
-                        f"normalized_text={text!r}\n"
-                        f"event_type={event.__class__.__module__}.{event.__class__.__name__}\n"
-                        f"event_chat_id={event_chat_id!r}\n"
-                        f"event_user_id={getattr(event, 'user_id', None)!r}\n"
-                        f"event_sender_id={getattr(event, 'sender_id', None)!r}\n"
-                        f"event_out={getattr(event, 'out', None)!r}\n"
-                        f"event_is_private={getattr(event, 'is_private', None)!r}\n"
-                        f"event_peer_type={event_peer.__class__.__name__ if event_peer else 'None'}\n"
-                        f"message_peer_type={message_peer.__class__.__name__ if message_peer else 'None'}\n"
-                        f"event_chat_type={getattr(event, 'chat', None).__class__.__name__ if getattr(event, 'chat', None) else 'None'}\n"
-                        f"get_chat_type={routing_type}\n"
-                        f"sender_type={_trace_sender.__class__.__name__ if _trace_sender else 'None'}\n"
-                        f"sender_id={_trace_sender_id}\n"
-                        f"owner_id={_trace_owner_id}\n"
-                        f"is_private={is_private_splus}\n"
-                        f"is_global_owner={_trace_owner}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "EXPIRY COMMAND DEBUG\n"
+                            f"raw_text={raw_text!r}\n"
+                            f"normalized_text={text!r}\n"
+                            f"event_type={event.__class__.__module__}.{event.__class__.__name__}\n"
+                            f"event_chat_id={event_chat_id!r}\n"
+                            f"event_user_id={getattr(event, 'user_id', None)!r}\n"
+                            f"event_sender_id={getattr(event, 'sender_id', None)!r}\n"
+                            f"event_out={getattr(event, 'out', None)!r}\n"
+                            f"event_is_private={getattr(event, 'is_private', None)!r}\n"
+                            f"event_peer_type={event_peer.__class__.__name__ if event_peer else 'None'}\n"
+                            f"message_peer_type={message_peer.__class__.__name__ if message_peer else 'None'}\n"
+                            f"event_chat_type={getattr(event, 'chat', None).__class__.__name__ if getattr(event, 'chat', None) else 'None'}\n"
+                            f"get_chat_type={routing_type}\n"
+                            f"sender_type={_trace_sender.__class__.__name__ if _trace_sender else 'None'}\n"
+                            f"sender_id={_trace_sender_id}\n"
+                            f"owner_id={_trace_owner_id}\n"
+                            f"is_private={is_private_splus}\n"
+                            f"is_global_owner={_trace_owner}"
+                        )
                 if text in _broadcast_words:
-                    self.logger.log_info(
-                        "BROADCAST ROUTE CHAT RESOLVED "
-                        f"chat_type={routing_type} "
-                        f"chat_id={getattr(routing_chat, 'id', None)} "
-                        f"private_route={is_private_splus}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "BROADCAST ROUTE CHAT RESOLVED "
+                            f"chat_type={routing_type} "
+                            f"chat_id={getattr(routing_chat, 'id', None)} "
+                            f"private_route={is_private_splus}"
+                        )
                 is_broadcast_text = text in {"اطلاع رسانی", "تایید", "✅ تایید", "لغو", "❌ لغو"}
                 is_name_family_trace_message = (
                     text == "اسم فامیل" or len(text.splitlines()) >= 7
@@ -1902,15 +1937,16 @@ class SoroushAntiSpamBot:
                     private_is_owner = is_global_owner(private_sender_id)
                     private_has_state = bool(get_broadcast_state(private_sender_id))
                     private_is_broadcast = is_broadcast_command(text)
-                    self.logger.log_info(
-                        "BROADCAST PRIVATE ROUTE\n"
-                        f"sender_id={private_sender_id}\n"
-                        f"sender_username={getattr(private_sender, 'username', None)!r}\n"
-                        f"event_out={getattr(event, 'out', None)}\n"
-                        f"trigger={private_is_broadcast}\n"
-                        f"state_present={private_has_state}\n"
-                        f"owner_check={private_is_owner}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "BROADCAST PRIVATE ROUTE\n"
+                            f"sender_id={private_sender_id}\n"
+                            f"sender_username={getattr(private_sender, 'username', None)!r}\n"
+                            f"event_out={getattr(event, 'out', None)}\n"
+                            f"trigger={private_is_broadcast}\n"
+                            f"state_present={private_has_state}\n"
+                            f"owner_check={private_is_owner}"
+                        )
                     if private_is_owner and (private_is_broadcast or private_has_state):
                         self.logger.log_info(
                             "BROADCAST COMMAND RECEIVED "
@@ -1920,11 +1956,13 @@ class SoroushAntiSpamBot:
                             self, event, private_sender_id, text
                         )
                         if handled:
-                            self.logger.log_info(
-                                "BROADCAST ROUTE HANDLED "
-                                f"owner_id={private_sender_id} text={text!r}"
-                            )
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if handled:' chat_id={_sd_chat} message_id={_sd_mid}")
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "BROADCAST ROUTE HANDLED "
+                                    f"owner_id={private_sender_id} text={text!r}"
+                                )
+                            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if handled:' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         self.logger.log_error(
                             "BROADCAST ROUTE NOT HANDLED "
@@ -1937,7 +1975,8 @@ class SoroushAntiSpamBot:
                     and event.message.id in getattr(self, "broadcast_bot_message_ids", set())
                 ):
                     self.broadcast_bot_message_ids.discard(event.message.id)
-                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_990' chat_id={_sd_chat} message_id={_sd_mid}")
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_990' chat_id={_sd_chat} message_id={_sd_mid}")
                     return
 
                 is_mode_command = text in {"فعال", "غیر فعال"}
@@ -1962,26 +2001,29 @@ class SoroushAntiSpamBot:
                     mode_username = (
                         client_me_username if event.out else sender_username_for_mode
                     )
-                    self.logger.log_info(
-                        "OWNER RUNTIME TRACE\n"
-                        f"raw_text={raw_text!r}\n"
-                        f"event_out={event.out}\n"
-                        f"sender_id={getattr(sender_for_mode, 'id', None)}\n"
-                        f"sender_username={sender_username_for_mode!r}\n"
-                        f"client_me_id={client_me_id}\n"
-                        f"client_me_username={client_me_username!r}\n"
-                        f"normalized_sender={normalized_sender!r}\n"
-                        f"normalized_client={normalized_client!r}\n"
-                        f"global_owner_config={global_owner_config!r}\n"
-                        f"is_global_owner_sender={is_global_owner_sender}\n"
-                        f"is_global_owner_client={is_global_owner_client}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "OWNER RUNTIME TRACE\n"
+                            f"raw_text={raw_text!r}\n"
+                            f"event_out={event.out}\n"
+                            f"sender_id={getattr(sender_for_mode, 'id', None)}\n"
+                            f"sender_username={sender_username_for_mode!r}\n"
+                            f"client_me_id={client_me_id}\n"
+                            f"client_me_username={client_me_username!r}\n"
+                            f"normalized_sender={normalized_sender!r}\n"
+                            f"normalized_client={normalized_client!r}\n"
+                            f"global_owner_config={global_owner_config!r}\n"
+                            f"is_global_owner_sender={is_global_owner_sender}\n"
+                            f"is_global_owner_client={is_global_owner_client}"
+                        )
                     is_global_owner_for_mode = (
                         is_global_owner_client if event.out else is_global_owner_sender
                     )
                     if event.out and not is_global_owner_for_mode:
-                        self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
-                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if event.out and not is_global_owner_for' chat_id={_sd_chat} message_id={_sd_mid}")
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info("OWNER RUNTIME TRACE STOP: event.out gate")
+                        if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if event.out and not is_global_owner_for' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
                 elif event.out:
                     if is_private_splus:
@@ -2052,32 +2094,35 @@ class SoroushAntiSpamBot:
                     is_disable_command = text == "غیر فعال"
 
                     if is_enable_command or is_disable_command:
-                        self.logger.log_info(
-                            "GROUP MODE DEBUG "
-                            f"chat_id={lock_id} sender_id={sender_id} "
-                            f"sender_username={sender_username!r} "
-                            f"normalized_username={normalized_username!r} "
-                            f"text={text!r} disabled_before={not group_is_active} "
-                            f"global_owner_check={can_change_group_mode} "
-                            f"mode_owner_check={can_change_group_mode} "
-                            f"enable_match={is_enable_command} "
-                            f"disable_match={is_disable_command}"
-                        )
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info(
+                                "GROUP MODE DEBUG "
+                                f"chat_id={lock_id} sender_id={sender_id} "
+                                f"sender_username={sender_username!r} "
+                                f"normalized_username={normalized_username!r} "
+                                f"text={text!r} disabled_before={not group_is_active} "
+                                f"global_owner_check={can_change_group_mode} "
+                                f"mode_owner_check={can_change_group_mode} "
+                                f"enable_match={is_enable_command} "
+                                f"disable_match={is_disable_command}"
+                            )
 
                     if not group_is_active:
                         if is_name_family_trace_message:
-                            self.logger.log_info(
-                                "NAME FAMILY TRACE CORE_BLOCK "
-                                f"reason=group_inactive chat_id={lock_id} "
-                                f"message_id={getattr(event.message, 'id', None)}"
-                            )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "NAME FAMILY TRACE CORE_BLOCK "
+                                    f"reason=group_inactive chat_id={lock_id} "
+                                    f"message_id={getattr(event.message, 'id', None)}"
+                                )
                         if is_enable_command and can_change_group_mode:
                             title = getattr(chat_lock, "title", "")
                             activate_group(lock_id, title)
                             await send_activation_message(
                                 self, event, lock_id, title
                             )
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1119' chat_id={_sd_chat} message_id={_sd_mid}")
+                            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1119' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         # ⏳ «مهلت گروه» — گزارش مهلت باقی‌مانده برای
                         # مالک/ادمین گروه. در گروه غیرفعال نباید فعال‌سازی
@@ -2090,11 +2135,12 @@ class SoroushAntiSpamBot:
                                 getattr(sender_lock, "username", None),
                             )
                         ):
-                            self.logger.log_info(
-                                "GROUP REMAINING QUERY ALLOWED (INACTIVE) "
-                                f"chat_id={lock_id} sender_id={sender_id} "
-                                f"command={text!r}"
-                            )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "GROUP REMAINING QUERY ALLOWED (INACTIVE) "
+                                    f"chat_id={lock_id} sender_id={sender_id} "
+                                    f"command={text!r}"
+                                )
                         # ⏳ گروهی که با پایان مهلت بسته شده باید بتواند دوباره
                         # باز شود. بدون این استثنا، سه دستور انقضا هرگز به
                         # هندلر نمی‌رسیدند و گروه برای همیشه قفل می‌ماند.
@@ -2111,7 +2157,8 @@ class SoroushAntiSpamBot:
                             activate_group(lock_id, title)
                         else:
                             _log_inactive_gate(self, lock_id, text)
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1135' chat_id={_sd_chat} message_id={_sd_mid}")
+                            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1135' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
 
                     if is_disable_command:
@@ -2126,7 +2173,8 @@ class SoroushAntiSpamBot:
                             await event.reply(
                                 f"🦊 روباه در گروه «{title}» غیر فعال شد ❌"
                             )
-                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1149' chat_id={_sd_chat} message_id={_sd_mid}")
+                        if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1149' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
 
                 # آزاد کردن کاربر محروم شده
@@ -2142,16 +2190,19 @@ class SoroushAntiSpamBot:
                             if target_username_arg is not None:
                                 if target_username_arg.isdigit():
                                     await event.reply("❌ لطفاً از نام کاربری استفاده کنید، آیدی عددی پشتیبانی نمی‌شود")
-                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_digit' chat_id={_sd_chat} message_id={_sd_mid}")
+                                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_digit' chat_id={_sd_chat} message_id={_sd_mid}")
                                     return
                                 if not target_username_arg:
                                     await event.reply("❌ نام کاربری مشخص نشده است")
-                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_empty' chat_id={_sd_chat} message_id={_sd_mid}")
+                                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_empty' chat_id={_sd_chat} message_id={_sd_mid}")
                                     return
                                 import re as _re_azad_core
                                 if not _re_azad_core.match(r"^[A-Za-z0-9_]{4,32}$", target_username_arg):
                                     await event.reply(f"❌ نام کاربری نامعتبر است: @{target_username_arg}")
-                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_invalid' chat_id={_sd_chat} message_id={_sd_mid}")
+                                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_invalid' chat_id={_sd_chat} message_id={_sd_mid}")
                                     return
 
                         user = None
@@ -2168,17 +2219,20 @@ class SoroushAntiSpamBot:
                             except Exception as e:
                                 self.logger.log_error(f"AZAD RESOLVE FAILED username=@{target_username_arg} error={e!r}")
                                 await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_not_found' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_not_found' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
                             if not user or not getattr(user, "id", None):
                                 await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_not_found2' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='azad_not_found2' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
                             username_for_unban = getattr(user, "username", None) or target_username_arg
                         else:
                             if not event.reply_to:
                                 await event.reply("❌ باید روی پیام کاربر ریپلای کنید یا به صورت «آزاد @username» بنویسید")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not event.reply_to:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not event.reply_to:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             reply_msg = await self.client.get_messages(
@@ -2189,7 +2243,8 @@ class SoroushAntiSpamBot:
                             user = await reply_msg.get_sender() if reply_msg else None
                             if not user:
                                 await event.reply("❌ کاربر پیدا نشد")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not user:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not user:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
                             username_for_unban = getattr(user, "username", None)
 
@@ -2226,7 +2281,8 @@ class SoroushAntiSpamBot:
 
                     except Exception as e:
                         await event.reply(f"❌ خطا در آزاد کردن: {e}")
-                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1196' chat_id={_sd_chat} message_id={_sd_mid}")
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1196' chat_id={_sd_chat} message_id={_sd_mid}")
                     return
 
 
@@ -2241,9 +2297,10 @@ class SoroushAntiSpamBot:
                     # the notification workflow.
                     _is_broadcast_word = is_broadcast_command(text)
                     if _is_broadcast_word:
-                        self.logger.log_info(
-                            f"BROADCAST ROUTE PRIVATE BRANCH text={text!r}"
-                        )
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info(
+                                f"BROADCAST ROUTE PRIVATE BRANCH text={text!r}"
+                            )
                     try:
                         sender = await event.get_sender()
                     except Exception as error:
@@ -2259,19 +2316,21 @@ class SoroushAntiSpamBot:
                     sender_id = getattr(sender, "id", None)
                     _owner_ok = is_global_owner(sender_id)
                     if _is_broadcast_word or _owner_ok:
-                        self.logger.log_info(
-                            "BROADCAST OWNER CHECK "
-                            f"sender_id={sender_id} "
-                            f"sender_username={getattr(sender, 'username', None)!r} "
-                            f"event_out={event.out} "
-                            f"configured_owner={get_owner()!r} "
-                            f"is_global_owner={_owner_ok}"
-                        )
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info(
+                                "BROADCAST OWNER CHECK "
+                                f"sender_id={sender_id} "
+                                f"sender_username={getattr(sender, 'username', None)!r} "
+                                f"event_out={event.out} "
+                                f"configured_owner={get_owner()!r} "
+                                f"is_global_owner={_owner_ok}"
+                            )
                     if not _owner_ok and _is_broadcast_word:
-                        self.logger.log_info(
-                            "BROADCAST ROUTE STOP reason=not_global_owner "
-                            f"sender_id={sender_id}"
-                        )
+                        if diagnostics_enabled(self.logger):
+                            self.logger.log_info(
+                                "BROADCAST ROUTE STOP reason=not_global_owner "
+                                f"sender_id={sender_id}"
+                            )
 
                     # گزارش انقضا یک فرمان خصوصیِ مستقل است: تنها مالک
                     # اصلی به آن دسترسی دارد و هرگز وارد مسیر گروه/بازی نمی‌شود.
@@ -2298,16 +2357,19 @@ class SoroushAntiSpamBot:
                             f"owner_id={sender_id} text={text!r} event_out={event.out}"
                         )
                         if await handle_private_broadcast(self, event, sender_id, text):
-                            self.logger.log_info(
-                                f"BROADCAST ROUTE HANDLED text={text!r}"
-                            )
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if await handle_private_broadcast(self, ' chat_id={_sd_chat} message_id={_sd_mid}")
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    f"BROADCAST ROUTE HANDLED text={text!r}"
+                                )
+                            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if await handle_private_broadcast(self, ' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         if _is_broadcast_word:
-                            self.logger.log_info(
-                                "BROADCAST ROUTE NOT HANDLED "
-                                f"text={text!r} (handler returned False)"
-                            )
+                            if diagnostics_enabled(self.logger):
+                                self.logger.log_info(
+                                    "BROADCAST ROUTE NOT HANDLED "
+                                    f"text={text!r} (handler returned False)"
+                                )
 
                     if "صفر" in text:
                         sender = await event.get_sender()
@@ -2315,7 +2377,8 @@ class SoroushAntiSpamBot:
                             await event.reply(
                                 "❌ فقط مالک اصلی ربات اجازه استفاده از این دستور را دارد"
                             )
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason=core_not_global_owner chat_id={_sd_chat} message_id={_sd_mid}")
+                            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason=core_not_global_owner chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         try:
                             import re
@@ -2324,7 +2387,8 @@ class SoroushAntiSpamBot:
                             m = re.search(r"@([A-Za-z0-9_]+)", text)
                             if not m:
                                 await event.reply("❌ آیدی کاربر پیدا نشد")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not m:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not m:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             username = m.group(1)
@@ -2332,7 +2396,8 @@ class SoroushAntiSpamBot:
                             groups = load_groups()
                             if not groups:
                                 await event.reply("❌ هیچ گروهی ثبت نشده")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not groups:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not groups:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             import json
@@ -2352,7 +2417,8 @@ class SoroushAntiSpamBot:
 
                             if not user_id:
                                 await event.reply("❌ کاربر در لیست ثبت شده پیدا نشد")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not user_id:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not user_id:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             reset_groups = []
@@ -2375,7 +2441,8 @@ class SoroushAntiSpamBot:
 
                             if not reset_groups:
                                 await event.reply("❌ این کاربر هیچ تخلف ثبت شده‌ای ندارد")
-                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not reset_groups:' chat_id={_sd_chat} message_id={_sd_mid}")
+                                if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not reset_groups:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
                             await event.reply("✅ انجام شد")
@@ -2384,11 +2451,13 @@ class SoroushAntiSpamBot:
                             self.logger.log_error(
                                 f"خطای صفر کردن از پیوی: {e}"
                             )
-                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1328' chat_id={_sd_chat} message_id={_sd_mid}")
+                        if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1328' chat_id={_sd_chat} message_id={_sd_mid}")
                         return
 
                     # پیام خصوصی پس از route اختصاصی هرگز وارد handler گروهی نمی‌شود.
-                    self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1331' chat_id={_sd_chat} message_id={_sd_mid}")
+                    if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1331' chat_id={_sd_chat} message_id={_sd_mid}")
                     return
 
             
@@ -2403,18 +2472,20 @@ class SoroushAntiSpamBot:
                                 getattr(sender, "id", 0),
                                 event.chat_id
                             )
-                            self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1345' chat_id={_sd_chat} message_id={_sd_mid}")
+                            if (diagnostics_enabled(self.logger) or self.config_manager.get("debug_message_pipeline", False)):
+                                self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1345' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
                         except Exception as e:
                             self.logger.log_error(f"خطای اجرای دستور مدیر: {e}")
 
                 started = time.perf_counter()
                 if is_name_family_trace_message:
-                    self.logger.log_info(
-                        "NAME FAMILY TRACE CORE_DISPATCH "
-                        f"chat_id={event.chat_id} message_id={getattr(event.message, 'id', None)} "
-                        f"line_count={len(text.splitlines())}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "NAME FAMILY TRACE CORE_DISPATCH "
+                            f"chat_id={event.chat_id} message_id={getattr(event.message, 'id', None)} "
+                            f"line_count={len(text.splitlines())}"
+                        )
                 await handle_new_message(self, event)
                 elapsed = time.perf_counter() - started
                 if self.config_manager.get("debug_message_pipeline", False) and elapsed >= 0.25:
@@ -2422,12 +2493,13 @@ class SoroushAntiSpamBot:
                     # monotonic دلخواه است (مثلاً ثانیه‌های از بوت) و در لاگ
                     # به‌صورت «receive=363650» گمراه‌کننده دیده می‌شد. فقط
                     # مدتِ واقعی پردازش و شناسهٔ پیام گزارش می‌شود.
-                    self.logger.log_info(
-                        "MESSAGE PROCESS TIME "
-                        f"total={elapsed:.4f}s "
-                        f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
-                        f"chat_id={event.chat_id} text={text!r}"
-                    )
+                    if diagnostics_enabled(self.logger):
+                        self.logger.log_info(
+                            "MESSAGE PROCESS TIME "
+                            f"total={elapsed:.4f}s "
+                            f"message_id={getattr(getattr(event, 'message', None), 'id', None)} "
+                            f"chat_id={event.chat_id} text={text!r}"
+                        )
             except Exception as handler_error:
                 import traceback as _tb
                 self.logger.log_error(

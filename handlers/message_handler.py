@@ -1,3 +1,5 @@
+from modules.log_policy import VERBOSE
+from modules.log_policy import diagnostics_enabled
 import asyncio as _asyncio
 from collections import Counter, deque
 from datetime import date
@@ -242,6 +244,10 @@ def _warm_reply_input_chat(bot, event, chat=None):
 
 
 def _message_debug_enabled(bot):
+    # Existing debug_message_pipeline remains authoritative for legacy adapters;
+    # only an explicit verbose flag enables diagnostics without that setting.
+    if bool(getattr(getattr(bot, "logger", None), "verbose_logs", False)):
+        return True
     cfg = getattr(bot, "config_manager", None)
     if cfg is None:
         return False
@@ -504,11 +510,12 @@ def _handle_forwarded_group_message(
     is_forwarded, forward_field, forward_fields, delete_ids,
 ):
     """Queue delete for a single forward / album wave. Mute after three."""
-    bot.logger.log_info(
-        "FORWARD DETECTED "
-        f"user_id={user_id} username={sender_username} "
-        f"forward_field={forward_field} fields={forward_fields}"
-    )
+    if diagnostics_enabled(bot.logger):
+        bot.logger.log_info(
+            "FORWARD DETECTED "
+            f"user_id={user_id} username={sender_username} "
+            f"forward_field={forward_field} fields={forward_fields}"
+        )
     deleted = False
     forward_key = (chat_id, user_id)
     forward_count = getattr(bot, "forward_spam_counts", {}).get(
@@ -563,26 +570,28 @@ def _handle_forwarded_group_message(
                     on_failure=forward_mute_failed,
                 )
     finally:
-        bot.logger.log_info(
-            "FORWARD DETECTED "
-            f"user_id={user_id} username={sender_username} "
-            f"forward_field={forward_field} deleted={deleted} "
-            f"forward_count={forward_count}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "FORWARD DETECTED "
+                f"user_id={user_id} username={sender_username} "
+                f"forward_field={forward_field} deleted={deleted} "
+                f"forward_count={forward_count}"
+            )
     return True
 
 
 def _log_ban_execution(bot, chat_id, user_id, reason):
     punish_key = _punishment_key(chat_id, user_id)
-    _debug_log(
-        bot,
-        "BAN EXECUTION DEBUG\n"
-        f"chat_id={chat_id}\n"
-        f"user_id={user_id}\n"
-        f"reason={reason}\n"
-        f"already_punished={punish_key in bot.punished_users}\n"
-        f"will_ban={punish_key not in bot.punished_users}",
-    )
+    if _message_debug_enabled(bot):
+        _debug_log(
+            bot,
+            "BAN EXECUTION DEBUG\n"
+            f"chat_id={chat_id}\n"
+            f"user_id={user_id}\n"
+            f"reason={reason}\n"
+            f"already_punished={punish_key in bot.punished_users}\n"
+            f"will_ban={punish_key not in bot.punished_users}",
+        )
 
 
 async def _send_moderation_notification_once(
@@ -1106,19 +1115,21 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
         # user is banned, but must not resurrect a detached old incident that
         # could pop a newer incident with the same key.
         if getattr(bot, "_big_spam_incidents", {}).get(key) is not incident:
-            bot.logger.log_info(
-                "BIG SPAM BAN CONFIRMED LATE "
-                f"chat_id={chat_id} user_id={user_id}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "BIG SPAM BAN CONFIRMED LATE "
+                    f"chat_id={chat_id} user_id={user_id}"
+                )
             return
         incident["ids"].update(_collect_big_spam_ids(
             chat_id, user_id, (), getattr(event.message, "id", None)
         ))
         _start_big_spam_cleanup(bot, event, chat_id, user_id, incident)
-        bot.logger.log_info(
-            "BIG SPAM BAN CONFIRMED "
-            f"chat_id={chat_id} user_id={user_id} cleanup_ids={len(incident['ids'])}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "BIG SPAM BAN CONFIRMED "
+                f"chat_id={chat_id} user_id={user_id} cleanup_ids={len(incident['ids'])}"
+            )
 
     async def failed(error):
         incident["ban_state"] = "failed"
@@ -1140,16 +1151,18 @@ def _queue_big_spam_ban(bot, event, chat_id, user_id, sender, seed_ids, reason):
         incident["ban_state"] = "failed"
         bot.punished_users.discard(punish_key)
         bot.clear_spam_lock(key)
-        bot.logger.log_info(
-            "BIG SPAM BAN QUEUE DUPLICATE "
-            f"chat_id={chat_id} user_id={user_id} reason={reason}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "BIG SPAM BAN QUEUE DUPLICATE "
+                f"chat_id={chat_id} user_id={user_id} reason={reason}"
+            )
         return False
-    bot.logger.log_info(
-        "BIG SPAM BAN QUEUED "
-        f"chat_id={chat_id} user_id={user_id} reason={reason} "
-        f"seed_ids={len(incident['ids'])}"
-    )
+    if diagnostics_enabled(bot.logger):
+        bot.logger.log_info(
+            "BIG SPAM BAN QUEUED "
+            f"chat_id={chat_id} user_id={user_id} reason={reason} "
+            f"seed_ids={len(incident['ids'])}"
+        )
     return True
 
 
@@ -1547,12 +1560,13 @@ async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
     }
     ids.update(tracked_ids)
     if ids:
-        bot.logger.log_info(
-            "SPAM HISTORY SWEEP SKIPPED "
-            f"chat_id={chat_id} user_id={user_id} "
-            f"seed_ids={len(seed_ids or ())} tracked_ids={len(tracked_ids)} "
-            f"total={len(ids)}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "SPAM HISTORY SWEEP SKIPPED "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"seed_ids={len(seed_ids or ())} tracked_ids={len(tracked_ids)} "
+                f"total={len(ids)}"
+            )
         return ids
 
     iterator_factory = getattr(bot.client, "iter_messages", None)
@@ -1601,11 +1615,12 @@ async def collect_accessible_spam_ids(bot, chat_id, user_id, seed_ids):
             )
             return ids
         else:
-            bot.logger.log_info(
-                "SPAM HISTORY SWEEP COMPLETE "
-                f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
-                f"spam_ids={len(ids)}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "SPAM HISTORY SWEEP COMPLETE "
+                    f"chat_id={chat_id} user_id={user_id} scanned={scanned} "
+                    f"spam_ids={len(ids)}"
+                )
             return ids
     return ids
 
@@ -1781,14 +1796,16 @@ async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=60):
     requested = len(pending)
     deleted = 0
     remaining = []
-    bot.logger.log_info(
-        "SPAM CLEANUP ENTRY "
-        f"chat_id={chat_id} user_id={user_id} "
-        f"current_message_id={pending[-1] if pending else None} source=cleanup_spam_messages"
-    )
-    bot.logger.log_info(
-        f"SPAM DELETE START total_ids={requested} ids={pending!r} batch_size={batch_size}"
-    )
+    if diagnostics_enabled(bot.logger):
+        bot.logger.log_info(
+            "SPAM CLEANUP ENTRY "
+            f"chat_id={chat_id} user_id={user_id} "
+            f"current_message_id={pending[-1] if pending else None} source=cleanup_spam_messages"
+        )
+    if diagnostics_enabled(bot.logger):
+        bot.logger.log_info(
+            f"SPAM DELETE START total_ids={requested} ids={pending!r} batch_size={batch_size}"
+        )
     # Process in bounded batches so a large cleanup cannot monopolize sender RPCs.
     for start in range(0, len(pending), batch_size):
         batch = pending[start:start + batch_size]
@@ -1839,10 +1856,11 @@ async def cleanup_spam_messages(bot, chat_id, user_id, ids, *, batch_size=60):
                         f"SPAM DELETE ITEM message_id={message_id} success=False "
                         f"error={ind_error!r}"
                     )
-    bot.logger.log_info(
-        f"SPAM DELETE FINISHED requested={requested} deleted={deleted} "
-        f"remaining={len(remaining)}"
-    )
+    if diagnostics_enabled(bot.logger):
+        bot.logger.log_info(
+            f"SPAM DELETE FINISHED requested={requested} deleted={deleted} "
+            f"remaining={len(remaining)}"
+        )
     return deleted, remaining
 
 
@@ -2422,11 +2440,12 @@ async def handle_fast_moderation_command(
         on_success=fast_mute_succeeded,
         on_failure=fast_mute_failed,
     )
-    bot.logger.log_info(
-        "FAST MODERATION QUEUED "
-        f"command=سکوت chat_id={chat_id} reply_id={reply_id} "
-        f"accepted={accepted}"
-    )
+    if diagnostics_enabled(bot.logger):
+        bot.logger.log_info(
+            "FAST MODERATION QUEUED "
+            f"command=سکوت chat_id={chat_id} reply_id={reply_id} "
+            f"accepted={accepted}"
+        )
     # Do not send an interim queue acknowledgement.  It costs another outgoing
     # RPC and is misleading when the mute later fails; the callback above sends
     # exactly one final success or failure message.
@@ -2555,13 +2574,14 @@ def resolve_registration_prefix(text):
 def _log_command_route(bot, text, matched_command, handler):
     """ردیابی تصمیم routing برای هر دستور حساس."""
     try:
-        _debug_log(
-            bot,
-            "COMMAND ROUTE MATCH "
-            f"text={text[:60]!r} "
-            f"matched_command={matched_command!r} "
-            f"handler={handler!r}",
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(
+                bot,
+                "COMMAND ROUTE MATCH "
+                f"text={text[:60]!r} "
+                f"matched_command={matched_command!r} "
+                f"handler={handler!r}",
+            )
     except Exception:
         pass
 
@@ -2617,12 +2637,13 @@ def _has_group_management_permission(bot, chat_id, user_id, username):
     # این helper برای هر پیام گروهی اجرا می‌شود؛ log synchronous فقط در
     # حالت debug نگه داشته می‌شود تا مسیر عادی کاربران I/O اضافی نداشته باشد.
     if result:
-        _debug_log(
-            bot,
-            "ADMIN CHECK DEBUG "
-            f"user_id={user_id} username={username} group_id={chat_id} "
-            f"result={result} source={source}",
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(
+                bot,
+                "ADMIN CHECK DEBUG "
+                f"user_id={user_id} username={username} group_id={chat_id} "
+                f"result={result} source={source}",
+            )
     return result
 
 
@@ -2947,11 +2968,12 @@ async def _resolve_display_sender(bot, event, user_id, sender):
                 pass
             _name_resolve_store(user_id, fresh)
             try:
-                bot.logger.log_info(
-                    "NAME FILTER RESOLVED "
-                    f"user_id={user_id} before={current!r} "
-                    f"after={fresh_name!r} probe={probe!r}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "NAME FILTER RESOLVED "
+                        f"user_id={user_id} before={current!r} "
+                        f"after={fresh_name!r} probe={probe!r}"
+                    )
             except Exception:
                 pass
             return fresh
@@ -3046,15 +3068,16 @@ def _name_filter_hit(bot, chat_id, user_id, sender):
     try:
         if skipped == "no_filters_for_group":
             return matched
-        bot.logger.log_info(
-            "NAME FILTER CHECK "
-            f"chat_id={chat_id} "
-            f"storage_key={_group_storage_key(chat_id)!r} "
-            f"user_id={user_id} "
-            f"display={display!r} username={username!r} "
-            f"terms={terms!r} "
-            f"skipped={skipped!r} matched={matched!r}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "NAME FILTER CHECK "
+                f"chat_id={chat_id} "
+                f"storage_key={_group_storage_key(chat_id)!r} "
+                f"user_id={user_id} "
+                f"display={display!r} username={username!r} "
+                f"terms={terms!r} "
+                f"skipped={skipped!r} matched={matched!r}"
+            )
     except Exception:
         pass
     return matched
@@ -3080,11 +3103,12 @@ async def _enforce_ad_name(bot, event, chat_id, user_id, sender, ad_reason):
     # only its first event may queue the ban or later notify.
     punish_key = _punishment_key(chat_id, user_id)
     if punish_key in bot.punished_users:
-        bot.logger.log_info(
-            "AD NAME INCIDENT DUPLICATE SKIPPED "
-            f"chat_id={chat_id} user_id={user_id} "
-            f"message_id={getattr(event.message, 'id', None)}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "AD NAME INCIDENT DUPLICATE SKIPPED "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"message_id={getattr(event.message, 'id', None)}"
+            )
         return True
     bot.punished_users.add(punish_key)
     # خودِ پیامِ متخلف بلافاصله در صف حذف می‌رود و هرگز منتظر RPC
@@ -3093,11 +3117,12 @@ async def _enforce_ad_name(bot, event, chat_id, user_id, sender, ad_reason):
         _offending_id = getattr(event.message, "id", None)
         if _offending_id is not None:
             _queue_message_deletes(bot, chat_id, [_offending_id])
-            bot.logger.log_info(
-                "AD NAME MESSAGE DELETE QUEUED "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"message_id={_offending_id}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "AD NAME MESSAGE DELETE QUEUED "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"message_id={_offending_id}"
+                )
     except Exception as _delete_error:
         bot.logger.log_error(
             "AD NAME MESSAGE DELETE FAILED "
@@ -3174,16 +3199,18 @@ async def _enforce_ad_name(bot, event, chat_id, user_id, sender, ad_reason):
     )
     if not queued:
         bot.punished_users.discard(punish_key)
-        bot.logger.log_info(
-            "AD NAME INCIDENT QUEUE DUPLICATE "
-            f"chat_id={chat_id} user_id={user_id}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "AD NAME INCIDENT QUEUE DUPLICATE "
+                f"chat_id={chat_id} user_id={user_id}"
+            )
     else:
-        bot.logger.log_info(
-            "AD NAME BAN QUEUED "
-            f"chat_id={chat_id} user_id={user_id} "
-            f"name={shown_name!r} reason={ad_reason!r}"
-        )
+        if diagnostics_enabled(bot.logger):
+            bot.logger.log_info(
+                "AD NAME BAN QUEUED "
+                f"chat_id={chat_id} user_id={user_id} "
+                f"name={shown_name!r} reason={ad_reason!r}"
+            )
     return True
 
 
@@ -3287,11 +3314,12 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     # Search administration above remains owned by this module. Every other
     # known bot command must continue through the normal command/game route.
     if _is_known_internal_command(clean_text, chat_id, user_id):
-        _debug_log(
-            bot,
-            "SEARCH ROUTE SKIPPED internal_command "
-            f"chat_id={chat_id} user_id={user_id} command={clean_text!r}",
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(
+                bot,
+                "SEARCH ROUTE SKIPPED internal_command "
+                f"chat_id={chat_id} user_id={user_id} command={clean_text!r}",
+            )
         return False
 
     enabled, allowed_user = search_access.access_state(chat_id, user_id)
@@ -3300,12 +3328,13 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     is_information_request, topic = web_search.factual_intent(request_text)
     if not enabled or not allowed_user or not reply_id or not is_information_request:
         return False
-    bot.logger.log_info(
-        "AI ACCESS CHECK "
-        f"user_id={user_id} chat_id={chat_id} enabled={enabled} "
-        f"allowed={allowed_user} reply_id={reply_id or 'none'} "
-        f"text_length={len(request_text)}"
-    )
+    if diagnostics_enabled(bot.logger):
+        bot.logger.log_info(
+            "AI ACCESS CHECK "
+            f"user_id={user_id} chat_id={chat_id} enabled={enabled} "
+            f"allowed={allowed_user} reply_id={reply_id or 'none'} "
+            f"text_length={len(request_text)}"
+        )
     try:
         reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
     except Exception as error:
@@ -3326,9 +3355,10 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
 
     async def answer_from_public_source():
         try:
-            bot.logger.log_info(
-                f"AI REQUEST PROCESS START chat_id={chat_id} user_id={user_id} query_length={len(query)}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    f"AI REQUEST PROCESS START chat_id={chat_id} user_id={user_id} query_length={len(query)}"
+                )
             try:
                 answer = await _asyncio.to_thread(
                     web_search.search_factual, topic, request_text
@@ -3340,9 +3370,10 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
                 )
                 answer = await _asyncio.to_thread(wiki_search_service.answer, query)
             await event.reply(answer)
-            bot.logger.log_info(
-                f"AI RESPONSE SENT chat_id={chat_id} user_id={user_id} chars={len(answer)}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    f"AI RESPONSE SENT chat_id={chat_id} user_id={user_id} chars={len(answer)}"
+                )
         except (web_search.FactualSearchError, wiki_search_service.WikiSearchError) as error:
             bot.logger.log_error(
                 f"SEARCH RESPONSE ERROR chat_id={chat_id} user_id={user_id} reason={error!s}"
@@ -3364,39 +3395,43 @@ async def handle_new_message(bot, event):
     chat_id = getattr(event, "chat_id", None)
     try:
         # SPAM DEBUG INCOMING — اولین خط handler قبل از هر فیلتر
-        try:
-            _dbg_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
-            _dbg_chat = getattr(event, 'chat_id', None)
-            _dbg_mid = getattr(getattr(event, 'message', None), 'id', None)
-            _dbg_sender_tmp = getattr(event, 'sender', None)
-            _dbg_sid = getattr(_dbg_sender_tmp, 'id', None) if _dbg_sender_tmp else getattr(event, 'sender_id', None)
-            # fallback: try event.get_sender not awaited, keep unknown
-            import hashlib as _hl_tmp
-            _dbg_hash = _hl_tmp.md5(str(_dbg_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _dbg_raw else "empty"
-            _dbg_len = len(str(_dbg_raw))
-            _debug_log(bot, f"SPAM DEBUG INCOMING chat_id={_dbg_chat} message_id={_dbg_mid} sender_id={_dbg_sid} text_hash={_dbg_hash} text_length={_dbg_len}")
-        except Exception as _dbg_e:
+        if _message_debug_enabled(bot):
             try:
-                bot.logger.log_error(f"SPAM DEBUG INCOMING failed { _dbg_e!r}")
-            except: pass
+                _dbg_raw = getattr(getattr(event, 'message', None), 'message', '') or getattr(getattr(event, 'message', None), 'caption', '') or ""
+                _dbg_chat = getattr(event, 'chat_id', None)
+                _dbg_mid = getattr(getattr(event, 'message', None), 'id', None)
+                _dbg_sender_tmp = getattr(event, 'sender', None)
+                _dbg_sid = getattr(_dbg_sender_tmp, 'id', None) if _dbg_sender_tmp else getattr(event, 'sender_id', None)
+                # fallback: try event.get_sender not awaited, keep unknown
+                import hashlib as _hl_tmp
+                _dbg_hash = _hl_tmp.md5(str(_dbg_raw).encode('utf-8', errors='ignore')).hexdigest()[:8] if _dbg_raw else "empty"
+                _dbg_len = len(str(_dbg_raw))
+                if _message_debug_enabled(bot):
+                    _debug_log(bot, f"SPAM DEBUG INCOMING chat_id={_dbg_chat} message_id={_dbg_mid} sender_id={_dbg_sid} text_hash={_dbg_hash} text_length={_dbg_len}")
+            except Exception as _dbg_e:
+                try:
+                    bot.logger.log_error(f"SPAM DEBUG INCOMING failed { _dbg_e!r}")
+                except: pass
         # اگر پیام متنی نیست رد کن (مثلا سرویس)
         if not event.message or not hasattr(event.message, 'message'):
             try:
                 _er_chat = getattr(event, 'chat_id', None)
                 _er_mid = getattr(getattr(event, 'message', None), 'id', None)
-                _debug_log(bot, f"SPAM DEBUG EARLY RETURN reason=no_message_attr chat_id={_er_chat} message_id={_er_mid}")
+                if _message_debug_enabled(bot):
+                    _debug_log(bot, f"SPAM DEBUG EARLY RETURN reason=no_message_attr chat_id={_er_chat} message_id={_er_mid}")
             except: pass
             return
 
         # اطلاعات پیام
         message_text = getattr(event.message, "message", "") or ""
-        _debug_log(bot,
-            "MESSAGE HANDLER ENTER "
-            f"chat_id={getattr(event, 'chat_id', None)} "
-            f"user_id={getattr(getattr(event, 'sender', None), 'id', None)} "
-            f"message_id={getattr(event.message, 'id', None)} "
-            f"text={message_text!r}"
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(bot,
+                "MESSAGE HANDLER ENTER "
+                f"chat_id={getattr(event, 'chat_id', None)} "
+                f"user_id={getattr(getattr(event, 'sender', None), 'id', None)} "
+                f"message_id={getattr(event.message, 'id', None)} "
+                f"text={message_text!r}"
+            )
         # برای کپشن عکس/فایل هم چک کن
         if not message_text and hasattr(
                 event.message, 'file') and event.message.file:
@@ -3493,12 +3528,13 @@ async def handle_new_message(bot, event):
                 )
             _nf_term = _name_filter_hit(bot, chat_id, user_id, sender)
             if _nf_term:
-                bot.logger.log_info(
-                    "NAME FILTER HIT "
-                    f"chat_id={chat_id} user_id={user_id} "
-                    f"term={_nf_term!r} "
-                    f"message_id={getattr(event.message, 'id', None)}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "NAME FILTER HIT "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"term={_nf_term!r} "
+                        f"message_id={getattr(event.message, 'id', None)}"
+                    )
                 await _enforce_ad_name(
                     bot, event, chat_id, user_id, sender,
                     f"فیلتر اسم: {_nf_term}",
@@ -3521,9 +3557,10 @@ async def handle_new_message(bot, event):
             _own_priority, own_kind = classify_priority(own_text, event)
             if own_kind not in {"admin", "command"}:
                 return
-            bot.logger.log_info(
-                f"SELF COMMAND ALLOWED chat_id={chat_id} command={own_text!r}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    f"SELF COMMAND ALLOWED chat_id={chat_id} command={own_text!r}"
+                )
 
         # A captionless ordinary media message has no text to inspect.  Return
         # before the tracker and every text-only route (commands, word filters,
@@ -3584,14 +3621,15 @@ async def handle_new_message(bot, event):
             getattr(bot, "native_admin_state_cleared", set()).discard(
                 (normalize_group_id(chat_id), str(user_id))
             )
-        _debug_log(bot,
-            "ADMIN BYPASS CHECK "
-            f"user_id={user_id} group_id={chat_id} "
-            f"registered_admin={registered_admin_bypass} "
-            f"native_group_admin={native_admin_bypass} "
-            f"state_cleared={state_cleared} is_admin={admin_bypass} "
-            f"blocked_cache={blocked_cache} spam_history={False if admin_bypass else 'unchecked'}"
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(bot,
+                "ADMIN BYPASS CHECK "
+                f"user_id={user_id} group_id={chat_id} "
+                f"registered_admin={registered_admin_bypass} "
+                f"native_group_admin={native_admin_bypass} "
+                f"state_cleared={state_cleared} is_admin={admin_bypass} "
+                f"blocked_cache={blocked_cache} spam_history={False if admin_bypass else 'unchecked'}"
+            )
         status_key = _punishment_key(chat_id, user_id)
         tracker_is_banned = getattr(bot.tracker, "is_banned", None)
         tracker_is_muted = getattr(bot.tracker, "is_muted", None)
@@ -3606,25 +3644,28 @@ async def handle_new_message(bot, event):
             if callable(tracker_is_muted) else False
         )
         history_count = 0 if admin_bypass else len(get_user_history(chat_id, user_id) or [])
-        _debug_log(bot,
-            "USER MODERATION STATUS "
-            f"user_id={user_id} is_banned={status_banned} "
-            f"spam_score={bot.tracker.get_count(chat_id, user_id)} "
-            f"history_count={history_count} group_id={chat_id}"
-        )
-        _debug_log(bot,
-            "USER MODERATION STATUS DETAIL "
-            f"user_id={user_id} group_id={chat_id} "
-            f"is_banned={status_banned} is_muted={status_muted} "
-            f"warning_count={bot.tracker.get_count(chat_id, user_id)} "
-            f"spam_count={bot.tracker.get_count(chat_id, user_id)}"
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(bot,
+                "USER MODERATION STATUS "
+                f"user_id={user_id} is_banned={status_banned} "
+                f"spam_score={bot.tracker.get_count(chat_id, user_id)} "
+                f"history_count={history_count} group_id={chat_id}"
+            )
+        if _message_debug_enabled(bot):
+            _debug_log(bot,
+                "USER MODERATION STATUS DETAIL "
+                f"user_id={user_id} group_id={chat_id} "
+                f"is_banned={status_banned} is_muted={status_muted} "
+                f"warning_count={bot.tracker.get_count(chat_id, user_id)} "
+                f"spam_count={bot.tracker.get_count(chat_id, user_id)}"
+            )
         # === SPAM FLOW TRACE: BEFORE_TRACKER ===
         _trace_msg_id = getattr(event.message, "id", None)
         _trace_hist_before = 0 if admin_bypass else len(message_tracker.get_user_recent_messages(chat_id, user_id))
-        _debug_log(bot,
-            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_TRACKER hist_before={_trace_hist_before} bot_id={id(bot)} lock_id={id(getattr(bot, 'spam_lock', set()))}"
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(bot,
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_TRACKER hist_before={_trace_hist_before} bot_id={id(bot)} lock_id={id(getattr(bot, 'spam_lock', set()))}"
+            )
         # Track every incoming group message before the spam-lock early drop;
         # otherwise messages after the first threshold hit never enter history.
         # Management commands skip tracker/big-spam/forward so بن/قفل/پاک
@@ -3636,16 +3677,18 @@ async def handle_new_message(bot, event):
             chat_id, user_id, getattr(event.message, "id", None), message_text
         )
         _trace_hist_after = 0 if admin_bypass else len(message_tracker.get_user_recent_messages(chat_id, user_id))
-        _debug_log(bot,
-            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=AFTER_TRACKER tracked_ok={tracked_ok} hist_after={_trace_hist_after}"
-        )
-        if tracked_ok:
+        if _message_debug_enabled(bot):
             _debug_log(bot,
-                "SPAM TRACK ADD "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"message_id={getattr(event.message, 'id', None)} "
-                f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=AFTER_TRACKER tracked_ok={tracked_ok} hist_after={_trace_hist_after}"
             )
+        if tracked_ok:
+            if _message_debug_enabled(bot):
+                _debug_log(bot,
+                    "SPAM TRACK ADD "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"message_id={getattr(event.message, 'id', None)} "
+                    f"history_size_after_add={len(message_tracker.get_user_recent_messages(chat_id, user_id))}"
+                )
         # Banned words run before the spam/burst filter so obfuscated
         # forms map to the original listed word, not to generic flood.
         banned_precheck = False
@@ -3656,12 +3699,13 @@ async def handle_new_message(bot, event):
                 message_text, chat_id
             )
             if banned_precheck:
-                bot.logger.log_info(
-                    "BANNED WORD PRECHECK "
-                    f"chat_id={chat_id} user_id={user_id} "
-                    f"reason=banned_word detail={banned_precheck_reason!r} "
-                    f"text={message_text[:60]!r}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "BANNED WORD PRECHECK "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"reason=banned_word detail={banned_precheck_reason!r} "
+                        f"text={message_text[:60]!r}"
+                    )
 
         # Fast lane for promotional/repeated payloads: it runs immediately
         # after the in-memory tracker update. Two clearly similar ads, or
@@ -3712,9 +3756,10 @@ async def handle_new_message(bot, event):
         spam_lock_key = (chat_id, user_id)
         _is_locked = False if admin_bypass else bot.is_spam_locked(spam_lock_key)
         _lock_size = len(getattr(bot, "spam_lock", set()))
-        _debug_log(bot,
-            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_SPAM_LOCK key={spam_lock_key!r} is_locked={_is_locked} lock_size={_lock_size} chat_id_type={type(chat_id).__name__} user_id_type={type(user_id).__name__}"
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(bot,
+                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_SPAM_LOCK key={spam_lock_key!r} is_locked={_is_locked} lock_size={_lock_size} chat_id_type={type(chat_id).__name__} user_id_type={type(user_id).__name__}"
+            )
         if (not event.is_private
                 and not admin_bypass
                 and not native_admin_warn_only
@@ -3722,33 +3767,39 @@ async def handle_new_message(bot, event):
             if _spam_runtime_key(chat_id, user_id) in getattr(bot, "_big_spam_incidents", {}):
                 # Ban and drain are already running. The ID was captured
                 # before this branch and will be deleted with the incident.
-                bot.logger.log_info(
-                    "BIG SPAM MESSAGE DEFERRED "
-                    f"chat_id={chat_id} user_id={user_id} "
-                    f"message_id={event.message.id}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "BIG SPAM MESSAGE DEFERRED "
+                        f"chat_id={chat_id} user_id={user_id} "
+                        f"message_id={event.message.id}"
+                    )
                 return
-            _debug_log(bot,
-                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
-            )
+            if _message_debug_enabled(bot):
+                _debug_log(bot,
+                    f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=INSIDE_SPAM_LOCK"
+                )
             _queue_message_deletes(bot, chat_id, [event.message.id])
-            _debug_log(bot, f"SPAM LOCK DROP QUEUED chat_id={chat_id} user_id={user_id} message_id={event.message.id}")
+            if _message_debug_enabled(bot):
+                _debug_log(bot, f"SPAM LOCK DROP QUEUED chat_id={chat_id} user_id={user_id} message_id={event.message.id}")
             locked_ids = message_tracker.spam_snapshot(
                 chat_id, user_id, getattr(event.message, "id", None)
             )
-            _debug_log(bot,
-                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=SNAPSHOT_COUNT count={len(locked_ids)} ids={locked_ids!r} snapshot_source=spam_snapshot"
-            )
+            if _message_debug_enabled(bot):
+                _debug_log(bot,
+                    f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=SNAPSHOT_COUNT count={len(locked_ids)} ids={locked_ids!r} snapshot_source=spam_snapshot"
+                )
             _schedule_auto_spam_cleanup(
                 bot, event, chat_id, user_id, set(locked_ids)
             )
-            _debug_log(bot,
-                f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} "
-                f"message_id={_trace_msg_id} stage=CLEANUP_QUEUED "
-                f"requested={len(locked_ids)}"
-            )
-            _debug_log(bot, "EARLY RETURN DEBUG reason=spam_lock "
-                f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}")
+            if _message_debug_enabled(bot):
+                _debug_log(bot,
+                    f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} "
+                    f"message_id={_trace_msg_id} stage=CLEANUP_QUEUED "
+                    f"requested={len(locked_ids)}"
+                )
+            if _message_debug_enabled(bot):
+                _debug_log(bot, "EARLY RETURN DEBUG reason=spam_lock "
+                    f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}")
             return
         profiler.mark("RECEIVE")
         # Independent advertising-name guard: runs before text moderation and
@@ -3793,14 +3844,16 @@ async def handle_new_message(bot, event):
                 and not is_global_owner(user_id)
                 and not is_session_command):
             if message_text.strip() == "اسم فامیل" or len(message_text.splitlines()) >= 7:
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "NAME FAMILY TRACE HANDLER_BLOCK "
+                        f"reason=bot_account chat_id={chat_id} user_id={user_id}"
+                    )
+            if diagnostics_enabled(bot.logger):
                 bot.logger.log_info(
-                    "NAME FAMILY TRACE HANDLER_BLOCK "
-                    f"reason=bot_account chat_id={chat_id} user_id={user_id}"
+                    "EARLY RETURN DEBUG reason=bot_account "
+                    f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
                 )
-            bot.logger.log_info(
-                "EARLY RETURN DEBUG reason=bot_account "
-                f"chat_id={chat_id} user_id={user_id} message_id={event.message.id}"
-            )
             return
         # Normalize only the routing copy; keep message_text unchanged for filters.
         # COMMAND_MATCH is the cheap text classify only — never include
@@ -3826,17 +3879,19 @@ async def handle_new_message(bot, event):
             "موجودی", "فروشگاه", "انتقال سکه", "قفل", "باز", "اخطار",
             "سابقه ها", "سابقه‌ها", "سطح گروه",
         }
-        _debug_log(
-            bot,
-            "PUBLIC COMMAND ROUTE ENTER "
-            f"chat_id={chat_id} user_id={user_id} text={message_text!r} "
-            f"normalized={clean_text!r}",
-        )
-        _debug_log(
-            bot,
-            "COMMAND MATCH CHECK "
-            f"command={clean_text!r} matched={clean_text in _legacy_commands}",
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(
+                bot,
+                "PUBLIC COMMAND ROUTE ENTER "
+                f"chat_id={chat_id} user_id={user_id} text={message_text!r} "
+                f"normalized={clean_text!r}",
+            )
+        if _message_debug_enabled(bot):
+            _debug_log(
+                bot,
+                "COMMAND MATCH CHECK "
+                f"command={clean_text!r} matched={clean_text in _legacy_commands}",
+            )
 
         # ------------------------------------------------------------------
         # 📋 لیست انقضا — فقط مالک اصلی و فقط در همان گروه.
@@ -3885,14 +3940,15 @@ async def handle_new_message(bot, event):
             # مستثنا شده‌اند.
             # این لاگ قبل از تصمیم‌گیری ثبت می‌شود تا معلوم باشد sender به
             # مسیر تشخیص رسیده است؛ حساب خود روباه بالاتر عمداً return می‌شود.
-            _debug_log(bot,
-                "BOT DETECTION DEBUG\n"
-                f"group_id={chat_id}\n"
-                f"sender_id={user_id}\n"
-                f"sender_username={getattr(sender, 'username', None)!r}\n"
-                f"sender_type={sender.__class__.__name__ if sender else 'None'}\n"
-                f"is_bot={getattr(sender, 'bot', None)!r}\n"
-                "detection_result=sender_detected_resolving")
+            if _message_debug_enabled(bot):
+                _debug_log(bot,
+                    "BOT DETECTION DEBUG\n"
+                    f"group_id={chat_id}\n"
+                    f"sender_id={user_id}\n"
+                    f"sender_username={getattr(sender, 'username', None)!r}\n"
+                    f"sender_type={sender.__class__.__name__ if sender else 'None'}\n"
+                    f"is_bot={getattr(sender, 'bot', None)!r}\n"
+                    "detection_result=sender_detected_resolving")
             skip_bot_probe = classify_priority(clean_text)[1] in {
                 "admin", "command",
             }
@@ -4072,7 +4128,8 @@ async def handle_new_message(bot, event):
         # تداخل نکند.
         # ------------------------------------------------------------------
         if clean_text in {"موجودی", "فروشگاه", "انتقال سکه"}:
-            bot.logger.log_info(f"HANDLER CALLED handler=economy command={clean_text!r}")
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(f"HANDLER CALLED handler=economy command={clean_text!r}")
         if await handle_economy(
             bot, event, chat_id, user_id, sender, clean_text, bot.logger
         ):
@@ -4082,12 +4139,13 @@ async def handle_new_message(bot, event):
             clean_text == "اسم فامیل" or name_family_active(chat_id)
         )
         if name_family_trace:
-            bot.logger.log_info(
-                "NAME FAMILY TRACE HANDLER_ENTER "
-                f"chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} "
-                f"line_count={len(clean_text.splitlines())} char_count={len(clean_text)} "
-                f"round_active={name_family_active(chat_id)}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "NAME FAMILY TRACE HANDLER_ENTER "
+                    f"chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} "
+                    f"line_count={len(clean_text.splitlines())} char_count={len(clean_text)} "
+                    f"round_active={name_family_active(chat_id)}"
+                )
 
         # حافظهٔ گروه: هر کاربر فقط نام متصل به user_id خودش را ثبت می‌کند.
         # ⚠️ دستورهای رزروشده (مثل «ثبت ادمین») هرگز نباید به این مسیر برسند؛
@@ -4272,14 +4330,16 @@ async def handle_new_message(bot, event):
                 )
                 deleted = len(repeated_gif_ids)
                 if repeated_gif_ids:
-                    bot.logger.log_info(
-                        "DUPLICATE GIF DETECTED "
-                        f"user={user_id} chat_id={chat_id} count={len(repeated_gif_ids)}"
-                    )
-                    bot.logger.log_info(
-                        "DELETE QUEUE SIZE "
-                        f"user={user_id} chat_id={chat_id} size={gif_pending_count(chat_id)}"
-                    )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            "DUPLICATE GIF DETECTED "
+                            f"user={user_id} chat_id={chat_id} count={len(repeated_gif_ids)}"
+                        )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            "DELETE QUEUE SIZE "
+                            f"user={user_id} chat_id={chat_id} size={gif_pending_count(chat_id)}"
+                        )
                     bot.logger.log_info(
                         "DELETE START "
                         f"message_ids={repeated_gif_ids!r}"
@@ -4287,20 +4347,24 @@ async def handle_new_message(bot, event):
                     # handle_gif already scheduled a per-chat flush worker.
                     # Awaiting it here blocked this group's (and previously
                     # the whole bot's) command path for 400ms plus delete RPCs.
-                    bot.logger.log_info(
-                        "GIF DELETE SCHEDULED "
-                        f"chat_id={chat_id} count={len(repeated_gif_ids)}"
-                    )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            "GIF DELETE SCHEDULED "
+                            f"chat_id={chat_id} count={len(repeated_gif_ids)}"
+                        )
                 if newly_flagged:
                     bot.set_spam_lock((chat_id, user_id))
-                    _debug_log(bot,
-                        f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=duplicate_gif lock_size={len(getattr(bot, 'spam_lock', set()))}"
-                    )
-                    bot.logger.log_info(
-                        f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} reason=duplicate_gif"
-                    )
+                    if _message_debug_enabled(bot):
+                        _debug_log(bot,
+                            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=duplicate_gif lock_size={len(getattr(bot, 'spam_lock', set()))}"
+                        )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} reason=duplicate_gif"
+                        )
                     async def gif_mute_succeeded(_result):
-                        print("USER MUTED 3600")
+                        if VERBOSE:
+                            print("USER MUTED 3600")
                         notification_key = (chat_id, user_id)
                         now = _asyncio.get_running_loop().time()
                         notified_until = getattr(bot, "gif_spam_notification_until", {})
@@ -4314,7 +4378,8 @@ async def handle_new_message(bot, event):
                                 f"{_format_banned_user(sender, user_id)}\n\n"
                                 "به دلیل ارسال گیف تکراری 𝟭 ساعت سکوت شد",
                             )
-                            print("GIF WARNING SENT")
+                            if VERBOSE:
+                                print("GIF WARNING SENT")
 
                     async def gif_mute_failed(_error):
                         reset_gif_history(chat_id, user_id)
@@ -4348,10 +4413,11 @@ async def handle_new_message(bot, event):
                 bot, event, chat_id, user_id, {event.message.id}
             )
             if name_family_trace:
-                bot.logger.log_info(
-                    "NAME FAMILY TRACE HANDLER_BLOCK "
-                    f"reason=spam_burst chat_id={chat_id} user_id={user_id}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "NAME FAMILY TRACE HANDLER_BLOCK "
+                        f"reason=spam_burst chat_id={chat_id} user_id={user_id}"
+                    )
             return
 
         if clean_text == "صفر":
@@ -4819,17 +4885,19 @@ async def handle_new_message(bot, event):
                     bot.spam_burst_users.add((chat_id, user_id))
                     bot.touch_temporary_state("burst", (chat_id, user_id))
                     bot.set_spam_lock((chat_id, user_id))
-                    _debug_log(bot,
-                        f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=is_repeat_severe lock_size={len(getattr(bot, 'spam_lock', set()))}"
-                    )
+                    if _message_debug_enabled(bot):
+                        _debug_log(bot,
+                            f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=is_repeat_severe lock_size={len(getattr(bot, 'spam_lock', set()))}"
+                        )
                     ids = message_tracker.spam_snapshot(
                         chat_id, user_id, getattr(event.message, "id", None)
                     )
-                    bot.logger.log_info(
-                        "SPAM HISTORY SNAPSHOT "
-                        f"chat_id={chat_id} user_id={user_id} "
-                        f"count={len(ids)} ids={ids!r}"
-                    )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            "SPAM HISTORY SNAPSHOT "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"count={len(ids)} ids={ids!r}"
+                        )
                     async def repeat_history_ban_succeeded(_result):
                         bot.logger.log_info(
                             f"PUNISHMENT RESULT user={user_id} success=True"
@@ -4859,10 +4927,11 @@ async def handle_new_message(bot, event):
                         on_failure=repeat_history_ban_failed,
                     )
                     if name_family_trace:
-                        bot.logger.log_info(
-                            "NAME FAMILY TRACE HANDLER_BLOCK "
-                            f"reason=repeat_spam chat_id={chat_id} user_id={user_id}"
-                        )
+                        if diagnostics_enabled(bot.logger):
+                            bot.logger.log_info(
+                                "NAME FAMILY TRACE HANDLER_BLOCK "
+                                f"reason=repeat_spam chat_id={chat_id} user_id={user_id}"
+                            )
                     return
             except Exception as e:
                 print("history error:", e)
@@ -5000,10 +5069,11 @@ async def handle_new_message(bot, event):
         # فقط مالک اصلی، مالک ثبت‌شدهٔ گروه یا ادمین ثبت‌شدهٔ همان گروه.
         # ------------------------------------------------------------------
         if clean_text in entertainment_control.COMMANDS:
-            bot.logger.log_info(
-                "HANDLER CALLED handler=entertainment_control "
-                f"command={clean_text!r} chat_id={chat_id} user_id={user_id}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "HANDLER CALLED handler=entertainment_control "
+                    f"command={clean_text!r} chat_id={chat_id} user_id={user_id}"
+                )
             if event.is_private:
                 await event.reply("❌ این دستور فقط داخل گروه کار می‌کند.")
                 return
@@ -5048,25 +5118,30 @@ async def handle_new_message(bot, event):
             if _chat_game_busy(chat_id):
                 await event.reply(GAME_BUSY_MESSAGE)
                 return
-            bot.logger.log_info(f"NAME FAMILY HANDLER START TRY chat_id={chat_id} user_id={user_id}")
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(f"NAME FAMILY HANDLER START TRY chat_id={chat_id} user_id={user_id}")
             game = start_name_family(chat_id, logger=bot.logger)
             if not game:
                 bot.logger.log_info(f"NAME FAMILY HANDLER START FAILED chat_id={chat_id} reason=already_active_or_no_letter")
                 await event.reply(GAME_BUSY_MESSAGE)
                 return
-            bot.logger.log_info(f"NAME FAMILY HANDLER START SUCCESS chat_id={chat_id} round_id={game['round_id']} letter={game['letter']}")
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(f"NAME FAMILY HANDLER START SUCCESS chat_id={chat_id} round_id={game['round_id']} letter={game['letter']}")
             await event.reply(
                 "🎮 اسم فامیل\n\n"
                 f"حرف: {game['letter']}\n\n"
                 "⏳ زمان: 90 ثانیه\n\n"
                 "👤 نام\n👤 فامیل\n🌍 شهر\n🍇 میوه\n📦 وسیله\n🐶 حیوان\n🎵 خواننده"
             )
-            bot.logger.log_info(f"NAME FAMILY HANDLER REPLY SENT chat_id={chat_id} round_id={game['round_id']}")
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(f"NAME FAMILY HANDLER REPLY SENT chat_id={chat_id} round_id={game['round_id']}")
             async def name_family_results(ranking):
                 """نمایش نتایج؛ توسط مسیر اختصاصی همین بازی فراخوانی می‌شود."""
-                bot.logger.log_info(f"NAME FAMILY HANDLER RESULTS CALLBACK ENTER chat_id={chat_id} round_id={game['round_id']} ranking_len={len(ranking) if ranking else 0}")
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(f"NAME FAMILY HANDLER RESULTS CALLBACK ENTER chat_id={chat_id} round_id={game['round_id']} ranking_len={len(ranking) if ranking else 0}")
                 if not ranking:
-                    bot.logger.log_info(f"NAME FAMILY HANDLER RESULTS EMPTY chat_id={chat_id} round_id={game['round_id']}")
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(f"NAME FAMILY HANDLER RESULTS EMPTY chat_id={chat_id} round_id={game['round_id']}")
                     await event.reply("🏆 نتایج\n\nشرکت‌کننده‌ای پاسخ صحیح ثبت نکرد.")
                     return
                 medals = ("🥇", "🥈", "🥉")
@@ -5108,20 +5183,22 @@ async def handle_new_message(bot, event):
                 name_family_results,
                 logger=bot.logger,
             )
-            bot.logger.log_info(
-                "NAME FAMILY ROUND STARTED "
-                f"chat_id={chat_id} round_id={game['round_id']} "
-                f"letter={game['letter']} seconds={game.get('seconds', 90)}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "NAME FAMILY ROUND STARTED "
+                    f"chat_id={chat_id} round_id={game['round_id']} "
+                    f"letter={game['letter']} seconds={game.get('seconds', 90)}"
+                )
             return
 
         # ثبت پاسخ اسم فامیل در همان بازی فعال
         if name_family_active(chat_id):
-            bot.logger.log_info(
-                "NAME FAMILY TRACE HANDLER_BEFORE_SUBMIT "
-                f"chat_id={chat_id} user_id={user_id} "
-                f"line_count={len(message_text.splitlines())} char_count={len(message_text)}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "NAME FAMILY TRACE HANDLER_BEFORE_SUBMIT "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"line_count={len(message_text.splitlines())} char_count={len(message_text)}"
+                )
             # هر ثبت اسم فامیل ممکن است تا ۷ جستجوی وب همگام انجام دهد
             # (هر دسته یک بار، هرکدام تا ۲ ثانیه). اجرای مستقیم آن حلقه را
             # ده‌ها ثانیه قفل می‌کرد و همهٔ گروه‌ها بی‌پاسخ می‌ماندند.
@@ -5141,10 +5218,11 @@ async def handle_new_message(bot, event):
                 learning_min_unique_users=bot.config_manager.get("name_family_learning_min_unique_users", 3),
                 learning_min_unique_chats=bot.config_manager.get("name_family_learning_min_unique_chats", 2),
             )
-            bot.logger.log_info(
-                "NAME FAMILY TRACE HANDLER_AFTER_SUBMIT "
-                f"chat_id={chat_id} user_id={user_id} submitted={submitted!r}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "NAME FAMILY TRACE HANDLER_AFTER_SUBMIT "
+                    f"chat_id={chat_id} user_id={user_id} submitted={submitted!r}"
+                )
             if submitted is not None:
                 await event.reply("✅ پاسخ ثبت شد")
                 return
@@ -5731,13 +5809,15 @@ async def handle_new_message(bot, event):
                 print("MEMBER COUNT ERROR:", repr(e))
                 member_count = 0
 
-            print("FINAL MEMBER COUNT:", member_count)
+            if VERBOSE:
+                print("FINAL MEMBER COUNT:", member_count)
             await event.reply(make_report(chat_id, member_count))
             return
 
         # لیست بازی
         if clean_text.strip() in ["لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "بازی ها", "بازی‌ها"]:
-            bot.logger.log_info(f"HANDLER CALLED handler=game_list command={clean_text!r}")
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(f"HANDLER CALLED handler=game_list command={clean_text!r}")
             games_text = (
                 "🎮 لیست بازی‌های روباه\n\n"
                 "🧩 چیستان\n"
@@ -5839,7 +5919,8 @@ async def handle_new_message(bot, event):
         # راهنمای ربات
         help_commands = {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمینی"}
         if clean_text.strip() in help_commands:
-            bot.logger.log_info(f"HANDLER CALLED handler=help command={clean_text!r}")
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(f"HANDLER CALLED handler=help command={clean_text!r}")
             # متن راهنما برای همهٔ کاربران یکسان است؛ هیچ نام یا اطلاعات
             # شخصی‌ای داخل آن قرار نمی‌گیرد. دستور «شخصیت» منطق جداگانهٔ
             # خودش را دارد و فقط نامی را تحلیل می‌کند که کاربر خودش می‌نویسد.
@@ -6066,7 +6147,8 @@ async def handle_new_message(bot, event):
             admin_marker = "👑 دستورات ادمین‌ها:\n\n"
             games_marker = "🎮 لیست بازی‌ها:\n\n"
             if clean_text.strip() == "لیست کاربران":
-                bot.logger.log_info("HANDLER CALLED handler=user_list")
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info("HANDLER CALLED handler=user_list")
                 # «لیست کاربران» فقط دستورات کاربری را نشان می‌دهد؛ بخش بازی‌ها
                 # از آن حذف می‌شود تا بازی‌ها فقط در «🎮 لیست بازی‌ها» دیده شوند.
                 pre_admin = full_help_text[:full_help_text.index(admin_marker)]
@@ -6363,7 +6445,8 @@ async def handle_new_message(bot, event):
         if clean_text == "فعال سازی":
             try:
                 sender = await event.get_sender()
-                print("OWNER DEBUG:", getattr(sender, "username", None), getattr(sender, "id", None), getattr(sender, "first_name", None))
+                if VERBOSE:
+                    print("OWNER DEBUG:", getattr(sender, "username", None), getattr(sender, "id", None), getattr(sender, "first_name", None))
                 if not is_global_owner(getattr(sender, "id", None)):
                     await event.reply("❌ فقط مالک ربات اجازه این دستور را دارد")
                     return
@@ -7929,10 +8012,11 @@ async def handle_new_message(bot, event):
 
                 bot.flood_messages[chat_id] = []
 
-                bot.logger.log_info(
-                    "DUPLICATE FLOOD DETECTED "
-                    f"chat_id={chat_id} user_id={user_id} count={len(ids)}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "DUPLICATE FLOOD DETECTED "
+                        f"chat_id={chat_id} user_id={user_id} count={len(ids)}"
+                    )
                 if bot.acquire_delete_notice_lock(chat_id):
                     sender5 = getattr(bot, "outgoing_sender", None)
                     if sender5 is not None:
@@ -7981,10 +8065,11 @@ async def handle_new_message(bot, event):
 
                 if punish_key not in bot.punished_users:
                     bot.punished_users.add(punish_key)
-                    bot.logger.log_info(
-                        "SPAM DETECTED "
-                        f"user={user_id} chat_id={chat_id} reason=heavy_repeat"
-                    )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            "SPAM DETECTED "
+                            f"user={user_id} chat_id={chat_id} reason=heavy_repeat"
+                        )
                     bot.logger.log_info(
                         "SPAM ACTION TYPE = severe\n"
                         "WARNING_SKIPPED = true\n"
@@ -8076,7 +8161,8 @@ async def handle_new_message(bot, event):
             if matched_word:
                 group_word_spam = True
                 group_word_reason = f"فیلتر گروه ({matched_word})"
-                bot.logger.log_info(f"FILTER WORD DETECTED chat_id={chat_id} word={matched_word!r} text={message_text[:50]!r}")
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(f"FILTER WORD DETECTED chat_id={chat_id} word={matched_word!r} text={message_text[:50]!r}")
 
         except Exception as e:
             bot.logger.log_error(f"خطای بررسی کلمات فیلتر گروه (/filter): {e}")
@@ -8098,9 +8184,11 @@ async def handle_new_message(bot, event):
         # اما اجرای راهنما، بازی‌ها و فرمان‌های مدیریت باید ادامه داشته باشد.
         if is_group_moderator or fast_command or _vip_exempt:
             if is_group_moderator:
-                _debug_log(bot, f"✅ ADMIN BYPASS FILTER: {sender_username}")
+                if _message_debug_enabled(bot):
+                    _debug_log(bot, f"✅ ADMIN BYPASS FILTER: {sender_username}")
             elif _vip_exempt:
-                _debug_log(bot, f"✅ VIP BYPASS FILTER: {sender_username}")
+                if _message_debug_enabled(bot):
+                    _debug_log(bot, f"✅ VIP BYPASS FILTER: {sender_username}")
             is_spam = False
             reason = ""
         elif public_username_spam:
@@ -8121,13 +8209,15 @@ async def handle_new_message(bot, event):
                 from modules.group_banned_words_control import is_enabled as _is_strict_check
                 _strict_on = _is_strict_check(chat_id)
                 if not _strict_on:
-                    bot.logger.log_info(f"BANNED WORD SKIP strict_off chat_id={chat_id} text={message_text[:60]!r}")
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(f"BANNED WORD SKIP strict_off chat_id={chat_id} text={message_text[:60]!r}")
                 elif is_spam and ("کلمه ممنوعه" in str(reason) or "banned_word" in str(reason)):
                     kind = "spam_banned_word" if "spam_banned_word" in str(reason) else "banned_word"
-                    bot.logger.log_info(
-                        f"BANNED WORD HIT kind={kind} chat_id={chat_id} "
-                        f"reason={reason!r} text={message_text[:60]!r}"
-                    )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            f"BANNED WORD HIT kind={kind} chat_id={chat_id} "
+                            f"reason={reason!r} text={message_text[:60]!r}"
+                        )
                 elif not is_spam:
                     # Check if text would have matched banned word but strict off or no match
                     # We do a quick check without full pattern to avoid double work
@@ -8137,35 +8227,39 @@ async def handle_new_message(bot, event):
             if is_spam:
                 moderation_trigger = _detector_moderation_trigger(reason)
 
-        _debug_log(
-            bot,
-            f"MODERATION TYPE={'SPAM' if moderation_trigger == 'spam' else 'FILTER_GROUP'} "
-            f"chat_id={chat_id} user_id={user_id} reason={reason!r}",
-        )
+        if _message_debug_enabled(bot):
+            _debug_log(
+                bot,
+                f"MODERATION TYPE={'SPAM' if moderation_trigger == 'spam' else 'FILTER_GROUP'} "
+                f"chat_id={chat_id} user_id={user_id} reason={reason!r}",
+            )
         profiler.mark("SPAM_CHECK")
         if is_spam:
-            bot.logger.log_info(
-                "SPAM DETECTED "
-                f"user={user_id} chat_id={chat_id} reason={reason!r}"
-            )
-            bot.logger.log_info(
-                "SPAM DETECT TIME "
-                f"user={user_id} chat_id={chat_id} message_id={getattr(event.message, 'id', None)}"
-            )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "SPAM DETECTED "
+                    f"user={user_id} chat_id={chat_id} reason={reason!r}"
+                )
+            if diagnostics_enabled(bot.logger):
+                bot.logger.log_info(
+                    "SPAM DETECT TIME "
+                    f"user={user_id} chat_id={chat_id} message_id={getattr(event.message, 'id', None)}"
+                )
             profiler.mark("AUTO_MODERATION")
             rejoin_state = getattr(bot, "rejoin_spam_state", {}).get(
                 (chat_id, user_id), {}
             )
             if rejoin_state.get("previously_banned"):
-                bot.logger.log_info(
-                    "SPLUS REJOIN STATE DEBUG\n"
-                    f"user_id={user_id}\n"
-                    f"chat_id={chat_id}\n"
-                    "previously_banned=True\n"
-                    f"previous_violations={rejoin_state.get('previous_violations', 0)}\n"
-                    "new_spam_detected=True\n"
-                    f"ban_triggered={f'{chat_id}:{user_id}' not in bot.punished_users}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "SPLUS REJOIN STATE DEBUG\n"
+                        f"user_id={user_id}\n"
+                        f"chat_id={chat_id}\n"
+                        "previously_banned=True\n"
+                        f"previous_violations={rejoin_state.get('previous_violations', 0)}\n"
+                        "new_spam_detected=True\n"
+                        f"ban_triggered={f'{chat_id}:{user_id}' not in bot.punished_users}"
+                    )
 
             # اسپم تکراری شدید: ذخیره + حذف + بن مستقیم
             try:
@@ -8193,11 +8287,12 @@ async def handle_new_message(bot, event):
                     repeated_ids = message_tracker.spam_snapshot(
                         chat_id, user_id, getattr(event.message, "id", None)
                     )
-                    bot.logger.log_info(
-                        "SPAM HISTORY SNAPSHOT "
-                        f"chat_id={chat_id} user_id={user_id} "
-                        f"count={len(repeated_ids)} ids={repeated_ids!r}"
-                    )
+                    if diagnostics_enabled(bot.logger):
+                        bot.logger.log_info(
+                            "SPAM HISTORY SNAPSHOT "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"count={len(repeated_ids)} ids={repeated_ids!r}"
+                        )
 
                     if hasattr(bot.admin_actions, "ban_user"):
                         punish_key = _punishment_key(chat_id, user_id)
@@ -8238,20 +8333,22 @@ async def handle_new_message(bot, event):
             save_user(chat_id, username, user_id)
 
             previous_warnings = bot.tracker.get_count(chat_id, user_id)
-            _debug_log(bot,
-                "WARNING LOAD DEBUG\n"
-                f"user_id={user_id}\n"
-                f"group_id={chat_id}\n"
-                f"previous_warnings={previous_warnings}"
-            )
+            if _message_debug_enabled(bot):
+                _debug_log(bot,
+                    "WARNING LOAD DEBUG\n"
+                    f"user_id={user_id}\n"
+                    f"group_id={chat_id}\n"
+                    f"previous_warnings={previous_warnings}"
+                )
             count = bot.tracker.increment(chat_id, user_id)
-            _debug_log(bot,
-                "WARNING LOAD DEBUG\n"
-                f"user_id={user_id}\n"
-                f"group_id={chat_id}\n"
-                f"previous_warnings={previous_warnings}\n"
-                f"new_warning_count={count}"
-            )
+            if _message_debug_enabled(bot):
+                _debug_log(bot,
+                    "WARNING LOAD DEBUG\n"
+                    f"user_id={user_id}\n"
+                    f"group_id={chat_id}\n"
+                    f"previous_warnings={previous_warnings}\n"
+                    f"new_warning_count={count}"
+                )
 
             threshold = warning_threshold.get_threshold(
                 chat_id, bot.config_manager.get("spam_threshold", 3))
@@ -8274,12 +8371,14 @@ async def handle_new_message(bot, event):
                 return
             if count >= threshold:
                 bot.set_spam_lock((chat_id, user_id))
-                _debug_log(bot,
-                    f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=threshold count={count} lock_size={len(getattr(bot, 'spam_lock', set()))}"
-                )
-                bot.logger.log_info(
-                    f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} count={count}"
-                )
+                if _message_debug_enabled(bot):
+                    _debug_log(bot,
+                        f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)} stage=LOCK_SET key={(chat_id, user_id)!r} reason=threshold count={count} lock_size={len(getattr(bot, 'spam_lock', set()))}"
+                    )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} count={count}"
+                    )
 
             # لاگ
             # لاگ
@@ -8389,10 +8488,11 @@ async def handle_new_message(bot, event):
                     bot, event, chat_id, user_id, pending_spam_cleanup_ids,
                     announce_cleanup=_send_spam_cleanup_notice(moderation_trigger),
                 )
-                bot.logger.log_info(
-                    "SPAM CLEANUP QUEUED "
-                    f"chat_id={chat_id} user_id={user_id} seed_ids={len(pending_spam_cleanup_ids)}"
-                )
+                if diagnostics_enabled(bot.logger):
+                    bot.logger.log_info(
+                        "SPAM CLEANUP QUEUED "
+                        f"chat_id={chat_id} user_id={user_id} seed_ids={len(pending_spam_cleanup_ids)}"
+                    )
             # پیام سالم - می‌توان برای آنالیز بیشتر لاگ کرد
             pass
 
